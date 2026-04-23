@@ -1,0 +1,2619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 2px;
+            margin-bottom: 24px;
+            padding: 0 10px;
+            background: linear-gradient(180deg, #081526 0%, #061120 100%);
+            border-bottom: 1px solid #0ea5e9;
+            border-radius: 10px 10px 0 0;
+            flex-wrap: wrap;
+            overflow: visible;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: rgba(226, 232, 240, 0.72);
+            padding: 12px 14px;
+            border-radius: 0;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.25;
+            text-align: center;
+            transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+            letter-spacing: 0.1px;
+        }
+
+        .tab-btn:hover {
+            color: #f8fafc;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tab-btn.active {
+            color: #ffffff;
+            border-bottom-color: #f8fafc;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .table thead {
+            background: #f7fafc;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .table th {
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .table td {
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .table tbody tr:hover {
+            background: #f7fafc;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-danger {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-secondary {
+            background: #e2e8f0;
+            color: #475569;
+        }
+
+        .order-row {
+            cursor: pointer;
+            background: #f8fafc;
+            font-weight: 600;
+        }
+
+        .order-row:hover {
+            background: #e2e8f0;
+        }
+
+        .order-row td {
+            padding: 18px 15px !important;
+        }
+
+        .group-row {
+            cursor: pointer;
+            background: #edf2f7;
+            font-weight: 600;
+        }
+
+        .group-row:hover {
+            background: #e2e8f0;
+        }
+
+        .group-row td {
+            padding: 14px 15px !important;
+            border-top: 2px solid #cbd5e0;
+        }
+
+        .items-row {
+            display: none;
+            background: #fefefe;
+        }
+
+        .items-row.expanded {
+            display: table-row;
+        }
+
+        .items-table {
+            width: 100%;
+            margin: 10px 0;
+            border-collapse: collapse;
+        }
+
+        .items-table th {
+            background: #f1f5f9;
+            padding: 10px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+        }
+
+        .items-table td {
+            padding: 10px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 14px;
+        }
+
+        .arrow {
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.3s ease;
+            font-size: 12px;
+        }
+
+        .arrow.expanded {
+            transform: rotate(90deg);
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .summary-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .summary-card h3 {
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0.9;
+        }
+
+        .summary-card .number {
+            font-size: 32px;
+            font-weight: 700;
+            margin-top: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .table th {
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+        }
+
+        .table th:hover {
+            background: #e2e8f0;
+        }
+
+        .sort-indicator {
+            margin-left: 5px;
+            font-size: 11px;
+            opacity: 0.5;
+        }
+
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .filter-group label {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 14px;
+        }
+
+        .filter-group select {
+            padding: 8px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .filter-group input {
+            padding: 8px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .filter-group button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .filter-group button:hover {
+            background: #5a67d8;
+        }
+
+        .filter-clear-btn {
+            padding: 10px 16px;
+            background: #4a5568;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            min-height: 42px;
+        }
+
+        .filter-clear-btn:hover {
+            background: #2d3748;
+        }
+
+        #all-invoices .filters {
+            align-items: flex-end;
+            gap: 12px;
+            padding: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+        }
+
+        #all-invoices .filter-group {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        #all-invoices .filter-group label {
+            font-size: 12px;
+            font-weight: 700;
+            color: #4a5568;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        #all-invoices-search {
+            min-width: 280px;
+            min-height: 42px;
+        }
+
+        #all-invoices-group-by {
+            min-width: 190px;
+            min-height: 42px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            padding: 8px 10px;
+            background: white;
+        }
+
+        #all-invoices-status-filter {
+            min-width: 220px;
+            border: 1px solid #94a3b8;
+            border-radius: 6px;
+            padding: 6px 8px;
+            background: #f8fafc;
+            box-shadow: inset 0 0 0 1px #e2e8f0;
+        }
+
+        .status-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 2px;
+        }
+
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 999px;
+        }
+
+        .status-chip::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .status-chip.draft {
+            color: #92400e;
+            background: #fef3c7;
+        }
+
+        .status-chip.unpaid {
+            color: #991b1b;
+            background: #fee2e2;
+        }
+
+        .status-chip.partial {
+            color: #1e40af;
+            background: #dbeafe;
+        }
+
+        .status-chip.paid {
+            color: #065f46;
+            background: #d1fae5;
+        }
+
+        .status-chip.cancelled {
+            color: #475569;
+            background: #e2e8f0;
+        }
+
+        #all-invoices .filter-clear-btn {
+            align-self: flex-end;
+            margin-bottom: 0;
+        }
+
+        .generator-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 12px 0 16px;
+        }
+
+        .generator-actions .btn-generate {
+            padding: 10px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .generator-actions .btn-primary {
+            background: #4f46e5;
+            color: white;
+        }
+
+        .generator-actions .btn-secondary {
+            background: #e2e8f0;
+            color: #1f2937;
+        }
+
+        .generator-meta {
+            font-size: 13px;
+            color: #475569;
+            margin-bottom: 10px;
+        }
+
+        .generator-table td,
+        .generator-table th {
+            font-size: 13px;
+        }
+
+        .generator-section-title {
+            margin-top: 18px;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .generator-group-row {
+            background: #eef2ff;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .generator-order-row {
+            background: #f8fafc;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .generator-item-row {
+            background: #ffffff;
+        }
+
+        .generator-item-row td {
+            border-top: 1px dashed #e2e8f0;
+        }
+
+        .generator-manual-row {
+            background: #fff7ed;
+        }
+
+        .generator-manual-row td {
+            border-top: 1px dashed #fed7aa;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 6px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .loading-subtext {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <div id="loading-text" class="loading-text">Loading Invoice Data</div>
+        <div id="loading-subtext" class="loading-subtext">Please wait while we fetch your invoices...</div>
+    </div>
+    <div class="container">
+        <div class="header">
+            <h1>📋 Invoicing</h1>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button onclick="loadUnsubmittedInvoices()" class="back-btn" style="background: rgba(255, 165, 0, 0.3); border-color: rgba(255, 165, 0, 0.5);">
+                    📄 View Draft Invoices
+                </button>
+                <a href="./dashboard.html" class="back-btn">← Back to Dashboard</a>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="not-invoiced">Not Invoiced (0)</button>
+            <button class="tab-btn" data-tab="generate-invoices">Generate Invoices</button>
+            <button class="tab-btn" data-tab="under-invoiced">Under-Invoiced (0)</button>
+            <button class="tab-btn" data-tab="over-invoiced">Over-Invoiced (0)</button>
+            <button class="tab-btn" data-tab="ignored-items">Ignored Items (0)</button>
+            <button class="tab-btn" data-tab="unpaid-invoices">Unpaid Invoices (0)</button>
+            <button class="tab-btn" data-tab="draft-invoices">Draft Invoices (0)</button>
+            <button class="tab-btn" data-tab="all-invoices">All Invoices (0)</button>
+        </div>
+
+        <!-- Not Invoiced Tab -->
+        <div id="not-invoiced" class="tab-content active">
+            <h2>Not Invoiced</h2>
+            <p>Orders with items that have not been invoiced yet.</p>
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Group By:</label>
+                    <select id="not-invoiced-group-by" onchange="filterTable('not-invoiced')">
+                        <option value="none">None</option>
+                        <option value="reference">Reference</option>
+                        <option value="job_number">Job #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="code">Order</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Search Order:</label>
+                    <input type="text" id="not-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('not-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <label>Job #:</label>
+                    <input type="text" id="not-invoiced-job-filter" placeholder="Filter by job #..." onkeyup="filterTable('not-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <button onclick="clearFilters('not-invoiced')">Clear Filters</button>
+                </div>
+            </div>
+            <div id="not-invoiced-summary" class="summary"></div>
+            <div id="not-invoiced-table"></div>
+        </div>
+
+        <div id="generate-invoices" class="tab-content">
+            <h2>Generate Invoices</h2>
+            <p>Create local draft invoices from orders in the Not Invoiced category. This does not post to MRPeasy yet.</p>
+            <div class="generator-actions">
+                <div class="filter-group">
+                    <label for="invoice-generator-group-display">Display Group</label>
+                    <select id="invoice-generator-group-display" onchange="renderInvoiceGeneratorCandidates()">
+                        <option value="none">None</option>
+                        <option value="reference" selected>PO #</option>
+                        <option value="shipment_number">Shipment #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="code">Order</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="invoice-generator-mode">Generate Mode</label>
+                    <select id="invoice-generator-mode">
+                        <option value="order">1 invoice per Order</option>
+                        <option value="po">1 invoice per PO #</option>
+                    </select>
+                </div>
+                <button class="btn-generate btn-secondary" onclick="refreshInvoiceGeneratorData(true)">Refresh</button>
+                <button class="btn-generate btn-secondary" onclick="toggleAllInvoiceCandidates(true)">Select All</button>
+                <button class="btn-generate btn-secondary" onclick="toggleAllInvoiceCandidates(false)">Clear Selection</button>
+                <button class="btn-generate btn-primary" onclick="createGeneratedInvoiceDrafts()">Generate Selected Drafts</button>
+            </div>
+            <div id="invoice-generator-meta" class="generator-meta">No candidates loaded.</div>
+            <div id="invoice-generator-candidates"></div>
+
+            <div class="generator-section-title">Generated Drafts</div>
+            <div id="invoice-generator-drafts"></div>
+        </div>
+
+        <!-- Under-Invoiced Tab -->
+        <div id="under-invoiced" class="tab-content">
+            <h2>Under-Invoiced</h2>
+            <p>Orders with items that have been partially invoiced.</p>
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Group By:</label>
+                    <select id="under-invoiced-group-by" onchange="filterTable('under-invoiced')">
+                        <option value="none">None</option>
+                        <option value="reference">Reference</option>
+                        <option value="job_number">Job #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="code">Order</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Search Order:</label>
+                    <input type="text" id="under-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('under-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <label>Job #:</label>
+                    <input type="text" id="under-invoiced-job-filter" placeholder="Filter by job #..." onkeyup="filterTable('under-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <button onclick="clearFilters('under-invoiced')">Clear Filters</button>
+                </div>
+            </div>
+            <div id="under-invoiced-summary" class="summary"></div>
+            <div id="under-invoiced-table"></div>
+        </div>
+
+        <!-- Over-Invoiced Tab -->
+        <div id="over-invoiced" class="tab-content">
+            <h2>Over-Invoiced</h2>
+            <p>Orders with items that have been over-invoiced (more than shipped).</p>
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Group By:</label>
+                    <select id="over-invoiced-group-by" onchange="filterTable('over-invoiced')">
+                        <option value="none">None</option>
+                        <option value="reference">Reference</option>
+                        <option value="job_number">Job #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="code">Order</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Search Order:</label>
+                    <input type="text" id="over-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('over-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <label>Job #:</label>
+                    <input type="text" id="over-invoiced-job-filter" placeholder="Filter by job #..." onkeyup="filterTable('over-invoiced')">
+                </div>
+                <div class="filter-group">
+                    <button onclick="clearFilters('over-invoiced')">Clear Filters</button>
+                </div>
+            </div>
+            <div id="over-invoiced-summary" class="summary"></div>
+            <div id="over-invoiced-table"></div>
+        </div>
+
+        <!-- Ignored Items Tab -->
+        <div id="ignored-items" class="tab-content">
+            <h2>Ignored Items</h2>
+            <p>Items with $0 selling cost (excluded from invoicing analysis).</p>
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Group By:</label>
+                    <select id="ignored-items-group-by" onchange="filterTable('ignored-items')">
+                        <option value="none">None</option>
+                        <option value="reference">Reference</option>
+                        <option value="job_number">Job #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="code">Order</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Search Order:</label>
+                    <input type="text" id="ignored-items-search" placeholder="Order code or customer..." onkeyup="filterTable('ignored-items')">
+                </div>
+                <div class="filter-group">
+                    <label>Job #:</label>
+                    <input type="text" id="ignored-items-job-filter" placeholder="Filter by job #..." onkeyup="filterTable('ignored-items')">
+                </div>
+                <div class="filter-group">
+                    <button onclick="clearFilters('ignored-items')">Clear Filters</button>
+                </div>
+            </div>
+            <div id="ignored-items-summary" class="summary"></div>
+            <div id="ignored-items-table"></div>
+        </div>
+
+        <!-- Unpaid Invoices Tab -->
+        <div id="unpaid-invoices" class="tab-content">
+            <h2>Unpaid Invoices</h2>
+            <p>Invoices with status Unpaid.</p>
+            <div id="unpaid-invoices-table"></div>
+        </div>
+
+        <!-- Draft Invoices Tab -->
+        <div id="draft-invoices" class="tab-content">
+            <h2>Draft Invoices</h2>
+            <p>Invoices that have been created but not yet submitted.</p>
+            <div id="draft-invoices-summary" class="summary"></div>
+            <div class="filters">
+                <div class="filter-group">
+                    <input type="text" id="draft-invoices-search" placeholder="Search by Invoice, Customer, Order, or PO #..." onkeyup="filterDraftInvoices()">
+                </div>
+                <div class="filter-group">
+                    <input type="text" id="draft-invoices-job-filter" placeholder="Filter by Job #..." onkeyup="filterDraftInvoices()">
+                </div>
+                <button class="filter-clear-btn" onclick="clearDraftFilters()">Clear Filters</button>
+            </div>
+            <div id="draft-invoices-table"></div>
+        </div>
+
+        <!-- All Invoices Tab -->
+        <div id="all-invoices" class="tab-content">
+            <h2>All Invoices</h2>
+            <p>Complete list of all invoices with their current status.</p>
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="all-invoices-search">Search</label>
+                    <input type="text" id="all-invoices-search" placeholder="Search by Invoice, Customer, Order, or PO #..." onkeyup="filterAllInvoices()">
+                </div>
+                <div class="filter-group">
+                    <label for="all-invoices-group-by">Group By</label>
+                    <select id="all-invoices-group-by" onchange="filterAllInvoices()">
+                        <option value="none">None</option>
+                        <option value="status">Status</option>
+                        <option value="reference">PO #</option>
+                        <option value="customer_name">Customer</option>
+                        <option value="customer_order_code">Order #</option>
+                        <option value="custom_531">Job #</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="all-invoices-status-filter">Status Filter</label>
+                    <select id="all-invoices-status-filter" onchange="filterAllInvoices()" multiple size="5" title="Hold Ctrl (Cmd on Mac) to select multiple statuses">
+                        <option value="">All Statuses</option>
+                        <option value="10">Draft</option>
+                        <option value="20">Unpaid</option>
+                        <option value="30">Partially Paid</option>
+                        <option value="40">Paid</option>
+                        <option value="50">Cancelled</option>
+                    </select>
+                    <div class="status-legend">
+                        <span class="status-chip draft">Draft</span>
+                        <span class="status-chip unpaid">Unpaid</span>
+                        <span class="status-chip partial">Partial</span>
+                        <span class="status-chip paid">Paid</span>
+                        <span class="status-chip cancelled">Cancelled</span>
+                    </div>
+                </div>
+                <button class="filter-clear-btn" onclick="clearAllInvoicesFilters()">Clear Filters</button>
+            </div>
+            <div id="all-invoices-table"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
+        window.invoiceGeneratorCandidates = [];
+        window.generatedInvoiceDrafts = [];
+        window.loadingOverlayCount = 0;
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                btn.classList.add('active');
+                const tabId = btn.dataset.tab;
+                document.getElementById(tabId).classList.add('active');
+
+                if (tabId === 'generate-invoices') {
+                    await refreshInvoiceGeneratorData(true);
+                }
+            });
+        });
+
+        // Load data
+        function setTabLabel(tabId, label) {
+            const tab = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+            if (tab) {
+                tab.textContent = label;
+            }
+        }
+
+        function toSafeNumber(value) {
+            if (value === null || value === undefined) return 0;
+            if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+            const normalized = String(value).replace(/,/g, '').trim();
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? parsed : 0;
+        }
+
+        function formatCurrency(currency, value) {
+            const safeValue = toSafeNumber(value);
+            return `${currency || '$'}${safeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
+        function formatPoReference(reference) {
+            const raw = String(reference || '').trim();
+            if (!raw) return 'N/A';
+            return raw.replace(/^PO\s*#?\s*/i, '').trim() || raw;
+        }
+
+        async function loadInvoiceGeneratorCandidates() {
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/generator/preview`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_codes: [] })
+                });
+
+                if (!response.ok) throw new Error('Failed to load invoice candidates');
+                const data = await response.json();
+                window.invoiceGeneratorCandidates = data.candidates || [];
+                renderInvoiceGeneratorCandidates();
+            } catch (error) {
+                document.getElementById('invoice-generator-meta').textContent = `Error loading candidates: ${error.message}`;
+            }
+        }
+
+        async function refreshInvoiceGeneratorData(showOverlay = false) {
+            if (showOverlay) {
+                showLoading('Loading Invoice Generator', 'Fetching candidate orders and saved drafts...');
+            }
+            try {
+                await Promise.all([
+                    loadInvoiceGeneratorCandidates(),
+                    loadGeneratedInvoiceDrafts()
+                ]);
+            } finally {
+                if (showOverlay) {
+                    hideLoading();
+                }
+            }
+        }
+
+        function getGeneratorOrderGroupValue(order, groupBy) {
+            if (!order) return 'N/A';
+            if (groupBy === 'reference') return order.reference || 'N/A';
+            if (groupBy === 'shipment_number') return order.shipment_number || 'No Shipment';
+            if (groupBy === 'customer_name') return order.customer_name || 'N/A';
+            if (groupBy === 'code') return order.code || 'N/A';
+            return 'All Orders';
+        }
+
+        function toggleGeneratorGroup(groupId) {
+            const rows = document.querySelectorAll(`tr.generator-group-member.${groupId}`);
+            const arrow = document.getElementById(`${groupId}-arrow`);
+            const isExpanded = arrow?.classList.contains('expanded');
+
+            rows.forEach(row => {
+                row.style.display = isExpanded ? 'none' : 'table-row';
+            });
+
+            if (arrow) {
+                if (isExpanded) arrow.classList.remove('expanded');
+                else arrow.classList.add('expanded');
+            }
+        }
+
+        function toggleGeneratorOrder(orderId) {
+            const itemRows = document.querySelectorAll(`tr[data-order-row="${orderId}"]`);
+            const arrow = document.getElementById(`${orderId}-arrow`);
+            const expanded = arrow?.classList.contains('expanded');
+
+            itemRows.forEach(row => {
+                row.style.display = expanded ? 'none' : 'table-row';
+            });
+
+            if (arrow) {
+                if (expanded) arrow.classList.remove('expanded');
+                else arrow.classList.add('expanded');
+            }
+        }
+
+        function toggleOrderItemsSelection(orderCode, checked) {
+            const orderItems = document.querySelectorAll(`.invoice-generator-item-select[data-order="${orderCode}"]`);
+            orderItems.forEach(item => {
+                item.checked = checked;
+            });
+
+            const affectedOrderRows = new Set(
+                Array.from(orderItems)
+                    .map(item => item.getAttribute('data-order-row'))
+                    .filter(Boolean)
+            );
+
+            affectedOrderRows.forEach(orderId => {
+                const orderTotalEl = document.querySelector(`.invoice-generator-order-total[data-order-row="${orderId}"]`);
+                const currency = orderTotalEl?.getAttribute('data-currency') || '$';
+                recalculateGeneratorOrderTotal(orderId, currency);
+            });
+        }
+
+        function collectSelectedGeneratorItems(orderCode = null) {
+            const selector = orderCode
+                ? `.invoice-generator-item-select[data-order="${orderCode}"]:checked`
+                : '.invoice-generator-item-select:checked';
+
+            return Array.from(document.querySelectorAll(selector)).map(checkbox => {
+                const selectedOrderCode = checkbox.getAttribute('data-order') || '';
+                const itemCode = checkbox.getAttribute('data-item') || '';
+                const lineId = checkbox.getAttribute('data-line-id') || `${selectedOrderCode}:${itemCode}`;
+                const qtyInput = document.querySelector(`.invoice-generator-qty[data-line-id="${lineId}"]`);
+                const priceInput = document.querySelector(`.invoice-generator-price[data-line-id="${lineId}"]`);
+                const noteInput = document.querySelector(`.invoice-generator-note[data-line-id="${lineId}"]`);
+
+                return {
+                    order_code: selectedOrderCode,
+                    item_code: itemCode,
+                    line_key: lineId,
+                    quantity: qtyInput ? toSafeNumber(qtyInput.value) : 0,
+                    unit_price: priceInput ? toSafeNumber(priceInput.value) : 0,
+                    line_note: noteInput ? String(noteInput.value || '').trim() : ''
+                };
+            }).filter(item => item.order_code && item.item_code && item.quantity > 0);
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getInvoiceLogoMarkup() {
+            if (!COMPANY_LOGO_URL) {
+                return '<div class="invoice-logo-slot" aria-hidden="true"></div>';
+            }
+
+            return `<div class="invoice-logo-slot" aria-hidden="true"><img class="invoice-logo" src="${escapeHtml(COMPANY_LOGO_URL)}" alt=""></div>`;
+        }
+
+        function addManualLineRow(orderId, orderCode) {
+            if (!orderId || !orderCode) return;
+            if (!window.invoiceGeneratorManualLineCounter) {
+                window.invoiceGeneratorManualLineCounter = 1;
+            }
+
+            const manualId = `manual-${window.invoiceGeneratorManualLineCounter++}`;
+            const orderRow = document.getElementById(orderId);
+            if (!orderRow) return;
+
+            const expandedArrow = document.getElementById(`${orderId}-arrow`);
+            const isExpanded = expandedArrow?.classList.contains('expanded');
+            if (!isExpanded) {
+                toggleGeneratorOrder(orderId);
+            }
+
+            const relatedRows = Array.from(document.querySelectorAll(`tr[data-order-row="${orderId}"]`));
+            const lastRelatedRow = relatedRows.length ? relatedRows[relatedRows.length - 1] : orderRow;
+
+            const rowHtml = `
+                <tr class="generator-manual-row" data-order-row="${escapeHtml(orderId)}" data-order="${escapeHtml(orderCode)}" data-manual-id="${manualId}" style="display:table-row;">
+                    <td><button class="btn-generate" style="padding:4px 8px; background:#ef4444; color:#fff; white-space:nowrap;" onclick="removeManualLineRow('${manualId}')">Remove</button></td>
+                    <td>${escapeHtml(orderCode)}</td>
+                    <td colspan="2"><input type="text" class="invoice-generator-manual-desc" data-manual-id="${manualId}" data-order="${escapeHtml(orderCode)}" placeholder="Manual line description (e.g., Freight charge)" style="width:100%"></td>
+                    <td>Manual Charge</td>
+                    <td><input type="text" class="invoice-generator-manual-shipment" data-manual-id="${manualId}" placeholder="Shipment #" style="width:110px"></td>
+                    <td><input type="date" class="invoice-generator-manual-delivery" data-manual-id="${manualId}" style="width:140px"></td>
+                    <td><strong>Charge</strong></td>
+                    <td><input type="text" class="invoice-generator-manual-note" data-manual-id="${manualId}" placeholder="Line note for customer" style="width:140px"></td>
+                    <td><input type="number" min="0" step="0.01" class="invoice-generator-manual-qty" data-manual-id="${manualId}" value="1" style="width:90px" oninput="updateManualLineTotal('${manualId}')"></td>
+                    <td><input type="number" min="0" step="0.01" class="invoice-generator-manual-price" data-manual-id="${manualId}" value="0" style="width:110px" oninput="updateManualLineTotal('${manualId}')"></td>
+                    <td><strong><span class="invoice-generator-manual-total" data-manual-id="${manualId}">${formatCurrency('$', 0)}</span></strong></td>
+                </tr>
+            `;
+
+            lastRelatedRow.insertAdjacentHTML('afterend', rowHtml);
+            updateManualLineTotal(manualId);
+        }
+
+        function updateManualLineTotal(manualId) {
+            const qtyInput = document.querySelector(`.invoice-generator-manual-qty[data-manual-id="${manualId}"]`);
+            const priceInput = document.querySelector(`.invoice-generator-manual-price[data-manual-id="${manualId}"]`);
+            const totalEl = document.querySelector(`.invoice-generator-manual-total[data-manual-id="${manualId}"]`);
+            if (!totalEl) return;
+
+            const qty = qtyInput ? toSafeNumber(qtyInput.value) : 0;
+            const unitPrice = priceInput ? toSafeNumber(priceInput.value) : 0;
+            const row = document.querySelector(`tr.generator-manual-row[data-manual-id="${manualId}"]`);
+            const orderId = row?.getAttribute('data-order-row') || '';
+            const orderTotalEl = document.querySelector(`.invoice-generator-order-total[data-order-row="${orderId}"]`);
+            const currency = orderTotalEl?.getAttribute('data-currency') || '$';
+            totalEl.textContent = formatCurrency(currency, qty * unitPrice);
+            recalculateGeneratorOrderTotal(orderId, currency);
+        }
+
+        function removeManualLineRow(manualId) {
+            const row = document.querySelector(`tr.generator-manual-row[data-manual-id="${manualId}"]`);
+            if (!row) return;
+            const orderId = row.getAttribute('data-order-row') || '';
+            row.remove();
+            recalculateGeneratorOrderTotal(orderId, '$');
+        }
+
+        function updateGeneratorItemLineAndOrderTotal(orderId, lineId, currency) {
+            const qtyInput = document.querySelector(`.invoice-generator-qty[data-line-id="${lineId}"]`);
+            const priceInput = document.querySelector(`.invoice-generator-price[data-line-id="${lineId}"]`);
+            const totalEl = document.querySelector(`.invoice-generator-item-total[data-line-id="${lineId}"]`);
+            const qty = qtyInput ? toSafeNumber(qtyInput.value) : 0;
+            const unitPrice = priceInput ? toSafeNumber(priceInput.value) : 0;
+
+            if (totalEl) {
+                totalEl.textContent = formatCurrency(currency || '$', qty * unitPrice);
+            }
+
+            recalculateGeneratorOrderTotal(orderId, currency || '$');
+        }
+
+        function recalculateGeneratorOrderTotal(orderId, currency = '$') {
+            if (!orderId) return;
+
+            let total = 0;
+            const itemCheckboxes = document.querySelectorAll(`.invoice-generator-item-select[data-order-row="${orderId}"]`);
+
+            itemCheckboxes.forEach(checkbox => {
+                if (!checkbox.checked) return;
+                const lineId = checkbox.getAttribute('data-line-id') || '';
+                const qtyInput = document.querySelector(`.invoice-generator-qty[data-line-id="${lineId}"]`);
+                const priceInput = document.querySelector(`.invoice-generator-price[data-line-id="${lineId}"]`);
+                const qty = qtyInput ? toSafeNumber(qtyInput.value) : 0;
+                const unitPrice = priceInput ? toSafeNumber(priceInput.value) : 0;
+                total += qty * unitPrice;
+            });
+
+            const manualRows = document.querySelectorAll(`.generator-manual-row[data-order-row="${orderId}"]`);
+            manualRows.forEach(row => {
+                const manualId = row.getAttribute('data-manual-id') || '';
+                const qtyInput = document.querySelector(`.invoice-generator-manual-qty[data-manual-id="${manualId}"]`);
+                const priceInput = document.querySelector(`.invoice-generator-manual-price[data-manual-id="${manualId}"]`);
+                const qty = qtyInput ? toSafeNumber(qtyInput.value) : 0;
+                const unitPrice = priceInput ? toSafeNumber(priceInput.value) : 0;
+                total += qty * unitPrice;
+            });
+
+            const orderTotalEl = document.querySelector(`.invoice-generator-order-total[data-order-row="${orderId}"]`);
+            if (orderTotalEl) {
+                orderTotalEl.textContent = formatCurrency(currency || '$', total);
+            }
+        }
+
+        function collectManualGeneratorLines(orderCode = null) {
+            const selector = orderCode
+                ? `.generator-manual-row[data-order="${orderCode}"]`
+                : '.generator-manual-row';
+
+            return Array.from(document.querySelectorAll(selector)).map(row => {
+                const selectedOrderCode = row.getAttribute('data-order') || '';
+                const manualId = row.getAttribute('data-manual-id') || '';
+                const descInput = document.querySelector(`.invoice-generator-manual-desc[data-manual-id="${manualId}"]`);
+                const qtyInput = document.querySelector(`.invoice-generator-manual-qty[data-manual-id="${manualId}"]`);
+                const priceInput = document.querySelector(`.invoice-generator-manual-price[data-manual-id="${manualId}"]`);
+                const shipmentInput = document.querySelector(`.invoice-generator-manual-shipment[data-manual-id="${manualId}"]`);
+                const deliveryInput = document.querySelector(`.invoice-generator-manual-delivery[data-manual-id="${manualId}"]`);
+                const noteInput = document.querySelector(`.invoice-generator-manual-note[data-manual-id="${manualId}"]`);
+
+                return {
+                    order_code: selectedOrderCode,
+                    description: descInput ? String(descInput.value || '').trim() : '',
+                    quantity: qtyInput ? toSafeNumber(qtyInput.value) : 0,
+                    unit_price: priceInput ? toSafeNumber(priceInput.value) : 0,
+                    shipment_number: shipmentInput ? String(shipmentInput.value || '').trim() : '',
+                    delivery_date: deliveryInput ? String(deliveryInput.value || '').trim() : '',
+                    line_note: noteInput ? String(noteInput.value || '').trim() : ''
+                };
+            }).filter(item => item.order_code && item.description && item.quantity > 0);
+        }
+
+        function renderInvoiceGeneratorCandidates() {
+            const container = document.getElementById('invoice-generator-candidates');
+            const meta = document.getElementById('invoice-generator-meta');
+            const candidates = window.invoiceGeneratorCandidates || [];
+            const groupBy = document.getElementById('invoice-generator-group-display')?.value || 'none';
+
+            if (!candidates.length) {
+                meta.textContent = 'No not-invoiced candidates found.';
+                container.innerHTML = '<p style="padding: 12px; color: #64748b;">No orders are currently available for draft generation.</p>';
+                return;
+            }
+
+            const totalValue = candidates.reduce((sum, candidate) => sum + toSafeNumber(candidate.invoice?.total), 0);
+            const totalItems = candidates.reduce((sum, candidate) => sum + ((candidate.invoice?.lines || []).length), 0);
+            meta.textContent = `${candidates.length} candidate order(s) • ${totalItems} billable item line(s) • Estimated total: ${formatCurrency(candidates[0]?.order?.currency || '$', totalValue)}`;
+
+            let html = '<table class="table generator-table"><thead><tr>';
+            html += '<th>Select</th>';
+            html += '<th>Order</th>';
+            html += '<th>Customer</th>';
+            html += '<th>PO #</th>';
+            html += '<th>Job #</th>';
+            html += '<th>Shipment #</th>';
+            html += '<th>Delivery Date</th>';
+            html += '<th>Item</th>';
+            html += '<th>Note</th>';
+            html += '<th>Qty</th>';
+            html += '<th>Unit Price</th>';
+            html += '<th>Line Total</th>';
+            html += '</tr></thead><tbody>';
+
+
+            const groupedCandidates = {};
+            candidates.forEach(candidate => {
+                const groupValue = groupBy === 'none'
+                    ? 'All Orders'
+                    : getGeneratorOrderGroupValue(candidate.order, groupBy);
+                if (!groupedCandidates[groupValue]) groupedCandidates[groupValue] = [];
+                groupedCandidates[groupValue].push(candidate);
+            });
+
+            const groupKeys = Object.keys(groupedCandidates).sort((a, b) => a.localeCompare(b));
+            let groupIndex = 0;
+
+            groupKeys.forEach(groupKey => {
+                const groupId = `generator-group-${groupIndex}`;
+                const groupOrders = groupedCandidates[groupKey];
+
+                if (groupBy !== 'none') {
+                    html += `<tr class="generator-group-row" onclick="toggleGeneratorGroup('${groupId}')">`;
+                    html += `<td colspan="12"><span class="arrow" id="${groupId}-arrow">▶</span><strong>${groupKey}</strong> (${groupOrders.length} order(s))</td>`;
+                    html += '</tr>';
+                }
+
+                groupOrders.forEach((candidate, orderIndex) => {
+                    const order = candidate.order || {};
+                    const invoice = candidate.invoice || {};
+                    const orderId = `generator-order-${groupIndex}-${orderIndex}`;
+                    const groupClass = groupBy === 'none' ? '' : ` generator-group-member ${groupId}`;
+                    const groupStyle = groupBy === 'none' ? '' : ' style="display:none;"';
+
+                    html += `<tr id="${orderId}" class="generator-order-row${groupClass}"${groupStyle}>`;
+                    html += `<td><input type="checkbox" onchange="toggleOrderItemsSelection('${order.code || ''}', this.checked)"></td>`;
+                    html += `<td onclick="toggleGeneratorOrder('${orderId}')"><span class="arrow" id="${orderId}-arrow">▶</span><strong>${order.code || 'N/A'}</strong><br><button class="btn-generate btn-primary" style="padding:4px 8px; margin-top:4px; margin-right:4px; font-size:12px;" onclick="event.stopPropagation(); generateSingleOrderDraft('${order.code || ''}')">Generate This Order</button><button class="btn-generate btn-secondary" style="padding:4px 8px; margin-top:4px; font-size:12px;" onclick="event.stopPropagation(); addManualLineRow('${orderId}','${order.code || ''}')">+ Line</button></td>`;
+                    html += `<td>${order.customer_name || 'N/A'}</td>`;
+                    html += `<td>${order.reference || 'N/A'}</td>`;
+                    html += `<td>${order.job_number || 'N/A'}</td>`;
+                    html += `<td>${order.shipment_number || 'N/A'}</td>`;
+                    html += `<td>${order.delivery_date || 'N/A'}</td>`;
+                    html += `<td><strong>${(invoice.lines || []).length} items</strong></td>`;
+                    html += `<td></td><td></td><td></td><td><strong><span class="invoice-generator-order-total" data-order-row="${orderId}" data-currency="${order.currency || '$'}">${formatCurrency(order.currency || '$', invoice.total || 0)}</span></strong></td>`;
+                    html += '</tr>';
+
+                    (invoice.lines || []).forEach((line, lineIndex) => {
+                        const lineId = line.line_key || `${order.code || ''}:${line.item_code || ''}:${lineIndex}`;
+                        html += `<tr class="generator-item-row${groupClass}" data-order-row="${orderId}" style="display:none;">`;
+                        html += `<td><input type="checkbox" class="invoice-generator-item-select" data-line-id="${lineId}" data-order-row="${orderId}" data-order="${order.code || ''}" data-item="${line.item_code || ''}" checked onchange="recalculateGeneratorOrderTotal('${orderId}','${order.currency || '$'}')"></td>`;
+                        html += `<td>${order.code || 'N/A'}</td>`;
+                        html += `<td>${order.customer_name || 'N/A'}</td>`;
+                        html += `<td>${order.reference || 'N/A'}</td>`;
+                        html += `<td>${order.job_number || 'N/A'}</td>`;
+                        html += `<td>${line.shipment_number || order.shipment_number || 'N/A'}</td>`;
+                        html += `<td>${line.delivery_date || order.delivery_date || 'N/A'}</td>`;
+                        html += `<td><strong>${line.item_code || 'N/A'}</strong><br><span style="font-size:12px;color:#64748b;">${line.item_title || ''}</span></td>`;
+                        html += `<td><input type="text" class="invoice-generator-note" data-line-id="${lineId}" value="${escapeHtml(line.line_note || '')}" placeholder="Customer note" style="width:150px"></td>`;
+                        html += `<td><input type="number" min="0" step="0.01" class="invoice-generator-qty" data-line-id="${lineId}" value="${toSafeNumber(line.quantity)}" style="width:90px" oninput="updateGeneratorItemLineAndOrderTotal('${orderId}','${lineId}','${order.currency || '$'}')"></td>`;
+                        html += `<td><input type="number" min="0" step="0.01" class="invoice-generator-price" data-line-id="${lineId}" value="${toSafeNumber(line.unit_price)}" style="width:110px" oninput="updateGeneratorItemLineAndOrderTotal('${orderId}','${lineId}','${order.currency || '$'}')"></td>`;
+                        html += `<td><strong><span class="invoice-generator-item-total" data-line-id="${lineId}">${formatCurrency(order.currency || '$', line.line_total || 0)}</span></strong></td>`;
+                        html += '</tr>';
+                    });
+                });
+
+                groupIndex += 1;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+
+            const orderRows = Array.from(document.querySelectorAll('.generator-order-row[id]'));
+            orderRows.forEach(orderRow => {
+                const orderId = orderRow.id;
+                const orderTotalEl = document.querySelector(`.invoice-generator-order-total[data-order-row="${orderId}"]`);
+                const currency = orderTotalEl?.getAttribute('data-currency') || '$';
+                recalculateGeneratorOrderTotal(orderId, currency);
+            });
+        }
+
+        function toggleAllInvoiceCandidates(selectAll) {
+            const checkboxes = document.querySelectorAll('.invoice-generator-item-select');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = selectAll;
+            });
+        }
+
+
+        async function generateSingleOrderDraft(orderCode) {
+            if (!orderCode) return;
+            const selectedItems = collectSelectedGeneratorItems(orderCode);
+            const manualLines = collectManualGeneratorLines(orderCode);
+            if (!selectedItems.length && !manualLines.length) {
+                alert('Select at least one item or add a manual line in this order before generating.');
+                return;
+            }
+
+            await submitGeneratedInvoiceDrafts(selectedItems, manualLines, true);
+        }
+
+        async function submitGeneratedInvoiceDrafts(selectedItems, manualLines = [], selectionApplied = true) {
+            const generationMode = document.getElementById('invoice-generator-mode')?.value || 'order';
+            showLoading('Generating Invoice Drafts', 'Preparing selected lines and creating draft invoices...');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/generator/create-drafts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        selected_items: selectedItems,
+                        manual_lines: manualLines,
+                        selection_applied: selectionApplied,
+                        generation_mode: generationMode
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to create invoice drafts');
+                const result = await response.json();
+
+                alert(`Created ${result.created_count || 0} draft(s). Skipped ${result.skipped_count || 0}.`);
+                await refreshInvoiceGeneratorData(false);
+            } finally {
+                hideLoading();
+            }
+        }
+        async function createGeneratedInvoiceDrafts() {
+            try {
+                const selectedItems = collectSelectedGeneratorItems();
+                const manualLines = collectManualGeneratorLines();
+                if (!selectedItems.length && !manualLines.length) {
+                    alert('Select at least one billable item with quantity > 0 or add a manual line.');
+                    return;
+                }
+
+                await submitGeneratedInvoiceDrafts(selectedItems, manualLines, true);
+            } catch (error) {
+                alert(`Error creating drafts: ${error.message}`);
+            }
+        }
+
+        async function loadGeneratedInvoiceDrafts() {
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/generator/drafts`);
+                if (!response.ok) throw new Error('Failed to load generated drafts');
+                const data = await response.json();
+                window.generatedInvoiceDrafts = data.drafts || [];
+                renderGeneratedInvoiceDrafts(window.generatedInvoiceDrafts);
+            } catch (error) {
+                document.getElementById('invoice-generator-drafts').innerHTML = `<p style="padding: 12px; color: #991b1b;">${error.message}</p>`;
+            }
+        }
+
+        function renderGeneratedInvoiceDrafts(drafts) {
+            const container = document.getElementById('invoice-generator-drafts');
+            if (!drafts.length) {
+                container.innerHTML = '<p style="padding: 12px; color: #64748b;">No generated drafts yet.</p>';
+                return;
+            }
+
+            let html = '<table class="table generator-table"><thead><tr>';
+            html += '<th>Draft ID</th>';
+            html += '<th>Mode</th>';
+            html += '<th>Order(s)</th>';
+            html += '<th>Customer</th>';
+            html += '<th>PO #</th>';
+            html += '<th>Job #</th>';
+            html += '<th>Lines</th>';
+            html += '<th>Total</th>';
+            html += '<th>Created</th>';
+            html += '<th>Actions</th>';
+            html += '</tr></thead><tbody>';
+
+            drafts.forEach(draft => {
+                const order = draft.order || {};
+                const orders = Array.isArray(draft.orders) ? draft.orders : [];
+                const invoice = draft.invoice || {};
+                const mode = (draft.generation_mode || 'order').toUpperCase();
+                const orderCodes = orders
+                    .map(entry => (entry || {}).code)
+                    .filter(Boolean);
+                const displayOrder = orderCodes.length
+                    ? orderCodes.join(', ')
+                    : (order.code || draft.group_label || 'N/A');
+                html += '<tr>';
+                html += `<td><strong>${draft.draft_id || 'N/A'}</strong></td>`;
+                html += `<td>${mode}</td>`;
+                html += `<td>${displayOrder}</td>`;
+                html += `<td>${order.customer_name || 'N/A'}</td>`;
+                html += `<td>${order.reference || draft.group_label || 'N/A'}</td>`;
+                html += `<td>${order.job_number || 'N/A'}</td>`;
+                html += `<td>${(invoice.lines || []).length}</td>`;
+                html += `<td><strong>${formatCurrency(order.currency || '$', invoice.total || 0)}</strong></td>`;
+                html += `<td>${(draft.created_at || '').replace('T', ' ').replace('Z', '')}</td>`;
+                html += `<td style="white-space: nowrap;">`;
+                html += `<button class="btn-generate btn-secondary" style="padding:6px 10px; margin-right:6px;" onclick="generateInvoiceDraftPdf('${draft.draft_id}')">Generate PDF</button>`;
+                html += `<button class="btn-generate" style="padding:6px 10px; background:#dc2626; color:#fff;" onclick="deleteGeneratedInvoiceDraft('${draft.draft_id}')">Delete</button>`;
+                html += `</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function deleteGeneratedInvoiceDraft(draftId) {
+            if (!draftId) return;
+            const confirmed = window.confirm(`Delete generated draft ${draftId}?`);
+            if (!confirmed) return;
+
+            try {
+                showLoading('Deleting Draft', `Removing draft ${draftId}...`);
+                const response = await fetch(`${API_BASE}/api/invoicing/generator/drafts/${encodeURIComponent(draftId)}`, {
+                    method: 'DELETE'
+                });
+                if (!response.ok) throw new Error('Failed to delete draft');
+                await loadGeneratedInvoiceDrafts();
+            } catch (error) {
+                alert(`Delete failed: ${error.message}`);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function generateInvoiceDraftPdf(draftId) {
+            const draft = (window.generatedInvoiceDrafts || []).find(item => item.draft_id === draftId);
+            if (!draft) {
+                alert('Draft not found. Refresh and try again.');
+                return;
+            }
+
+            const order = draft.order || {};
+            const invoice = draft.invoice || {};
+            const lines = invoice.lines || [];
+            const printableInvoiceNumber = buildPrintableInvoiceNumber(draftId, draft.created_at || '');
+
+            const rowsHtml = lines.map(line => {
+                const isManual = (line.line_type || '').toLowerCase() === 'manual' || String(line.item_code || '').toUpperCase() === 'MANUAL';
+                const displayItemCode = isManual ? '' : (line.item_code || 'N/A');
+                const displayNote = String(line.line_note || '').trim();
+                const noteHtml = displayNote
+                    ? `<div style="margin-top:2px; font-size:7px; color:#475569;">Note: ${escapeHtml(displayNote)}</div>`
+                    : '';
+                return `
+                <tr>
+                    <td>${displayItemCode}</td>
+                    <td>${line.item_title || 'N/A'}${noteHtml}</td>
+                    <td>${line.shipment_number || order.shipment_number || 'N/A'}</td>
+                    <td>${line.delivery_date || order.delivery_date || 'N/A'}</td>
+                    <td style="text-align:right;">${toSafeNumber(line.quantity).toLocaleString()}</td>
+                    <td style="text-align:right;">${formatCurrency(order.currency || '$', line.unit_price || 0)}</td>
+                    <td style="text-align:right;">${formatCurrency(order.currency || '$', line.line_total || 0)}</td>
+                </tr>
+            `;
+            }).join('');
+
+            const html = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8" />
+                    <title>${draftId}</title>
+                    <style>
+                        @page { size: Letter portrait; margin: 0.5in; }
+                        body { font-family: "Century Gothic", "Trebuchet MS", "Segoe UI", sans-serif; margin: 0; color: #0f172a; font-size: 8.5px; }
+                        .invoice-shell { border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; }
+                        .header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom: 2px solid #e2e8f0; padding-bottom:10px; margin-bottom:12px; }
+                        .header-left { flex: 1; }
+                        .invoice-logo-slot {
+                            width: 160px;
+                            height: 58px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            overflow: hidden;
+                            flex-shrink: 0;
+                        }
+                        .invoice-logo {
+                            width: 100%;
+                            height: 100%;
+                            object-fit: contain;
+                            display: block;
+                        }
+                        h1 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0.35px; }
+                        .subtle { color:#475569; font-size:8px; }
+                        .meta { margin-bottom: 10px; line-height:1.45; color: #334155; font-size: 8px; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+                        th, td { border: 1px solid #cbd5e1; padding: 4px 5px; font-size: 7.8px; }
+                        th { background: #f8fafc; text-transform: uppercase; letter-spacing: 0.4px; text-align: left; }
+                        tbody tr:nth-child(odd) { background: #ffffff; }
+                        tbody tr:nth-child(even) { background: #f3f4f6; }
+                        .totals { margin-top: 12px; width: 280px; margin-left: auto; }
+                        .totals td { border: none; padding: 2px 0; font-size: 8.2px; }
+                        .totals .final { font-weight: 700; border-top: 1px solid #94a3b8; padding-top: 6px; font-size: 9px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="invoice-shell">
+                        <div class="header">
+                            <div class="header-left">
+                                <h1>Invoice</h1>
+                            </div>
+                            ${getInvoiceLogoMarkup()}
+                            <div class="meta" style="text-align:right; margin-bottom:0;">
+                                <div><strong>Invoice #:</strong> ${printableInvoiceNumber}</div>
+                            </div>
+                        </div>
+
+                        <div class="meta">
+                            <div><strong>Order:</strong> ${order.code || 'N/A'}</div>
+                            <div><strong>PO #:</strong> ${formatPoReference(order.reference)}</div>
+                            <div><strong>Job #:</strong> ${order.job_number || 'N/A'}</div>
+                            <div><strong>Customer:</strong> ${order.customer_name || 'N/A'}</div>
+                        </div>
+
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Item Code</th>
+                                    <th>Description</th>
+                                    <th>Shipment #</th>
+                                    <th>Delivery Date</th>
+                                    <th>Qty</th>
+                                    <th>Unit Price</th>
+                                    <th>Line Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+
+                        <table class="totals">
+                            <tr><td>Subtotal:</td><td style="text-align:right;">${formatCurrency(order.currency || '$', invoice.subtotal || 0)}</td></tr>
+                            <tr class="final"><td>Total:</td><td style="text-align:right;">${formatCurrency(order.currency || '$', invoice.total || 0)}</td></tr>
+                        </table>
+                    </div>
+                </body>
+                </html>
+            `;
+
+            const popup = window.open('', '_blank', 'width=1100,height=800');
+            if (!popup) {
+                alert('Popup blocked. Please allow popups to generate PDF.');
+                return;
+            }
+
+            popup.document.open();
+            popup.document.write(html);
+            popup.document.close();
+            popup.focus();
+            popup.print();
+        }
+
+        function buildPrintableInvoiceNumber(draftId, createdAt) {
+            const source = `${draftId || ''}|${createdAt || ''}`;
+            let hash = 0;
+            for (let i = 0; i < source.length; i += 1) {
+                hash = ((hash << 5) - hash) + source.charCodeAt(i);
+                hash |= 0;
+            }
+
+            const normalized = Math.abs(hash) % 9000000;
+            return String(1000000 + normalized);
+        }
+
+        function calculateDiscrepancyValue(tabData, discrepancyType) {
+            if (!tabData || !Array.isArray(tabData.orders)) {
+                return 0;
+            }
+
+            return tabData.orders.reduce((sum, orderData) => {
+                const items = Array.isArray(orderData.discrepancy_items) ? orderData.discrepancy_items : [];
+
+                const itemValue = items.reduce((itemSum, item) => {
+                    if (item.discrepancy_type !== discrepancyType) {
+                        return itemSum;
+                    }
+
+                    const discrepancyQty = Math.abs(Number(item.discrepancy) || 0);
+                    const unitPrice = Number(item.item_price) || 0;
+                    return itemSum + (discrepancyQty * unitPrice);
+                }, 0);
+
+                return sum + itemValue;
+            }, 0);
+        }
+
+        async function loadDiscrepancies() {
+            showLoading();
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/shipped-uninvoiced/items`);
+                const data = await response.json();
+
+                // Calculate totals
+                const notInvoicedTotal = calculateDiscrepancyValue(data.not_invoiced, 'not_invoiced');
+                const underInvoicedTotal = calculateDiscrepancyValue(data.under_invoiced, 'under_invoiced');
+                const overInvoicedTotal = calculateDiscrepancyValue(data.over_invoiced, 'over_invoiced');
+                
+                const currency = data.not_invoiced?.orders?.[0]?.order?.currency || '$';
+
+                // Update tab counts with dollar amounts
+                setTabLabel('not-invoiced', `Not Invoiced (${data.not_invoiced?.total_orders || 0}) - ${formatCurrency(currency, notInvoicedTotal)}`);
+                setTabLabel('under-invoiced', `Under-Invoiced (${data.under_invoiced?.total_orders || 0}) - ${formatCurrency(currency, underInvoicedTotal)}`);
+                setTabLabel('over-invoiced', `Over-Invoiced (${data.over_invoiced?.total_orders || 0}) - ${formatCurrency(currency, overInvoicedTotal)}`);
+                setTabLabel('ignored-items', `Ignored Items (${data.ignored_items?.total_orders || 0})`);
+
+                // Render each tab
+                renderTab('not-invoiced', data.not_invoiced);
+                renderTab('under-invoiced', data.under_invoiced);
+                renderTab('over-invoiced', data.over_invoiced);
+                renderIgnoredItems('ignored-items', data.ignored_items);
+
+                // Auto-load unpaid invoices
+                await loadUnpaidInvoicesData();
+                
+                // Auto-load draft invoices
+                await loadDraftInvoicesData();
+                
+                // Auto-load all invoices
+                await loadAllInvoicesData();
+                
+                hideLoading();
+            } catch (error) {
+                console.error('Error loading data:', error);
+                hideLoading();
+                document.body.innerHTML += `<div class="error">Error loading data: ${error.message}</div>`;
+            }
+        }
+        
+        async function loadDraftInvoicesData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/unsubmitted`);
+                const data = await response.json();
+
+                setTabLabel('draft-invoices', `Draft Invoices (${data.total_count}) - ${formatCurrency(data.currency, data.total_value)}`);
+
+                // Pre-render draft invoices so they're ready when user clicks the tab
+                renderDraftInvoices(data);
+            } catch (error) {
+                console.error('Error loading draft invoices:', error);
+            }
+        }
+
+        async function loadUnpaidInvoicesData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/?status=20`);
+                const invoices = await response.json();
+
+                const totalValue = invoices.reduce((sum, inv) => sum + (Number(inv.total_price) || 0), 0);
+                const currency = invoices[0]?.currency || '$';
+                setTabLabel('unpaid-invoices', `Unpaid Invoices (${invoices.length}) - ${formatCurrency(currency, totalValue)}`);
+
+                renderUnpaidInvoices({ invoices, currency });
+            } catch (error) {
+                console.error('Error loading unpaid invoices:', error);
+                setTabLabel('unpaid-invoices', 'Unpaid Invoices (0)');
+            }
+        }
+
+        async function loadAllInvoicesData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/`);
+                const invoices = await response.json();
+
+                const totalValue = invoices.reduce((sum, inv) => sum + (inv.total_price || 0), 0);
+                const currency = invoices[0]?.currency || '$';
+                setTabLabel('all-invoices', `All Invoices (${invoices.length}) - ${formatCurrency(currency, totalValue)}`);
+
+                // Render all invoices
+                renderAllInvoices({ invoices, currency });
+            } catch (error) {
+                console.error('Error loading all invoices:', error);
+            }
+        }
+
+        function getOrderGroupValue(order, groupBy) {
+            if (!order) return 'N/A';
+            if (groupBy === 'reference') return order.reference || 'N/A';
+            if (groupBy === 'job_number') return order.job_number || 'N/A';
+            if (groupBy === 'customer_name') return order.customer_name || 'N/A';
+            if (groupBy === 'code') return order.code || 'N/A';
+            return 'N/A';
+        }
+
+        function getGroupLabel(groupBy) {
+            if (groupBy === 'reference') return 'Reference';
+            if (groupBy === 'job_number') return 'Job #';
+            if (groupBy === 'customer_name') return 'Customer';
+            if (groupBy === 'code') return 'Order';
+            return 'Group';
+        }
+
+        function getInvoiceGroupValue(invoice, groupBy) {
+            if (!invoice) return 'N/A';
+            if (groupBy === 'status') {
+                const statusMap = {
+                    10: 'Draft',
+                    20: 'Unpaid',
+                    30: 'Partially Paid',
+                    40: 'Paid',
+                    50: 'Cancelled'
+                };
+                return statusMap[invoice.status] || 'Unknown';
+            }
+            if (groupBy === 'reference') return invoice.reference || 'N/A';
+            if (groupBy === 'customer_name') return invoice.customer_name || 'N/A';
+            if (groupBy === 'customer_order_code') return invoice.customer_order_code || 'N/A';
+            if (groupBy === 'custom_531') return invoice.custom_531 || 'N/A';
+            return 'N/A';
+        }
+
+        function getInvoiceGroupLabel(groupBy) {
+            if (groupBy === 'status') return 'Status';
+            if (groupBy === 'reference') return 'PO #';
+            if (groupBy === 'customer_name') return 'Customer';
+            if (groupBy === 'customer_order_code') return 'Order #';
+            if (groupBy === 'custom_531') return 'Job #';
+            return 'Group';
+        }
+
+        function calculateOrderUnbilledTotal(orderData, activeDiscrepancyType) {
+            const items = orderData.discrepancy_items || [];
+            return items.reduce((sum, item) => {
+                if (activeDiscrepancyType && item.discrepancy_type !== activeDiscrepancyType) {
+                    return sum;
+                }
+                const discrepancyQty = Math.abs(Number(item.discrepancy) || 0);
+                const unitPrice = Number(item.item_price) || 0;
+                return sum + (discrepancyQty * unitPrice);
+            }, 0);
+        }
+
+        function toggleGroupRows(groupId) {
+            const rows = document.querySelectorAll(`tr.group-member.${groupId}`);
+            const arrow = document.getElementById(`${groupId}-arrow`);
+            const isExpanded = arrow?.classList.contains('expanded');
+
+            if (isExpanded) {
+                rows.forEach(row => {
+                    row.style.display = 'none';
+                    if (row.classList.contains('items-row')) {
+                        row.classList.remove('expanded');
+                    }
+                    if (row.classList.contains('order-row')) {
+                        const rowArrow = row.querySelector('.arrow');
+                        if (rowArrow) rowArrow.classList.remove('expanded');
+                    }
+                });
+                if (arrow) arrow.classList.remove('expanded');
+                return;
+            }
+
+            rows.forEach(row => {
+                if (row.classList.contains('order-row')) {
+                    row.style.display = 'table-row';
+                } else {
+                    row.style.display = 'none';
+                    row.classList.remove('expanded');
+                }
+            });
+            if (arrow) arrow.classList.add('expanded');
+        }
+
+        function renderTab(tabId, tabData, updateOriginal = true) {
+            if (!tabData || !tabData.orders || tabData.orders.length === 0) {
+                document.getElementById(tabId + '-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No discrepancies found.</p>';
+                return;
+            }
+
+            const discrepancyTypeByTab = {
+                'not-invoiced': 'not_invoiced',
+                'under-invoiced': 'under_invoiced',
+                'over-invoiced': 'over_invoiced'
+            };
+            const activeDiscrepancyType = discrepancyTypeByTab[tabId] || null;
+            const groupBy = document.getElementById(`${tabId}-group-by`)?.value || 'none';
+
+            // Store original data for filtering only on initial load
+            if (updateOriginal) {
+                window[`${tabId}_originalData`] = JSON.parse(JSON.stringify(tabData.orders));
+            }
+
+            let html = '<table class="table" id="' + tabId + '-table-element"><thead><tr>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'code\')">Order <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'customer_name\')">Customer <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'reference\')">Reference <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'job_number\')">Job # <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'items\')">Items <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'shipping_cost\')">Shipping <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'unbilled_total\')">Unbilled Total <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'total_price\')">Total Value <span class="sort-indicator">↕</span></th>';
+            html += '<th>Status</th>';
+            html += '</tr></thead><tbody>';
+
+            const renderOrderRows = (orderData, index, groupClass = '', hidden = false) => {
+                const order = orderData.order;
+                const items = orderData.discrepancy_items || [];
+                const rowId = `${tabId}-order-${index}`;
+                const unbilledTotal = calculateOrderUnbilledTotal(orderData, activeDiscrepancyType);
+                const rowClass = groupClass ? ` group-member ${groupClass}` : '';
+                const rowStyle = hidden ? ' style="display: none;"' : '';
+                
+                // Order summary row
+                html += `<tr class="order-row${rowClass}"${rowStyle} onclick="toggleOrderItems('${rowId}')">`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${order.code}</strong></td>`;
+                html += `<td>${order.customer_name}</td>`;
+                html += `<td>${order.reference || 'N/A'}</td>`;
+                html += `<td><strong>${order.job_number}</strong></td>`;
+                html += `<td>${items.length} items</td>`;
+                html += `<td>${formatCurrency(order.currency, order.shipping_cost || 0)}</td>`;
+                html += `<td>${order.currency}${unbilledTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>`;
+                html += `<td>${formatCurrency(order.currency, order.total_price || 0)}</td>`;
+                html += `<td><span style="font-size: 12px; color: #64748b;">${order.status}</span></td>`;
+                html += '</tr>';
+                
+                // Items detail row
+                html += `<tr class="items-row${rowClass}" id="${rowId}">`;
+                html += '<td colspan="9" style="padding: 0 15px 15px 50px;">';
+                html += '<table class="items-table">';
+                html += '<thead><tr>';
+                html += '<th>Item Code</th>';
+                html += '<th>Item Name</th>';
+                html += '<th>Order Line</th>';
+                html += '<th>Delivery Date</th>';
+                html += '<th>Shipped</th>';
+                html += '<th>Invoiced</th>';
+                html += '<th>Invoice(s)</th>';
+                html += '<th>Discrepancy</th>';
+                html += '</tr></thead><tbody>';
+                
+                items.forEach(item => {
+                    const discrepancy = item.shipped_quantity - item.invoiced_quantity;
+                    const discrepancyAbs = Math.abs(discrepancy);
+                    const invoiceCodes = item.invoice_codes || [];
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${item.item_code}</strong></td>`;
+                    html += `<td>${item.item_title || 'N/A'}</td>`;
+                    html += `<td>${item.order_line || 'N/A'}</td>`;
+                    html += `<td>${item.delivery_date || 'N/A'}</td>`;
+                    html += `<td>${item.shipped_quantity}</td>`;
+                    html += `<td>${item.invoiced_quantity}</td>`;
+                    html += `<td style="font-size: 12px; color: #64748b;">${invoiceCodes.length > 0 ? invoiceCodes.join(', ') : 'None'}</td>`;
+                    
+                    if (discrepancy > 0) {
+                        html += `<td><span class="badge badge-warning">${discrepancyAbs} missing</span></td>`;
+                    } else if (discrepancy < 0) {
+                        html += `<td><span class="badge badge-danger">${discrepancyAbs} excess</span></td>`;
+                    } else {
+                        html += `<td><span class="badge badge-info">✓ Matched</span></td>`;
+                    }
+                    
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                html += '</td>';
+                html += '</tr>';
+            };
+
+            if (groupBy === 'none') {
+                tabData.orders.forEach((orderData, index) => {
+                    renderOrderRows(orderData, index);
+                });
+            } else {
+                const groups = {};
+                tabData.orders.forEach(orderData => {
+                    const key = getOrderGroupValue(orderData.order, groupBy);
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(orderData);
+                });
+
+                const groupKeys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+                let rowIndex = 0;
+
+                groupKeys.forEach((groupKey, groupIndex) => {
+                    const groupedOrders = groups[groupKey];
+                    const groupId = `${tabId}-group-${groupIndex}`;
+                    html += `<tr class="group-row" onclick="toggleGroupRows('${groupId}')">`;
+                    html += `<td colspan="9"><span class="arrow" id="${groupId}-arrow">▶</span>${getGroupLabel(groupBy)}: <strong>${groupKey}</strong> (${groupedOrders.length} orders)</td>`;
+                    html += '</tr>';
+
+                    groupedOrders.forEach(orderData => {
+                        renderOrderRows(orderData, rowIndex, groupId, true);
+                        rowIndex += 1;
+                    });
+                });
+            }
+
+            html += '</tbody></table>';
+            document.getElementById(tabId + '-table').innerHTML = html;
+        }
+
+        function toggleOrderItems(rowId) {
+            const itemsRow = document.getElementById(rowId);
+            const arrow = document.getElementById(rowId + '-arrow');
+            
+            if (itemsRow.classList.contains('expanded')) {
+                itemsRow.classList.remove('expanded');
+                itemsRow.style.display = 'none';
+                arrow.classList.remove('expanded');
+            } else {
+                itemsRow.classList.add('expanded');
+                itemsRow.style.display = 'table-row';
+                arrow.classList.add('expanded');
+            }
+        }
+
+        function renderIgnoredItems(tabId, tabData, updateOriginal = true) {
+            if (!tabData || !tabData.orders || tabData.orders.length === 0) {
+                document.getElementById(tabId + '-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No ignored items found.</p>';
+                return;
+            }
+
+            const groupBy = document.getElementById(`${tabId}-group-by`)?.value || 'none';
+
+            // Store original data for filtering only on initial load
+            if (updateOriginal) {
+                window[`${tabId}_originalData`] = JSON.parse(JSON.stringify(tabData.orders));
+            }
+
+            let html = '<table class="table" id="' + tabId + '-table-element"><thead><tr>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'code\')">Order <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'customer_name\')">Customer <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'reference\')">Reference <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'job_number\')">Job # <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'items\')">Ignored Items <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortTable(\'' + tabId + '\', \'shipping_cost\')">Shipping <span class="sort-indicator">↕</span></th>';
+            html += '<th>Status</th>';
+            html += '</tr></thead><tbody>';
+
+            const renderIgnoredOrderRows = (orderData, index, groupClass = '', hidden = false) => {
+                const order = orderData.order;
+                const items = orderData.ignored_items || [];
+                const rowId = `${tabId}-order-${index}`;
+                const rowClass = groupClass ? ` group-member ${groupClass}` : '';
+                const rowStyle = hidden ? ' style="display: none;"' : '';
+                
+                // Order summary row
+                html += `<tr class="order-row${rowClass}"${rowStyle} onclick="toggleOrderItems('${rowId}')">`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${order.code}</strong></td>`;
+                html += `<td>${order.customer_name}</td>`;
+                html += `<td>${order.reference || 'N/A'}</td>`;
+                html += `<td><strong>${order.job_number}</strong></td>`;
+                html += `<td>${items.length} items</td>`;
+                html += `<td>${formatCurrency(order.currency, order.shipping_cost || 0)}</td>`;
+                html += `<td><span style="font-size: 12px; color: #64748b;">${order.status}</span></td>`;
+                html += '</tr>';
+                
+                // Items detail row
+                html += `<tr class="items-row${rowClass}" id="${rowId}">`;
+                html += '<td colspan="7" style="padding: 0 15px 15px 50px;">';
+                html += '<table class="items-table">';
+                html += '<thead><tr>';
+                html += '<th>Item Code</th>';
+                html += '<th>Item Name</th>';
+                html += '<th>Order Line</th>';
+                html += '<th>Delivery Date</th>';
+                html += '<th>Shipped</th>';
+                html += '<th>Invoiced</th>';
+                html += '<th>Invoice(s)</th>';
+                html += '<th>Reason</th>';
+                html += '</tr></thead><tbody>';
+                
+                items.forEach(item => {
+                    const invoiceCodes = item.invoice_codes || [];
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${item.item_code}</strong></td>`;
+                    html += `<td>${item.item_title || 'N/A'}</td>`;
+                    html += `<td>${item.order_line || 'N/A'}</td>`;
+                    html += `<td>${item.delivery_date || 'N/A'}</td>`;
+                    html += `<td>${item.shipped_quantity}</td>`;
+                    html += `<td>${item.invoiced_quantity}</td>`;
+                    html += `<td style="font-size: 12px; color: #64748b;">${invoiceCodes.length > 0 ? invoiceCodes.join(', ') : 'None'}</td>`;
+                    html += `<td><span class="badge badge-info">${item.reason}</span></td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                html += '</td>';
+                html += '</tr>';
+            };
+
+            if (groupBy === 'none') {
+                tabData.orders.forEach((orderData, index) => {
+                    renderIgnoredOrderRows(orderData, index);
+                });
+            } else {
+                const groups = {};
+                tabData.orders.forEach(orderData => {
+                    const key = getOrderGroupValue(orderData.order, groupBy);
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(orderData);
+                });
+
+                const groupKeys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+                let rowIndex = 0;
+
+                groupKeys.forEach((groupKey, groupIndex) => {
+                    const groupedOrders = groups[groupKey];
+                    const groupId = `${tabId}-group-${groupIndex}`;
+                    html += `<tr class="group-row" onclick="toggleGroupRows('${groupId}')">`;
+                    html += `<td colspan="7"><span class="arrow" id="${groupId}-arrow">▶</span>${getGroupLabel(groupBy)}: <strong>${groupKey}</strong> (${groupedOrders.length} orders)</td>`;
+                    html += '</tr>';
+
+                    groupedOrders.forEach(orderData => {
+                        renderIgnoredOrderRows(orderData, rowIndex, groupId, true);
+                        rowIndex += 1;
+                    });
+                });
+            }
+
+            html += '</tbody></table>';
+            document.getElementById(tabId + '-table').innerHTML = html;
+        }
+
+        async function loadUnsubmittedInvoices() {
+            // Switch to draft invoices tab (data already loaded on page load)
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            const draftTabBtn = document.querySelector('.tab-btn[data-tab="draft-invoices"]');
+            if (draftTabBtn) draftTabBtn.classList.add('active');
+            document.getElementById('draft-invoices').classList.add('active');
+        }
+
+        function renderUnpaidInvoices(data) {
+            if (!data.invoices || data.invoices.length === 0) {
+                document.getElementById('unpaid-invoices-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No unpaid invoices found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Invoice</th>';
+            html += '<th>Customer</th>';
+            html += '<th>Order</th>';
+            html += '<th>PO #</th>';
+            html += '<th>Job #</th>';
+            html += '<th>Items</th>';
+            html += '<th>Shipping</th>';
+            html += '<th>Amount</th>';
+            html += '<th>Status</th>';
+            html += '</tr></thead><tbody>';
+
+            data.invoices.forEach((invoice, index) => {
+                const products = Array.isArray(invoice.products) ? invoice.products : [];
+                const rowId = `unpaid-invoice-${index}`;
+                const shippingCost = products
+                    .filter(p => (p.item_code || '').toLowerCase() === 'shipping')
+                    .reduce((sum, p) => sum + (parseFloat(p.total_price) || 0), 0);
+
+                const jobNumber = invoice.custom_531 || 'N/A';
+
+                html += `<tr class="order-row" onclick="toggleOrderItems('${rowId}')">`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${invoice.code || invoice.invoice_id}</strong></td>`;
+                html += `<td>${invoice.customer_name || 'N/A'}</td>`;
+                html += `<td>${invoice.customer_order_code || 'N/A'}</td>`;
+                html += `<td>${invoice.reference || 'N/A'}</td>`;
+                html += `<td><strong>${jobNumber}</strong></td>`;
+                html += `<td>${products.length} items</td>`;
+                html += `<td>${formatCurrency(invoice.currency || '$', shippingCost || 0)}</td>`;
+                html += `<td>${formatCurrency(invoice.currency || '$', invoice.total_price || 0)}</td>`;
+                html += `<td><span class="badge badge-danger">Unpaid</span></td>`;
+                html += '</tr>';
+
+                html += `<tr class="items-row" id="${rowId}">`;
+                html += '<td colspan="9" style="padding: 0 15px 15px 50px;">';
+                html += '<table class="items-table">';
+                html += '<thead><tr>';
+                html += '<th>Item Code</th>';
+                html += '<th>Item Name</th>';
+                html += '<th>Quantity</th>';
+                html += '<th>Unit Price</th>';
+                html += '<th>Total</th>';
+                html += '</tr></thead><tbody>';
+
+                products.forEach(product => {
+                    html += '<tr>';
+                    html += `<td><strong>${product.item_code || 'N/A'}</strong></td>`;
+                    html += `<td>${product.item_title || 'N/A'}</td>`;
+                    html += `<td>${product.quantity || 0}</td>`;
+                    html += `<td>${formatCurrency(invoice.currency || '$', product.item_price || 0)}</td>`;
+                    html += `<td>${formatCurrency(invoice.currency || '$', product.total_price || 0)}</td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                html += '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('unpaid-invoices-table').innerHTML = html;
+        }
+
+        function renderDraftInvoices(data, updateOriginal = true) {
+            // Store original data for filtering only on initial load
+            if (updateOriginal) {
+                window['draft-invoices_originalData'] = JSON.parse(JSON.stringify(data.invoices || []));
+            }
+            
+            if (!data.invoices || data.invoices.length === 0) {
+                document.getElementById('draft-invoices-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No draft invoices found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th onclick="sortDraftInvoices(\'code\')" style="cursor: pointer;">Invoice <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'customer_name\')" style="cursor: pointer;">Customer <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'customer_order_code\')" style="cursor: pointer;">Order <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'reference\')" style="cursor: pointer;">PO # <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'job_number\')" style="cursor: pointer;">Job # <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'items\')" style="cursor: pointer;">Items <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'shipping_cost\')" style="cursor: pointer;">Shipping <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortDraftInvoices(\'total_price\')" style="cursor: pointer;">Amount <span class="sort-indicator"></span></th>';
+            html += '<th>Status</th>';
+            html += '</tr></thead><tbody>';
+
+            data.invoices.forEach((invoice, index) => {
+                const products = Array.isArray(invoice.products) ? invoice.products : [];
+                const rowId = `draft-invoice-${index}`;
+                
+                // Calculate shipping cost from products - ensure it's always a number
+                const shippingCost = products
+                    .filter(p => (p.item_code || '').toLowerCase() === 'shipping')
+                    .reduce((sum, p) => sum + (parseFloat(p.total_price) || 0), 0);
+                
+                // Get job number from custom field or N/A
+                const jobNumber = invoice.custom_531 || 'N/A';
+                
+                // Invoice summary row
+                html += `<tr class="order-row" onclick="toggleOrderItems('${rowId}')">`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${invoice.code || invoice.invoice_id}</strong></td>`;
+                html += `<td>${invoice.customer_name || 'N/A'}</td>`;
+                html += `<td>${invoice.customer_order_code || 'N/A'}</td>`;
+                html += `<td>${invoice.reference || 'N/A'}</td>`;
+                html += `<td><strong>${jobNumber}</strong></td>`;
+                html += `<td>${products.length} items</td>`;
+                html += `<td>${formatCurrency(invoice.currency || '$', shippingCost || 0)}</td>`;
+                html += `<td>${formatCurrency(invoice.currency || '$', invoice.total_price || 0)}</td>`;
+                html += `<td><span class="badge badge-warning">Draft</span></td>`;
+                html += '</tr>';
+                
+                // Products detail row
+                html += `<tr class="items-row" id="${rowId}">`;
+                html += '<td colspan="9" style="padding: 0 15px 15px 50px;">';
+                html += '<table class="items-table">';
+                html += '<thead><tr>';
+                html += '<th>Item Code</th>';
+                html += '<th>Item Name</th>';
+                html += '<th>Quantity</th>';
+                html += '<th>Unit Price</th>';
+                html += '<th>Total</th>';
+                html += '</tr></thead><tbody>';
+                
+                products.forEach(product => {
+                    html += '<tr>';
+                    html += `<td><strong>${product.item_code || 'N/A'}</strong></td>`;
+                    html += `<td>${product.item_title || 'N/A'}</td>`;
+                    html += `<td>${product.quantity || 0}</td>`;
+                    html += `<td>${formatCurrency(invoice.currency || '$', product.item_price || 0)}</td>`;
+                    html += `<td>${formatCurrency(invoice.currency || '$', product.total_price || 0)}</td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                
+                // Additional invoice details
+                if (invoice.free_text) {
+                    html += `<div style="margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 6px; font-size: 13px;">`;
+                    html += `<strong>Notes:</strong> ${invoice.free_text}`;
+                    html += `</div>`;
+                }
+                
+                html += '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('draft-invoices-table').innerHTML = html;
+        }
+
+        function renderAllInvoices(data, updateOriginal = true) {
+            // Store original data for filtering only on initial load
+            if (updateOriginal) {
+                window['all-invoices_originalData'] = JSON.parse(JSON.stringify(data.invoices || []));
+            }
+
+            const groupBy = document.getElementById('all-invoices-group-by')?.value || 'none';
+            
+            if (!data.invoices || data.invoices.length === 0) {
+                document.getElementById('all-invoices-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No invoices found.</p>';
+                return;
+            }
+
+            const statusMap = {
+                10: { text: 'Draft', badge: 'warning' },
+                20: { text: 'Unpaid', badge: 'danger' },
+                30: { text: 'Partially Paid', badge: 'info' },
+                40: { text: 'Paid', badge: 'success' },
+                50: { text: 'Cancelled', badge: 'secondary' }
+            };
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th onclick="sortAllInvoices(\'code\')" style="cursor: pointer;">Invoice <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'customer_name\')" style="cursor: pointer;">Customer <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'customer_order_code\')" style="cursor: pointer;">Order <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'reference\')" style="cursor: pointer;">PO # <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'job_number\')" style="cursor: pointer;">Job # <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'total_price\')" style="cursor: pointer;">Amount <span class="sort-indicator"></span></th>';
+            html += '<th onclick="sortAllInvoices(\'status\')" style="cursor: pointer;">Status <span class="sort-indicator"></span></th>';
+            html += '<th>Date</th>';
+            html += '</tr></thead><tbody>';
+
+            const renderInvoiceRows = (invoice, rowIndex, groupClass = '', hidden = false) => {
+                const rowId = `all-invoice-${rowIndex}`;
+                const status = statusMap[invoice.status] || { text: 'Unknown', badge: 'secondary' };
+                const jobNumber = invoice.custom_531 || 'N/A';
+                const rowClass = groupClass ? ` group-member ${groupClass}` : '';
+                const rowStyle = hidden ? ' style="display: none; cursor: pointer;"' : ' style="cursor: pointer;"';
+
+                html += `<tr class="order-row${rowClass}" onclick="toggleOrderItems('${rowId}')"${rowStyle}>`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${invoice.code || invoice.invoice_id}</strong></td>`;
+                html += `<td>${invoice.customer_name || 'N/A'}</td>`;
+                html += `<td>${invoice.customer_order_code || 'N/A'}</td>`;
+                html += `<td>${invoice.reference || 'N/A'}</td>`;
+                html += `<td><strong>${jobNumber}</strong></td>`;
+                html += `<td>${formatCurrency(invoice.currency || '$', invoice.total_price || 0)}</td>`;
+                html += `<td><span class="badge badge-${status.badge}">${status.text}</span></td>`;
+                html += `<td>${invoice.created_date || 'N/A'}</td>`;
+                html += '</tr>';
+
+                if (invoice.products && invoice.products.length > 0) {
+                    const detailRowClass = groupClass ? ` class="items-row group-member ${groupClass}"` : ' class="items-row"';
+                    const detailRowStyle = hidden ? ' style="display: none;"' : '';
+                    html += `<tr${detailRowClass} id="${rowId}"${detailRowStyle}>`;
+                    html += '<td colspan="8" style="padding: 0 15px 15px 50px;">';
+                    html += '<table class="items-table">';
+                    html += '<thead><tr>';
+                    html += '<th>Item Code</th>';
+                    html += '<th>Item Name</th>';
+                    html += '<th>Quantity</th>';
+                    html += '<th>Unit Price</th>';
+                    html += '<th>Total</th>';
+                    html += '</tr></thead><tbody>';
+
+                    invoice.products.forEach(product => {
+                        html += '<tr>';
+                        html += `<td><strong>${product.item_code || 'N/A'}</strong></td>`;
+                        html += `<td>${product.item_title || 'N/A'}</td>`;
+                        html += `<td>${product.quantity || 0}</td>`;
+                        html += `<td>${formatCurrency(invoice.currency || '$', product.item_price || 0)}</td>`;
+                        html += `<td>${formatCurrency(invoice.currency || '$', product.total_price || 0)}</td>`;
+                        html += '</tr>';
+                    });
+
+                    html += '</tbody></table></td></tr>';
+                }
+            };
+
+            if (groupBy === 'none') {
+                data.invoices.forEach((invoice, index) => {
+                    renderInvoiceRows(invoice, index);
+                });
+            } else {
+                const groups = {};
+                data.invoices.forEach(invoice => {
+                    const key = getInvoiceGroupValue(invoice, groupBy);
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(invoice);
+                });
+
+                const groupKeys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+                let rowIndex = 0;
+
+                groupKeys.forEach((groupKey, groupIndex) => {
+                    const groupedInvoices = groups[groupKey];
+                    const groupId = `all-invoices-group-${groupIndex}`;
+                    html += `<tr class="group-row" onclick="toggleGroupRows('${groupId}')">`;
+                    html += `<td colspan="8"><span class="arrow" id="${groupId}-arrow">▶</span>${getInvoiceGroupLabel(groupBy)}: <strong>${groupKey}</strong> (${groupedInvoices.length} invoices)</td>`;
+                    html += '</tr>';
+
+                    groupedInvoices.forEach(invoice => {
+                        renderInvoiceRows(invoice, rowIndex, groupId, true);
+                        rowIndex += 1;
+                    });
+                });
+            }
+
+            html += '</tbody></table>';
+            document.getElementById('all-invoices-table').innerHTML = html;
+        }
+
+        // Draft invoices sorting
+        let draftSortState = { field: null, ascending: true };
+
+        function sortDraftInvoices(field) {
+            const data = window['draft-invoices_originalData'];
+            if (!data) return;
+
+            // Toggle sort order if clicking same field
+            if (draftSortState.field === field) {
+                draftSortState.ascending = !draftSortState.ascending;
+            } else {
+                draftSortState.field = field;
+                draftSortState.ascending = true;
+            }
+
+            // Sort the data
+            const sortedData = JSON.parse(JSON.stringify(data));
+            sortedData.sort((a, b) => {
+                let aVal, bVal;
+                
+                if (field === 'items') {
+                    aVal = (a.products || []).length;
+                    bVal = (b.products || []).length;
+                } else if (field === 'job_number') {
+                    aVal = a.custom_531 || '';
+                    bVal = b.custom_531 || '';
+                } else if (field === 'shipping_cost') {
+                    const aShipping = (a.products || [])
+                        .filter(p => (p.item_code || '').toLowerCase() === 'shipping')
+                        .reduce((sum, p) => sum + (p.total_price || 0), 0);
+                    const bShipping = (b.products || [])
+                        .filter(p => (p.item_code || '').toLowerCase() === 'shipping')
+                        .reduce((sum, p) => sum + (p.total_price || 0), 0);
+                    aVal = aShipping;
+                    bVal = bShipping;
+                } else if (field === 'total_price') {
+                    aVal = a.total_price || 0;
+                    bVal = b.total_price || 0;
+                } else {
+                    aVal = a[field] || '';
+                    bVal = b[field] || '';
+                }
+
+                if (typeof aVal === 'string') {
+                    return draftSortState.ascending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                } else {
+                    return draftSortState.ascending ? aVal - bVal : bVal - aVal;
+                }
+            });
+
+            // Re-render with sorted data
+            renderDraftInvoices({ invoices: sortedData }, false);
+        }
+
+        // Draft invoices filtering
+        function filterDraftInvoices() {
+            const searchInput = document.getElementById('draft-invoices-search')?.value.toLowerCase() || '';
+            const jobFilterInput = document.getElementById('draft-invoices-job-filter')?.value.toLowerCase() || '';
+            
+            const originalData = window['draft-invoices_originalData'];
+            if (!originalData) return;
+
+            const filteredData = originalData.filter(invoice => {
+                const code = (invoice.code || invoice.invoice_id || '').toLowerCase();
+                const customer = (invoice.customer_name || '').toLowerCase();
+                const order = (invoice.customer_order_code || '').toLowerCase();
+                const reference = (invoice.reference || '').toLowerCase();
+                const jobNumber = (invoice.custom_531 || '').toLowerCase();
+
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput);
+                const matchesJob = !jobFilterInput || jobNumber.includes(jobFilterInput);
+
+                return matchesSearch && matchesJob;
+            });
+
+            renderDraftInvoices({ invoices: filteredData }, false);
+        }
+
+        function clearDraftFilters() {
+            document.getElementById('draft-invoices-search').value = '';
+            document.getElementById('draft-invoices-job-filter').value = '';
+            const originalData = window['draft-invoices_originalData'];
+            if (originalData) {
+                renderDraftInvoices({ invoices: originalData }, false);
+            }
+        }
+
+        // All invoices sorting
+        let allInvoicesSortState = { field: null, ascending: true };
+
+        function sortAllInvoices(field) {
+            const data = window['all-invoices_originalData'];
+            if (!data) return;
+
+            if (allInvoicesSortState.field === field) {
+                allInvoicesSortState.ascending = !allInvoicesSortState.ascending;
+            } else {
+                allInvoicesSortState.field = field;
+                allInvoicesSortState.ascending = true;
+            }
+
+            const sortedData = JSON.parse(JSON.stringify(data));
+            sortedData.sort((a, b) => {
+                let aVal, bVal;
+                
+                if (field === 'job_number') {
+                    aVal = a.custom_531 || '';
+                    bVal = b.custom_531 || '';
+                } else if (field === 'total_price' || field === 'status') {
+                    aVal = a[field] || 0;
+                    bVal = b[field] || 0;
+                } else {
+                    aVal = a[field] || '';
+                    bVal = b[field] || '';
+                }
+
+                if (typeof aVal === 'string') {
+                    return allInvoicesSortState.ascending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                } else {
+                    return allInvoicesSortState.ascending ? aVal - bVal : bVal - aVal;
+                }
+            });
+
+            renderAllInvoices({ invoices: sortedData }, false);
+        }
+
+        function filterAllInvoices() {
+            const searchInput = document.getElementById('all-invoices-search')?.value.toLowerCase() || '';
+            const statusSelect = document.getElementById('all-invoices-status-filter');
+            const selectedStatuses = statusSelect
+                ? Array.from(statusSelect.selectedOptions).map(option => option.value).filter(value => value)
+                : [];
+            
+            const originalData = window['all-invoices_originalData'];
+            if (!originalData) return;
+
+            const filteredData = originalData.filter(invoice => {
+                const code = (invoice.code || invoice.invoice_id || '').toLowerCase();
+                const customer = (invoice.customer_name || '').toLowerCase();
+                const order = (invoice.customer_order_code || '').toLowerCase();
+                const reference = (invoice.reference || '').toLowerCase();
+                const status = String(invoice.status || '');
+
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput);
+                const matchesStatus = selectedStatuses.length === 0 || selectedStatuses.includes(status);
+
+                return matchesSearch && matchesStatus;
+            });
+
+            const statusLabel = selectedStatuses.length > 0
+                ? Array.from(statusSelect.selectedOptions).map(option => option.text).join(', ')
+                : 'All Statuses';
+            const currency = filteredData[0]?.currency || originalData[0]?.currency || '$';
+            const filteredTotal = filteredData.reduce((sum, invoice) => sum + toSafeNumber(invoice.total_price), 0);
+
+            if (selectedStatuses.length > 0) {
+                setTabLabel('all-invoices', `All Invoices (${statusLabel}: ${filteredData.length}) - ${formatCurrency(currency, filteredTotal)}`);
+            } else {
+                setTabLabel('all-invoices', `All Invoices (${filteredData.length}) - ${formatCurrency(currency, filteredTotal)}`);
+            }
+
+            renderAllInvoices({ invoices: filteredData }, false);
+        }
+
+        function clearAllInvoicesFilters() {
+            document.getElementById('all-invoices-search').value = '';
+            const statusSelect = document.getElementById('all-invoices-status-filter');
+            if (statusSelect) {
+                Array.from(statusSelect.options).forEach(option => {
+                    option.selected = false;
+                });
+            }
+            const groupBySelect = document.getElementById('all-invoices-group-by');
+            if (groupBySelect) groupBySelect.value = 'none';
+            const originalData = window['all-invoices_originalData'];
+            if (originalData) {
+                const currency = originalData[0]?.currency || '$';
+                const total = originalData.reduce((sum, invoice) => sum + toSafeNumber(invoice.total_price), 0);
+                setTabLabel('all-invoices', `All Invoices (${originalData.length}) - ${formatCurrency(currency, total)}`);
+                renderAllInvoices({ invoices: originalData }, false);
+            }
+        }
+
+        // Loading overlay functions
+        function showLoading(message = 'Loading Invoice Data', subtext = 'Please wait while we fetch your invoices...') {
+            const overlay = document.getElementById('loading-overlay');
+            const textEl = document.getElementById('loading-text');
+            const subtextEl = document.getElementById('loading-subtext');
+
+            if (textEl) textEl.textContent = message;
+            if (subtextEl) subtextEl.textContent = subtext;
+
+            window.loadingOverlayCount = (window.loadingOverlayCount || 0) + 1;
+            overlay.classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            window.loadingOverlayCount = Math.max((window.loadingOverlayCount || 1) - 1, 0);
+            if (window.loadingOverlayCount === 0) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        // Load on page load
+        window.addEventListener('DOMContentLoaded', loadDiscrepancies);
+
+        // Sorting functionality
+        let sortState = {};
+
+        function sortTable(tabId, field) {
+            const data = window[`${tabId}_originalData`];
+            if (!data) return;
+
+            // Initialize sort state for this tab if not exists
+            if (!sortState[tabId]) {
+                sortState[tabId] = { field: null, ascending: true };
+            }
+
+            // Toggle sort order if clicking same field
+            if (sortState[tabId].field === field) {
+                sortState[tabId].ascending = !sortState[tabId].ascending;
+            } else {
+                sortState[tabId].field = field;
+                sortState[tabId].ascending = true;
+            }
+
+            // Sort the data
+            const sortedData = JSON.parse(JSON.stringify(data));
+            sortedData.sort((a, b) => {
+                let aVal, bVal;
+                
+                if (field === 'items') {
+                    aVal = (a.discrepancy_items || a.ignored_items || []).length;
+                    bVal = (b.discrepancy_items || b.ignored_items || []).length;
+                } else if (field === 'code') {
+                    aVal = a.order.code;
+                    bVal = b.order.code;
+                } else if (field === 'customer_name') {
+                    aVal = a.order.customer_name;
+                    bVal = b.order.customer_name;
+                } else if (field === 'reference') {
+                    aVal = a.order.reference || '';
+                    bVal = b.order.reference || '';
+                } else if (field === 'job_number') {
+                    aVal = a.order.job_number || '';
+                    bVal = b.order.job_number || '';
+                } else if (field === 'shipping_cost') {
+                    aVal = a.order.shipping_cost || 0;
+                    bVal = b.order.shipping_cost || 0;
+                } else if (field === 'total_price') {
+                    aVal = a.order.total_price || 0;
+                    bVal = b.order.total_price || 0;
+                } else if (field === 'unbilled_total') {
+                    const discrepancyTypeByTab = {
+                        'not-invoiced': 'not_invoiced',
+                        'under-invoiced': 'under_invoiced',
+                        'over-invoiced': 'over_invoiced'
+                    };
+                    const activeDiscrepancyType = discrepancyTypeByTab[tabId] || null;
+
+                    const calcUnbilled = (orderData) => {
+                        const items = orderData.discrepancy_items || [];
+                        return items.reduce((sum, item) => {
+                            if (activeDiscrepancyType && item.discrepancy_type !== activeDiscrepancyType) {
+                                return sum;
+                            }
+                            const discrepancyQty = Math.abs(Number(item.discrepancy) || 0);
+                            const unitPrice = Number(item.item_price) || 0;
+                            return sum + (discrepancyQty * unitPrice);
+                        }, 0);
+                    };
+
+                    aVal = calcUnbilled(a);
+                    bVal = calcUnbilled(b);
+                }
+
+                if (typeof aVal === 'string') {
+                    return sortState[tabId].ascending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                } else {
+                    return sortState[tabId].ascending ? aVal - bVal : bVal - aVal;
+                }
+            });
+
+            // Re-render with sorted data
+            const categoryData = {
+                orders: sortedData,
+                total_orders: sortedData.length
+            };
+            
+            if (tabId === 'ignored-items') {
+                renderIgnoredItems(tabId, categoryData, false);
+            } else {
+                renderTab(tabId, categoryData, false);
+            }
+        }
+
+        // Filtering functionality
+        function filterTable(tabId) {
+            const searchInput = document.getElementById(`${tabId}-search`)?.value.toLowerCase() || '';
+            const jobFilterInput = document.getElementById(`${tabId}-job-filter`)?.value.toLowerCase() || '';
+            
+            const originalData = window[`${tabId}_originalData`];
+            if (!originalData) return;
+
+            const filteredData = originalData.filter(orderData => {
+                const code = orderData.order.code.toLowerCase();
+                const customer = orderData.order.customer_name.toLowerCase();
+                const jobNumber = (orderData.order.job_number || '').toLowerCase();
+
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput);
+                const matchesJob = !jobFilterInput || jobNumber.includes(jobFilterInput);
+
+                return matchesSearch && matchesJob;
+            });
+
+            const categoryData = {
+                orders: filteredData,
+                total_orders: filteredData.length
+            };
+
+            if (tabId === 'ignored-items') {
+                renderIgnoredItems(tabId, categoryData, false);
+            } else {
+                renderTab(tabId, categoryData, false);
+            }
+        }
+
+        function clearFilters(tabId) {
+            document.getElementById(`${tabId}-search`).value = '';
+            document.getElementById(`${tabId}-job-filter`).value = '';
+            const originalData = window[`${tabId}_originalData`];
+            if (originalData) {
+                const categoryData = {
+                    orders: originalData,
+                    total_orders: originalData.length
+                };
+                if (tabId === 'ignored-items') {
+                    renderIgnoredItems(tabId, categoryData, false);
+                } else {
+                    renderTab(tabId, categoryData, false);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

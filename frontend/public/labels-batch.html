@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .header h1 { color: #333; font-size: 32px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 16px; }
+        .controls { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .bulk-items-section { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 25px; border: 2px solid #667eea; }
+        .bulk-items-section h3 { color: #333; margin-bottom: 15px; font-size: 18px; }
+        .bulk-items-table { width: 100%; border-collapse: collapse; background: white; border-radius: 6px; overflow: hidden; }
+        .bulk-items-table th { background: #764ba2; color: white; padding: 12px; text-align: left; font-size: 13px; font-weight: 600; }
+        .bulk-items-table td { padding: 12px; border-bottom: 1px solid #e0e0e0; font-size: 14px; }
+        .bulk-items-table input { width: 100px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 14px; }
+        .bulk-items-table tr:hover { background: #f8f9fa; }
+        .apply-bulk-btn { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 10px 25px; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 15px; }
+        .apply-bulk-btn:hover { opacity: 0.9; }
+        .shipments-table-container { background: white; border-radius: 6px; overflow-x: auto; margin-bottom: 20px; }
+        .shipments-table { width: 100%; border-collapse: collapse; }
+        .shipments-table th { background: #667eea; color: white; padding: 12px; text-align: left; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .shipments-table td { padding: 12px; border-bottom: 1px solid #e0e0e0; font-size: 14px; }
+        .shipments-table tr:hover { background: #f8f9fa; }
+        .expand-btn { cursor: pointer; font-size: 18px; font-weight: bold; color: #667eea; user-select: none; width: 30px; text-align: center; }
+        .expand-btn:hover { color: #764ba2; }
+        .print-shipment-btn { cursor: pointer; font-size: 20px; color: #667eea; padding: 5px 10px; border-radius: 4px; background: transparent; border: 1px solid #667eea; transition: all 0.2s; }
+        .print-shipment-btn:hover { background: #667eea; color: white; }
+        .items-row { display: none; background: #f8f9fa; }
+        .items-row.expanded { display: table-row; }
+        .items-table { width: 100%; margin: 15px 0; border: 1px solid #e0e0e0; }
+        .items-table th { background: #555; color: white; padding: 10px; text-align: left; font-size: 12px; border-bottom: 2px solid #e0e0e0; font-weight: 600; }
+        .items-table td { padding: 10px; border-bottom: 1px solid #e0e0e0; font-size: 13px; }
+        .items-table td.description { max-width: 300px; word-wrap: break-word; white-space: normal; }
+        .items-table input, .items-table select { width: 100px; padding: 6px; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 13px; }
+        .button-group { display: flex; gap: 15px; margin-top: 20px; }
+        .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .labels-container { display: none; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .labels-header { display: flex; justify-content: space-between; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
+        .label-card { border: 2px solid #000; padding: 14px; margin-bottom: 20px; width: 6in; height: 4in; page-break-after: always; position: relative; display: flex; flex-direction: column; box-sizing: border-box; }
+        .label-logo-slot {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 86px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .label-logo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .label-customer {
+            text-align: center;
+            font-size: 22px;
+            font-weight: 700;
+            color: #000;
+            margin: 6px 0;
+            border-bottom: 2px solid #000;
+            padding-bottom: 6px;
+            padding-right: 96px;
+            line-height: 1.1;
+            min-height: 46px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .label-footer { position: static; margin-top: auto; text-align: center; font-size: 12px; font-weight: 600; color: #000; border-top: 2px solid #000; padding-top: 6px; }
+        .label-body { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+        .label-field { display: flex; flex-direction: column; padding: 8px; border: 1px solid #000; }
+        .label-field.item-field { min-height: 88px; }
+        .label-field.qty-field { margin-top: 8px; }
+        .label-field-label { font-size: 11px; color: #000; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+        .label-field-value { font-size: 15px; color: #000; font-weight: 500; }
+        .label-field-value.item-multiline { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; min-height: 56px; max-height: 56px; overflow: hidden; }
+        .label-field-value.large { font-size: 22px; font-weight: 700; color: #000; }
+        .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #f5c6cb; }
+        .loading { text-align: center; padding: 20px; color: #667eea; font-size: 16px; }
+        .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; }
+        .loading-overlay.active { display: flex; }
+        .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #667eea; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-text { color: white; font-size: 18px; margin-top: 20px; font-weight: 600; }
+        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+        .dashboard-btn:hover { background: #ffffff; }
+        @media print {
+            @page { size: 6in 4in landscape; margin: 0; }
+            body { background: white; padding: 0; }
+            .header, .controls, .labels-header { display: none; }
+            .labels-container { box-shadow: none; padding: 0; }
+            .label-card { margin: 0; }
+            .dashboard-btn { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <a href="./dashboard.html" class="dashboard-btn">← Dashboard</a>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loading-text">Generating labels...</div>
+    </div>
+    <div class="container">
+        <div class="header">
+            <h1>📦 Batch Shipment Labeling System</h1>
+            <p>American Traders LLC - Process multiple shipments at once</p>
+        </div>
+        <div class="controls">
+            <div id="loading" class="loading">Loading shipments...</div>
+            <div id="shipments-container" style="display: none;">
+                <!-- Bulk Pack Size Entry Section -->
+                <div class="bulk-items-section" id="bulk-items-section" style="display: none;">
+                    <h3>⚡ Quick Pack Size Entry - Apply to All Shipments</h3>
+                    <p style="color: #666; font-size: 14px; margin-bottom: 15px;">Enter pack sizes once for each unique item. Click "Apply" to update all matching items across all shipments.</p>
+                    <table class="bulk-items-table">
+                        <thead>
+                            <tr>
+                                <th>Item Code</th>
+                                <th>Description</th>
+                                <th>Total Qty Across All Shipments</th>
+                                <th>Pack Size</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bulk-items-list"></tbody>
+                    </table>
+                    <button class="apply-bulk-btn" onclick="applyBulkPackSizes()">✓ Apply to All Shipments</button>
+                </div>
+                <div class="shipments-table-container">
+                    <table class="shipments-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>Shipment Code</th>
+                                <th>Customer Order</th>
+                                <th>Customer Name</th>
+                                <th>PO #</th>
+                                <th>Status</th>
+                                <th>Items</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="shipments-list"></tbody>
+                    </table>
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="generateAllLabels()">Generate All Labels</button>
+                    <button class="btn btn-primary" onclick="finalizeAllShipments()" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);">🔒 Finalize & Lock All</button>
+                    <button class="btn btn-secondary" onclick="window.print()" style="display: none;" id="print-btn">Print Labels</button>
+                </div>
+            </div>
+            <div id="error-message"></div>
+        </div>
+        <div class="labels-container" id="labels-container">
+            <div class="labels-header"><h2 id="labels-title">Generated Labels</h2><span id="labels-count"></span></div>
+            <div id="labels-list"></div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
+        let allShipments = [];
+        
+        // Helper functions - define early so they can be used by other functions
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.className = message ? 'error' : '';
+            errorDiv.textContent = message;
+        }
+        
+        function showLoading(text = 'Generating labels...') {
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            loadingText.textContent = text;
+            overlay.classList.add('active');
+        }
+        
+        function hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.classList.remove('active');
+        }
+        
+        function toggleItems(index) {
+            const itemsRow = document.getElementById(`items-row-${index}`);
+            const expandBtn = document.querySelectorAll('.expand-btn')[index];
+            
+            if (itemsRow.classList.contains('expanded')) {
+                itemsRow.classList.remove('expanded');
+                expandBtn.textContent = '▶';
+            } else {
+                itemsRow.classList.add('expanded');
+                expandBtn.textContent = '▼';
+            }
+        }
+        
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getLabelLogoMarkup() {
+            if (!COMPANY_LOGO_URL) {
+                return '<div class="label-logo-slot" aria-hidden="true"></div>';
+            }
+
+            const safeLogoUrl = escapeHtml(COMPANY_LOGO_URL);
+            return `<div class="label-logo-slot" aria-hidden="true"><img class="label-logo" src="${safeLogoUrl}" alt=""></div>`;
+        }
+
+        function autoFitItemText() {
+            const maxFontSize = 15;
+            const minFontSize = 10;
+            const fontStep = 0.5;
+            const maxLines = 4;
+
+            document.querySelectorAll('.item-multiline').forEach((element) => {
+                element.style.fontSize = `${maxFontSize}px`;
+                element.style.lineHeight = '1.2';
+                element.style.display = 'block';
+                element.style.overflow = 'hidden';
+
+                let currentSize = maxFontSize;
+                while (element.scrollHeight > element.clientHeight && currentSize > minFontSize) {
+                    currentSize -= fontStep;
+                    element.style.fontSize = `${currentSize}px`;
+                }
+
+                if (element.scrollHeight > element.clientHeight) {
+                    element.style.display = '-webkit-box';
+                    element.style.webkitBoxOrient = 'vertical';
+                    element.style.webkitLineClamp = String(maxLines);
+                    element.style.textOverflow = 'ellipsis';
+                }
+            });
+        }
+
+        function displayLabels(data) {
+            const title = document.getElementById('labels-title');
+            const count = document.getElementById('labels-count');
+            const list = document.getElementById('labels-list');
+            title.textContent = `Generated Labels (${data.shipment_code})`;
+            count.textContent = `${data.total_labels} label(s)`;
+            list.innerHTML = '';
+            
+            // Extract PO # and Shipment code for filename
+            let poNumber = 'Labels';
+            let shipmentCode = data.shipment_code;
+            
+            if (data.labels && data.labels.length > 0) {
+                const firstLabel = data.labels[0];
+                if (firstLabel.reference) {
+                    poNumber = firstLabel.reference.replace(/[^a-zA-Z0-9]/g, '_');
+                } else if (firstLabel.customer_order) {
+                    poNumber = firstLabel.customer_order;
+                }
+            }
+            
+            // Set document title for PDF filename
+            document.title = 'American Traders LLC';
+            
+            data.labels.forEach((label, index) => {
+                const labelCard = document.createElement('div');
+                labelCard.className = 'label-card';
+                const customerName = label.customer_name || 'Customer';
+                const poNumber = label.reference || label.customer_order || 'N/A';
+                const orderNumber = label.customer_order || 'N/A';
+                const jobNumber = label.job_number || 'N/A';
+                const itemCode = escapeHtml(label.item_code || 'N/A');
+                const itemTitle = escapeHtml(label.item_title || '');
+                const itemBoxHtml = `<div><strong>ITEM # ${itemCode}</strong></div><div>${itemTitle}</div>`;
+                
+                labelCard.innerHTML = `
+                    ${getLabelLogoMarkup()}
+                    <div class="label-customer">${customerName}</div>
+                    <div class="label-body">
+                        <div class="label-field">
+                            <div class="label-field-label">Shipment</div>
+                            <div class="label-field-value">${label.shipment_code}</div>
+                        </div>
+                        <div class="label-field">
+                            <div class="label-field-label">Order #</div>
+                            <div class="label-field-value">${orderNumber}</div>
+                        </div>
+                        <div class="label-field">
+                            <div class="label-field-label">PO #</div>
+                            <div class="label-field-value">${poNumber}</div>
+                        </div>
+                        <div class="label-field">
+                            <div class="label-field-label">Job #</div>
+                            <div class="label-field-value">${jobNumber}</div>
+                        </div>
+                        <div class="label-field item-field" style="grid-column: span 4;">
+                            <div class="label-field-value item-multiline">${itemBoxHtml}</div>
+                        </div>
+                        <div class="label-field qty-field" style="grid-column: span 4;">
+                            <div class="label-field-label">Quantity in Box</div>
+                            <div class="label-field-value large">${label.quantity_in_box}</div>
+                        </div>
+                    </div>
+                    <div class="label-footer">American Traders LLC - ATind Supplies</div>
+                `;
+                list.appendChild(labelCard);
+            });
+            autoFitItemText();
+            document.getElementById('labels-container').style.display = 'block';
+        }
+        
+        // Main functions below
+        async function checkBackend() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                if (!response.ok) throw new Error('Backend not responding');
+                return true;
+            } catch (error) {
+                showError('Cannot connect to backend. Ensure FastAPI is running on http://localhost:8000');
+                return false;
+            }
+        }
+        
+        async function loadShipments() {
+            if (!(await checkBackend())) {
+                document.getElementById('loading').textContent = 'Backend not running';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/ready`);
+                const data = await response.json();
+
+                if (data.shipments && data.shipments.length > 0) {
+                    allShipments = data.shipments;
+                    await loadShipmentDetails();
+                    renderShipmentsTable();
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('shipments-container').style.display = 'block';
+                } else {
+                    document.getElementById('loading').textContent = 'No ready shipments found';
+                }
+            } catch (error) {
+                document.getElementById('loading').textContent = 'Error loading shipments';
+                showError('Failed to load shipments: ' + error.message);
+            }
+        }
+        
+        async function loadShipmentDetails() {
+            for (let shipment of allShipments) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/shipments/${shipment.code}`);
+                    const data = await response.json();
+                    shipment.details = data.shipment;
+                } catch (error) {
+                    console.error(`Error loading details for ${shipment.code}:`, error);
+                }
+            }
+        }
+        
+        function renderShipmentsTable() {
+            const tbody = document.getElementById('shipments-list');
+            tbody.innerHTML = '';
+            
+            // Build unique items map for bulk entry
+            const uniqueItems = {};
+            
+            allShipments.forEach((shipment, index) => {
+                const details = shipment.details || {};
+                
+                if (details.products) {
+                    details.products.forEach(product => {
+                        const itemCode = product.item_code;
+                        if (!uniqueItems[itemCode]) {
+                            uniqueItems[itemCode] = {
+                                item_code: itemCode,
+                                item_title: product.item_title || '',
+                                total_quantity: 0
+                            };
+                        }
+                        uniqueItems[itemCode].total_quantity += product.quantity_booked || 0;
+                    });
+                }
+            });
+            
+            // Render bulk items table if we have items
+            if (Object.keys(uniqueItems).length > 0) {
+                renderBulkItemsTable(uniqueItems);
+            }
+            
+            allShipments.forEach((shipment, index) => {
+                const details = shipment.details || {};
+                const customerName = details.customer_name || 'N/A';
+                const reference = details.reference || 'N/A';
+                
+                // Main shipment row
+                const shipmentRow = document.createElement('tr');
+                shipmentRow.innerHTML = `
+                    <td><span class="expand-btn" onclick="toggleItems(${index})">▶</span></td>
+                    <td><strong>${shipment.code}</strong></td>
+                    <td>${shipment.customer_order_code || 'N/A'}</td>
+                    <td>${customerName}</td>
+                    <td>${reference}</td>
+                    <td>${shipment.status_txt || 'N/A'}</td>
+                    <td>${shipment.products_count || 0}</td>
+                    <td><button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="Print this shipment">🖨️</button></td>
+                `;
+                tbody.appendChild(shipmentRow);
+                
+                // Items row (hidden by default)
+                const itemsRow = document.createElement('tr');
+                itemsRow.className = 'items-row';
+                itemsRow.id = `items-row-${index}`;
+                itemsRow.innerHTML = `
+                    <td colspan="8">
+                        <div style="padding: 15px 0;">
+                            <div style="margin-bottom: 15px; display: flex; gap: 20px; align-items: center;">
+                                <div>
+                                    <label style="font-weight: 600; color: #333;">Pallet #:</label>
+                                    <input type="text" id="pallet-${shipment.code}" placeholder="Optional - for grouping on pallets" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
+                                </div>
+                                <button class="btn btn-primary" onclick="finalizeShipment(${index})" style="padding: 10px 20px;">🔒 Finalize & Lock</button>
+                            </div>
+                        </div>
+                        <table class="items-table">
+                            <thead>
+                                <tr>
+                                    <th>Item #</th>
+                                    <th>Description</th>
+                                    <th>Qty</th>
+                                    <th>Qty Remaining</th>
+                                    <th>Order Line</th>
+                                    <th>Pack Size</th>
+                                    <th>Label Mode</th>
+                                </tr>
+                            </thead>
+                            <tbody id="items-list-${index}"></tbody>
+                        </table>
+                    </td>
+                `;
+                tbody.appendChild(itemsRow);
+                
+                // Populate items - group by item_code + order_line to show combined items
+                if (details.products) {
+                    const itemsList = document.getElementById(`items-list-${index}`);
+                    
+                    // Group products by item_code + order_line
+                    const groupedProducts = {};
+                    details.products.forEach((product, prodIndex) => {
+                        const itemCode = product.item_code;
+                        const orderLine = product.order_line || '1';
+                        const groupKey = `${itemCode}:${orderLine}`;
+                        
+                        if (!groupedProducts[groupKey]) {
+                            groupedProducts[groupKey] = {
+                                item_code: itemCode,
+                                item_title: product.item_title,
+                                order_line: orderLine,
+                                total_quantity: 0,
+                                lot_codes: [],
+                                product_indices: [],
+                                qty_remaining: product.qty_remaining || 0
+                            };
+                        }
+                        
+                        groupedProducts[groupKey].total_quantity += product.quantity_booked || 0;
+                        groupedProducts[groupKey].lot_codes.push(product.lot_code || 'N/A');
+                        groupedProducts[groupKey].product_indices.push(prodIndex);
+                    });
+                    
+                    // Display grouped products
+                    Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                        const itemCode = group.item_code;
+                        const qty = group.total_quantity;
+                        const qtyRemaining = group.qty_remaining;
+                        const lotCodes = [...new Set(group.lot_codes)].join(', '); // Remove duplicates
+                        const orderLine = group.order_line;
+                        const prodIndex = group.product_indices[0]; // Use first product index for form IDs
+                        
+                        const row = document.createElement('tr');
+                        
+                        const itemCodeCell = document.createElement('td');
+                        itemCodeCell.innerHTML = `<strong>${itemCode}</strong><br><small style="color: #666;">Lots: ${lotCodes}</small>`;
+                        
+                        const descCell = document.createElement('td');
+                        descCell.className = 'description';
+                        descCell.textContent = group.item_title || '';
+                        
+                        const qtyCell = document.createElement('td');
+                        qtyCell.textContent = qty.toString();
+                        
+                        const qtyRemainingCell = document.createElement('td');
+                        qtyRemainingCell.textContent = qtyRemaining.toString();
+                        qtyRemainingCell.style.color = qtyRemaining <= 0 ? '#999' : '#333';
+                        
+                        const orderLineCell = document.createElement('td');
+                        orderLineCell.textContent = orderLine;
+                        orderLineCell.style.textAlign = 'center';
+                        orderLineCell.style.fontWeight = 'bold';
+                        
+                        const packSizeCell = document.createElement('td');
+                        const packInput = document.createElement('input');
+                        packInput.type = 'number';
+                        packInput.id = `pack-size-${shipment.code}-${itemCode}-${prodIndex}`;
+                        packInput.min = '1';
+                        packInput.value = qty.toString();
+                        packSizeCell.appendChild(packInput);
+                        
+                        const labelModeCell = document.createElement('td');
+                        const modeSelect = document.createElement('select');
+                        modeSelect.id = `label-mode-${shipment.code}-${itemCode}-${prodIndex}`;
+                        modeSelect.innerHTML = '<option value="grouped">Grouped</option><option value="individual">Individual</option>';
+                        modeSelect.value = 'grouped';
+                        labelModeCell.appendChild(modeSelect);
+                        
+                        row.appendChild(itemCodeCell);
+                        row.appendChild(descCell);
+                        row.appendChild(qtyCell);
+                        row.appendChild(qtyRemainingCell);
+                        row.appendChild(orderLineCell);
+                        row.appendChild(packSizeCell);
+                        row.appendChild(labelModeCell);
+                        itemsList.appendChild(row);
+                    });
+                }
+            });
+        }
+        
+        async function generateAndPrintShipment(index) {
+            showLoading(`Generating labels for shipment ${allShipments[index].code}...`);
+            
+            const shipment = allShipments[index];
+            const details = shipment.details;
+            if (!details || !details.products) {
+                hideLoading();
+                return;
+            }
+            
+            try {
+                const allLabels = [];
+                
+                // Group products by item_code + order_line (same logic as display)
+                const groupedProducts = {};
+                details.products.forEach((product, prodIndex) => {
+                    const itemCode = product.item_code;
+                    const orderLine = product.order_line || '1';
+                    const groupKey = `${itemCode}:${orderLine}`;
+                    
+                    if (!groupedProducts[groupKey]) {
+                        groupedProducts[groupKey] = {
+                            item_code: itemCode,
+                            order_line: orderLine,
+                            product_indices: []
+                        };
+                    }
+                    groupedProducts[groupKey].product_indices.push(prodIndex);
+                });
+                
+                // Collect pack sizes and modes for grouped products
+                const productConfigs = {};
+                
+                Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                    const itemCode = group.item_code;
+                    const orderLine = group.order_line;
+                    const firstProdIndex = group.product_indices[0];
+                    
+                    const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    const labelModeSelect = document.getElementById(`label-mode-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    
+                    console.log(`Group ${groupKey}: firstProdIndex=${firstProdIndex}, form ID=pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`, {packSizeInput, labelModeSelect});
+                    
+                    if (packSizeInput && labelModeSelect) {
+                        // Send ALL product indices for this group
+                        group.product_indices.forEach(prodIndex => {
+                            const productKey = `${itemCode}-${prodIndex}`;
+                            productConfigs[productKey] = {
+                                item_code: itemCode,
+                                order_line: orderLine,
+                                pack_size: parseInt(packSizeInput.value) || 1,
+                                label_mode: labelModeSelect.value
+                            };
+                        });
+                        console.log(`Group ${groupKey} productConfigs:`, productConfigs);
+                    } else {
+                        console.warn(`Group ${groupKey}: Form inputs not found!`);
+                    }
+                });
+                
+                // Group by label mode and send to backend
+                const modeGroups = {};
+                for (const [key, config] of Object.entries(productConfigs)) {
+                    const mode = config.label_mode;
+                    if (!modeGroups[mode]) modeGroups[mode] = {};
+                    modeGroups[mode][key] = config;
+                }
+                
+                // Generate labels for each label mode
+                for (const [labelMode, itemsToGenerate] of Object.entries(modeGroups)) {
+                    try {
+                        const response = await fetch(`${API_BASE}/api/labels/generate/${shipment.code}?label_mode=${labelMode}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(itemsToGenerate)
+                        });
+                        
+                        const data = await response.json();
+                        if (data.labels) {
+                            allLabels.push(...data.labels);
+                        }
+                    } catch (error) {
+                        console.error(`Error generating labels for ${shipment.code}:`, error);
+                    }
+                }
+                
+                if (allLabels.length > 0) {
+                    displayLabels({ shipment_code: shipment.code, total_labels: allLabels.length, labels: allLabels });
+                    hideLoading();
+                    setTimeout(() => window.print(), 500);
+                } else {
+                    hideLoading();
+                    showError(`No labels generated for shipment ${shipment.code}`);
+                }
+            } catch (error) {
+                hideLoading();
+                showError(`Error: ${error.message}`);
+            }
+        }
+        
+        
+        async function generateAllLabels() {
+            showLoading('Generating labels for all shipments...');
+            const allLabels = [];
+            
+            for (const shipment of allShipments) {
+                const details = shipment.details;
+                if (!details || !details.products) continue;
+                
+                // Group products by item_code + order_line (same logic as display)
+                const groupedProducts = {};
+                details.products.forEach((product, prodIndex) => {
+                    const itemCode = product.item_code;
+                    const orderLine = product.order_line || '1';
+                    const groupKey = `${itemCode}:${orderLine}`;
+                    
+                    if (!groupedProducts[groupKey]) {
+                        groupedProducts[groupKey] = {
+                            item_code: itemCode,
+                            order_line: orderLine,
+                            product_indices: []
+                        };
+                    }
+                    groupedProducts[groupKey].product_indices.push(prodIndex);
+                });
+                
+                // Collect pack sizes and modes for grouped products
+                const productConfigs = {};
+                
+                Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                    const itemCode = group.item_code;
+                    const orderLine = group.order_line;
+                    const firstProdIndex = group.product_indices[0];
+                    
+                    const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    const labelModeSelect = document.getElementById(`label-mode-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    
+                    if (packSizeInput && labelModeSelect) {
+                        // Send ALL product indices for this group
+                        group.product_indices.forEach(prodIndex => {
+                            const productKey = `${itemCode}-${prodIndex}`;
+                            productConfigs[productKey] = {
+                                item_code: itemCode,
+                                order_line: orderLine,
+                                pack_size: parseInt(packSizeInput.value) || 1,
+                                label_mode: labelModeSelect.value
+                            };
+                        });
+                    }
+                });
+                
+                // Group by label mode and send to backend
+                const modeGroups = {};
+                for (const [key, config] of Object.entries(productConfigs)) {
+                    const mode = config.label_mode;
+                    if (!modeGroups[mode]) modeGroups[mode] = {};
+                    modeGroups[mode][key] = config;
+                }
+                
+                for (const [labelMode, products] of Object.entries(modeGroups)) {
+                    if (Object.keys(products).length === 0) continue;
+                    
+                    try {
+                        const response = await fetch(`${API_BASE}/api/labels/generate/${shipment.code}?label_mode=${labelMode}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(products)
+                        });
+                        
+                        const data = await response.json();
+                        if (data.labels) {
+                            allLabels.push(...data.labels);
+                        }
+                    } catch (error) {
+                        console.error(`Error generating labels for ${shipment.code}:`, error);
+                    }
+                }
+            }
+            
+            if (allLabels.length > 0) {
+                displayLabels({ shipment_code: 'Multiple Shipments', total_labels: allLabels.length, labels: allLabels });
+                document.getElementById('print-btn').style.display = 'inline-block';
+                hideLoading();
+            } else {
+                hideLoading();
+                showError('No labels generated');
+            }
+        }
+        
+        async function finalizeShipment(index) {
+            showLoading(`Finalizing shipment configuration...`);
+            
+            const shipment = allShipments[index];
+            const details = shipment.details;
+            if (!details || !details.products) {
+                hideLoading();
+                return;
+            }
+            
+            try {
+                // Get pallet number from input
+                const palletInput = document.getElementById(`pallet-${shipment.code}`);
+                const palletNumber = palletInput ? palletInput.value.trim() : null;
+                
+                // Group products by item_code + order_line (same logic as display)
+                const groupedProducts = {};
+                details.products.forEach((product, prodIndex) => {
+                    const itemCode = product.item_code;
+                    const orderLine = product.order_line || '1';
+                    const groupKey = `${itemCode}:${orderLine}`;
+                    
+                    if (!groupedProducts[groupKey]) {
+                        groupedProducts[groupKey] = {
+                            item_code: itemCode,
+                            order_line: orderLine,
+                            product_indices: []
+                        };
+                    }
+                    groupedProducts[groupKey].product_indices.push(prodIndex);
+                });
+                
+                // Collect pack sizes for grouped products
+                const productConfigs = {};
+                
+                Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                    const itemCode = group.item_code;
+                    const orderLine = group.order_line;
+                    const firstProdIndex = group.product_indices[0];
+                    
+                    const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    
+                    if (packSizeInput) {
+                        // Send ALL product indices for this group
+                        group.product_indices.forEach(prodIndex => {
+                            const productKey = `${itemCode}-${prodIndex}`;
+                            productConfigs[productKey] = {
+                                item_code: itemCode,
+                                order_line: orderLine,
+                                pack_size: parseInt(packSizeInput.value) || 1
+                            };
+                        });
+                    }
+                });
+                
+                // Send finalize request to backend
+                const response = await fetch(`${API_BASE}/api/labels/finalize/${shipment.code}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        pallet_number: palletNumber,
+                        product_configs: productConfigs
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    hideLoading();
+                    const packingSlipLink = `<a href="packing-slip.html?shipment=${shipment.code}" target="_blank" style="color: #1976d2; text-decoration: underline; margin-left: 10px;">View Packing Slip</a>`;
+                    showError(`✓ Finalized ${shipment.code}: ${data.total_boxes_saved} boxes saved to database with ${palletNumber ? `pallet #${palletNumber}` : 'no pallet assignment'} ${packingSlipLink}`);
+                    
+                    // Disable pack size inputs after finalization
+                    Object.keys(productConfigs).forEach(productKey => {
+                        const [itemCode, prodIndex] = productKey.split('-');
+                        const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${prodIndex}`);
+                        if (packSizeInput) {
+                            packSizeInput.disabled = true;
+                            packSizeInput.style.opacity = '0.6';
+                        }
+                    });
+                    
+                    // Disable pallet input
+                    if (palletInput) {
+                        palletInput.disabled = true;
+                        palletInput.style.opacity = '0.6';
+                    }
+                } else {
+                    hideLoading();
+                    showError(`Error: ${data.detail || 'Failed to finalize shipment'}`);
+                }
+            } catch (error) {
+                hideLoading();
+                showError(`Error finalizing shipment: ${error.message}`);
+                console.error('Finalize error:', error);
+            }
+        }
+        
+        function renderBulkItemsTable(uniqueItems) {
+            const bulkItemsList = document.getElementById('bulk-items-list');
+            const bulkSection = document.getElementById('bulk-items-section');
+            
+            bulkItemsList.innerHTML = '';
+            
+            Object.values(uniqueItems).forEach(item => {
+                const row = document.createElement('tr');
+                
+                const itemCodeCell = document.createElement('td');
+                itemCodeCell.innerHTML = `<strong>${item.item_code}</strong>`;
+                
+                const descCell = document.createElement('td');
+                descCell.textContent = item.item_title;
+                descCell.style.maxWidth = '400px';
+                descCell.style.wordWrap = 'break-word';
+                
+                const qtyCell = document.createElement('td');
+                qtyCell.textContent = item.total_quantity.toString();
+                qtyCell.style.fontWeight = 'bold';
+                
+                const packSizeCell = document.createElement('td');
+                const packInput = document.createElement('input');
+                packInput.type = 'number';
+                packInput.id = `bulk-pack-size-${item.item_code}`;
+                packInput.min = '1';
+                packInput.value = item.total_quantity.toString();
+                packInput.style.width = '120px';
+                packSizeCell.appendChild(packInput);
+                
+                row.appendChild(itemCodeCell);
+                row.appendChild(descCell);
+                row.appendChild(qtyCell);
+                row.appendChild(packSizeCell);
+                bulkItemsList.appendChild(row);
+            });
+            
+            bulkSection.style.display = 'block';
+        }
+        
+        function applyBulkPackSizes() {
+            let appliedCount = 0;
+            
+            // Iterate through all shipments and update matching items
+            allShipments.forEach((shipment) => {
+                const details = shipment.details;
+                if (!details || !details.products) return;
+                
+                // Group products by item_code + order_line (same logic as display)
+                const groupedProducts = {};
+                details.products.forEach((product, prodIndex) => {
+                    const itemCode = product.item_code;
+                    const orderLine = product.order_line || '1';
+                    const groupKey = `${itemCode}:${orderLine}`;
+                    
+                    if (!groupedProducts[groupKey]) {
+                        groupedProducts[groupKey] = {
+                            item_code: itemCode,
+                            order_line: orderLine,
+                            product_indices: []
+                        };
+                    }
+                    groupedProducts[groupKey].product_indices.push(prodIndex);
+                });
+                
+                // Update pack sizes from bulk inputs
+                Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                    const itemCode = group.item_code;
+                    const firstProdIndex = group.product_indices[0];
+                    
+                    const bulkPackInput = document.getElementById(`bulk-pack-size-${itemCode}`);
+                    const shipmentPackInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    const shipmentLabelMode = document.getElementById(`label-mode-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                    
+                    if (bulkPackInput && shipmentPackInput) {
+                        shipmentPackInput.value = bulkPackInput.value;
+                        appliedCount++;
+                    }
+                    
+                    if (shipmentLabelMode) {
+                        shipmentLabelMode.value = 'grouped';
+                    }
+                });
+            });
+            
+            showError(`✓ Applied pack sizes to ${appliedCount} item(s) across all shipments. Label mode set to "Grouped" for all items.`);
+            setTimeout(() => showError(''), 3000);
+        }
+        
+        async function finalizeAllShipments() {
+            if (!confirm(`Are you sure you want to finalize and lock ALL ${allShipments.length} shipments? This will save all configurations to the database.`)) {
+                return;
+            }
+            
+            showLoading(`Finalizing all ${allShipments.length} shipments...`);
+            
+            let successCount = 0;
+            let errorCount = 0;
+            let totalBoxesSaved = 0;
+            
+            for (let index = 0; index < allShipments.length; index++) {
+                const shipment = allShipments[index];
+                const details = shipment.details;
+                if (!details || !details.products) continue;
+                
+                try {
+                    const palletInput = document.getElementById(`pallet-${shipment.code}`);
+                    const palletNumber = palletInput ? palletInput.value.trim() : null;
+                    
+                    const groupedProducts = {};
+                    details.products.forEach((product, prodIndex) => {
+                        const itemCode = product.item_code;
+                        const orderLine = product.order_line || '1';
+                        const groupKey = `${itemCode}:${orderLine}`;
+                        
+                        if (!groupedProducts[groupKey]) {
+                            groupedProducts[groupKey] = {
+                                item_code: itemCode,
+                                order_line: orderLine,
+                                product_indices: []
+                            };
+                        }
+                        groupedProducts[groupKey].product_indices.push(prodIndex);
+                    });
+                    
+                    const productConfigs = {};
+                    
+                    Object.entries(groupedProducts).forEach(([groupKey, group]) => {
+                        const itemCode = group.item_code;
+                        const orderLine = group.order_line;
+                        const firstProdIndex = group.product_indices[0];
+                        
+                        const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
+                        
+                        if (packSizeInput) {
+                            group.product_indices.forEach(prodIndex => {
+                                const productKey = `${itemCode}-${prodIndex}`;
+                                productConfigs[productKey] = {
+                                    item_code: itemCode,
+                                    order_line: orderLine,
+                                    pack_size: parseInt(packSizeInput.value) || 1
+                                };
+                            });
+                        }
+                    });
+                    
+                    const response = await fetch(`${API_BASE}/api/labels/finalize/${shipment.code}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            pallet_number: palletNumber,
+                            product_configs: productConfigs
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        successCount++;
+                        totalBoxesSaved += data.total_boxes_saved || 0;
+                        
+                        Object.keys(productConfigs).forEach(productKey => {
+                            const [itemCode, prodIndex] = productKey.split('-');
+                            const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${prodIndex}`);
+                            if (packSizeInput) {
+                                packSizeInput.disabled = true;
+                                packSizeInput.style.opacity = '0.6';
+                            }
+                        });
+                        
+                        if (palletInput) {
+                            palletInput.disabled = true;
+                            palletInput.style.opacity = '0.6';
+                        }
+                    } else {
+                        errorCount++;
+                        console.error(`Failed to finalize ${shipment.code}:`, data.detail);
+                    }
+                } catch (error) {
+                    errorCount++;
+                    console.error(`Error finalizing ${shipment.code}:`, error);
+                }
+            }
+            
+            hideLoading();
+            
+            if (successCount > 0) {
+                showError(`✓ Successfully finalized ${successCount} shipment(s)! Total ${totalBoxesSaved} boxes saved to database.${errorCount > 0 ? ` (${errorCount} failed)` : ''}`);
+            } else {
+                showError(`❌ Failed to finalize shipments. Please check console for details.`);
+            }
+        }
+        
+        loadShipments();
+    </script>
+</body>
+</html>

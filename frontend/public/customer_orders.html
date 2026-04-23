@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+            font-size: 13px;
+            font-weight: 400;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 500;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            flex: 1;
+            min-width: 200px;
+            padding: 15px 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #4a5568;
+        }
+
+        .tab-btn:hover {
+            background: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .tab-btn.active {
+            background: white;
+            color: #667eea;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .content-area {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .tab-content h2 {
+            font-size: 20px;
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .tab-content p {
+            color: #718096;
+            margin-bottom: 20px;
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-danger {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .order-row {
+            cursor: pointer;
+            background: #f8fafc;
+            font-weight: 400;
+        }
+
+        .order-row:hover {
+            background: #e2e8f0;
+        }
+
+        .items-row {
+            display: none;
+            background: #ffffff;
+        }
+
+        .items-row.expanded {
+            display: table-row;
+        }
+
+        .items-table {
+            width: 100%;
+            margin: 10px 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .items-table th {
+            background: #f1f5f9;
+            padding: 8px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 500;
+            color: #475569;
+        }
+
+        .items-table td {
+            padding: 8px;
+            font-size: 12px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .table th {
+            background: #e2e8f0;
+            padding: 12px;
+            text-align: left;
+            font-weight: 500;
+            font-size: 12px;
+            color: #475569;
+            border-bottom: 2px solid #e2e8f0;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .table th:hover {
+            background: #f1f5f9;
+        }
+
+        .table td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 12px;
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .arrow {
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.3s ease;
+            font-size: 10px;
+        }
+
+        .arrow.expanded {
+            transform: rotate(90deg);
+        }
+
+        .group-toggle {
+            cursor: pointer;
+        }
+
+        .group-toggle-arrow {
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.2s ease;
+            font-size: 10px;
+        }
+
+        .group-toggle-arrow.expanded {
+            transform: rotate(90deg);
+        }
+
+        .sort-indicator {
+            margin-left: 5px;
+            font-size: 11px;
+            opacity: 0.5;
+        }
+
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            min-width: 200px;
+        }
+
+        .filter-group label {
+            font-weight: 500;
+            color: #2d3748;
+            font-size: 14px;
+        }
+
+        .filter-group input {
+            padding: 8px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-size: 14px;
+            background: #ffffff;
+        }
+
+        .filter-group select {
+            padding: 8px 12px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .filter-clear-btn {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            align-self: flex-end;
+        }
+
+        strong {
+            font-weight: 400;
+        }
+
+        .filter-clear-btn:hover {
+            background: #5a67d8;
+        }
+
+        .toggle-btn {
+            padding: 8px 16px;
+            background: #475569;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            align-self: flex-end;
+        }
+
+        .toggle-btn:hover {
+            background: #334155;
+        }
+
+        .section-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+
+        .section-card h3 {
+            margin: 0 0 10px;
+            font-size: 16px;
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .panel-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .panel-actions select {
+            padding: 6px 10px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            font-size: 12px;
+            background: #ffffff;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 6px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .loading-subtext {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading Customer Orders</div>
+        <div class="loading-subtext">Please wait while we fetch your orders...</div>
+    </div>
+    <div class="container">
+        <div class="header">
+            <h1>📦 Customer Orders</h1>
+            <a href="./dashboard.html" class="back-btn">← Back to Dashboard</a>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="partially-shipped">Shipment Status (0)</button>
+        </div>
+
+        <div class="content-area">
+            <!-- Shipment Status Orders Tab -->
+            <div id="partially-shipped" class="tab-content active">
+                <h2>Order Shipment Status</h2>
+                <p>View and filter orders by their shipment and delivery status.</p>
+                <div class="filters">
+                    <div class="filter-group">
+                        <label>Shipment Filter:</label>
+                        <select id="shipment-filter">
+                            <option value="all_active" selected>All Active Orders (Not Cancelled/Delivered)</option>
+                            <option value="any_undelivered">Partial Deliveries</option>
+                            <option value="not_shipped">Undelivered</option>
+                            <option value="partially_shipped">Partial Items</option>
+                        </select>
+                    </div>
+                    <div class="filter-group" style="min-width: 320px; flex: 1;">
+                        <input type="text" id="partial-shipments-unified-search" placeholder="Search orders, customer, reference, job, item name, item #..." onkeyup="filterPartialShipments()">
+                    </div>
+                    <button class="filter-clear-btn" onclick="clearPartialShipmentsFilters()">Clear Filters</button>
+                    <button class="toggle-btn" onclick="toggleUnfulfilledItems()">Show Unfulfilled Items</button>
+                </div>
+                <div id="unfulfilled-items-panel" style="display: none;">
+                    <div class="section-card">
+                        <div class="panel-actions">
+                            <h3>Unfulfilled Items</h3>
+                            <select id="unfulfilled-group-by" onchange="renderUnfulfilledItems(window['partial-shipments_filteredData'] || [])">
+                            <option value="none">Group: None</option>
+                            <option value="item" selected>Group: Item Code</option>
+                            <option value="order">Group: Order</option>
+                            <option value="job">Group: Job #</option>
+                            <option value="customer">Group: Customer</option>
+                            <option value="reference">Group: Reference</option>
+                            </select>
+                        </div>
+                        <div id="unfulfilled-items-content"></div>
+                    </div>
+                </div>
+                <div id="partial-shipments-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        // Get authentication token from storage
+        function getToken() {
+            return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+        }
+
+        // Load data
+        async function loadShipmentStatusOrders() {
+            showLoading();
+            try {
+                const token = getToken();
+                if (!token) {
+                    console.error('No authentication token found');
+                    window.location.href = './login.html';
+                    return;
+                }
+                
+                const filterType = document.getElementById('shipment-filter').value;
+                
+                const response = await fetch(`${API_BASE}/api/customer-orders/shipment-status?filter_type=${filterType}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        console.error('Authentication failed');
+                        window.location.href = './login.html';
+                        return;
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const orders = await response.json();
+                
+                // Debug: log first order structure
+                if (orders.length > 0) {
+                    console.log('First order:', orders[0]);
+                    console.log('Job # field (job_number):', orders[0].job_number);
+                }
+
+                // Update the tab count
+                const filterText = document.getElementById('shipment-filter').selectedOptions[0].text;
+                document.querySelectorAll('.tab-btn')[0].textContent = `Shipment Status (${orders.length})`;
+
+                // Render orders
+                renderPartialShipments({ orders });
+                hideLoading();
+            } catch (error) {
+                console.error('Error loading shipment status orders:', error);
+                hideLoading();
+                document.getElementById('partial-shipments-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #dc3545;">Error loading orders. Please try again.</p>';
+            }
+        }
+        
+        // Alias for initial load
+        async function loadPartialShipments() {
+            await loadShipmentStatusOrders();
+        }
+
+        function showLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) {
+                overlay.classList.remove('hidden');
+            }
+        }
+
+        function hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function toggleOrderItems(rowId) {
+            const itemsRow = document.getElementById(rowId);
+            const arrow = document.getElementById(rowId + '-arrow');
+            
+            if (itemsRow.classList.contains('expanded')) {
+                itemsRow.classList.remove('expanded');
+                arrow.classList.remove('expanded');
+            } else {
+                itemsRow.classList.add('expanded');
+                arrow.classList.add('expanded');
+            }
+        }
+
+        // Helper function to convert MRPeasy dates (Unix timestamps or ISO strings)
+        function formatMRPeasyDate(dateValue) {
+            if (!dateValue) return 'N/A';
+            
+            // If it's a numeric timestamp (Unix time in seconds)
+            if (typeof dateValue === 'string' && /^\d+$/.test(dateValue)) {
+                return new Date(parseInt(dateValue) * 1000).toLocaleDateString();
+            }
+            
+            // If it's already a number (Unix timestamp)
+            if (typeof dateValue === 'number') {
+                return new Date(dateValue * 1000).toLocaleDateString();
+            }
+            
+            // Otherwise treat as ISO date string
+            return new Date(dateValue).toLocaleDateString();
+        }
+
+        function renderPartialShipments(data, updateOriginal = true) {
+            // Store original data for filtering only on initial load
+            if (updateOriginal) {
+                window['partial-shipments_originalData'] = JSON.parse(JSON.stringify(data.orders || []));
+            }
+            window['partial-shipments_filteredData'] = JSON.parse(JSON.stringify(data.orders || []));
+
+            const orders = data.orders || [];
+            const currencyTotals = orders.reduce((totals, order) => {
+                totals.orderValue += Number(order.total_price) || 0;
+                totals.deliveredValue += Number(order.shipped_value) || 0;
+                totals.undeliveredValue += Number(order.remaining_value) || 0;
+                return totals;
+            }, {
+                orderValue: 0,
+                deliveredValue: 0,
+                undeliveredValue: 0
+            });
+            
+            if (!orders || orders.length === 0) {
+                document.getElementById('partial-shipments-table').innerHTML = '<p style="padding: 20px; text-align: center; color: #718096;">No orders found matching the selected filter.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th onclick="sortPartialShipments(\'code\')" style="cursor: pointer;">Order <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'customer_name\')" style="cursor: pointer;">Customer <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'reference\')" style="cursor: pointer;">Reference <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'job_number\')" style="cursor: pointer;">Job # <span class="sort-indicator">↕</span></th>';
+            html += '<th>Shipment Status</th>';
+            html += '<th onclick="sortPartialShipments(\'total_price\')" style="cursor: pointer;">Order Value <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'shipped_value\')" style="cursor: pointer;">Delivered Value <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'remaining_value\')" style="cursor: pointer;">Undelivered Value <span class="sort-indicator">↕</span></th>';
+            html += '<th onclick="sortPartialShipments(\'delivery_date\')" style="cursor: pointer;">Delivery Date <span class="sort-indicator">↕</span></th>';
+            html += '<th>Order Status</th>';
+            html += '<th>Invoices</th>';
+            html += '</tr></thead><tbody>';
+
+            orders.forEach((order, index) => {
+                const products = order.products || [];
+                const rowId = `order-${index}`;
+                const jobNumber = order.job_number || 'N/A';
+                const shipmentSummary = order.shipment_summary || {};
+                const invoices = order.invoices || [];
+                
+                // Create shipment status badge
+                let shipmentBadge = '';
+                if (shipmentSummary.not_shipped === shipmentSummary.total_items) {
+                    shipmentBadge = '<span class="badge badge-danger">Undelivered</span>';
+                } else if (shipmentSummary.fully_shipped === shipmentSummary.total_items) {
+                    shipmentBadge = '<span class="badge badge-success">Fully Shipped</span>';
+                } else {
+                    shipmentBadge = `<span class="badge badge-warning">Partial (${shipmentSummary.partially_shipped + shipmentSummary.fully_shipped}/${shipmentSummary.total_items})</span>`;
+                }
+                
+                html += `<tr class="order-row" onclick="toggleOrderItems('${rowId}')">`;                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${order.code}</strong></td>`;
+                html += `<td>${order.customer_name}</td>`;
+                html += `<td>${order.reference || 'N/A'}</td>`;
+                html += `<td><strong>${jobNumber}</strong></td>`;
+                html += `<td>${shipmentBadge}</td>`;
+                html += `<td>${order.currency || '$'}${(order.total_price || 0).toLocaleString()}</td>`;
+                html += `<td><strong style="color: #10b981;">${order.currency || '$'}${(order.shipped_value || 0).toLocaleString()}</strong></td>`;
+                html += `<td><strong style="color: #ef4444;">${order.currency || '$'}${(order.remaining_value || 0).toLocaleString()}</strong></td>`;
+                html += `<td>${formatMRPeasyDate(order.delivery_date)}</td>`;
+                html += `<td><span style="font-size: 12px; color: #64748b;">${order.status_txt || 'N/A'}</span></td>`;
+                html += `<td>${invoices.length} invoice(s)</td>`;
+                html += '</tr>';
+                
+                // Items detail row
+                html += `<tr class="items-row" id="${rowId}">`;
+                html += '<td colspan="11" style="padding: 0 15px 15px 50px;">';
+                
+                // Order dates section
+                html += '<div style="margin-bottom: 15px; padding: 10px; background: #f0f9ff; border-radius: 6px;">';
+                html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📅 Order Dates:</h4>';
+                html += '<div style="display: flex; gap: 15px; flex-wrap: wrap; font-size: 13px;">';
+                if (order.created) {
+                    html += `<div><strong>Created:</strong> ${formatMRPeasyDate(order.created)}</div>`;
+                }
+                if (order.confirmed_at) {
+                    html += `<div><strong>Confirmed:</strong> ${formatMRPeasyDate(order.confirmed_at)}</div>`;
+                }
+                if (order.modified) {
+                    html += `<div><strong>Modified:</strong> ${formatMRPeasyDate(order.modified)}</div>`;
+                }
+                if (order.delivery_date) {
+                    html += `<div><strong>Expected Delivery:</strong> ${formatMRPeasyDate(order.delivery_date)}</div>`;
+                }
+                if (order.actual_delivery_date) {
+                    html += `<div><strong>Actual Delivery:</strong> ${formatMRPeasyDate(order.actual_delivery_date)}</div>`;
+                }
+                if (order.latest_shipment_date) {
+                    html += `<div><strong>Latest Shipment:</strong> ${formatMRPeasyDate(order.latest_shipment_date)}</div>`;
+                }
+                html += '</div></div>';
+                
+                // Shipments section
+                const shipments = order.shipments || [];
+                if (shipments.length > 0) {
+                    html += '<div style="margin-bottom: 15px; padding: 10px; background: #fef3c7; border-radius: 6px;">';
+                    html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📦 Shipments:</h4>';
+                    html += '<div style="display: flex; gap: 10px; flex-wrap: wrap;">';
+                    shipments.forEach(ship => {
+                        html += `<div style="padding: 5px 10px; background: white; border-radius: 4px; border: 1px solid #e2e8f0;">`;
+                        html += `<strong>${ship.code}</strong>`;
+                        if (ship.shipped_date) {
+                            html += ` - <span style="color: #718096;">${formatMRPeasyDate(ship.shipped_date)}</span>`;
+                        }
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                }
+                
+                // Order-level invoices section
+                if (invoices.length > 0) {
+                    html += '<div style="margin-bottom: 15px; padding: 10px; background: #f7fafc; border-radius: 6px;">';
+                    html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📄 Order Invoices:</h4>';
+                    html += '<div style="display: flex; gap: 10px; flex-wrap: wrap;">';
+                    invoices.forEach(inv => {
+                        const statusBadge = inv.status === 40 ? 'badge-success' : inv.status === 20 ? 'badge-danger' : 'badge-warning';
+                        html += `<div style="padding: 5px 10px; background: white; border-radius: 4px; border: 1px solid #e2e8f0;">`;
+                        html += `<strong>${inv.code}</strong> - <span class="badge ${statusBadge}">${inv.status_txt}</span>`;
+                        html += `<span style="margin-left: 8px; color: #718096;">${inv.currency}${(inv.total_price_cur || 0).toFixed(2)}</span>`;
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                }
+                
+                // Items table
+                html += '<table class="items-table">';
+                html += '<thead><tr>';
+                html += '<th>Item Code</th>';
+                html += '<th style="max-width: 120px;">Item Name</th>';
+                html += '<th>Qty</th>';
+                html += '<th>Unit Price</th>';
+                html += '<th>Shipped Qty</th>';
+                html += '<th>Shipped Price</th>';
+                html += '<th>Remaining</th>';
+                html += '<th>Remaining Price</th>';
+                html += '<th>Status</th>';
+                html += '<th>Invoiced On</th>';
+                html += '</tr></thead><tbody>';
+                
+                products.forEach(product => {
+                    const itemInvoices = product.invoices || [];
+                    let invoiceInfo = 'N/A';
+                    if (itemInvoices.length > 0) {
+                        invoiceInfo = itemInvoices.map(inv => 
+                            `${inv.invoice_code} (${inv.invoice_status})`
+                        ).join('<br>');
+                    }
+                    
+                    html += '<tr>';
+                    html += `<td><strong>${product.item_code || 'N/A'}</strong></td>`;
+                    html += `<td style="max-width: 120px; word-wrap: break-word;">${product.item_title || 'N/A'}</td>`;
+                    html += `<td>${product.quantity || 0}</td>`;
+                    html += `<td>$${(product.item_price || 0).toFixed(2)}</td>`;
+                    html += `<td>${product.shipped || 0}</td>`;
+                    html += `<td>$${(product.shipped_price || 0).toFixed(2)}</td>`;
+                    html += `<td>${product.remaining || 0}</td>`;
+                    html += `<td>$${(product.remaining_price || 0).toFixed(2)}</td>`;
+                    
+                    // Status badge based on item status
+                    let statusBadge = '';
+                    if (product.status === 'Not Shipped') {
+                        statusBadge = '<span class="badge badge-danger">Undelivered</span>';
+                    } else if (product.status === 'Fully Shipped') {
+                        statusBadge = '<span class="badge badge-success">Fully Shipped</span>';
+                    } else {
+                        statusBadge = '<span class="badge badge-warning">Partial Items</span>';
+                    }
+                    html += `<td>${statusBadge}</td>`;
+                    html += `<td style="font-size: 11px; color: #718096;">${invoiceInfo}</td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table></td></tr>';
+            });
+
+            html += '<tr style="background: #f8fafc; border-top: 2px solid #cbd5e0;">';
+            html += '<td colspan="5" style="text-align: right; font-weight: 700;">Totals</td>';
+            html += `<td style="font-weight: 700;">$${currencyTotals.orderValue.toLocaleString()}</td>`;
+            html += `<td style="font-weight: 700; color: #10b981;">$${currencyTotals.deliveredValue.toLocaleString()}</td>`;
+            html += `<td style="font-weight: 700; color: #ef4444;">$${currencyTotals.undeliveredValue.toLocaleString()}</td>`;
+            html += '<td colspan="3"></td>';
+            html += '</tr>';
+
+            html += '</tbody></table>';
+            document.getElementById('partial-shipments-table').innerHTML = html;
+        }
+
+
+        // Partial shipments sorting
+        let partialShipmentsSortState = { field: null, ascending: true };
+
+        function sortPartialShipments(field) {
+            const data = window['partial-shipments_originalData'];
+            if (!data) return;
+
+            if (partialShipmentsSortState.field === field) {
+                partialShipmentsSortState.ascending = !partialShipmentsSortState.ascending;
+            } else {
+                partialShipmentsSortState.field = field;
+                partialShipmentsSortState.ascending = true;
+            }
+
+            const sortedData = JSON.parse(JSON.stringify(data));
+            sortedData.sort((a, b) => {
+                let aVal, bVal;
+                
+                if (field === 'items') {
+                    const aPartial = (a.products || []).filter(p => {
+                        const qty = p.quantity || 0;
+                        const shipped = p.shipped || 0;
+                        return shipped > 0 && shipped < qty;
+                    }).length;
+                    const bPartial = (b.products || []).filter(p => {
+                        const qty = p.quantity || 0;
+                        const shipped = p.shipped || 0;
+                        return shipped > 0 && shipped < qty;
+                    }).length;
+                    aVal = aPartial;
+                    bVal = bPartial;
+                } else if (field === 'job_number') {
+                    aVal = a.job_number || '';
+                    bVal = b.job_number || '';
+                } else if (field === 'total_price') {
+                    aVal = a.total_price || 0;
+                    bVal = b.total_price || 0;
+                } else {
+                    aVal = a[field] || '';
+                    bVal = b[field] || '';
+                }
+
+                if (typeof aVal === 'string') {
+                    return partialShipmentsSortState.ascending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                } else {
+                    return partialShipmentsSortState.ascending ? aVal - bVal : bVal - aVal;
+                }
+            });
+
+            renderPartialShipments({ orders: sortedData }, false);
+        }
+
+        function filterPartialShipments() {
+            const searchInput = document.getElementById('partial-shipments-unified-search')?.value.toLowerCase() || '';
+            
+            const originalData = window['partial-shipments_originalData'];
+            if (!originalData) return;
+
+            const filteredData = originalData.filter(order => {
+                const code = (order.code || '').toLowerCase();
+                const customer = (order.customer_name || '').toLowerCase();
+                const jobNumber = (order.job_number || '').toLowerCase();
+                const reference = (order.reference || '').toLowerCase();
+
+                if (!searchInput) {
+                    return true;
+                }
+
+                const matchesOrder = code.includes(searchInput) ||
+                    customer.includes(searchInput) ||
+                    jobNumber.includes(searchInput) ||
+                    reference.includes(searchInput);
+
+                const matchesProduct = (order.products || []).some(product => {
+                    const itemCode = (product.item_code || '').toLowerCase();
+                    const itemTitle = (product.item_title || '').toLowerCase();
+                    return itemCode.includes(searchInput) || itemTitle.includes(searchInput);
+                });
+
+                return matchesOrder || matchesProduct;
+            });
+
+            renderPartialShipments({ orders: filteredData }, false);
+        }
+
+        function clearPartialShipmentsFilters() {
+            document.getElementById('partial-shipments-unified-search').value = '';
+            const originalData = window['partial-shipments_originalData'];
+            if (originalData) {
+                renderPartialShipments({ orders: originalData }, false);
+            }
+        }
+
+        function toggleUnfulfilledItems() {
+            const panel = document.getElementById('unfulfilled-items-panel');
+            const isHidden = panel.style.display === 'none';
+            panel.style.display = isHidden ? 'block' : 'none';
+            renderUnfulfilledItems(window['partial-shipments_filteredData'] || []);
+            const button = document.querySelector('.toggle-btn');
+            if (button) {
+                button.textContent = isHidden ? 'Hide Unfulfilled Items' : 'Show Unfulfilled Items';
+            }
+        }
+
+        function toggleUnfulfilledGroup(groupId) {
+            const rows = document.querySelectorAll(`.${groupId}`);
+            const arrow = document.getElementById(`${groupId}-arrow`);
+            if (!rows.length) {
+                return;
+            }
+            const isHidden = rows[0].style.display === 'none';
+            rows.forEach(row => {
+                row.style.display = isHidden ? 'table-row' : 'none';
+            });
+            if (arrow) {
+                arrow.classList.toggle('expanded', isHidden);
+            }
+        }
+
+        function renderUnfulfilledItems(orders) {
+            const panel = document.getElementById('unfulfilled-items-panel');
+            const content = document.getElementById('unfulfilled-items-content');
+            if (!panel || !content || panel.style.display === 'none') {
+                return;
+            }
+
+            const rows = [];
+            (orders || []).forEach(order => {
+                const products = order.products || [];
+                products.forEach(product => {
+                    const remaining = product.remaining ?? ((product.quantity || 0) - (product.shipped || 0));
+                    if (remaining > 0) {
+                        rows.push({
+                            orderCode: order.code || 'N/A',
+                            reference: order.reference || 'N/A',
+                            jobNumber: order.job_number || 'N/A',
+                            customer: order.customer_name || 'N/A',
+                            itemCode: product.item_code || 'N/A',
+                            itemTitle: product.item_title || 'N/A',
+                            remaining,
+                            deliveryDate: formatMRPeasyDate(order.delivery_date)
+                        });
+                    }
+                });
+            });
+
+            const groupBy = document.getElementById('unfulfilled-group-by')?.value || 'none';
+            const groupLabel = groupBy === 'item' ? 'Item' :
+                groupBy === 'order' ? 'Order' :
+                groupBy === 'job' ? 'Job #' :
+                groupBy === 'customer' ? 'Customer' :
+                groupBy === 'reference' ? 'Reference' : '';
+
+            if (rows.length === 0) {
+                content.innerHTML = '<p style="padding: 10px 0; color: #718096;">No unfulfilled items for this filter.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Order</th>';
+            html += '<th>Reference</th>';
+            html += '<th>Job #</th>';
+            html += '<th>Customer</th>';
+            html += '<th>Item Code</th>';
+            html += '<th>Item Name</th>';
+            html += '<th>Remaining</th>';
+            html += '<th>Delivery Date</th>';
+            html += '</tr></thead><tbody>';
+
+            if (groupBy === 'none') {
+                rows.forEach(row => {
+                    html += '<tr>';
+                    html += `<td>${row.orderCode}</td>`;
+                    html += `<td>${row.reference}</td>`;
+                    html += `<td>${row.jobNumber}</td>`;
+                    html += `<td>${row.customer}</td>`;
+                    html += `<td>${row.itemCode}</td>`;
+                    html += `<td style="max-width: 180px; word-wrap: break-word; white-space: normal;">${row.itemTitle}</td>`;
+                    html += `<td>${row.remaining}</td>`;
+                    html += `<td>${row.deliveryDate}</td>`;
+                    html += '</tr>';
+                });
+            } else {
+                const grouped = rows.reduce((acc, row) => {
+                    let key = '';
+                    if (groupBy === 'item') {
+                        key = row.itemCode || 'N/A';
+                    } else if (groupBy === 'order') {
+                        key = row.orderCode || 'N/A';
+                    } else if (groupBy === 'job') {
+                        key = row.jobNumber || 'N/A';
+                    } else if (groupBy === 'reference') {
+                        key = row.reference || 'N/A';
+                    } else {
+                        key = row.customer || 'N/A';
+                    }
+                    if (!acc[key]) {
+                        acc[key] = [];
+                    }
+                    acc[key].push(row);
+                    return acc;
+                }, {});
+
+                Object.keys(grouped).sort().forEach((groupKey, index) => {
+                    const groupRows = grouped[groupKey];
+                    const totalRemaining = groupRows.reduce((sum, row) => sum + (row.remaining || 0), 0);
+                    const groupId = `unfulfilled-group-${index}`;
+                    html += `<tr class="group-toggle" onclick="toggleUnfulfilledGroup('${groupId}')">`;
+                    html += `<td colspan="8" style="background: #f8fafc; font-weight: 500;">`;
+                    html += `<span class="group-toggle-arrow" id="${groupId}-arrow">▶</span>`;
+                    html += `${groupLabel}: ${groupKey} (${groupRows.length}) - Remaining Qty: ${totalRemaining}`;
+                    html += `</td></tr>`;
+                    groupRows.forEach(row => {
+                        html += `<tr class="${groupId}" style="display: none;">`;
+                        html += `<td>${row.orderCode}</td>`;
+                        html += `<td>${row.reference}</td>`;
+                        html += `<td>${row.jobNumber}</td>`;
+                        html += `<td>${row.customer}</td>`;
+                        html += `<td>${row.itemCode}</td>`;
+                        html += `<td style="max-width: 180px; word-wrap: break-word; white-space: normal;">${row.itemTitle}</td>`;
+                        html += `<td>${row.remaining}</td>`;
+                        html += `<td>${row.deliveryDate}</td>`;
+                        html += '</tr>';
+                    });
+                });
+            }
+
+            html += '</tbody></table>';
+            content.innerHTML = html;
+        }
+
+        // Load on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            // Tab switching
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    
+                    btn.classList.add('active');
+                    const tabId = btn.dataset.tab;
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+            
+            // Attach filter change handler
+            document.getElementById('shipment-filter').addEventListener('change', loadShipmentStatusOrders);
+            
+            // Load initial data
+            loadPartialShipments();
+        });
+    </script>
+</body>
+</html>

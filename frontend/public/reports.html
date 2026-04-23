@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+            font-size: 13px;
+            font-weight: 400;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 500;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .content-area {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .summary-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .summary-card h3 {
+            font-size: 14px;
+            font-weight: 500;
+            color: #334155;
+            margin-bottom: 8px;
+        }
+
+        .summary-value {
+            font-size: 22px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .summary-subtext {
+            color: #64748b;
+            margin-top: 6px;
+            font-size: 12px;
+        }
+
+        .section {
+            margin-top: 24px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .table th {
+            background: #e2e8f0;
+            padding: 12px;
+            text-align: left;
+            font-weight: 500;
+            font-size: 12px;
+            color: #475569;
+            border-bottom: 2px solid #cbd5e0;
+        }
+
+        .table td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 12px;
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .section-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .empty-state {
+            padding: 20px;
+            text-align: center;
+            color: #64748b;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            backdrop-filter: blur(5px);
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 6px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .loading-subtext {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+            margin-top: 8px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .action-btn {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 8px;
+            background: #1f2937;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .action-btn.secondary {
+            background: #475569;
+        }
+
+        .action-btn.small {
+            padding: 6px 10px;
+            font-size: 11px;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .section-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .loading-overlay,
+            .back-btn,
+            .action-btn {
+                display: none !important;
+            }
+
+            .content-area {
+                box-shadow: none;
+                border-radius: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading Reports</div>
+        <div class="loading-subtext">Please wait while we compile analytics...</div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>📊 Reports</h1>
+            <div class="header-actions">
+                <button class="action-btn" onclick="printReport()">Print / Save PDF</button>
+                <button class="action-btn secondary" onclick="exportSummaryCsv()">Export Summary CSV</button>
+                <a href="./dashboard.html" class="back-btn">← Back to Dashboard</a>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="summary-grid" id="summary-grid"></div>
+
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Unfulfilled Items (Top)</div>
+                    <div class="section-actions">
+                        <button class="action-btn small" onclick="exportUnfulfilledCsv()">Export CSV</button>
+                        <div id="reports-updated" class="summary-subtext"></div>
+                    </div>
+                </div>
+                <div class="section-card" id="unfulfilled-items"></div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Invoice Status Summary</div>
+                    <div class="section-actions">
+                        <button class="action-btn small" onclick="exportInvoiceSummaryCsv()">Export CSV</button>
+                    </div>
+                </div>
+                <div class="section-card" id="invoice-summary"></div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Customer Backlog</div>
+                    <div class="section-actions">
+                        <button class="action-btn small" onclick="exportCustomerBacklogCsv()">Export CSV</button>
+                    </div>
+                </div>
+                <div class="section-card" id="customer-backlog"></div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Overdue Orders</div>
+                    <div class="section-actions">
+                        <button class="action-btn small" onclick="exportOverdueOrdersCsv()">Export CSV</button>
+                    </div>
+                </div>
+                <div class="section-card" id="overdue-orders"></div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Recent Shipments (Last 7 Days)</div>
+                    <div class="section-actions">
+                        <button class="action-btn small" onclick="exportRecentShipmentsCsv()">Export CSV</button>
+                    </div>
+                </div>
+                <div class="section-card" id="recent-shipments"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        function getToken() {
+            return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+        }
+
+        function showLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) {
+                overlay.classList.remove('hidden');
+            }
+        }
+
+        function hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function formatCurrency(value, currency) {
+            const amount = Number(value || 0);
+            return `${currency || '$'}${amount.toLocaleString()}`;
+        }
+
+        function formatMRPeasyDate(dateValue) {
+            if (!dateValue) return 'N/A';
+            if (typeof dateValue === 'string' && /^\d+$/.test(dateValue)) {
+                return new Date(parseInt(dateValue) * 1000).toLocaleDateString();
+            }
+            if (typeof dateValue === 'number') {
+                return new Date(dateValue * 1000).toLocaleDateString();
+            }
+            return new Date(dateValue).toLocaleDateString();
+        }
+
+        function printReport() {
+            window.print();
+        }
+
+        function csvEscape(value) {
+            if (value === null || value === undefined) {
+                return '';
+            }
+            const strValue = String(value).replace(/"/g, '""');
+            return /[",\n]/.test(strValue) ? `"${strValue}"` : strValue;
+        }
+
+        function downloadCsv(filename, rows) {
+            const csv = rows.map(row => row.map(csvEscape).join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        async function loadReports() {
+            showLoading();
+            try {
+                const token = getToken();
+                if (!token) {
+                    window.location.href = './login.html';
+                    return;
+                }
+
+                const response = await fetch(`${API_BASE}/api/reports/summary`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        window.location.href = './login.html';
+                        return;
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                window.reportData = data;
+                renderSummary(data.summary);
+                renderInvoiceSummary(data.invoice_summary || {}, data.summary?.currency || '$');
+                renderUnfulfilledItems(data.unfulfilled_items || [], data.summary?.currency || '$');
+                renderCustomerBacklog(data.customer_backlog || [], data.summary?.currency || '$');
+                renderOverdueOrders(data.overdue_orders || [], data.summary?.currency || '$');
+                renderRecentShipments(data.recent_shipments || []);
+
+                const updated = new Date().toLocaleString();
+                const updatedEl = document.getElementById('reports-updated');
+                if (updatedEl) {
+                    updatedEl.textContent = `Updated: ${updated}`;
+                }
+
+                hideLoading();
+            } catch (error) {
+                console.error('Error loading reports:', error);
+                hideLoading();
+                document.querySelector('.content-area').innerHTML = '<p class="empty-state">Error loading reports. Please try again.</p>';
+            }
+        }
+
+        function renderSummary(summary) {
+            const container = document.getElementById('summary-grid');
+            if (!container) return;
+            const currency = summary?.currency || '$';
+
+            const cards = [
+                { title: 'Active Orders', value: summary?.active_orders || 0, sub: `Total: ${summary?.total_orders || 0}` },
+                { title: 'Partial Orders', value: summary?.partial_orders || 0, sub: `Not Shipped: ${summary?.not_shipped_orders || 0}` },
+                { title: 'Delivered Orders', value: summary?.delivered_orders || 0, sub: `Cancelled: ${summary?.cancelled_orders || 0}` },
+                { title: 'Remaining Value', value: formatCurrency(summary?.total_remaining_value || 0, currency), sub: 'Open backlog value' },
+                { title: 'Shipped Value', value: formatCurrency(summary?.total_shipped_value || 0, currency), sub: 'Delivered value' }
+            ];
+
+            container.innerHTML = cards.map(card => (
+                `<div class="summary-card">
+                    <h3>${card.title}</h3>
+                    <div class="summary-value">${card.value}</div>
+                    <div class="summary-subtext">${card.sub}</div>
+                </div>`
+            )).join('');
+        }
+
+        function renderInvoiceSummary(summary, currencyFallback) {
+            const container = document.getElementById('invoice-summary');
+            if (!container) return;
+            if (!summary || !summary.currency) {
+                container.innerHTML = '<p class="empty-state">No invoice summary available.</p>';
+                return;
+            }
+
+            const currency = summary.currency || currencyFallback || '$';
+            const rows = [
+                { label: 'Dummy (Not Submitted)', data: summary.dummy || { count: 0, total_value: 0 } },
+                { label: 'Unpaid', data: summary.unpaid || { count: 0, total_value: 0 } },
+                { label: 'Paid Partially', data: summary.paid_partially || { count: 0, total_value: 0 } },
+                { label: 'Paid', data: summary.paid || { count: 0, total_value: 0 } }
+            ];
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Status</th>';
+            html += '<th>Count</th>';
+            html += '<th>Total Value</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(row => {
+                html += '<tr>';
+                html += `<td>${row.label}</td>`;
+                html += `<td>${row.data.count || 0}</td>`;
+                html += `<td>${formatCurrency(row.data.total_value || 0, currency)}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderUnfulfilledItems(items, currency) {
+            const container = document.getElementById('unfulfilled-items');
+            if (!container) return;
+            if (!items.length) {
+                container.innerHTML = '<p class="empty-state">No unfulfilled items found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Item Code</th>';
+            html += '<th>Item Name</th>';
+            html += '<th>Remaining Qty</th>';
+            html += '<th>Remaining Value</th>';
+            html += '</tr></thead><tbody>';
+
+            items.slice(0, 20).forEach(item => {
+                html += '<tr>';
+                html += `<td>${item.item_code || 'N/A'}</td>`;
+                html += `<td style="max-width: 240px; word-wrap: break-word; white-space: normal;">${item.item_title || 'N/A'}</td>`;
+                html += `<td>${item.remaining_qty || 0}</td>`;
+                html += `<td>${formatCurrency(item.remaining_value || 0, currency)}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderCustomerBacklog(customers, currency) {
+            const container = document.getElementById('customer-backlog');
+            if (!container) return;
+            if (!customers.length) {
+                container.innerHTML = '<p class="empty-state">No customer backlog found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Customer</th>';
+            html += '<th>Orders</th>';
+            html += '<th>Remaining Value</th>';
+            html += '</tr></thead><tbody>';
+
+            customers.slice(0, 20).forEach(customer => {
+                html += '<tr>';
+                html += `<td>${customer.customer || 'N/A'}</td>`;
+                html += `<td>${customer.order_count || 0}</td>`;
+                html += `<td>${formatCurrency(customer.remaining_value || 0, currency)}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderOverdueOrders(orders, currency) {
+            const container = document.getElementById('overdue-orders');
+            if (!container) return;
+            if (!orders.length) {
+                container.innerHTML = '<p class="empty-state">No overdue orders found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Order</th>';
+            html += '<th>Reference</th>';
+            html += '<th>Customer</th>';
+            html += '<th>Delivery Date</th>';
+            html += '<th>Remaining Value</th>';
+            html += '</tr></thead><tbody>';
+
+            orders.slice(0, 20).forEach(order => {
+                html += '<tr>';
+                html += `<td>${order.code || 'N/A'}</td>`;
+                html += `<td>${order.reference || 'N/A'}</td>`;
+                html += `<td>${order.customer_name || 'N/A'}</td>`;
+                html += `<td>${formatMRPeasyDate(order.delivery_date)}</td>`;
+                html += `<td>${formatCurrency(order.remaining_value || 0, currency)}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderRecentShipments(shipments) {
+            const container = document.getElementById('recent-shipments');
+            if (!container) return;
+            if (!shipments.length) {
+                container.innerHTML = '<p class="empty-state">No recent shipments found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Shipment</th>';
+            html += '<th>Shipped Date</th>';
+            html += '<th>Order</th>';
+            html += '<th>Customer</th>';
+            html += '</tr></thead><tbody>';
+
+            shipments.slice(0, 20).forEach(shipment => {
+                html += '<tr>';
+                html += `<td>${shipment.shipment_code || 'N/A'}</td>`;
+                html += `<td>${formatMRPeasyDate(shipment.shipped_date)}</td>`;
+                html += `<td>${shipment.order_code || 'N/A'}</td>`;
+                html += `<td>${shipment.customer_name || 'N/A'}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function exportSummaryCsv() {
+            const data = window.reportData || {};
+            const summary = data.summary || {};
+            const currency = summary.currency || '$';
+            const rows = [
+                ['Metric', 'Value'],
+                ['Total Orders', summary.total_orders || 0],
+                ['Active Orders', summary.active_orders || 0],
+                ['Partial Orders', summary.partial_orders || 0],
+                ['Not Shipped Orders', summary.not_shipped_orders || 0],
+                ['Delivered Orders', summary.delivered_orders || 0],
+                ['Cancelled Orders', summary.cancelled_orders || 0],
+                ['Total Shipped Value', formatCurrency(summary.total_shipped_value || 0, currency)],
+                ['Total Remaining Value', formatCurrency(summary.total_remaining_value || 0, currency)]
+            ];
+            downloadCsv('reports_summary.csv', rows);
+        }
+
+        function exportInvoiceSummaryCsv() {
+            const data = window.reportData || {};
+            const summary = data.invoice_summary || {};
+            const currency = summary.currency || '$';
+            const rows = [
+                ['Status', 'Count', 'Total Value'],
+                ['Dummy (Not Submitted)', summary.dummy?.count || 0, formatCurrency(summary.dummy?.total_value || 0, currency)],
+                ['Unpaid', summary.unpaid?.count || 0, formatCurrency(summary.unpaid?.total_value || 0, currency)],
+                ['Paid Partially', summary.paid_partially?.count || 0, formatCurrency(summary.paid_partially?.total_value || 0, currency)],
+                ['Paid', summary.paid?.count || 0, formatCurrency(summary.paid?.total_value || 0, currency)]
+            ];
+            downloadCsv('invoice_status_summary.csv', rows);
+        }
+
+        function exportUnfulfilledCsv() {
+            const items = (window.reportData?.unfulfilled_items) || [];
+            const currency = window.reportData?.summary?.currency || '$';
+            const rows = [['Item Code', 'Item Name', 'Remaining Qty', 'Remaining Value']];
+            items.forEach(item => {
+                rows.push([
+                    item.item_code || 'N/A',
+                    item.item_title || 'N/A',
+                    item.remaining_qty || 0,
+                    formatCurrency(item.remaining_value || 0, currency)
+                ]);
+            });
+            downloadCsv('unfulfilled_items.csv', rows);
+        }
+
+        function exportCustomerBacklogCsv() {
+            const customers = (window.reportData?.customer_backlog) || [];
+            const currency = window.reportData?.summary?.currency || '$';
+            const rows = [['Customer', 'Orders', 'Remaining Value']];
+            customers.forEach(customer => {
+                rows.push([
+                    customer.customer || 'N/A',
+                    customer.order_count || 0,
+                    formatCurrency(customer.remaining_value || 0, currency)
+                ]);
+            });
+            downloadCsv('customer_backlog.csv', rows);
+        }
+
+        function exportOverdueOrdersCsv() {
+            const orders = (window.reportData?.overdue_orders) || [];
+            const currency = window.reportData?.summary?.currency || '$';
+            const rows = [['Order', 'Reference', 'Customer', 'Delivery Date', 'Remaining Value']];
+            orders.forEach(order => {
+                rows.push([
+                    order.code || 'N/A',
+                    order.reference || 'N/A',
+                    order.customer_name || 'N/A',
+                    formatMRPeasyDate(order.delivery_date),
+                    formatCurrency(order.remaining_value || 0, currency)
+                ]);
+            });
+            downloadCsv('overdue_orders.csv', rows);
+        }
+
+        function exportRecentShipmentsCsv() {
+            const shipments = (window.reportData?.recent_shipments) || [];
+            const rows = [['Shipment', 'Shipped Date', 'Order', 'Customer']];
+            shipments.forEach(shipment => {
+                rows.push([
+                    shipment.shipment_code || 'N/A',
+                    formatMRPeasyDate(shipment.shipped_date),
+                    shipment.order_code || 'N/A',
+                    shipment.customer_name || 'N/A'
+                ]);
+            });
+            downloadCsv('recent_shipments.csv', rows);
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadReports();
+        });
+    </script>
+</body>
+</html>

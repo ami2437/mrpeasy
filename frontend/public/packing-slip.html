@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        .header {
+            border-bottom: 3px solid #333;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header-top {
+            display: grid;
+            grid-template-columns: 1fr 170px;
+            align-items: start;
+            gap: 16px;
+            margin-bottom: 8px;
+        }
+
+        .header-logo-slot {
+            width: 170px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            justify-self: end;
+        }
+
+        .header-logo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        .header-info {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .header-field {
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: #f9f9f9;
+        }
+
+        .header-field label {
+            display: block;
+            font-weight: bold;
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .header-field value {
+            display: block;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+        }
+
+        .items-table thead {
+            background: #333;
+            color: white;
+        }
+
+        .items-table th {
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+            border: 1px solid #333;
+        }
+
+        .items-table td {
+            padding: 12px;
+            border: 1px solid #ddd;
+        }
+
+        .items-table tbody tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+
+        .items-table tbody tr:hover {
+            background: #f0f0f0;
+        }
+
+        .item-row {
+            border-top: 2px solid #333;
+        }
+
+        .item-code {
+            font-weight: bold;
+            font-size: 13px;
+        }
+
+        .item-title {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .qty-cell {
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .box-breakdown {
+            font-size: 12px;
+            color: #333;
+        }
+
+        .order-line-badge {
+            display: inline-block;
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            color: #1976d2;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #ddd;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            font-size: 12px;
+        }
+
+        .footer-field {
+            text-align: center;
+        }
+
+        .footer-field label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 30px;
+            min-height: 40px;
+        }
+
+        .footer-field .line {
+            border-top: 1px solid #333;
+            margin-top: 10px;
+            padding-top: 5px;
+        }
+
+        .print-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #2196f3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .print-btn:hover {
+            background: #1976d2;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .container {
+                max-width: 100%;
+                margin: 0;
+                padding: 0;
+                box-shadow: none;
+            }
+
+            .print-btn {
+                display: none;
+            }
+
+            .dashboard-btn {
+                display: none;
+            }
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #c62828;
+            margin-bottom: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .summary {
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            font-size: 13px;
+        }
+
+        .summary-row {
+            margin: 5px 0;
+        }
+
+        .summary-row strong {
+            color: #2e7d32;
+        }
+
+        .dashboard-btn {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 10001;
+            background: rgba(255, 255, 255, 0.95);
+            color: #333;
+            border: 1px solid #d0d0d0;
+            padding: 8px 14px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .dashboard-btn:hover {
+            background: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <a href="./dashboard.html" class="dashboard-btn">← Dashboard</a>
+    <button class="print-btn" onclick="window.print()">🖨️ Print</button>
+
+    <div class="container">
+        <div id="content">
+            <div class="loading">Loading packing slip data...</div>
+        </div>
+    </div>
+
+    <script>
+        // Get shipment code from URL or use default
+        const urlParams = new URLSearchParams(window.location.search);
+        const shipmentCode = urlParams.get('shipment') || 'SH215601';
+        const API_BASE = 'http://localhost:8000';
+        const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
+
+        function escapeAttribute(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getDocumentLogoMarkup(slotClass, imageClass) {
+            if (!COMPANY_LOGO_URL) {
+                return `<div class="${slotClass}" aria-hidden="true"></div>`;
+            }
+
+            const safeLogoUrl = escapeAttribute(COMPANY_LOGO_URL);
+            return `<div class="${slotClass}" aria-hidden="true"><img class="${imageClass}" src="${safeLogoUrl}" alt=""></div>`;
+        }
+
+        async function loadPackingSlip() {
+            try {
+                const response = await fetch(`${API_BASE}/api/packing-slip/${shipmentCode}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    showError(data.detail || 'Failed to load packing slip');
+                    return;
+                }
+
+                renderPackingSlip(data);
+            } catch (error) {
+                showError(`Error loading packing slip: ${error.message}`);
+                console.error('Error:', error);
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('content').innerHTML = `
+                <div class="error">❌ ${message}</div>
+            `;
+        }
+
+        function renderPackingSlip(data) {
+            const items = data.items || [];
+            if (items.length === 0) {
+                showError('No items found in packing slip');
+                return;
+            }
+
+            // Get header info from first item
+            const firstItem = items[0];
+            const headerDate = new Date(firstItem.finalized_at);
+            const formattedDate = headerDate.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+
+            // Build items table rows
+            let tableRows = '';
+            let totalQtyShipped = 0;
+
+            items.forEach((item, index) => {
+                totalQtyShipped += item.qty_shipped;
+                tableRows += `
+                    <tr class="item-row">
+                        <td>
+                            <div class="item-code">${item.item_code}</div>
+                            <div class="item-title">${item.item_title}</div>
+                        </td>
+                        <td>${item.po_number || '-'}</td>
+                        <td>
+                            <span class="order-line-badge">Line ${item.order_line}</span>
+                        </td>
+                        <td class="qty-cell">${item.qty_shipped}</td>
+                        <td class="box-breakdown">${item.box_breakdown}</td>
+                    </tr>
+                `;
+            });
+
+            const html = `
+                <div class="header">
+                    <div class="header-top">
+                        <h1>PACKING SLIP</h1>
+                        ${getDocumentLogoMarkup('header-logo-slot', 'header-logo')}
+                    </div>
+                    <div class="header-info">
+                        <div class="header-field">
+                            <label>Shipment #</label>
+                            <value>${shipmentCode}</value>
+                        </div>
+                        <div class="header-field">
+                            <label>PO #</label>
+                            <value>${firstItem.po_number || '-'}</value>
+                        </div>
+                        <div class="header-field">
+                            <label>Date</label>
+                            <value>${formattedDate}</value>
+                        </div>
+                        <div class="header-field">
+                            <label>Customer</label>
+                            <value>American Traders LLC</value>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="summary">
+                    <div class="summary-row">
+                        <strong>Total Items:</strong> ${items.length}
+                    </div>
+                    <div class="summary-row">
+                        <strong>Total Quantity Shipped:</strong> ${totalQtyShipped}
+                    </div>
+                    <div class="summary-row">
+                        <strong>Items with Multiple Order Lines:</strong> 
+                        ${getItemsWithMultipleLines(items)}
+                    </div>
+                </div>
+
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th>Item Code / Description</th>
+                            <th>PO #</th>
+                            <th>Order Line</th>
+                            <th>Qty Shipped</th>
+                            <th>Box Breakdown</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRows}
+                    </tbody>
+                </table>
+
+                <div class="footer">
+                    <div class="footer-field">
+                        <label>Packed By:<div class="line"></div></label>
+                    </div>
+                    <div class="footer-field">
+                        <label>Checked By:<div class="line"></div></label>
+                    </div>
+                    <div class="footer-field">
+                        <label>Shipped By:<div class="line"></div></label>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('content').innerHTML = html;
+        }
+
+        function getItemsWithMultipleLines(items) {
+            const itemCodes = new Set();
+            const itemsWithMultiple = [];
+
+            items.forEach(item => {
+                itemCodes.add(item.item_code);
+            });
+
+            itemCodes.forEach(code => {
+                const count = items.filter(i => i.item_code === code).length;
+                if (count > 1) {
+                    itemsWithMultiple.push(`${code} (${count} lines)`);
+                }
+            });
+
+            return itemsWithMultiple.length > 0 ? itemsWithMultiple.join(', ') : 'None';
+        }
+
+        // Load packing slip when page loads
+        loadPackingSlip();
+    </script>
+</body>
+</html>

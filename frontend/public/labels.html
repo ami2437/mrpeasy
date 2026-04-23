@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .header h1 { color: #333; font-size: 32px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 16px; }
+        .controls { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; margin-bottom: 8px; color: #333; font-weight: 600; font-size: 14px; }
+        .form-group select { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px; }
+        .pack-sizes { display: none; margin-top: 15px; background: #f8f9fa; border-radius: 6px; overflow-x: auto; }
+        .items-table { width: 100%; border-collapse: collapse; }
+        .items-table th { background: #667eea; color: white; padding: 12px; text-align: left; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .items-table td { padding: 12px; border-bottom: 1px solid #e0e0e0; font-size: 14px; }
+        .items-table td.description { max-width: 300px; word-wrap: break-word; white-space: normal; }
+        .items-table tr:hover { background: #f0f0f0; }
+        .items-table input, .items-table select { width: 100px; padding: 8px; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 14px; }
+        .button-group { display: flex; gap: 15px; margin-top: 20px; }
+        .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .labels-container { display: none; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .labels-header { display: flex; justify-content: space-between; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
+        .label-card { border: 2px solid #000; padding: 14px; margin-bottom: 20px; width: 6in; height: 4in; page-break-after: always; position: relative; display: flex; flex-direction: column; box-sizing: border-box; }
+        .label-logo-slot {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 86px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .label-logo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .label-customer {
+            text-align: center;
+            font-size: 22px;
+            font-weight: 700;
+            color: #000;
+            margin: 6px 0;
+            border-bottom: 2px solid #000;
+            padding-bottom: 6px;
+            padding-right: 96px;
+            line-height: 1.1;
+            min-height: 46px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .label-footer { position: static; margin-top: auto; text-align: center; font-size: 12px; font-weight: 600; color: #000; border-top: 2px solid #000; padding-top: 6px; }
+        .label-body { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+        .label-field { display: flex; flex-direction: column; padding: 8px; border: 1px solid #000; }
+        .label-field.item-field { min-height: 88px; }
+        .label-field.qty-field { margin-top: 8px; }
+        .label-field-label { font-size: 11px; color: #000; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+        .label-field-value { font-size: 15px; color: #000; font-weight: 500; }
+        .label-field-value.item-multiline { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; min-height: 56px; max-height: 56px; overflow: hidden; }
+        .label-field-value.large { font-size: 22px; font-weight: 700; color: #000; }
+        .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #f5c6cb; }
+        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+        .dashboard-btn:hover { background: #ffffff; }
+        @media print {
+            @page { size: 6in 4in landscape; margin: 0; }
+            body { background: white; padding: 0; }
+            .header, .controls, .labels-header { display: none; }
+            .labels-container { box-shadow: none; padding: 0; }
+            .label-card { margin: 0; }
+            .dashboard-btn { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <a href="./dashboard.html" class="dashboard-btn">← Dashboard</a>
+    <div class="container">
+        <div class="header">
+            <h1>🏷️ Shipment Labeling System</h1>
+            <p>American Traders LLC - Generate and print shipping labels</p>
+        </div>
+        <div class="controls">
+            <div class="form-group">
+                <label for="shipment-select">Select Shipment</label>
+                <select id="shipment-select"><option value="">Loading shipments...</option></select>
+            </div>
+            <div class="pack-sizes" id="pack-sizes-container">
+                <table class="items-table">
+                    <thead>
+                        <tr><th>Item #</th><th>Description</th><th>Order #</th><th>PO #</th><th>Qty</th><th>Remaining</th><th>Pack Size</th><th>Label Mode</th></tr>
+                    </thead>
+                    <tbody id="pack-sizes-list"></tbody>
+                </table>
+            </div>
+            <div class="button-group">
+                <button class="btn btn-primary" onclick="generateLabels()">Generate Labels</button>
+                <button class="btn btn-secondary" onclick="window.print()" style="display: none;" id="print-btn">Print Labels</button>
+            </div>
+            <div id="error-message"></div>
+        </div>
+        <div class="labels-container" id="labels-container">
+            <div class="labels-header"><h2 id="labels-title">Generated Labels</h2><span id="labels-count"></span></div>
+            <div id="labels-list"></div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
+        let currentShipment = null;
+        async function checkBackend() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                if (!response.ok) throw new Error('Backend not responding');
+                return true;
+            } catch (error) {
+                showError('Cannot connect to backend. Ensure FastAPI is running on http://localhost:8000');
+                return false;
+            }
+        }
+        async function loadShipments() {
+            if (!(await checkBackend())) {
+                document.getElementById('shipment-select').innerHTML = '<option value="">Backend not running</option>';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/ready`);
+                const data = await response.json();
+                const select = document.getElementById('shipment-select');
+                select.innerHTML = '<option value="">-- Select a shipment --</option>';
+                if (data.shipments && data.shipments.length > 0) {
+                    data.shipments.forEach(shipment => {
+                        const option = document.createElement('option');
+                        option.value = shipment.code;
+                        option.textContent = `${shipment.code} - Order: ${shipment.customer_order_code} (${shipment.products_count} items)`;
+                        select.appendChild(option);
+                    });
+                } else {
+                    select.innerHTML = '<option value="">No ready shipments found</option>';
+                }
+            } catch (error) {
+                document.getElementById('shipment-select').innerHTML = '<option value="">Error loading shipments</option>';
+                showError('Failed to load shipments: ' + error.message);
+            }
+        }
+        document.getElementById('shipment-select').addEventListener('change', async (e) => {
+            const shipmentCode = e.target.value;
+            if (!shipmentCode) {
+                document.getElementById('pack-sizes-container').style.display = 'none';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/${shipmentCode}`);
+                const data = await response.json();
+                currentShipment = data.shipment;
+                const packSizesList = document.getElementById('pack-sizes-list');
+                packSizesList.innerHTML = '';
+                data.shipment.products.forEach(product => {
+                    const row = document.createElement('tr');
+                    const quantityBooked = product.quantity_booked || 0;
+                    const quantityPicked = product.quantity_picked || 0;
+                    const remainingQty = quantityBooked - quantityPicked;
+                    const poNumber = data.shipment.reference || 'N/A';
+                    row.innerHTML = `
+                        <td><strong>${product.item_code}</strong></td>
+                        <td class="description">${product.item_title}</td>
+                        <td>${data.shipment.customer_order_code || 'N/A'}</td>
+                        <td>${poNumber}</td>
+                        <td><strong>${quantityBooked}</strong></td>
+                        <td><strong>${remainingQty}</strong></td>
+                        <td><input type="number" id="pack-size-${product.item_code}" min="1" value="1"></td>
+                        <td><select id="label-mode-${product.item_code}"><option value="individual">Individual</option><option value="grouped">Grouped</option></select></td>
+                    `;
+                    packSizesList.appendChild(row);
+                });
+                document.getElementById('pack-sizes-container').style.display = 'block';
+            } catch (error) {
+                showError('Failed to load shipment details');
+            }
+        });
+        async function generateLabels() {
+            const shipmentCode = document.getElementById('shipment-select').value;
+            if (!shipmentCode) {
+                showError('Please select a shipment');
+                return;
+            }
+            const packSizes = {}, labelModes = {};
+            if (currentShipment) {
+                currentShipment.products.forEach(product => {
+                    const packSizeInput = document.getElementById(`pack-size-${product.item_code}`);
+                    const labelModeSelect = document.getElementById(`label-mode-${product.item_code}`);
+                    if (packSizeInput) packSizes[product.item_code] = parseInt(packSizeInput.value) || 1;
+                    if (labelModeSelect) labelModes[product.item_code] = labelModeSelect.value;
+                });
+            }
+            try {
+                showError('');
+                let allLabels = [];
+                for (const product of currentShipment.products) {
+                    const itemPackSize = {};
+                    itemPackSize[product.item_code] = packSizes[product.item_code];
+                    const itemLabelMode = labelModes[product.item_code] || 'individual';
+                    const response = await fetch(`${API_BASE}/api/labels/generate/${shipmentCode}?label_mode=${itemLabelMode}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(itemPackSize)
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        allLabels = allLabels.concat(data.labels.filter(label => label.item_code === product.item_code));
+                    }
+                }
+                if (allLabels.length > 0) {
+                    displayLabels({ success: true, shipment_code: shipmentCode, total_labels: allLabels.length, labels: allLabels });
+                    document.getElementById('print-btn').style.display = 'inline-block';
+                }
+            } catch (error) {
+                showError('Error generating labels: ' + error.message);
+            }
+        }
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getLabelLogoMarkup() {
+            if (!COMPANY_LOGO_URL) {
+                return '<div class="label-logo-slot" aria-hidden="true"></div>';
+            }
+
+            const safeLogoUrl = escapeHtml(COMPANY_LOGO_URL);
+            return `<div class="label-logo-slot" aria-hidden="true"><img class="label-logo" src="${safeLogoUrl}" alt=""></div>`;
+        }
+
+        function autoFitItemText() {
+            const maxFontSize = 15;
+            const minFontSize = 10;
+            const fontStep = 0.5;
+            const maxLines = 4;
+
+            document.querySelectorAll('.item-multiline').forEach((element) => {
+                element.style.fontSize = `${maxFontSize}px`;
+                element.style.lineHeight = '1.2';
+                element.style.display = 'block';
+                element.style.overflow = 'hidden';
+
+                let currentSize = maxFontSize;
+                while (element.scrollHeight > element.clientHeight && currentSize > minFontSize) {
+                    currentSize -= fontStep;
+                    element.style.fontSize = `${currentSize}px`;
+                }
+
+                if (element.scrollHeight > element.clientHeight) {
+                    element.style.display = '-webkit-box';
+                    element.style.webkitBoxOrient = 'vertical';
+                    element.style.webkitLineClamp = String(maxLines);
+                    element.style.textOverflow = 'ellipsis';
+                }
+            });
+        }
+
+        function displayLabels(data) {
+            const title = document.getElementById('labels-title');
+            const count = document.getElementById('labels-count');
+            const list = document.getElementById('labels-list');
+            title.textContent = `Shipment ${data.shipment_code} Labels`;
+            count.textContent = `${data.total_labels} label(s)`;
+            list.innerHTML = '';
+            
+            data.labels.forEach((label, index) => {
+                const labelCard = document.createElement('div');
+                labelCard.className = 'label-card';
+                const customerName = label.customer_name || 'Customer';
+                const poNumber = label.reference || label.customer_order || 'N/A';
+                const orderNumber = label.customer_order || 'N/A';
+                const jobNumber = label.job_number || 'N/A';
+                const itemCode = escapeHtml(label.item_code || 'N/A');
+                const itemTitle = escapeHtml(label.item_title || '');
+                const itemBoxHtml = `<div><strong>ITEM # ${itemCode}</strong></div><div>${itemTitle}</div>`;
+
+                if (label.label_type === 'individual') {
+                    labelCard.innerHTML = `
+                        ${getLabelLogoMarkup()}
+                        <div class="label-customer">${customerName}</div>
+                        <div class="label-body">
+                            <div class="label-field">
+                                <div class="label-field-label">Shipment</div>
+                                <div class="label-field-value">${label.shipment_code}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">Order #</div>
+                                <div class="label-field-value">${orderNumber}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">PO #</div>
+                                <div class="label-field-value">${poNumber}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">Job #</div>
+                                <div class="label-field-value">${jobNumber}</div>
+                            </div>
+                            <div class="label-field item-field" style="grid-column: span 4;">
+                                <div class="label-field-value item-multiline">${itemBoxHtml}</div>
+                            </div>
+                            <div class="label-field qty-field" style="grid-column: span 4;">
+                                <div class="label-field-label">Quantity in Box</div>
+                                <div class="label-field-value large">${label.quantity_in_box} pieces</div>
+                            </div>
+                        </div>
+                        <div class="label-footer">American Traders LLC - ATind Supplies</div>
+                    `;
+                } else {
+                    labelCard.innerHTML = `
+                        ${getLabelLogoMarkup()}
+                        <div class="label-customer">${customerName}</div>
+                        <div class="label-body">
+                            <div class="label-field">
+                                <div class="label-field-label">Shipment</div>
+                                <div class="label-field-value">${label.shipment_code}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">Order #</div>
+                                <div class="label-field-value">${orderNumber}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">PO #</div>
+                                <div class="label-field-value">${poNumber}</div>
+                            </div>
+                            <div class="label-field">
+                                <div class="label-field-label">Job #</div>
+                                <div class="label-field-value">${jobNumber}</div>
+                            </div>
+                            <div class="label-field item-field" style="grid-column: span 4;">
+                                <div class="label-field-value item-multiline">${itemBoxHtml}</div>
+                            </div>
+                            <div class="label-field qty-field" style="grid-column: span 4;">
+                                <div class="label-field-label">Quantity per Box</div>
+                                <div class="label-field-value large">${label.quantity_in_box} pieces</div>
+                            </div>
+                        </div>
+                        <div class="label-footer">American Traders LLC - ATind Supplies</div>
+                    `;
+                }
+                list.appendChild(labelCard);
+            });
+            autoFitItemText();
+            document.getElementById('labels-container').style.display = 'block';
+        }
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.className = message ? 'error' : '';
+            errorDiv.textContent = message;
+        }
+        loadShipments();
+    </script>
+</body>
+</html>

@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 60px;
+        }
+
+        .header h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .user-info {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .logout-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .logout-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+
+        .settings-panel {
+            margin-top: 36px;
+            background: rgba(255, 255, 255, 0.96);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+        }
+
+        .settings-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .settings-subtitle {
+            color: #6b7280;
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+
+        .logo-grid {
+            display: grid;
+            grid-template-columns: 1fr 220px;
+            gap: 16px;
+            align-items: start;
+        }
+
+        .logo-controls {
+            display: grid;
+            gap: 10px;
+        }
+
+        .logo-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: #374151;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .logo-input {
+            width: 100%;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 14px;
+            color: #1f2937;
+            outline: none;
+        }
+
+        .logo-input:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+        }
+
+        .logo-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .logo-btn {
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .logo-btn.primary {
+            background: #4f46e5;
+            color: #fff;
+        }
+
+        .logo-btn.secondary {
+            background: #e5e7eb;
+            color: #111827;
+        }
+
+        .logo-btn:hover {
+            opacity: 0.92;
+        }
+
+        .logo-preview-wrap {
+            border: 1px dashed #cbd5e1;
+            border-radius: 12px;
+            padding: 10px;
+            background: #fff;
+        }
+
+        .logo-preview {
+            width: 100%;
+            height: 100px;
+            object-fit: contain;
+            display: none;
+        }
+
+        .logo-empty {
+            height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b7280;
+            font-size: 12px;
+            text-align: center;
+            padding: 0 8px;
+        }
+
+        .logo-status {
+            font-size: 12px;
+            color: #374151;
+            min-height: 16px;
+        }
+
+        .module-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .module-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+        }
+
+        .module-icon {
+            font-size: 60px;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .module-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .module-description {
+            font-size: 14px;
+            color: #718096;
+            line-height: 1.5;
+        }
+
+        .module-badge {
+            display: inline-block;
+            background: #edf2f7;
+            color: #667eea;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 15px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 32px;
+            }
+
+            .modules-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .logo-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .user-info {
+                position: static;
+                flex-direction: column;
+                text-align: center;
+                margin-bottom: 30px;
+                color: white;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="user-info">
+        <span id="userName">User</span>
+        <div class="user-avatar">👤</div>
+        <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>Manufacturing Portal</h1>
+            <p>Manage your operations efficiently</p>
+        </div>
+
+        <div class="modules-grid">
+            <!-- Shipments Module -->
+            <a href="packing-list.html" class="module-card">
+                <span class="module-icon">📦</span>
+                <div class="module-title">Shipments</div>
+                <div class="module-description">Manage and track shipments</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Invoicing Module -->
+            <a href="invoicing.html" class="module-card">
+                <span class="module-icon">📋</span>
+                <div class="module-title">Invoicing</div>
+                <div class="module-description">Track invoices and discrepancies</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Customer Orders Module -->
+            <a href="customer_orders.html" class="module-card">
+                <span class="module-icon">📦</span>
+                <div class="module-title">Customer Orders</div>
+                <div class="module-description">View order status and partial shipments</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Batch Labeling Module -->
+            <a href="labels-batch.html" class="module-card">
+                <span class="module-icon">🏷️</span>
+                <div class="module-title">Batch Labels</div>
+                <div class="module-description">Create batch shipment labels</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Individual Labels Module -->
+            <a href="labels.html" class="module-card">
+                <span class="module-icon">🎫</span>
+                <div class="module-title">Labels</div>
+                <div class="module-description">Generate individual labels</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Packing Slips Module -->
+            <a href="packing-slip.html" class="module-card">
+                <span class="module-icon">📄</span>
+                <div class="module-title">Packing Slips</div>
+                <div class="module-description">Print packing slips</div>
+                <span class="module-badge">Active</span>
+            </a>
+
+            <!-- Reports Module -->
+            <a href="reports.html" class="module-card">
+                <span class="module-icon">📊</span>
+                <div class="module-title">Reports</div>
+                <div class="module-description">View analytics and reports</div>
+                <span class="module-badge">Active</span>
+            </a>
+        </div>
+
+        <div class="settings-panel">
+            <div class="settings-title">Print Logo Settings</div>
+            <div class="settings-subtitle">Used on labels, packing lists, packing slips, and invoice PDFs.</div>
+
+            <div class="logo-grid">
+                <div class="logo-controls">
+                    <label class="logo-label" for="logo-url-input">Logo URL</label>
+                    <input id="logo-url-input" class="logo-input" type="url" placeholder="https://example.com/company-logo.png">
+
+                    <label class="logo-label" for="logo-file-input">Or Upload Logo File</label>
+                    <input id="logo-file-input" class="logo-input" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+
+                    <div class="logo-actions">
+                        <button class="logo-btn primary" onclick="saveLogoFromUrl()">Save URL</button>
+                        <button class="logo-btn secondary" onclick="clearSavedLogo()">Clear Logo</button>
+                    </div>
+
+                    <div id="logo-status" class="logo-status"></div>
+                </div>
+
+                <div class="logo-preview-wrap">
+                    <img id="logo-preview" class="logo-preview" alt="Saved logo preview">
+                    <div id="logo-empty" class="logo-empty">No logo saved yet</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const COMPANY_LOGO_KEY = 'company_logo_url';
+
+        function setLogoStatus(message, isError = false) {
+            const status = document.getElementById('logo-status');
+            if (!status) return;
+            status.textContent = message || '';
+            status.style.color = isError ? '#b91c1c' : '#374151';
+        }
+
+        function updateLogoPreview() {
+            const savedLogo = localStorage.getItem(COMPANY_LOGO_KEY) || '';
+            const preview = document.getElementById('logo-preview');
+            const empty = document.getElementById('logo-empty');
+            const input = document.getElementById('logo-url-input');
+
+            if (!preview || !empty || !input) return;
+
+            input.value = savedLogo;
+            if (savedLogo) {
+                preview.src = savedLogo;
+                preview.style.display = 'block';
+                empty.style.display = 'none';
+            } else {
+                preview.removeAttribute('src');
+                preview.style.display = 'none';
+                empty.style.display = 'flex';
+            }
+        }
+
+        function saveLogoFromUrl() {
+            const input = document.getElementById('logo-url-input');
+            if (!input) return;
+
+            const value = String(input.value || '').trim();
+            if (!value) {
+                setLogoStatus('Please enter a logo URL first.', true);
+                return;
+            }
+
+            localStorage.setItem(COMPANY_LOGO_KEY, value);
+            updateLogoPreview();
+            setLogoStatus('Logo URL saved. Print pages will use it immediately.');
+        }
+
+        function clearSavedLogo() {
+            localStorage.removeItem(COMPANY_LOGO_KEY);
+            updateLogoPreview();
+            setLogoStatus('Saved logo cleared.');
+
+            const fileInput = document.getElementById('logo-file-input');
+            if (fileInput) fileInput.value = '';
+        }
+
+        function onLogoFileSelected(event) {
+            const file = event && event.target ? event.target.files[0] : null;
+            if (!file) return;
+
+            const maxSizeInBytes = 2 * 1024 * 1024;
+            if (file.size > maxSizeInBytes) {
+                setLogoStatus('File is too large. Please use an image under 2MB.', true);
+                event.target.value = '';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(loadEvent) {
+                const result = loadEvent.target && loadEvent.target.result ? String(loadEvent.target.result) : '';
+                if (!result) {
+                    setLogoStatus('Could not read logo file.', true);
+                    return;
+                }
+
+                localStorage.setItem(COMPANY_LOGO_KEY, result);
+                updateLogoPreview();
+                setLogoStatus('Logo uploaded and saved.');
+            };
+
+            reader.onerror = function() {
+                setLogoStatus('Failed to read image file.', true);
+            };
+
+            reader.readAsDataURL(file);
+        }
+
+        // Load user info from localStorage
+        window.addEventListener('DOMContentLoaded', function() {
+            const user = localStorage.getItem('user') || sessionStorage.getItem('user');
+            if (!user) {
+                window.location.href = './login.html';
+            } else {
+                const userData = JSON.parse(user);
+                // Try different field names for username
+                const displayName = userData.name || userData.username || userData.full_name || 'User';
+                document.getElementById('userName').textContent = displayName;
+            }
+
+            updateLogoPreview();
+
+            const fileInput = document.getElementById('logo-file-input');
+            if (fileInput) {
+                fileInput.addEventListener('change', onLogoFileSelected);
+            }
+        });
+
+        function logout() {
+            localStorage.removeItem('user');
+            localStorage.removeItem('access_token');
+            sessionStorage.removeItem('user');
+            sessionStorage.removeItem('access_token');
+            window.location.href = './login.html';
+        }
+    </script>
+</body>
+</html>

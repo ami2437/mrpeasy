@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .header h1 { color: #333; font-size: 32px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 16px; }
+        .controls { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .shipments-table-container { background: white; border-radius: 6px; overflow-x: auto; margin-bottom: 20px; }
+        .shipments-table { width: 100%; border-collapse: collapse; }
+        .shipments-table th { background: #2c3e50; color: white; padding: 12px; text-align: left; font-size: 13px; font-weight: 600; white-space: nowrap; border: 1px solid #1f2d3a; }
+        .shipments-table td { padding: 12px; border-bottom: 1px solid #e0e0e0; font-size: 14px; }
+        .shipments-table tr:hover { background: #f8f9fa; }
+        .expand-btn { cursor: pointer; font-size: 18px; font-weight: bold; color: #667eea; user-select: none; width: 30px; text-align: center; }
+        .expand-btn:hover { color: #764ba2; }
+        .print-shipment-btn { cursor: pointer; font-size: 20px; color: #667eea; padding: 5px 10px; border-radius: 4px; background: transparent; border: 1px solid #667eea; transition: all 0.2s; }
+        .print-shipment-btn:hover { background: #667eea; color: white; }
+        .items-row { display: none; background: #f8f9fa; }
+        .items-row.expanded { display: table-row; }
+        .packing-details { width: 100%; margin: 15px 0; border: 1px solid #1f2d3a; border-collapse: collapse; }
+        .packing-details th { background: #2c3e50; color: #fff; padding: 10px; text-align: left; font-size: 12px; border-bottom: 2px solid #1f2d3a; font-weight: 600; border: 1px solid #1f2d3a; }
+        .packing-details td { padding: 10px; border-bottom: 1px solid #e0e0e0; font-size: 13px; border: 1px solid #e0e0e0; }
+        .packing-details td.description { max-width: 300px; word-wrap: break-word; white-space: normal; }
+        .button-group { display: flex; gap: 15px; margin-top: 20px; }
+        .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .packing-list-container { display: none; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
+        .packing-list {
+            page-break-after: always;
+            border: 2px solid #1f2d3a;
+            padding: 16px;
+            margin-bottom: 30px;
+            position: relative;
+            overflow: hidden;
+            font-family: "Century Gothic", "Trebuchet MS", "Segoe UI", sans-serif;
+            font-size: 9px;
+            line-height: 1.25;
+        }
+        .packing-list-header {
+            text-align: center;
+            margin-bottom: 12px;
+            border-bottom: 2px solid #1f2d3a;
+            padding-bottom: 8px;
+        }
+        .packing-list-logo-slot {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 120px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            z-index: 2;
+        }
+        .packing-list-logo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .company-name { font-size: 15px; font-weight: 700; color: #2c3e50; }
+        .packing-list-title { font-size: 18px; font-weight: 700; margin: 4px 0 0; color: #333; letter-spacing: 0.2px; }
+        .shipment-info {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+            border: 1px solid #e0e0e0;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .info-field.full-width { grid-column: 1 / -1; }
+        .info-label { font-size: 9px; color: #666; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+        .info-value { font-size: 10.5px; font-weight: 600; color: #333; margin-top: 2px; line-height: 1.2; }
+        .items-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #1f2d3a; }
+        .items-table th { background: #2c3e50; color: white; padding: 6px 7px; text-align: left; font-size: 9px; font-weight: 700; border: 1px solid #1f2d3a; letter-spacing: 0.03em; text-transform: uppercase; }
+        .items-table td { padding: 6px 7px; border-bottom: 1px solid #ddd; font-size: 9.5px; border: 1px solid #e0e0e0; vertical-align: top; }
+        .items-table tr:nth-child(even) { background: #f8f9fa; }
+        .packing-list-footer { text-align: center; margin-top: 12px; padding-top: 8px; border-top: 1px solid #ccc; font-size: 9px; color: #666; }
+        .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 6px; margin-top: 15px; border: 1px solid #f5c6cb; }
+        .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; }
+        .loading-overlay.active { display: flex; }
+        .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #667eea; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-text { color: white; font-size: 18px; margin-top: 20px; font-weight: 600; }
+        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+        .dashboard-btn:hover { background: #ffffff; }
+        @media print {
+            @page { size: Letter portrait; margin: 0.5in; }
+            body { background: white; padding: 0; }
+            .header, .controls, .shipments-table-container, .button-group { display: none; }
+            .packing-list-container { box-shadow: none; padding: 0; }
+            .packing-list { border: none; }
+            .dashboard-btn { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <a href="./dashboard.html" class="dashboard-btn">← Dashboard</a>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loading-text">Generating packing list...</div>
+    </div>
+    <div class="container">
+        <div class="header">
+            <h1>📦 Packing List Generator</h1>
+            <p>American Traders LLC - Generate packing lists for shipments</p>
+        </div>
+        <div class="controls">
+            <div id="loading" class="loading">Loading shipments...</div>
+            <div id="shipments-container" style="display: none;">
+                <div class="shipments-table-container">
+                    <table class="shipments-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>Shipment Code</th>
+                                <th>PO #</th>
+                                <th>Customer</th>
+                                <th>Finalized Date</th>
+                                <th>Total Boxes</th>
+                                <th>Items</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="shipments-list"></tbody>
+                    </table>
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="generateAllPackingLists()">Generate All Packing Lists</button>
+                    <button class="btn btn-secondary" onclick="window.print()" style="display: none;" id="print-btn">Print Packing Lists</button>
+                </div>
+            </div>
+            <div id="error-message"></div>
+        </div>
+        <div class="packing-list-container" id="packing-list-container">
+            <div id="packing-lists"></div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
+        let allShipments = [];
+
+        function escapeAttribute(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getDocumentLogoMarkup(slotClass, imageClass) {
+            if (!COMPANY_LOGO_URL) {
+                return '';
+            }
+
+            const safeLogoUrl = escapeAttribute(COMPANY_LOGO_URL);
+            return `<div class="${slotClass}" aria-hidden="true"><img class="${imageClass}" src="${safeLogoUrl}" alt=""></div>`;
+        }
+
+        async function checkBackend() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                if (!response.ok) throw new Error('Backend not responding');
+                return true;
+            } catch (error) {
+                showError('Cannot connect to backend. Ensure FastAPI is running on http://localhost:8000');
+                return false;
+            }
+        }
+        
+        async function loadShipments() {
+            if (!(await checkBackend())) {
+                document.getElementById('loading').textContent = 'Backend not running';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/packing-slip/shipments/list`);
+                const data = await response.json();
+
+                if (data.shipments && data.shipments.length > 0) {
+                    allShipments = data.shipments.map(s => ({
+                        code: s.shipment_code,
+                        po_number: s.po_number,
+                        customer_name: s.customer_name,
+                        shipping_address: s.shipping_address,
+                        finalized_at: s.finalized_at,
+                        total_boxes: s.total_boxes
+                    }));
+                    await loadShipmentDetails();
+                    renderShipmentsTable();
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('shipments-container').style.display = 'block';
+                } else {
+                    document.getElementById('loading').textContent = 'No finalized shipments found';
+                }
+            } catch (error) {
+                document.getElementById('loading').textContent = 'Error loading shipments';
+                showError('Failed to load shipments: ' + error.message);
+            }
+        }
+        
+        async function loadShipmentDetails() {
+            for (let shipment of allShipments) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/packing-slip/${shipment.code}`);
+                    const data = await response.json();
+                    shipment.packingSlip = data;
+                } catch (error) {
+                    console.error(`Error loading packing slip for ${shipment.code}:`, error);
+                }
+            }
+        }
+        
+        function renderShipmentsTable() {
+            const tbody = document.getElementById('shipments-list');
+            tbody.innerHTML = '';
+            
+            allShipments.forEach((shipment, index) => {
+                const packingSlip = shipment.packingSlip || {};
+                const itemsCount = packingSlip.items ? packingSlip.items.length : 0;
+                const finalizedDate = shipment.finalized_at ? new Date(shipment.finalized_at).toLocaleDateString() : 'N/A';
+
+                // Main shipment row
+                const shipmentRow = document.createElement('tr');
+                shipmentRow.innerHTML = `
+                    <td><span class="expand-btn" onclick="toggleItems(${index})">▶</span></td>
+                    <td><strong>${shipment.code}</strong></td>
+                    <td>${shipment.po_number || 'N/A'}</td>
+                    <td>${shipment.customer_name || 'N/A'}</td>
+                    <td>${finalizedDate}</td>
+                    <td>${shipment.total_boxes || 0}</td>
+                    <td>${itemsCount}</td>
+                    <td><button class="print-shipment-btn" onclick="generateAndPrintPackingList(${index})" title="Generate packing list">📋</button></td>
+                `;
+                tbody.appendChild(shipmentRow);
+                
+                // Items row
+                const itemsRow = document.createElement('tr');
+                itemsRow.className = 'items-row';
+                itemsRow.id = `items-row-${index}`;
+                itemsRow.innerHTML = `
+                    <td colspan="8">
+                        <table class="packing-details">
+                            <thead>
+                                <tr>
+                                    <th>Item #</th>
+                                    <th>Description</th>
+                                    <th>Qty Ordered</th>
+                                    <th>Qty Shipped</th>
+                                    <th>Qty Remaining</th>
+                                    <th>Box Breakdown</th>
+                                </tr>
+                            </thead>
+                            <tbody id="items-list-${index}"></tbody>
+                        </table>
+                    </td>
+                `;
+                tbody.appendChild(itemsRow);
+                
+                // Populate items from packing slip data (shipment_boxes)
+                if (packingSlip.items) {
+                    const itemsList = document.getElementById(`items-list-${index}`);
+
+                    packingSlip.items.forEach(item => {
+                        const row = document.createElement('tr');
+
+                        const itemCodeCell = document.createElement('td');
+                        itemCodeCell.innerHTML = `<strong>${item.item_code}</strong>`;
+
+                        const descCell = document.createElement('td');
+                        descCell.className = 'description';
+                        descCell.textContent = item.item_title || '';
+
+                        const orderedCell = document.createElement('td');
+                        orderedCell.textContent = item.qty_ordered || 0;
+
+                        const qtyCell = document.createElement('td');
+                        qtyCell.textContent = item.qty_shipped || 0;
+
+                        const remainingCell = document.createElement('td');
+                        remainingCell.textContent = item.qty_remaining || 0;
+
+                        const boxCell = document.createElement('td');
+                        boxCell.textContent = item.box_breakdown || '';
+
+                        row.appendChild(itemCodeCell);
+                        row.appendChild(descCell);
+                        row.appendChild(orderedCell);
+                        row.appendChild(qtyCell);
+                        row.appendChild(remainingCell);
+                        row.appendChild(boxCell);
+
+                        itemsList.appendChild(row);
+                    });
+                }
+            });
+        }
+        
+        function toggleItems(index) {
+            const itemsRow = document.getElementById(`items-row-${index}`);
+            const expandBtn = document.querySelectorAll('.expand-btn')[index];
+            
+            if (itemsRow.classList.contains('expanded')) {
+                itemsRow.classList.remove('expanded');
+                expandBtn.textContent = '▶';
+            } else {
+                itemsRow.classList.add('expanded');
+                expandBtn.textContent = '▼';
+            }
+        }
+        
+        async function generateAndPrintPackingList(index) {
+            showLoading(`Generating packing list for ${allShipments[index].code}...`);
+            
+            const shipment = allShipments[index];
+            const packingSlip = shipment.packingSlip;
+            if (!packingSlip || !packingSlip.items || packingSlip.items.length === 0) {
+                hideLoading();
+                showError('No packing slip data found for this shipment');
+                return;
+            }
+            
+            displayPackingList(shipment, packingSlip);
+            hideLoading();
+            setTimeout(() => window.print(), 500);
+        }
+        
+        async function generateAllPackingLists() {
+            showLoading('Generating all packing lists...');
+            
+            const listContainer = document.getElementById('packing-lists');
+            listContainer.innerHTML = '';
+            
+            for (let index = 0; index < allShipments.length; index++) {
+                const shipment = allShipments[index];
+                const packingSlip = shipment.packingSlip;
+                if (!packingSlip || !packingSlip.items || packingSlip.items.length === 0) continue;
+                
+                generatePackingListHTML(shipment, packingSlip, listContainer);
+            }
+            
+            document.getElementById('packing-list-container').style.display = 'block';
+            document.getElementById('print-btn').style.display = 'inline-block';
+            
+            const shipmentCodes = allShipments.map(s => s.code).filter(Boolean);
+            document.title = 'American Traders LLC';
+            
+            hideLoading();
+        }
+        
+        function displayPackingList(shipment, packingSlip) {
+            const listContainer = document.getElementById('packing-lists');
+            listContainer.innerHTML = '';
+            generatePackingListHTML(shipment, packingSlip, listContainer);
+            document.getElementById('packing-list-container').style.display = 'block';
+            
+            const po = shipment.po_number ? shipment.po_number.replace(/[^a-zA-Z0-9]/g, '_') : 'PackingList';
+            document.title = 'American Traders LLC';
+        }
+        
+        function generatePackingListHTML(shipment, packingSlip, container) {
+            const packingList = document.createElement('div');
+            packingList.className = 'packing-list';
+            
+            const items = packingSlip.items || [];
+            const finalizedDate = shipment.finalized_at
+                ? new Date(shipment.finalized_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+                : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+            
+            let totalPieces = 0;
+            let totalBoxes = 0;
+            
+            let itemsHTML = `
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th>Item #</th>
+                            <th>Description</th>
+                            <th>Qty Ordered</th>
+                            <th>Qty Shipped</th>
+                            <th>Qty Remaining</th>
+                            <th>Box Breakdown</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            items.forEach(item => {
+                totalPieces += item.qty_shipped || 0;
+                totalBoxes += item.all_boxes ? item.all_boxes.length : 0;
+                
+                itemsHTML += `
+                    <tr>
+                        <td><strong>${item.item_code}</strong></td>
+                        <td>${item.item_title || ''}</td>
+                        <td>${item.qty_ordered || 0}</td>
+                        <td>${item.qty_shipped || 0}</td>
+                        <td>${item.qty_remaining || 0}</td>
+                        <td>${item.box_breakdown || ''}</td>
+                    </tr>
+                `;
+            });
+            
+            itemsHTML += `
+                </tbody>
+            </table>
+            `;
+            
+            packingList.innerHTML = `
+                ${getDocumentLogoMarkup('packing-list-logo-slot', 'packing-list-logo')}
+                <div class="packing-list-header">
+                    <div class="company-name">American Traders LLC - ATind Supplies</div>
+                    <div class="packing-list-title">PACKING LIST</div>
+                </div>
+                <div class="shipment-info">
+                    <div class="info-field">
+                        <div class="info-label">Shipment Code</div>
+                        <div class="info-value">${shipment.code}</div>
+                    </div>
+                    <div class="info-field">
+                        <div class="info-label">PO #</div>
+                        <div class="info-value">${shipment.po_number || 'N/A'}</div>
+                    </div>
+                    <div class="info-field">
+                        <div class="info-label">Customer</div>
+                        <div class="info-value">${shipment.customer_name || 'N/A'}</div>
+                    </div>
+                    <div class="info-field">
+                        <div class="info-label">Date</div>
+                        <div class="info-value">${finalizedDate}</div>
+                    </div>
+                    <div class="info-field">
+                        <div class="info-label">Total Boxes</div>
+                        <div class="info-value">${totalBoxes}</div>
+                    </div>
+                    <div class="info-field full-width">
+                        <div class="info-label">Shipping Address</div>
+                        <div class="info-value">${shipment.shipping_address || 'N/A'}</div>
+                    </div>
+                </div>
+                ${itemsHTML}
+                <div class="packing-list-footer">
+                    Packed By: __________________  |  Checked By: __________________  |  Shipped By: __________________
+                </div>
+            `;
+            
+            container.appendChild(packingList);
+        }
+        
+        function hideLoading() {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.classList.remove('active');
+        }
+
+        function showLoading(text = 'Generating packing list...') {
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            if (loadingText) {
+                loadingText.textContent = text;
+            }
+            overlay.classList.add('active');
+        }
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.className = message ? 'error' : '';
+            errorDiv.textContent = message;
+        }
+        
+        loadShipments();
+    </script>
+</body>
+</html>

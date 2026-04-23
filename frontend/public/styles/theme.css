@@ -1,0 +1,199 @@
+:root {
+    --atl-bg: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    --atl-surface: #ffffff;
+    --atl-surface-soft: #f8fafc;
+    --atl-border: #dbe3ef;
+    --atl-text: #0f172a;
+    --atl-text-soft: #475569;
+    --atl-primary: #4f46e5;
+    --atl-primary-hover: #4338ca;
+    --atl-secondary: #0ea5e9;
+    --atl-success: #16a34a;
+    --atl-warning: #d97706;
+    --atl-danger: #dc2626;
+    --atl-radius-md: 10px;
+    --atl-radius-lg: 14px;
+    --atl-shadow-sm: 0 4px 12px rgba(15, 23, 42, 0.08);
+    --atl-shadow-md: 0 10px 30px rgba(15, 23, 42, 0.12);
+}
+
+html, body {
+    color: var(--atl-text);
+}
+
+body {
+    background: var(--atl-bg);
+}
+
+.container {
+    max-width: 1400px;
+}
+
+.header,
+.controls,
+.content-area,
+.labels-container,
+.packing-list-container,
+.login-card,
+.section,
+.section-card {
+    border-radius: var(--atl-radius-lg) !important;
+    box-shadow: var(--atl-shadow-md) !important;
+}
+
+.header h1,
+h1,
+h2,
+h3 {
+    color: var(--atl-text);
+}
+
+.header p,
+.subtitle,
+.info-label,
+.loading,
+.loading-subtext {
+    color: var(--atl-text-soft);
+}
+
+.btn,
+button,
+.action-btn,
+.filter-clear-btn,
+.back-btn,
+.logout-btn,
+.print-btn {
+    border-radius: var(--atl-radius-md) !important;
+    transition: all 0.2s ease;
+}
+
+.btn-primary,
+.action-btn,
+.filter-group button,
+.filter-clear-btn {
+    background: var(--atl-primary) !important;
+    color: #fff !important;
+    border: 1px solid transparent !important;
+}
+
+.btn-primary:hover,
+.action-btn:hover,
+.filter-group button:hover,
+.filter-clear-btn:hover {
+    background: var(--atl-primary-hover) !important;
+}
+
+.btn-secondary,
+.action-btn.secondary,
+.back-btn,
+.logout-btn,
+.print-btn {
+    background: #ffffff !important;
+    color: var(--atl-text) !important;
+    border: 1px solid var(--atl-border) !important;
+}
+
+.btn-secondary:hover,
+.action-btn.secondary:hover,
+.back-btn:hover,
+.logout-btn:hover,
+.print-btn:hover {
+    background: var(--atl-surface-soft) !important;
+}
+
+input,
+select,
+textarea,
+.filter-group input,
+.filter-group select,
+.items-table input,
+.items-table select,
+.bulk-items-table input,
+.form-group select {
+    border: 1px solid var(--atl-border) !important;
+    border-radius: var(--atl-radius-md) !important;
+    min-height: 40px;
+    background: #fff;
+    color: var(--atl-text);
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+.filter-group input:focus,
+.filter-group select:focus {
+    outline: none;
+    border-color: var(--atl-primary) !important;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}
+
+.table,
+.items-table,
+.shipments-table,
+.bulk-items-table,
+.packing-details {
+    border-radius: var(--atl-radius-md);
+    overflow: hidden;
+    border: 1px solid var(--atl-border);
+}
+
+.table th,
+.items-table th,
+.shipments-table th,
+.bulk-items-table th,
+.packing-details th {
+    background: #eef2ff !important;
+    color: #1e293b !important;
+    border-bottom: 1px solid var(--atl-border) !important;
+}
+
+.table td,
+.items-table td,
+.shipments-table td,
+.bulk-items-table td,
+.packing-details td {
+    border-bottom: 1px solid #eaf0f8;
+}
+
+.table tbody tr:hover,
+.items-table tbody tr:hover,
+.shipments-table tbody tr:hover,
+.bulk-items-table tbody tr:hover {
+    background: #f8fbff !important;
+}
+
+.badge {
+    border-radius: 999px !important;
+    font-weight: 700 !important;
+}
+
+.badge-success { background: #dcfce7 !important; color: #166534 !important; }
+.badge-warning { background: #ffedd5 !important; color: #9a3412 !important; }
+.badge-danger { background: #fee2e2 !important; color: #991b1b !important; }
+.badge-info { background: #dbeafe !important; color: #1e3a8a !important; }
+.badge-secondary { background: #e2e8f0 !important; color: #334155 !important; }
+
+.error {
+    border-radius: var(--atl-radius-md) !important;
+    box-shadow: var(--atl-shadow-sm);
+}
+
+.module-card,
+.summary-card,
+.label-card,
+.packing-list {
+    border-radius: var(--atl-radius-lg) !important;
+    box-shadow: var(--atl-shadow-sm);
+}
+
+.module-card:hover {
+    transform: translateY(-6px);
+}
+
+@media print {
+    .header,
+    .controls,
+    .dashboard-btn {
+        box-shadow: none !important;
+    }
+}

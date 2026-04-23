@@ -1,0 +1,52 @@
+[
+  {
+    "shipment_code": "SH215598",
+    "customer_order": "C89076",
+    "item_code": "51753",
+    "item_title": "BOLT_HH_3/4-10x10_GR8_MECH GALV_MINIMUM THREAD LENGTH OF 2.5\"",
+    "lot_code": "L00290",
+    "box_count": 6,
+    "box_numbers": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "total_boxes": 7,
+    "quantity_in_box": 40,
+    "total_quantity": 250,
+    "label_type": "grouped"
+  },
+  {
+    "shipment_code": "SH215598",
+    "customer_order": "C89076",
+    "item_code": "51753",
+    "item_title": "BOLT_HH_3/4-10x10_GR8_MECH GALV_MINIMUM THREAD LENGTH OF 2.5\"",
+    "lot_code": "L00290",
+    "box_count": 1,
+    "box_numbers": [
+      7
+    ],
+    "total_boxes": 7,
+    "quantity_in_box": 10,
+    "total_quantity": 250,
+    "label_type": "grouped"
+  },
+  {
+    "shipment_code": "SH215598",
+    "customer_order": "C89076",
+    "item_code": "51754",
+    "item_title": "NUT_HEX_3/4\"-10_GR8_GALV",
+    "lot_code": "L00291",
+    "box_count": 1,
+    "box_numbers": [
+      1
+    ],
+    "total_boxes": 1,
+    "quantity_in_box": 150,
+    "total_quantity": 150,
+    "label_type": "grouped"
+  }
+]

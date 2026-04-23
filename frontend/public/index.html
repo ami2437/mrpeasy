@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="MRPeasy Custom Manufacturing Portal"
+    />
+    <title>American Traders LLC</title>
+    <link rel="stylesheet" href="./styles/theme.css" />
+  </head>
+  <body>
+    <script>
+      // Redirect to login or dashboard based on auth status
+      window.addEventListener('DOMContentLoaded', function() {
+        const user = localStorage.getItem('user');
+        if (user) {
+          window.location.href = './dashboard.html';
+        } else {
+          window.location.href = './login.html';
+        }
+      });
+    </script>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

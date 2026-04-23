@@ -1,0 +1,5 @@
+{
+  "name": "mrpeasy-fastapi-backend",
+  "version": "1.0.0",
+  "description": "FastAPI backend for MRPeasy custom portal with SQLAlchemy"
+}
