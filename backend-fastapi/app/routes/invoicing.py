@@ -188,6 +188,11 @@ def _build_order_shipment_map():
     for shipment in shipments:
         shipment_code = shipment.get("code") or "N/A"
         delivery_date = _format_epoch_to_iso(shipment.get("delivery_date"))
+        shipment_product_match_keys = set()
+        for shipment_product in shipment.get("products", []) or []:
+            match_key = _build_invoice_match_key(shipment_product)
+            if match_key:
+                shipment_product_match_keys.add(match_key)
 
         order_ids = set()
         direct_id = shipment.get("customer_order_id")
@@ -208,7 +213,8 @@ def _build_order_shipment_map():
                 shipment_map[order_id] = {
                     "shipment_codes": [],
                     "delivery_dates": [],
-                    "by_delivery_date": {}
+                    "by_delivery_date": {},
+                    "shipment_entries": []
                 }
 
             if shipment_code not in shipment_map[order_id]["shipment_codes"]:
@@ -222,6 +228,17 @@ def _build_order_shipment_map():
                     by_date[delivery_date] = []
                 if shipment_code not in by_date[delivery_date]:
                     by_date[delivery_date].append(shipment_code)
+
+            shipment_entries = shipment_map[order_id]["shipment_entries"]
+            existing_entry = next((entry for entry in shipment_entries if entry.get("code") == shipment_code), None)
+            if existing_entry:
+                existing_entry["product_match_keys"].update(shipment_product_match_keys)
+            else:
+                shipment_entries.append({
+                    "code": shipment_code,
+                    "delivery_date": delivery_date,
+                    "product_match_keys": set(shipment_product_match_keys)
+                })
 
     return shipment_map
 
@@ -244,6 +261,61 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
         shipment_codes = order_shipments.get("shipment_codes", [])
         delivery_dates = order_shipments.get("delivery_dates", [])
         shipment_codes_by_delivery = order_shipments.get("by_delivery_date", {})
+        shipment_entries = order_shipments.get("shipment_entries", [])
+
+        def _parse_iso_date(value):
+            if not value or not isinstance(value, str):
+                return None
+            try:
+                return datetime.fromisoformat(value).date()
+            except Exception:
+                return None
+
+        def _resolve_line_shipment_codes(item):
+            line_article_id = item.get("article_id")
+            if line_article_id not in (None, ""):
+                line_match_key = ("article_id", str(line_article_id))
+            else:
+                line_item_code = item.get("item_code")
+                line_match_key = ("item_code", str(line_item_code)) if line_item_code not in (None, "") else None
+
+            line_delivery_date = item.get("delivery_date")
+            line_delivery_parsed = _parse_iso_date(line_delivery_date)
+
+            candidate_entries = []
+            if line_match_key:
+                candidate_entries = [
+                    entry for entry in shipment_entries
+                    if line_match_key in entry.get("product_match_keys", set())
+                ]
+            if not candidate_entries:
+                candidate_entries = list(shipment_entries)
+
+            if candidate_entries:
+                if line_delivery_parsed:
+                    scored = []
+                    for entry in candidate_entries:
+                        entry_delivery = _parse_iso_date(entry.get("delivery_date"))
+                        if entry_delivery is None:
+                            distance = 10**6
+                        else:
+                            distance = abs((entry_delivery - line_delivery_parsed).days)
+                        scored.append((distance, entry.get("code") or "N/A"))
+                    scored.sort(key=lambda pair: (pair[0], pair[1]))
+                    return [scored[0][1]] if scored else []
+
+                candidate_codes = sorted({entry.get("code") or "N/A" for entry in candidate_entries})
+                return [candidate_codes[0]] if candidate_codes else []
+
+            if line_delivery_date and line_delivery_date in shipment_codes_by_delivery:
+                by_date_codes = shipment_codes_by_delivery.get(line_delivery_date, [])
+                if by_date_codes:
+                    return [by_date_codes[0]]
+
+            if shipment_codes:
+                return [sorted(shipment_codes)[0]]
+
+            return []
 
         discrepancy_items = order_data.get("discrepancy_items", [])
         not_invoiced_items = [
@@ -266,11 +338,7 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
             line_key = item.get("line_key") or f"{order_code}:{item.get('item_code')}:{item.get('line_index', 0)}"
 
             line_delivery_date = item.get("delivery_date")
-            line_shipment_codes = []
-            if line_delivery_date and line_delivery_date in shipment_codes_by_delivery:
-                line_shipment_codes = shipment_codes_by_delivery.get(line_delivery_date, [])
-            if not line_shipment_codes:
-                line_shipment_codes = shipment_codes
+            line_shipment_codes = _resolve_line_shipment_codes(item)
 
             lines.append({
                 "line_key": line_key,
