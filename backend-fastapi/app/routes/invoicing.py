@@ -194,6 +194,10 @@ def _build_order_shipment_map():
         if direct_id is not None:
             order_ids.add(direct_id)
 
+        direct_cust_ord_id = shipment.get("cust_ord_id")
+        if direct_cust_ord_id is not None:
+            order_ids.add(direct_cust_ord_id)
+
         for linked in shipment.get("orders", []) or []:
             linked_id = linked.get("customer_order_id")
             if linked_id is not None:
@@ -203,13 +207,21 @@ def _build_order_shipment_map():
             if order_id not in shipment_map:
                 shipment_map[order_id] = {
                     "shipment_codes": [],
-                    "delivery_dates": []
+                    "delivery_dates": [],
+                    "by_delivery_date": {}
                 }
 
             if shipment_code not in shipment_map[order_id]["shipment_codes"]:
                 shipment_map[order_id]["shipment_codes"].append(shipment_code)
             if delivery_date and delivery_date not in shipment_map[order_id]["delivery_dates"]:
                 shipment_map[order_id]["delivery_dates"].append(delivery_date)
+
+            if delivery_date:
+                by_date = shipment_map[order_id]["by_delivery_date"]
+                if delivery_date not in by_date:
+                    by_date[delivery_date] = []
+                if shipment_code not in by_date[delivery_date]:
+                    by_date[delivery_date].append(shipment_code)
 
     return shipment_map
 
@@ -231,6 +243,7 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
         order_shipments = shipment_map.get(order.get("cust_ord_id"), {})
         shipment_codes = order_shipments.get("shipment_codes", [])
         delivery_dates = order_shipments.get("delivery_dates", [])
+        shipment_codes_by_delivery = order_shipments.get("by_delivery_date", {})
 
         discrepancy_items = order_data.get("discrepancy_items", [])
         not_invoiced_items = [
@@ -251,6 +264,14 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
             line_total = quantity * unit_price
             subtotal += line_total
             line_key = item.get("line_key") or f"{order_code}:{item.get('item_code')}:{item.get('line_index', 0)}"
+
+            line_delivery_date = item.get("delivery_date")
+            line_shipment_codes = []
+            if line_delivery_date and line_delivery_date in shipment_codes_by_delivery:
+                line_shipment_codes = shipment_codes_by_delivery.get(line_delivery_date, [])
+            if not line_shipment_codes:
+                line_shipment_codes = shipment_codes
+
             lines.append({
                 "line_key": line_key,
                 "item_code": item.get("item_code"),
@@ -261,8 +282,8 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "line_total": line_total,
-                "shipment_number": ", ".join(shipment_codes) if shipment_codes else "N/A",
-                "delivery_date": item.get("delivery_date") or ", ".join(delivery_dates) if delivery_dates else "N/A"
+                "shipment_number": ", ".join(line_shipment_codes) if line_shipment_codes else "N/A",
+                "delivery_date": line_delivery_date or (", ".join(delivery_dates) if delivery_dates else "N/A")
             })
 
         shipping = _to_number(order.get("shipping_cost", 0), 0)
