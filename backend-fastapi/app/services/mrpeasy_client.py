@@ -145,6 +145,10 @@ class MRPeasyAPIClient:
         """Get specific sales invoice"""
         return self._request("GET", f"/invoices/{invoice_id}")
 
+    def update_invoice(self, invoice_id: int, payload: Dict[str, Any]) -> Optional[Dict[Any, Any]]:
+        """Update a sales invoice"""
+        return self._request("PUT", f"/invoices/{invoice_id}", json=payload)
+
 
 # Global instance
 mrpeasy_client = MRPeasyAPIClient()

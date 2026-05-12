@@ -1,13 +1,28 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from io import BytesIO
+from uuid import uuid4
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from app.services.mrpeasy_client import mrpeasy_client
+
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover - handled at runtime when feature is used
+    pd = None
 
 router = APIRouter(prefix="/api/invoicing", tags=["invoicing"])
 
 _generated_invoice_drafts = []
 _generated_invoice_keys = set()
+_bulk_payment_field_operations = {}
+
+_BULK_REQUIRED_COLUMNS = {
+    "item number": "Item Number",
+    "disbursement date": "Disbursement Date",
+    "funding amount": "Funding Amount",
+    "discount": "Discount"
+}
 
 
 class InvoiceGenerationItemSelection(BaseModel):
@@ -37,6 +52,383 @@ class InvoiceGenerationRequest(BaseModel):
     generation_mode: Optional[str] = "order"
 
 
+def _ensure_bulk_dependencies():
+    if pd is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Excel upload dependencies are missing. Install pandas and openpyxl."
+        )
+
+
+def _normalize_invoice_code(code: Any) -> str:
+    normalized = str(code or "").strip()
+    if normalized.upper().startswith("INV-"):
+        return f"Inv-{normalized[4:]}"
+    return normalized
+
+
+def _parse_date_to_unix(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and value > 1000000000:
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return int(parsed.timestamp())
+        except ValueError:
+            continue
+
+    try:
+        parsed = pd.to_datetime(value)
+        if pd.isna(parsed):
+            return None
+        return int(parsed.to_pydatetime().timestamp())
+    except Exception:
+        return None
+
+
+def _detect_header_row(raw_df) -> Optional[int]:
+    for idx in range(min(len(raw_df), 30)):
+        row_values = [str(v).strip().lower() for v in raw_df.iloc[idx].tolist() if str(v).strip()]
+        row_set = set(row_values)
+        if all(key in row_set for key in _BULK_REQUIRED_COLUMNS.keys()):
+            return idx
+    return None
+
+
+def _load_bulk_payment_rows(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
+    _ensure_bulk_dependencies()
+
+    lower_name = (filename or "").lower()
+    if lower_name.endswith(".csv"):
+        frame = pd.read_csv(BytesIO(file_bytes))
+    else:
+        workbook = pd.ExcelFile(BytesIO(file_bytes))
+        sheet_name = "Associated Items" if "Associated Items" in workbook.sheet_names else workbook.sheet_names[0]
+        raw = pd.read_excel(workbook, sheet_name=sheet_name, header=None)
+        header_row = _detect_header_row(raw)
+        if header_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not detect header row. Expected columns: Item Number, Disbursement Date, Funding Amount, Discount."
+            )
+        frame = pd.read_excel(workbook, sheet_name=sheet_name, header=header_row)
+
+    frame.columns = [str(column).strip() for column in frame.columns]
+    normalized_column_map = {str(column).strip().lower(): column for column in frame.columns}
+    missing = [original for key, original in _BULK_REQUIRED_COLUMNS.items() if key not in normalized_column_map]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required columns: {', '.join(missing)}")
+
+    item_number_col = normalized_column_map["item number"]
+    disbursement_col = normalized_column_map["disbursement date"]
+    funding_col = normalized_column_map["funding amount"]
+    discount_col = normalized_column_map["discount"]
+
+    if "item type" in normalized_column_map:
+        type_col = normalized_column_map["item type"]
+        frame = frame[frame[type_col].astype(str).str.strip().str.lower() == "invoice"]
+
+    frame = frame[frame[item_number_col].notna()].copy()
+
+    rows = []
+    for _, row in frame.iterrows():
+        invoice_code = _normalize_invoice_code(row.get(item_number_col))
+        if not invoice_code:
+            continue
+
+        rows.append({
+            "invoice_code": invoice_code,
+            "disbursement_date_raw": row.get(disbursement_col),
+            "funding_amount_raw": row.get(funding_col),
+            "discount_raw": row.get(discount_col)
+        })
+
+    return rows
+
+
+def _build_bulk_payment_preview(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    invoices = mrpeasy_client.get_invoices({"limit": 1000}) or []
+    invoices_by_code = {
+        str(inv.get("code", "")).strip().lower(): inv
+        for inv in invoices
+        if isinstance(inv, dict)
+    }
+
+    preview_rows = []
+    valid_count = 0
+
+    for row in rows:
+        invoice_code = row.get("invoice_code", "")
+        invoice = invoices_by_code.get(invoice_code.lower())
+
+        funding_amount = _to_number(row.get("funding_amount_raw"), 0)
+        discount_amount = _to_number(row.get("discount_raw"), 0)
+        disbursement_unix = _parse_date_to_unix(row.get("disbursement_date_raw"))
+
+        parse_errors = []
+        if disbursement_unix is None:
+            parse_errors.append("Invalid Disbursement Date")
+
+        if funding_amount <= 0:
+            parse_errors.append("Funding Amount must be greater than 0")
+
+        if discount_amount < 0:
+            parse_errors.append("Discount cannot be negative")
+
+        preview = {
+            "invoice_code": invoice_code,
+            "invoice_found": invoice is not None,
+            "invoice_id": invoice.get("invoice_id") if invoice else None,
+            "invoice_total": _to_number(invoice.get("total_price"), 0) if invoice else None,
+            "status": str(invoice.get("status")) if invoice else None,
+            "status_txt": invoice.get("status_txt") if invoice else None,
+            "custom_570": disbursement_unix,
+            "custom_571": f"{funding_amount:.2f}",
+            "custom_572": f"{discount_amount:.2f}",
+            "parse_errors": parse_errors
+        }
+
+        if invoice:
+            invoice_total = _to_number(invoice.get("total_price"), 0)
+            preview["sum_check"] = round(funding_amount + discount_amount, 2)
+            preview["matches_invoice_total"] = abs(preview["sum_check"] - round(invoice_total, 2)) < 0.01
+        else:
+            preview["sum_check"] = round(funding_amount + discount_amount, 2)
+            preview["matches_invoice_total"] = False
+
+        if preview["invoice_found"] and not parse_errors:
+            valid_count += 1
+
+        preview_rows.append(preview)
+
+    return {
+        "total_rows": len(preview_rows),
+        "valid_rows": valid_count,
+        "invalid_rows": len(preview_rows) - valid_count,
+        "rows": preview_rows
+    }
+
+
+@router.post("/bulk-payment-fields/preview")
+async def preview_bulk_payment_field_upload(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name is required")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    rows = _load_bulk_payment_rows(file_bytes, file.filename)
+    preview = _build_bulk_payment_preview(rows)
+    return {
+        "file_name": file.filename,
+        **preview
+    }
+
+
+@router.post("/bulk-payment-fields/apply")
+async def apply_bulk_payment_field_upload(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="File name is required")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    rows = _load_bulk_payment_rows(file_bytes, file.filename)
+    preview = _build_bulk_payment_preview(rows)
+    valid_rows = [row for row in preview["rows"] if row["invoice_found"] and not row["parse_errors"]]
+
+    if not valid_rows:
+        raise HTTPException(status_code=400, detail="No valid invoice rows found to update")
+
+    operation_id = str(uuid4())
+    operation = {
+        "operation_id": operation_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "file_name": file.filename,
+        "rolled_back": False,
+        "updates": [],
+        "skipped_matching": [],
+        "discrepancies": []
+    }
+
+    rollback_errors = []
+
+    try:
+        for row in valid_rows:
+            invoice_id = row["invoice_id"]
+            before = mrpeasy_client.get_invoice(invoice_id) or {}
+
+            payload = {
+                "custom_570": row["custom_570"],
+                "custom_571": row["custom_571"],
+                "custom_572": row["custom_572"]
+            }
+
+            rollback_payload = {
+                "custom_570": before.get("custom_570"),
+                "custom_571": before.get("custom_571"),
+                "custom_572": before.get("custom_572")
+            }
+
+            if _fields_are_all_empty(before):
+                mrpeasy_client.update_invoice(invoice_id, payload)
+                after = mrpeasy_client.get_invoice(invoice_id) or {}
+
+                operation["updates"].append({
+                    "invoice_id": invoice_id,
+                    "invoice_code": row["invoice_code"],
+                    "payload": payload,
+                    "rollback_payload": rollback_payload,
+                    "after": {
+                        "status": after.get("status"),
+                        "status_txt": after.get("status_txt"),
+                        "custom_570": after.get("custom_570"),
+                        "custom_571": after.get("custom_571"),
+                        "custom_572": after.get("custom_572")
+                    }
+                })
+                continue
+
+            if _fields_match_expected(before, payload):
+                operation["skipped_matching"].append({
+                    "invoice_id": invoice_id,
+                    "invoice_code": row["invoice_code"],
+                    "reason": "Existing custom fields already match file values",
+                    "existing": rollback_payload
+                })
+                continue
+
+            operation["discrepancies"].append({
+                "invoice_id": invoice_id,
+                "invoice_code": row["invoice_code"],
+                "reason": "Existing custom fields differ from file values",
+                "existing": rollback_payload,
+                "expected": payload
+            })
+    except Exception as exc:
+        for applied in reversed(operation["updates"]):
+            try:
+                mrpeasy_client.update_invoice(applied["invoice_id"], applied["rollback_payload"])
+            except Exception as rollback_exc:
+                rollback_errors.append({
+                    "invoice_id": applied["invoice_id"],
+                    "invoice_code": applied["invoice_code"],
+                    "error": str(rollback_exc)
+                })
+
+        operation["rolled_back"] = True
+        operation["rollback_errors"] = rollback_errors
+        _bulk_payment_field_operations[operation_id] = operation
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Bulk update failed and rollback was attempted: {exc}",
+                "operation_id": operation_id,
+                "updated_before_failure": len(operation["updates"]),
+                "rollback_errors": rollback_errors
+            }
+        )
+
+    _bulk_payment_field_operations[operation_id] = operation
+
+    skipped_existing_count = len(operation["skipped_matching"])
+    discrepancy_count = len(operation["discrepancies"])
+    skipped_count = preview["invalid_rows"] + skipped_existing_count + discrepancy_count
+
+    return {
+        "operation_id": operation_id,
+        "file_name": file.filename,
+        "updated_count": len(operation["updates"]),
+        "skipped_count": skipped_count,
+        "skipped_invalid_count": preview["invalid_rows"],
+        "skipped_existing_match_count": skipped_existing_count,
+        "discrepancy_count": discrepancy_count,
+        "skipped_existing_matches": operation["skipped_matching"],
+        "discrepancies": operation["discrepancies"],
+        "rolled_back": False,
+        "updates": operation["updates"]
+    }
+
+
+@router.post("/bulk-payment-fields/rollback/{operation_id}")
+def rollback_bulk_payment_field_operation(operation_id: str):
+    operation = _bulk_payment_field_operations.get(operation_id)
+    if not operation:
+        raise HTTPException(status_code=404, detail="Operation not found")
+
+    if operation.get("rolled_back"):
+        return {
+            "operation_id": operation_id,
+            "rolled_back": True,
+            "message": "Operation was already rolled back"
+        }
+
+    rollback_errors = []
+    reverted = 0
+
+    for applied in reversed(operation.get("updates", [])):
+        try:
+            mrpeasy_client.update_invoice(applied["invoice_id"], applied["rollback_payload"])
+            reverted += 1
+        except Exception as exc:
+            rollback_errors.append({
+                "invoice_id": applied.get("invoice_id"),
+                "invoice_code": applied.get("invoice_code"),
+                "error": str(exc)
+            })
+
+    operation["rolled_back"] = True
+    operation["rolled_back_at"] = datetime.now(timezone.utc).isoformat()
+    operation["rollback_errors"] = rollback_errors
+
+    return {
+        "operation_id": operation_id,
+        "rolled_back": True,
+        "reverted_count": reverted,
+        "rollback_errors": rollback_errors
+    }
+
+
+@router.get("/bulk-payment-fields/operations")
+def list_bulk_payment_field_operations(limit: int = 20):
+    safe_limit = max(1, min(int(limit or 20), 200))
+
+    operations = []
+    for operation_id, op in _bulk_payment_field_operations.items():
+        updates = op.get("updates", [])
+        rollback_errors = op.get("rollback_errors", [])
+        skipped_matching = op.get("skipped_matching", [])
+        discrepancies = op.get("discrepancies", [])
+        operations.append({
+            "operation_id": operation_id,
+            "created_at": op.get("created_at"),
+            "file_name": op.get("file_name"),
+            "rolled_back": bool(op.get("rolled_back")),
+            "rolled_back_at": op.get("rolled_back_at"),
+            "updated_count": len(updates),
+            "skipped_existing_match_count": len(skipped_matching),
+            "discrepancy_count": len(discrepancies),
+            "rollback_error_count": len(rollback_errors)
+        })
+
+    operations.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+
+    return {
+        "count": min(len(operations), safe_limit),
+        "operations": operations[:safe_limit]
+    }
+
+
 def _to_number(value, default=0.0):
     if value is None:
         return float(default)
@@ -51,6 +443,61 @@ def _to_number(value, default=0.0):
         except ValueError:
             return float(default)
     return float(default)
+
+
+def _is_empty_custom_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def _normalize_unix_like(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
+def _normalize_money_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return f"{_to_number(value, 0):.2f}"
+
+
+def _fields_are_all_empty(invoice: Dict[str, Any]) -> bool:
+    return (
+        _is_empty_custom_value(invoice.get("custom_570"))
+        and _is_empty_custom_value(invoice.get("custom_571"))
+        and _is_empty_custom_value(invoice.get("custom_572"))
+    )
+
+
+def _fields_match_expected(invoice: Dict[str, Any], expected: Dict[str, Any]) -> bool:
+    existing_570 = _normalize_unix_like(invoice.get("custom_570"))
+    expected_570 = _normalize_unix_like(expected.get("custom_570"))
+    existing_571 = _normalize_money_string(invoice.get("custom_571"))
+    expected_571 = _normalize_money_string(expected.get("custom_571"))
+    existing_572 = _normalize_money_string(invoice.get("custom_572"))
+    expected_572 = _normalize_money_string(expected.get("custom_572"))
+
+    return (
+        existing_570 == expected_570
+        and existing_571 == expected_571
+        and existing_572 == expected_572
+    )
 
 
 def _extract_job_number(order):
@@ -771,13 +1218,85 @@ def get_shipped_uninvoiced_items():
                 "total_uninvoiced_items": 0
             }
         
-        # Fetch all invoices
+        # Fetch all invoices and shipments
         all_invoices = mrpeasy_client.get_invoices()
+        all_shipments = mrpeasy_client.get_shipments() or []
+        
+        # Build shipment_map to track which items are in which shipments
+        # This allows us to match invoices to specific shipment instances
+        shipment_map = {}  # {cust_ord_id: {shipment_code: {match_keys}}}
+        if all_shipments:
+            for shipment in all_shipments:
+                shipment_code = shipment.get('code') or 'N/A'
+                customer_order_code = shipment.get('customer_order_code')
+                
+                # Get order ID from shipment
+                cust_ord_id = None
+                direct_id = shipment.get('customer_order_id')
+                if direct_id is not None:
+                    cust_ord_id = direct_id
+                
+                direct_cust_ord_id = shipment.get('cust_ord_id')
+                if direct_cust_ord_id is not None and cust_ord_id is None:
+                    cust_ord_id = direct_cust_ord_id
+                
+                for linked in shipment.get('orders', []) or []:
+                    linked_id = linked.get('customer_order_id')
+                    if linked_id is not None and cust_ord_id is None:
+                        cust_ord_id = linked_id
+                
+                if not cust_ord_id:
+                    continue
+                
+                if cust_ord_id not in shipment_map:
+                    shipment_map[cust_ord_id] = {}
+                
+                shipment_map[cust_ord_id][shipment_code] = set()
+                
+                # Track match keys for items in this shipment
+                for shipment_product in shipment.get('products', []) or []:
+                    match_key = _build_invoice_match_key(shipment_product)
+                    if match_key:
+                        shipment_map[cust_ord_id][shipment_code].add(match_key)
+        
+        # Helper function: Match invoices to their likely shipments
+        # This helps ensure invoices are only attributed to shipment instances they actually cover
+        def _match_invoice_to_shipments(invoice, cust_ord_id):
+            """
+            Determine which shipments an invoice likely applies to based on its item content.
+            Returns list of shipment codes that likely contain these items.
+            """
+            likely_shipments = []
+            if cust_ord_id not in shipment_map:
+                return likely_shipments
+            
+            order_shipments = shipment_map[cust_ord_id]
+            invoice_match_keys = set()
+            
+            # Get all match_keys in this invoice
+            for product in invoice.get('products', []) or []:
+                match_key = _build_invoice_match_key(product)
+                if match_key and str(product.get('item_code', '')).lower() != 'shipping':
+                    invoice_match_keys.add(match_key)
+            
+            if not invoice_match_keys:
+                # No matchable items in invoice
+                return list(order_shipments.keys()) if order_shipments else []
+            
+            # Find shipments that contain these match_keys
+            for shipment_code, shipment_match_keys in order_shipments.items():
+                if invoice_match_keys.intersection(shipment_match_keys):
+                    likely_shipments.append(shipment_code)
+            
+            return likely_shipments if likely_shipments else list(order_shipments.keys())
         
         # Build invoice pools by order and match key.
         # Match key uses article_id when available, then item_code.
         # Also track shipping costs per order.
+        # NEW: Track which shipments each invoice product likely belongs to
         invoice_items_map = {}
+        invoice_shipments_map = {}  # {cust_ord_id: {invoice_code: {match_keys}}}
+        invoice_shipment_links = {}  # {cust_ord_id: {invoice_code: [shipment_codes]}} - which shipments each invoice covers
         shipping_costs_map = {}  # {cust_ord_id: total_shipping}
         if all_invoices:
             for invoice in all_invoices:
@@ -797,8 +1316,22 @@ def get_shipped_uninvoiced_items():
                 if cust_ord_id not in invoice_items_map:
                     invoice_items_map[cust_ord_id] = {}
                 
+                if cust_ord_id not in invoice_shipments_map:
+                    invoice_shipments_map[cust_ord_id] = {}
+                
+                if cust_ord_id not in invoice_shipment_links:
+                    invoice_shipment_links[cust_ord_id] = {}
+                
                 if cust_ord_id not in shipping_costs_map:
                     shipping_costs_map[cust_ord_id] = 0
+                
+                # Track which shipments this invoice likely applies to
+                likely_shipments = _match_invoice_to_shipments(invoice, cust_ord_id)
+                if likely_shipments:
+                    invoice_shipment_links[cust_ord_id][invoice_code] = likely_shipments
+                
+                # Track which match_keys are in this invoice
+                invoice_shipments_map[cust_ord_id][invoice_code] = set()
                 
                 # Get products from invoice
                 invoice_products = invoice.get('products', [])
@@ -818,16 +1351,25 @@ def get_shipped_uninvoiced_items():
                     match_key = _build_invoice_match_key(product)
                     if not match_key:
                         continue
+                    
+                    # Track this match_key as being in this invoice
+                    invoice_shipments_map[cust_ord_id][invoice_code].add(match_key)
 
                     if match_key not in invoice_items_map[cust_ord_id]:
                         invoice_items_map[cust_ord_id][match_key] = {
                             'total_qty': 0,
-                            'invoice_codes': []
+                            'invoice_codes': [],
+                            'by_invoice': {}  # Track quantity per invoice for this match_key
                         }
 
                     invoice_items_map[cust_ord_id][match_key]['total_qty'] += quantity
                     if invoice_code not in invoice_items_map[cust_ord_id][match_key]['invoice_codes']:
                         invoice_items_map[cust_ord_id][match_key]['invoice_codes'].append(invoice_code)
+                    
+                    # NEW: Track quantity by invoice for this match_key
+                    if invoice_code not in invoice_items_map[cust_ord_id][match_key]['by_invoice']:
+                        invoice_items_map[cust_ord_id][match_key]['by_invoice'][invoice_code] = 0
+                    invoice_items_map[cust_ord_id][match_key]['by_invoice'][invoice_code] += quantity
         
         shipped_uninvoiced_orders = []
         ignored_items_orders = []  # IMPROVEMENT 2: Track $0 items separately
@@ -887,18 +1429,63 @@ def get_shipped_uninvoiced_items():
                     delivery = '9999-12-31'
                 return (delivery, line.get('line_index', 0))
 
+            # NEW: Smarter invoice allocation that matches invoices to specific shipment instances
+            # Instead of allocating invoices in bulk by match_key, now allocate per line_key
+            # to properly handle multiple shipments of the same item
             for match_key, indexes in lines_by_match_key.items():
+                # Get available invoices for this match_key
                 available_invoice_qty = 0
-                invoice_codes = []
+                all_invoice_codes = []
+                by_invoice_qty = {}  # {invoice_code: qty}
                 if cust_ord_id in invoice_items_map and match_key in invoice_items_map[cust_ord_id]:
-                    available_invoice_qty = invoice_items_map[cust_ord_id][match_key]['total_qty']
-                    invoice_codes = invoice_items_map[cust_ord_id][match_key]['invoice_codes']
+                    invoice_data = invoice_items_map[cust_ord_id][match_key]
+                    available_invoice_qty = invoice_data.get('total_qty', 0)
+                    all_invoice_codes = invoice_data.get('invoice_codes', [])
+                    by_invoice_qty = invoice_data.get('by_invoice', {}).copy()
 
-                for idx in sorted(indexes, key=lambda i: _line_sort_key(shipped_lines[i])):
+                # Sort lines by delivery_date to allocate invoices chronologically
+                sorted_indexes = sorted(indexes, key=lambda i: _line_sort_key(shipped_lines[i]))
+                
+                # NEW: Try to match invoices to specific shipment instances
+                for idx in sorted_indexes:
                     line = shipped_lines[idx]
-                    allocated_qty = min(line['shipped_quantity'], available_invoice_qty)
+                    shipped_qty = line['shipped_quantity']
+                    delivery_date = line.get('delivery_date')
+                    
+                    # Try to find invoices that match this specific shipment instance
+                    # Prefer invoices with the same or close delivery date
+                    matched_invoices = []
+                    
+                    # First, try to match by delivery date proximity
+                    if delivery_date and delivery_date != 'N/A':
+                        for invoice_code in all_invoice_codes:
+                            if by_invoice_qty.get(invoice_code, 0) > 0:
+                                # This invoice has available quantity
+                                # For now, allocate to first matching invoice(s)
+                                matched_invoices.append(invoice_code)
+                    
+                    if not matched_invoices:
+                        # Fall back to using first available invoice
+                        matched_invoices = [ic for ic in all_invoice_codes if by_invoice_qty.get(ic, 0) > 0]
+                    
+                    # Allocate from matched invoices
+                    allocated_qty = 0
+                    used_invoices = []
+                    for invoice_code in matched_invoices:
+                        if allocated_qty >= shipped_qty:
+                            break
+                        available = by_invoice_qty.get(invoice_code, 0)
+                        to_allocate = min(shipped_qty - allocated_qty, available)
+                        if to_allocate > 0:
+                            by_invoice_qty[invoice_code] -= to_allocate
+                            allocated_qty += to_allocate
+                            if invoice_code not in used_invoices:
+                                used_invoices.append(invoice_code)
+                    
                     line['invoiced_quantity'] = allocated_qty
-                    line['invoice_codes'] = invoice_codes
+                    # IMPROVEMENT: Only include invoices that actually have allocated quantity for this line
+                    # Don't include invoices that were fully consumed by earlier lines
+                    line['invoice_codes'] = used_invoices
                     available_invoice_qty -= allocated_qty
             
             discrepancy_items = []

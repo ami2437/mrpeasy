@@ -577,6 +577,85 @@
             font-size: 14px;
             margin-top: 8px;
         }
+
+        .bulk-upload-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            background: #f8fafc;
+            margin-top: 14px;
+        }
+
+        .bulk-upload-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 12px;
+            align-items: center;
+        }
+
+        .bulk-upload-actions button {
+            padding: 10px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .bulk-btn-primary {
+            background: #2563eb;
+            color: #ffffff;
+        }
+
+        .bulk-btn-secondary {
+            background: #334155;
+            color: #ffffff;
+        }
+
+        .bulk-btn-danger {
+            background: #b91c1c;
+            color: #ffffff;
+        }
+
+        .bulk-upload-meta {
+            margin-top: 10px;
+            color: #334155;
+            font-size: 13px;
+        }
+
+        .bulk-input {
+            min-height: 38px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            padding: 6px 10px;
+            min-width: 280px;
+        }
+
+        .bulk-history-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            background: #ffffff;
+            margin-top: 14px;
+        }
+
+        .bulk-history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .bulk-history-header button {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            background: #0f172a;
+            color: #ffffff;
+        }
     </style>
 </head>
 <body>
@@ -606,6 +685,7 @@
             <button class="tab-btn" data-tab="unpaid-invoices">Unpaid Invoices (0)</button>
             <button class="tab-btn" data-tab="draft-invoices">Draft Invoices (0)</button>
             <button class="tab-btn" data-tab="all-invoices">All Invoices (0)</button>
+            <button class="tab-btn" data-tab="bulk-payment-fields">Bulk Payment Fields</button>
         </div>
 
         <!-- Not Invoiced Tab -->
@@ -831,6 +911,37 @@
             </div>
             <div id="all-invoices-table"></div>
         </div>
+
+        <div id="bulk-payment-fields" class="tab-content">
+            <h2>Bulk Payment Fields Upload</h2>
+            <p>Upload an Associated Items Excel/CSV export to update invoice custom fields only.</p>
+
+            <div class="bulk-upload-card">
+                <label for="bulk-payment-file"><strong>File</strong></label>
+                <input class="bulk-input" id="bulk-payment-file" type="file" accept=".xlsx,.xls,.csv">
+
+                <div class="bulk-upload-actions">
+                    <button class="bulk-btn-primary" onclick="previewBulkPaymentFieldUpload()">Preview Updates</button>
+                    <button class="bulk-btn-secondary" onclick="applyBulkPaymentFieldUpload()">Apply Updates</button>
+                    <input class="bulk-input" id="bulk-rollback-operation-id" type="text" placeholder="Operation ID for rollback">
+                    <button class="bulk-btn-danger" onclick="rollbackBulkPaymentFieldUpload()">Rollback Operation</button>
+                </div>
+
+                <div id="bulk-payment-meta" class="bulk-upload-meta">No file preview yet.</div>
+                <div id="bulk-payment-errors" class="bulk-upload-meta" style="color:#991b1b;"></div>
+                <div id="bulk-discrepancy-results"></div>
+            </div>
+
+            <div class="bulk-history-card">
+                <div class="bulk-history-header">
+                    <h3>Operation Audit History</h3>
+                    <button onclick="loadBulkOperationHistory()">Refresh History</button>
+                </div>
+                <div id="bulk-operation-history">No operations recorded yet.</div>
+            </div>
+
+            <div id="bulk-payment-results"></div>
+        </div>
     </div>
 
     <script>
@@ -839,6 +950,8 @@
         window.invoiceGeneratorCandidates = [];
         window.generatedInvoiceDrafts = [];
         window.loadingOverlayCount = 0;
+        window.bulkPaymentPreview = null;
+        window.lastBulkPaymentOperationId = '';
 
         // Tab switching
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -852,6 +965,14 @@
 
                 if (tabId === 'generate-invoices') {
                     await refreshInvoiceGeneratorData(true);
+                }
+
+                if (tabId === 'bulk-payment-fields') {
+                    const operationInput = document.getElementById('bulk-rollback-operation-id');
+                    if (operationInput && window.lastBulkPaymentOperationId && !operationInput.value) {
+                        operationInput.value = window.lastBulkPaymentOperationId;
+                    }
+                    await loadBulkOperationHistory();
                 }
             });
         });
@@ -2595,6 +2716,310 @@
                 renderIgnoredItems(tabId, categoryData, false);
             } else {
                 renderTab(tabId, categoryData, false);
+            }
+        }
+
+        function getBulkPaymentFile() {
+            const input = document.getElementById('bulk-payment-file');
+            const file = input?.files?.[0];
+            if (!file) {
+                throw new Error('Please select an Excel or CSV file first.');
+            }
+            return file;
+        }
+
+        function renderBulkPaymentPreview(preview) {
+            const container = document.getElementById('bulk-payment-results');
+            const meta = document.getElementById('bulk-payment-meta');
+
+            const total = Number(preview.total_rows || 0);
+            const valid = Number(preview.valid_rows || 0);
+            const invalid = Number(preview.invalid_rows || 0);
+            meta.textContent = `File: ${preview.file_name || 'N/A'} | Rows: ${total} | Valid: ${valid} | Invalid: ${invalid}`;
+
+            const rows = Array.isArray(preview.rows) ? preview.rows : [];
+            if (!rows.length) {
+                container.innerHTML = '<p style="padding: 14px; color: #64748b;">No rows found in file.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>Invoice</th>';
+            html += '<th>Invoice ID</th>';
+            html += '<th>Current Status</th>';
+            html += '<th>Date_payment_recd</th>';
+            html += '<th>Amount_recd</th>';
+            html += '<th>Interest Paid</th>';
+            html += '<th>Total Match</th>';
+            html += '<th>Validation</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(row => {
+                const hasErrors = Array.isArray(row.parse_errors) && row.parse_errors.length > 0;
+                const invoiceMissing = !row.invoice_found;
+                const validationLabel = invoiceMissing
+                    ? 'Invoice not found'
+                    : (hasErrors ? row.parse_errors.join(', ') : 'Ready');
+
+                const matchBadge = row.matches_invoice_total
+                    ? '<span class="badge badge-success">Match</span>'
+                    : '<span class="badge badge-warning">Check</span>';
+
+                const validationBadge = invoiceMissing || hasErrors
+                    ? '<span class="badge badge-danger">Invalid</span>'
+                    : '<span class="badge badge-success">Valid</span>';
+
+                html += '<tr>';
+                html += `<td><strong>${row.invoice_code || 'N/A'}</strong></td>`;
+                html += `<td>${row.invoice_id || 'N/A'}</td>`;
+                html += `<td>${row.status_txt || row.status || 'N/A'}</td>`;
+                html += `<td>${row.custom_570 || 'N/A'}</td>`;
+                html += `<td>${row.custom_571 || 'N/A'}</td>`;
+                html += `<td>${row.custom_572 || 'N/A'}</td>`;
+                html += `<td>${matchBadge}</td>`;
+                html += `<td>${validationBadge} <span style="font-size:12px; color:#475569;">${validationLabel}</span></td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderBulkDiscrepancies(discrepancies) {
+            const container = document.getElementById('bulk-discrepancy-results');
+            if (!container) return;
+
+            const rows = Array.isArray(discrepancies) ? discrepancies : [];
+            if (!rows.length) {
+                container.innerHTML = '';
+                return;
+            }
+
+            let html = '<div class="bulk-history-card" style="margin-top:12px;">';
+            html += '<div class="bulk-history-header"><h3>Discrepancy Details (Review Required)</h3></div>';
+            html += '<table class="table"><thead><tr>';
+            html += '<th>Invoice</th>';
+            html += '<th>Invoice ID</th>';
+            html += '<th>Existing Values</th>';
+            html += '<th>File Values</th>';
+            html += '<th>Recommended Action</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(item => {
+                const invoiceCode = item.invoice_code || 'N/A';
+                const invoiceId = item.invoice_id || 'N/A';
+                const existing = item.existing || {};
+                const expected = item.expected || {};
+
+                const existingText = `custom_570=${existing.custom_570 ?? 'empty'}, custom_571=${existing.custom_571 ?? 'empty'}, custom_572=${existing.custom_572 ?? 'empty'}`;
+                const expectedText = `custom_570=${expected.custom_570 ?? 'empty'}, custom_571=${expected.custom_571 ?? 'empty'}, custom_572=${expected.custom_572 ?? 'empty'}`;
+                const actionText = 'Open invoice, verify source of truth, then correct invoice or file and re-run.';
+
+                html += '<tr>';
+                html += `<td><strong>${invoiceCode}</strong></td>`;
+                html += `<td>${invoiceId}</td>`;
+                html += `<td><span style="font-size:12px; color:#334155;">${existingText}</span></td>`;
+                html += `<td><span style="font-size:12px; color:#334155;">${expectedText}</span></td>`;
+                html += `<td><span style="font-size:12px; color:#7c2d12;">${actionText}</span></td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        async function previewBulkPaymentFieldUpload(options = {}) {
+            try {
+                const file = getBulkPaymentFile();
+                const clearErrors = options.clearErrors !== false;
+                const errorBox = document.getElementById('bulk-payment-errors');
+                if (errorBox && clearErrors) {
+                    errorBox.textContent = '';
+                }
+                if (clearErrors) {
+                    renderBulkDiscrepancies([]);
+                }
+                showLoading('Previewing Bulk Updates', 'Parsing file and validating invoice rows...');
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch(`${API_BASE}/api/invoicing/bulk-payment-fields/preview`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || 'Preview failed');
+                }
+
+                const preview = await response.json();
+                window.bulkPaymentPreview = preview;
+                renderBulkPaymentPreview(preview);
+            } catch (error) {
+                document.getElementById('bulk-payment-meta').textContent = `Preview failed: ${error.message}`;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function applyBulkPaymentFieldUpload() {
+            try {
+                const file = getBulkPaymentFile();
+                const confirmed = window.confirm('Apply custom field updates from this file now? This does not mark invoices paid.');
+                if (!confirmed) return;
+
+                showLoading('Applying Bulk Updates', 'Updating custom payment fields on invoices...');
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch(`${API_BASE}/api/invoicing/bulk-payment-fields/apply`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    const detail = typeof errorData.detail === 'string' ? errorData.detail : JSON.stringify(errorData.detail || errorData);
+                    throw new Error(detail || 'Apply failed');
+                }
+
+                const result = await response.json();
+                window.lastBulkPaymentOperationId = result.operation_id || '';
+                const rollbackInput = document.getElementById('bulk-rollback-operation-id');
+                const errorBox = document.getElementById('bulk-payment-errors');
+                if (rollbackInput && result.operation_id) {
+                    rollbackInput.value = result.operation_id;
+                }
+
+                const updatedCount = result.updated_count || 0;
+                const skippedCount = result.skipped_count || 0;
+                const skippedMatchCount = result.skipped_existing_match_count || 0;
+                const discrepancyCount = result.discrepancy_count || 0;
+                document.getElementById('bulk-payment-meta').textContent = `Apply complete. Updated ${updatedCount}, Skipped ${skippedCount} (Already matched: ${skippedMatchCount}, Discrepancies: ${discrepancyCount}). Operation ID: ${result.operation_id || 'N/A'}`;
+
+                if (errorBox) {
+                    const discrepancies = Array.isArray(result.discrepancies) ? result.discrepancies : [];
+                    if (discrepancies.length) {
+                        errorBox.textContent = `Discrepancies found on ${discrepancies.length} invoice(s). Review details below before retrying.`;
+                        renderBulkDiscrepancies(discrepancies);
+                    } else {
+                        errorBox.textContent = '';
+                        renderBulkDiscrepancies([]);
+                    }
+                }
+
+                if (window.bulkPaymentPreview) {
+                    await previewBulkPaymentFieldUpload({ clearErrors: false });
+                }
+                await loadBulkOperationHistory();
+            } catch (error) {
+                document.getElementById('bulk-payment-meta').textContent = `Apply failed: ${error.message}`;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function rollbackBulkPaymentFieldUpload() {
+            try {
+                const operationInput = document.getElementById('bulk-rollback-operation-id');
+                const operationId = (operationInput?.value || '').trim() || window.lastBulkPaymentOperationId;
+                if (!operationId) {
+                    throw new Error('Enter or select an operation ID first.');
+                }
+
+                const confirmed = window.confirm(`Rollback operation ${operationId}?`);
+                if (!confirmed) return;
+
+                showLoading('Rolling Back', `Reverting updates for operation ${operationId}...`);
+                const response = await fetch(`${API_BASE}/api/invoicing/bulk-payment-fields/rollback/${encodeURIComponent(operationId)}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || 'Rollback failed');
+                }
+
+                const result = await response.json();
+                document.getElementById('bulk-payment-meta').textContent = `Rollback complete. Reverted ${result.reverted_count || 0}.`;
+                const errorBox = document.getElementById('bulk-payment-errors');
+                if (errorBox) {
+                    errorBox.textContent = '';
+                }
+                renderBulkDiscrepancies([]);
+
+                if (window.bulkPaymentPreview) {
+                    await previewBulkPaymentFieldUpload();
+                }
+                await loadBulkOperationHistory();
+            } catch (error) {
+                document.getElementById('bulk-payment-meta').textContent = `Rollback failed: ${error.message}`;
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function useBulkOperationId(operationId) {
+            const input = document.getElementById('bulk-rollback-operation-id');
+            if (input) input.value = operationId;
+            window.lastBulkPaymentOperationId = operationId;
+        }
+
+        async function loadBulkOperationHistory() {
+            const container = document.getElementById('bulk-operation-history');
+            if (!container) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/bulk-payment-fields/operations?limit=25`);
+                if (!response.ok) {
+                    throw new Error('Failed to load operation history');
+                }
+
+                const data = await response.json();
+                const operations = Array.isArray(data.operations) ? data.operations : [];
+
+                if (!operations.length) {
+                    container.innerHTML = '<p style="color:#64748b;">No operations recorded yet.</p>';
+                    return;
+                }
+
+                let html = '<table class="table"><thead><tr>';
+                html += '<th>Operation ID</th>';
+                html += '<th>Created</th>';
+                html += '<th>File</th>';
+                html += '<th>Updated</th>';
+                html += '<th>Matched</th>';
+                html += '<th>Discrepancies</th>';
+                html += '<th>Rolled Back</th>';
+                html += '<th>Rollback Errors</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                operations.forEach(op => {
+                    const rolledBackBadge = op.rolled_back
+                        ? '<span class="badge badge-secondary">Yes</span>'
+                        : '<span class="badge badge-success">No</span>';
+
+                    html += '<tr>';
+                    html += `<td><strong>${op.operation_id || 'N/A'}</strong></td>`;
+                    html += `<td>${op.created_at || 'N/A'}</td>`;
+                    html += `<td>${op.file_name || 'N/A'}</td>`;
+                    html += `<td>${op.updated_count || 0}</td>`;
+                    html += `<td>${op.skipped_existing_match_count || 0}</td>`;
+                    html += `<td>${op.discrepancy_count || 0}</td>`;
+                    html += `<td>${rolledBackBadge}</td>`;
+                    html += `<td>${op.rollback_error_count || 0}</td>`;
+                    html += `<td><button class="bulk-btn-secondary" style="padding:6px 10px;" onclick="useBulkOperationId('${op.operation_id || ''}')">Use ID</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<p style="color:#991b1b;">${error.message}</p>`;
             }
         }
 
