@@ -1107,6 +1107,9 @@
                 const qtyInput = document.querySelector(`.invoice-generator-qty[data-line-id="${lineId}"]`);
                 const priceInput = document.querySelector(`.invoice-generator-price[data-line-id="${lineId}"]`);
                 const noteInput = document.querySelector(`.invoice-generator-note[data-line-id="${lineId}"]`);
+                const lineDateInput = document.querySelector(`.invoice-generator-line-date[data-line-id="${lineId}"]`);
+                const orderRow = checkbox.closest('table')?.querySelector(`.invoice-generator-date[data-order-row="${checkbox.getAttribute('data-order-row')}"]`);
+                const deliveryDate = (lineDateInput?.value || orderRow?.value || '').trim();
 
                 return {
                     order_code: selectedOrderCode,
@@ -1114,7 +1117,8 @@
                     line_key: lineId,
                     quantity: qtyInput ? toSafeNumber(qtyInput.value) : 0,
                     unit_price: priceInput ? toSafeNumber(priceInput.value) : 0,
-                    line_note: noteInput ? String(noteInput.value || '').trim() : ''
+                    line_note: noteInput ? String(noteInput.value || '').trim() : '',
+                    delivery_date: deliveryDate
                 };
             }).filter(item => item.order_code && item.item_code && item.quantity > 0);
         }
@@ -1239,10 +1243,41 @@
                 total += qty * unitPrice;
             });
 
+            const shippingInput = document.querySelector(`.invoice-generator-shipping[data-order-row="${orderId}"]`);
+            const shippingValue = shippingInput ? toSafeNumber(shippingInput.value) : 0;
+            total += shippingValue;
+
             const orderTotalEl = document.querySelector(`.invoice-generator-order-total[data-order-row="${orderId}"]`);
             if (orderTotalEl) {
                 orderTotalEl.textContent = formatCurrency(currency || '$', total);
             }
+            recalculateEstimatedTotal();
+        }
+
+        function recalculateEstimatedTotal() {
+            const meta = document.getElementById('invoice-generator-meta');
+            if (!meta) return;
+            let grandTotal = 0;
+            let currency = '$';
+            document.querySelectorAll('.invoice-generator-order-total').forEach(el => {
+                const raw = el.textContent.replace(/[^0-9.\-]/g, '');
+                grandTotal += parseFloat(raw) || 0;
+                currency = el.getAttribute('data-currency') || currency;
+            });
+            const candidates = window.invoiceGeneratorCandidates || [];
+            const totalItems = candidates.reduce((sum, c) => sum + ((c.invoice?.lines || []).length), 0);
+            meta.textContent = `${candidates.length} candidate order(s) • ${totalItems} billable item line(s) • Estimated total: ${formatCurrency(currency, grandTotal)}`;
+        }
+
+        function collectShippingOverrides(orderCode = null) {
+            const selector = orderCode
+                ? `.invoice-generator-shipping[data-order="${orderCode}"]`
+                : '.invoice-generator-shipping';
+
+            return Array.from(document.querySelectorAll(selector)).map(input => ({
+                order_code: input.getAttribute('data-order') || '',
+                shipping: toSafeNumber(input.value)
+            })).filter(item => item.order_code);
         }
 
         function collectManualGeneratorLines(orderCode = null) {
@@ -1334,15 +1369,19 @@
                     const groupStyle = groupBy === 'none' ? '' : ' style="display:none;"';
 
                     html += `<tr id="${orderId}" class="generator-order-row${groupClass}"${groupStyle}>`;
+                    const lineShipments = [...new Set((invoice.lines || []).map(l => l.shipment_number).filter(s => s && s !== 'N/A'))].join(', ') || order.shipment_number || 'N/A';
+                    const lineDates = [...new Set((invoice.lines || []).map(l => l.delivery_date).filter(d => d && d !== 'N/A'))].join(', ') || order.delivery_date || 'N/A';
+
                     html += `<td><input type="checkbox" onchange="toggleOrderItemsSelection('${order.code || ''}', this.checked)"></td>`;
                     html += `<td onclick="toggleGeneratorOrder('${orderId}')"><span class="arrow" id="${orderId}-arrow">▶</span><strong>${order.code || 'N/A'}</strong><br><button class="btn-generate btn-primary" style="padding:4px 8px; margin-top:4px; margin-right:4px; font-size:12px;" onclick="event.stopPropagation(); generateSingleOrderDraft('${order.code || ''}')">Generate This Order</button><button class="btn-generate btn-secondary" style="padding:4px 8px; margin-top:4px; font-size:12px;" onclick="event.stopPropagation(); addManualLineRow('${orderId}','${order.code || ''}')">+ Line</button></td>`;
                     html += `<td>${order.customer_name || 'N/A'}</td>`;
                     html += `<td>${order.reference || 'N/A'}</td>`;
                     html += `<td>${order.job_number || 'N/A'}</td>`;
-                    html += `<td>${order.shipment_number || 'N/A'}</td>`;
-                    html += `<td>${order.delivery_date || 'N/A'}</td>`;
+                    html += `<td>${lineShipments}</td>`;
+                    html += `<td><input type="date" class="invoice-generator-date" data-order-row="${orderId}" value="${lineDates && lineDates !== 'N/A' ? lineDates : ''}" style="width:140px"></td>`;
                     html += `<td><strong>${(invoice.lines || []).length} items</strong></td>`;
-                    html += `<td></td><td></td><td></td><td><strong><span class="invoice-generator-order-total" data-order-row="${orderId}" data-currency="${order.currency || '$'}">${formatCurrency(order.currency || '$', invoice.total || 0)}</span></strong></td>`;
+                    html += `<td><label style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:#475569;">Shipping<input type="number" min="0" step="0.01" class="invoice-generator-shipping" data-order-row="${orderId}" data-order="${order.code || ''}" value="${toSafeNumber(invoice.shipping)}" style="width:120px" oninput="recalculateGeneratorOrderTotal('${orderId}','${order.currency || '$'}')"></label></td>`;
+                    html += `<td></td><td></td><td><strong><span class="invoice-generator-order-total" data-order-row="${orderId}" data-currency="${order.currency || '$'}">${formatCurrency(order.currency || '$', invoice.total || 0)}</span></strong></td>`;
                     html += '</tr>';
 
                     (invoice.lines || []).forEach((line, lineIndex) => {
@@ -1354,7 +1393,7 @@
                         html += `<td>${order.reference || 'N/A'}</td>`;
                         html += `<td>${order.job_number || 'N/A'}</td>`;
                         html += `<td>${line.shipment_number || order.shipment_number || 'N/A'}</td>`;
-                        html += `<td>${line.delivery_date || order.delivery_date || 'N/A'}</td>`;
+                        html += `<td><input type="date" class="invoice-generator-line-date" data-line-id="${lineId}" value="${line.delivery_date && line.delivery_date !== 'N/A' ? line.delivery_date : ''}" style="width:140px"></td>`;
                         html += `<td><strong>${line.item_code || 'N/A'}</strong><br><span style="font-size:12px;color:#64748b;">${line.item_title || ''}</span></td>`;
                         html += `<td><input type="text" class="invoice-generator-note" data-line-id="${lineId}" value="${escapeHtml(line.line_note || '')}" placeholder="Customer note" style="width:150px"></td>`;
                         html += `<td><input type="number" min="0" step="0.01" class="invoice-generator-qty" data-line-id="${lineId}" value="${toSafeNumber(line.quantity)}" style="width:90px" oninput="updateGeneratorItemLineAndOrderTotal('${orderId}','${lineId}','${order.currency || '$'}')"></td>`;
@@ -1390,15 +1429,16 @@
             if (!orderCode) return;
             const selectedItems = collectSelectedGeneratorItems(orderCode);
             const manualLines = collectManualGeneratorLines(orderCode);
+            const shippingOverrides = collectShippingOverrides(orderCode);
             if (!selectedItems.length && !manualLines.length) {
                 alert('Select at least one item or add a manual line in this order before generating.');
                 return;
             }
 
-            await submitGeneratedInvoiceDrafts(selectedItems, manualLines, true);
+            await submitGeneratedInvoiceDrafts(selectedItems, manualLines, shippingOverrides, true);
         }
 
-        async function submitGeneratedInvoiceDrafts(selectedItems, manualLines = [], selectionApplied = true) {
+        async function submitGeneratedInvoiceDrafts(selectedItems, manualLines = [], shippingOverrides = [], selectionApplied = true) {
             const generationMode = document.getElementById('invoice-generator-mode')?.value || 'order';
             showLoading('Generating Invoice Drafts', 'Preparing selected lines and creating draft invoices...');
 
@@ -1409,6 +1449,7 @@
                     body: JSON.stringify({
                         selected_items: selectedItems,
                         manual_lines: manualLines,
+                        shipping_overrides: shippingOverrides,
                         selection_applied: selectionApplied,
                         generation_mode: generationMode
                     })
@@ -1427,12 +1468,13 @@
             try {
                 const selectedItems = collectSelectedGeneratorItems();
                 const manualLines = collectManualGeneratorLines();
+                const shippingOverrides = collectShippingOverrides();
                 if (!selectedItems.length && !manualLines.length) {
                     alert('Select at least one billable item with quantity > 0 or add a manual line.');
                     return;
                 }
 
-                await submitGeneratedInvoiceDrafts(selectedItems, manualLines, true);
+                await submitGeneratedInvoiceDrafts(selectedItems, manualLines, shippingOverrides, true);
             } catch (error) {
                 alert(`Error creating drafts: ${error.message}`);
             }
@@ -1631,6 +1673,7 @@
 
                         <table class="totals">
                             <tr><td>Subtotal:</td><td style="text-align:right;">${formatCurrency(order.currency || '$', invoice.subtotal || 0)}</td></tr>
+                            <tr><td>Shipping:</td><td style="text-align:right;">${formatCurrency(order.currency || '$', invoice.shipping || 0)}</td></tr>
                             <tr class="final"><td>Total:</td><td style="text-align:right;">${formatCurrency(order.currency || '$', invoice.total || 0)}</td></tr>
                         </table>
                     </div>

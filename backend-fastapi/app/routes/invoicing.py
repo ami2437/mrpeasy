@@ -44,10 +44,16 @@ class InvoiceGenerationManualLine(BaseModel):
     line_note: Optional[str] = None
 
 
+class InvoiceGenerationShippingOverride(BaseModel):
+    order_code: str
+    shipping: Optional[float] = 0
+
+
 class InvoiceGenerationRequest(BaseModel):
     order_codes: List[str] = Field(default_factory=list)
     selected_items: List[InvoiceGenerationItemSelection] = Field(default_factory=list)
     manual_lines: List[InvoiceGenerationManualLine] = Field(default_factory=list)
+    shipping_overrides: List[InvoiceGenerationShippingOverride] = Field(default_factory=list)
     selection_applied: bool = False
     generation_mode: Optional[str] = "order"
 
@@ -635,6 +641,7 @@ def _build_order_shipment_map():
     for shipment in shipments:
         shipment_code = shipment.get("code") or "N/A"
         delivery_date = _format_epoch_to_iso(shipment.get("delivery_date"))
+        created_date = _format_epoch_to_iso(shipment.get("created"))
         shipment_product_match_keys = set()
         for shipment_product in shipment.get("products", []) or []:
             match_key = _build_invoice_match_key(shipment_product)
@@ -684,6 +691,7 @@ def _build_order_shipment_map():
                 shipment_entries.append({
                     "code": shipment_code,
                     "delivery_date": delivery_date,
+                    "created_date": created_date,
                     "product_match_keys": set(shipment_product_match_keys)
                 })
 
@@ -709,6 +717,7 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
         delivery_dates = order_shipments.get("delivery_dates", [])
         shipment_codes_by_delivery = order_shipments.get("by_delivery_date", {})
         shipment_entries = order_shipments.get("shipment_entries", [])
+        shipment_created_map = {e.get("code"): e.get("created_date") for e in shipment_entries if e.get("code")}
 
         def _parse_iso_date(value):
             if not value or not isinstance(value, str):
@@ -787,6 +796,14 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
             line_delivery_date = item.get("delivery_date")
             line_shipment_codes = _resolve_line_shipment_codes(item)
 
+            # Use shipment created date as the display date (actual ship-out date)
+            resolved_shipment_code = line_shipment_codes[0] if line_shipment_codes else None
+            display_date = (
+                shipment_created_map.get(resolved_shipment_code)
+                or line_delivery_date
+                or (", ".join(delivery_dates) if delivery_dates else "N/A")
+            )
+
             lines.append({
                 "line_key": line_key,
                 "item_code": item.get("item_code"),
@@ -798,7 +815,7 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
                 "unit_price": unit_price,
                 "line_total": line_total,
                 "shipment_number": ", ".join(line_shipment_codes) if line_shipment_codes else "N/A",
-                "delivery_date": line_delivery_date or (", ".join(delivery_dates) if delivery_dates else "N/A")
+                "delivery_date": display_date
             })
 
         shipping = _to_number(order.get("shipping_cost", 0), 0)
@@ -879,6 +896,41 @@ def create_generated_invoice_drafts(payload: InvoiceGenerationRequest):
                 "unit_price": selected_item.unit_price,
                 "line_note": selected_item.line_note
             }
+
+        shipping_override_map = {}
+        for shipping_override in payload.shipping_overrides:
+            order_code = (shipping_override.order_code or "").strip()
+            if not order_code:
+                continue
+
+            shipping_override_map[order_code] = max(_to_number(shipping_override.shipping, 0), 0)
+
+        if shipping_override_map:
+            adjusted_candidates = []
+            for candidate in candidates:
+                order = candidate.get("order", {})
+                invoice = candidate.get("invoice", {})
+                order_code = (order.get("code") or "").strip()
+
+                lines = list(invoice.get("lines", []))
+                shipping = _to_number(invoice.get("shipping", 0), 0)
+                if order_code in shipping_override_map:
+                    shipping = shipping_override_map[order_code]
+
+                subtotal = sum(_to_number(line.get("line_total", 0), 0) for line in lines)
+                total = subtotal + shipping
+
+                adjusted_candidates.append({
+                    "order": order,
+                    "invoice": {
+                        "lines": lines,
+                        "shipping": shipping,
+                        "subtotal": subtotal,
+                        "total": total
+                    }
+                })
+
+            candidates = adjusted_candidates
 
         if payload.selection_applied:
             filtered_candidates = []
