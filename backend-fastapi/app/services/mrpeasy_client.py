@@ -1,5 +1,7 @@
 import requests
 from requests.auth import HTTPBasicAuth
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from app.config.settings import settings
 from typing import Optional, Dict, Any
 
@@ -9,21 +11,35 @@ class MRPeasyAPIClient:
 
     def __init__(self):
         self.base_url = settings.mrpeasy_api_base_url
-        self.auth = HTTPBasicAuth(
+        self.session = requests.Session()
+        self.session.auth = HTTPBasicAuth(
             settings.mrpeasy_api_key,
             settings.mrpeasy_api_secret
         )
-        self.headers = {"Content-Type": "application/json"}
+        self.session.headers.update({"Content-Type": "application/json"})
+        retry_strategy = Retry(
+            total=4,
+            connect=4,
+            read=4,
+            status=4,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        self.timeout = 30
 
     def _request(self, method: str, endpoint: str, **kwargs) -> Optional[Dict[Any, Any]]:
         """Make HTTP request to MRPeasy API"""
         try:
             url = f"{self.base_url}{endpoint}"
-            response = requests.request(
+            response = self.session.request(
                 method,
                 url,
-                auth=self.auth,
-                headers=self.headers,
+                timeout=kwargs.pop("timeout", self.timeout),
                 **kwargs
             )
             response.raise_for_status()
@@ -50,11 +66,10 @@ class MRPeasyAPIClient:
             
             try:
                 url = f"{self.base_url}{endpoint}"
-                response = requests.request(
+                response = self.session.request(
                     method,
                     url,
-                    auth=self.auth,
-                    headers=self.headers,
+                    timeout=paginated_kwargs.pop("timeout", self.timeout),
                     **paginated_kwargs
                 )
                 response.raise_for_status()

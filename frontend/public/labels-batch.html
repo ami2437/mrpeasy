@@ -488,6 +488,49 @@
             shipment.detailsError = lastError?.message || 'Unknown detail loading error';
             throw new Error(shipment.detailsError);
         }
+
+        async function postFinalizeShipment(shipmentCode, payload, maxAttempts = 3) {
+            let lastError;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/finalize/${shipmentCode}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const responseText = await response.text();
+                    let data = {};
+
+                    if (responseText) {
+                        try {
+                            data = JSON.parse(responseText);
+                        } catch (error) {
+                            throw new Error(`Backend returned an invalid response (HTTP ${response.status})`);
+                        }
+                    }
+
+                    if (response.ok && data.success) {
+                        return data;
+                    }
+
+                    const requestError = new Error(
+                        data.detail || `Finalization failed with HTTP ${response.status}`
+                    );
+                    requestError.retryable = response.status === 429 || response.status >= 500;
+                    throw requestError;
+                } catch (error) {
+                    lastError = error;
+                    const retryable = error.retryable !== false;
+                    if (!retryable || attempt === maxAttempts) {
+                        throw error;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+                }
+            }
+
+            throw lastError || new Error('Finalization failed');
+        }
         
         function renderShipmentsTable() {
             const tbody = document.getElementById('shipments-list');
@@ -920,17 +963,10 @@
                     }
                 });
                 
-                // Send finalize request to backend
-                const response = await fetch(`${API_BASE}/api/labels/finalize/${shipment.code}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        pallet_number: palletNumber,
-                        product_configs: productConfigs
-                    })
+                const data = await postFinalizeShipment(shipment.code, {
+                    pallet_number: palletNumber,
+                    product_configs: productConfigs
                 });
-                
-                const data = await response.json();
                 
                 if (data.success) {
                     hideLoading();
@@ -1120,21 +1156,10 @@
                         });
                     });
                     
-                    const response = await fetch(`${API_BASE}/api/labels/finalize/${shipment.code}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            pallet_number: palletNumber,
-                            product_configs: productConfigs
-                        })
+                    const data = await postFinalizeShipment(shipment.code, {
+                        pallet_number: palletNumber,
+                        product_configs: productConfigs
                     });
-
-                    if (!response.ok) {
-                        const responseText = await response.text();
-                        throw new Error(`HTTP ${response.status}${responseText ? `: ${responseText.slice(0, 200)}` : ''}`);
-                    }
-
-                    const data = await response.json();
                     
                     if (data.success) {
                         successCount++;

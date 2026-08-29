@@ -631,6 +631,9 @@ async def finalize_shipment_configuration(
         shipment_products = shipment.get('products', [])
         pallet_number = request.pallet_number
         product_configs = request.product_configs
+
+        if not product_configs:
+            raise HTTPException(status_code=400, detail="No product configurations were provided")
         
         # Fetch PO number, customer name, job #, and shipping address from customer order
         po_number = None
@@ -658,10 +661,6 @@ async def finalize_shipment_configuration(
 
         # Delivery date comes from the shipment itself (falls back to the customer order)
         delivery_date = shipment.get('delivery_date') or (customer_order.get('delivery_date') if customer_order else None)
-        
-        # Delete existing records for this shipment (if re-finalizing)
-        db.query(ShipmentBox).filter(ShipmentBox.shipment_code == shipment_code).delete()
-        db.commit()
         
         # Pool all lots for the same item_code + order_line before splitting into boxes,
         # so the box breakdown reflects the pack size entered for that item, not per-lot MRP quantities.
@@ -696,6 +695,21 @@ async def finalize_shipment_configuration(
             if lot_code:
                 groups[group_key]['lot_codes'].append(lot_code)
 
+        if not groups:
+            raise HTTPException(
+                status_code=400,
+                detail="None of the product configurations matched this shipment"
+            )
+
+        if not any(group['total_quantity'] > 0 for group in groups.values()):
+            raise HTTPException(status_code=400, detail="Shipment products have no quantity to pack")
+
+        # Replace existing rows in the same transaction as the new rows. If any
+        # replacement fails, rollback preserves the previous packing list.
+        db.query(ShipmentBox).filter(
+            ShipmentBox.shipment_code == shipment_code
+        ).delete(synchronize_session=False)
+
         # Create new shipment box records from the pooled per-item totals
         saved_boxes = []
         for (item_code, order_line), group in groups.items():
@@ -728,6 +742,9 @@ async def finalize_shipment_configuration(
                     'box_number': box['box_number'],
                     'quantity': box['quantity']
                 })
+
+        if not saved_boxes:
+            raise HTTPException(status_code=400, detail="No packing-list boxes were generated")
         
         db.commit()
         
@@ -740,6 +757,7 @@ async def finalize_shipment_configuration(
         }
     
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
         db.rollback()
