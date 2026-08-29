@@ -21,6 +21,14 @@ class FinalizeShipmentRequest(BaseModel):
     product_configs: Dict = {}
 
 
+class BulkFinalizeShipmentRequest(FinalizeShipmentRequest):
+    shipment_code: str
+
+
+class BulkFinalizeRequest(BaseModel):
+    shipments: List[BulkFinalizeShipmentRequest]
+
+
 class PastePackSizesRequest(BaseModel):
     text: str
 
@@ -834,7 +842,7 @@ async def delete_finalized_shipment(shipment_code: str, db: Session = Depends(ge
 
 
 @router.post("/finalize/{shipment_code}")
-async def finalize_shipment_configuration(
+def finalize_shipment_configuration(
     shipment_code: str,
     request: FinalizeShipmentRequest,
     db: Session = Depends(get_db)
@@ -992,6 +1000,55 @@ async def finalize_shipment_configuration(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/finalize-batch")
+def finalize_shipment_batch(
+    request: BulkFinalizeRequest,
+    db: Session = Depends(get_db)
+):
+    """Finalize every submitted shipment server-side, even if the browser disconnects."""
+    if not request.shipments:
+        raise HTTPException(status_code=400, detail="No shipments were provided")
+
+    results = []
+    failures = []
+    total_boxes_saved = 0
+
+    for shipment_request in request.shipments:
+        try:
+            result = finalize_shipment_configuration(
+                shipment_request.shipment_code,
+                FinalizeShipmentRequest(
+                    pallet_number=shipment_request.pallet_number,
+                    product_configs=shipment_request.product_configs
+                ),
+                db
+            )
+            results.append(result)
+            total_boxes_saved += result.get('total_boxes_saved', 0)
+        except HTTPException as error:
+            failures.append({
+                'shipment_code': shipment_request.shipment_code,
+                'status_code': error.status_code,
+                'detail': error.detail
+            })
+        except Exception as error:
+            db.rollback()
+            failures.append({
+                'shipment_code': shipment_request.shipment_code,
+                'status_code': 500,
+                'detail': str(error)
+            })
+
+    return {
+        'success': not failures,
+        'success_count': len(results),
+        'failure_count': len(failures),
+        'total_boxes_saved': total_boxes_saved,
+        'results': results,
+        'failures': failures
+    }
 
 
 @router.get("/packing-slip/{shipment_code}")
