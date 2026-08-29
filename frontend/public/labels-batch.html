@@ -450,13 +450,43 @@
         async function loadShipmentDetails() {
             for (let shipment of allShipments) {
                 try {
-                    const response = await fetch(`${API_BASE}/api/labels/shipments/${shipment.code}`);
-                    const data = await response.json();
-                    shipment.details = data.shipment;
+                    await fetchShipmentDetails(shipment);
                 } catch (error) {
                     console.error(`Error loading details for ${shipment.code}:`, error);
                 }
             }
+        }
+
+        async function fetchShipmentDetails(shipment, maxAttempts = 3) {
+            let lastError;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/shipments/${shipment.code}`);
+                    if (!response.ok) {
+                        const responseText = await response.text();
+                        throw new Error(`HTTP ${response.status}${responseText ? `: ${responseText.slice(0, 200)}` : ''}`);
+                    }
+
+                    const data = await response.json();
+                    if (!data.shipment || !Array.isArray(data.shipment.products)) {
+                        throw new Error('Shipment detail response did not include a products list');
+                    }
+
+                    shipment.details = data.shipment;
+                    delete shipment.detailsError;
+                    return shipment.details;
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                    }
+                }
+            }
+
+            shipment.details = null;
+            shipment.detailsError = lastError?.message || 'Unknown detail loading error';
+            throw new Error(shipment.detailsError);
         }
         
         function renderShipmentsTable() {
@@ -493,18 +523,22 @@
                 const details = shipment.details || {};
                 const customerName = details.customer_name || 'N/A';
                 const reference = details.reference || 'N/A';
+                const detailsUnavailable = !Array.isArray(details.products);
                 
                 // Main shipment row
                 const shipmentRow = document.createElement('tr');
+                if (detailsUnavailable) {
+                    shipmentRow.title = `Details unavailable: ${shipment.detailsError || 'Unknown error'}`;
+                }
                 shipmentRow.innerHTML = `
                     <td><span class="expand-btn" onclick="toggleItems(${index})">▶</span></td>
                     <td><strong>${shipment.code}</strong></td>
                     <td>${shipment.customer_order_code || 'N/A'}</td>
-                    <td>${customerName}</td>
-                    <td>${reference}</td>
+                    <td>${detailsUnavailable ? 'Details unavailable' : customerName}</td>
+                    <td>${detailsUnavailable ? shipment.detailsError || 'Load failed' : reference}</td>
                     <td>${shipment.status_txt || 'N/A'}</td>
                     <td>${shipment.products_count || 0}</td>
-                    <td><button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="Print this shipment">🖨️</button></td>
+                    <td><button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="${detailsUnavailable ? 'Shipment details unavailable' : 'Print this shipment'}" ${detailsUnavailable ? 'disabled' : ''}>🖨️</button></td>
                 `;
                 tbody.appendChild(shipmentRow);
                 
@@ -1028,15 +1062,23 @@
             showLoading(`Finalizing all ${allShipments.length} shipments...`);
             
             let successCount = 0;
-            let errorCount = 0;
             let totalBoxesSaved = 0;
+            const failures = [];
             
             for (let index = 0; index < allShipments.length; index++) {
                 const shipment = allShipments[index];
-                const details = shipment.details;
-                if (!details || !details.products) continue;
                 
                 try {
+                    showLoading(`Finalizing ${shipment.code} (${index + 1} of ${allShipments.length})...`);
+
+                    let details = shipment.details;
+                    if (!details || !Array.isArray(details.products)) {
+                        details = await fetchShipmentDetails(shipment);
+                    }
+                    if (details.products.length === 0) {
+                        throw new Error('No products were returned for this shipment');
+                    }
+
                     const palletInput = document.getElementById(`pallet-${shipment.code}`);
                     const palletNumber = palletInput ? palletInput.value.trim() : null;
                     
@@ -1050,10 +1092,12 @@
                             groupedProducts[groupKey] = {
                                 item_code: itemCode,
                                 order_line: orderLine,
-                                product_indices: []
+                                product_indices: [],
+                                total_quantity: 0
                             };
                         }
                         groupedProducts[groupKey].product_indices.push(prodIndex);
+                        groupedProducts[groupKey].total_quantity += product.quantity_booked || 0;
                     });
                     
                     const productConfigs = {};
@@ -1065,16 +1109,15 @@
                         
                         const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${firstProdIndex}`);
                         
-                        if (packSizeInput) {
-                            group.product_indices.forEach(prodIndex => {
-                                const productKey = `${itemCode}-${prodIndex}`;
-                                productConfigs[productKey] = {
-                                    item_code: itemCode,
-                                    order_line: orderLine,
-                                    pack_size: parseInt(packSizeInput.value) || 1
-                                };
-                            });
-                        }
+                        const packSize = parseInt(packSizeInput?.value) || group.total_quantity || 1;
+                        group.product_indices.forEach(prodIndex => {
+                            const productKey = `${itemCode}-${prodIndex}`;
+                            productConfigs[productKey] = {
+                                item_code: itemCode,
+                                order_line: orderLine,
+                                pack_size: packSize
+                            };
+                        });
                     });
                     
                     const response = await fetch(`${API_BASE}/api/labels/finalize/${shipment.code}`, {
@@ -1085,7 +1128,12 @@
                             product_configs: productConfigs
                         })
                     });
-                    
+
+                    if (!response.ok) {
+                        const responseText = await response.text();
+                        throw new Error(`HTTP ${response.status}${responseText ? `: ${responseText.slice(0, 200)}` : ''}`);
+                    }
+
                     const data = await response.json();
                     
                     if (data.success) {
@@ -1106,21 +1154,23 @@
                             palletInput.style.opacity = '0.6';
                         }
                     } else {
-                        errorCount++;
-                        console.error(`Failed to finalize ${shipment.code}:`, data.detail);
+                        throw new Error(data.detail || 'Backend did not confirm finalization');
                     }
                 } catch (error) {
-                    errorCount++;
+                    failures.push(`${shipment.code}: ${error.message}`);
                     console.error(`Error finalizing ${shipment.code}:`, error);
                 }
             }
             
             hideLoading();
             
-            if (successCount > 0) {
-                showError(`✓ Successfully finalized ${successCount} shipment(s)! Total ${totalBoxesSaved} boxes saved to database.${errorCount > 0 ? ` (${errorCount} failed)` : ''}`);
+            if (failures.length === 0) {
+                showError(`✓ Successfully finalized all ${successCount} shipment(s)! Total ${totalBoxesSaved} boxes saved to database.`);
             } else {
-                showError(`❌ Failed to finalize shipments. Please check console for details.`);
+                const successSummary = successCount > 0
+                    ? `Finalized ${successCount} shipment(s) and saved ${totalBoxesSaved} boxes. `
+                    : '';
+                showError(`${successSummary}Failed ${failures.length} shipment(s): ${failures.join(' | ')}`);
             }
         }
         
