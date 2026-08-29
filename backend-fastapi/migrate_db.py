@@ -35,6 +35,22 @@ try:
         print("✅ Column added successfully!")
     else:
         print("shipping_address column already exists")
+
+    if 'job_number' not in columns:
+        print("Adding job_number column to shipment_boxes table...")
+        cursor.execute("ALTER TABLE shipment_boxes ADD COLUMN job_number TEXT")
+        conn.commit()
+        print("✅ Column added successfully!")
+    else:
+        print("job_number column already exists")
+
+    if 'delivery_date' not in columns:
+        print("Adding delivery_date column to shipment_boxes table...")
+        cursor.execute("ALTER TABLE shipment_boxes ADD COLUMN delivery_date TEXT")
+        conn.commit()
+        print("✅ Column added successfully!")
+    else:
+        print("delivery_date column already exists")
 except Exception as e:
     print(f"❌ Error: {e}")
 finally:

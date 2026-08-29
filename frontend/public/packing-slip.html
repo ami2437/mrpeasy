@@ -302,6 +302,10 @@
                 .replace(/'/g, '&#39;');
         }
 
+        function stripPoPrefix(value) {
+            return String(value ?? '').replace(/^\s*po\s*#?\s*/i, '').trim();
+        }
+
         function getDocumentLogoMarkup(slotClass, imageClass) {
             if (!COMPANY_LOGO_URL) {
                 return `<div class="${slotClass}" aria-hidden="true"></div>`;
@@ -362,7 +366,7 @@
                             <div class="item-code">${item.item_code}</div>
                             <div class="item-title">${item.item_title}</div>
                         </td>
-                        <td>${item.po_number || '-'}</td>
+                        <td>${stripPoPrefix(item.po_number) || '-'}</td>
                         <td>
                             <span class="order-line-badge">Line ${item.order_line}</span>
                         </td>
@@ -385,7 +389,7 @@
                         </div>
                         <div class="header-field">
                             <label>PO #</label>
-                            <value>${firstItem.po_number || '-'}</value>
+                            <value>${stripPoPrefix(firstItem.po_number) || '-'}</value>
                         </div>
                         <div class="header-field">
                             <label>Date</label>
@@ -428,13 +432,7 @@
 
                 <div class="footer">
                     <div class="footer-field">
-                        <label>Packed By:<div class="line"></div></label>
-                    </div>
-                    <div class="footer-field">
                         <label>Checked By:<div class="line"></div></label>
-                    </div>
-                    <div class="footer-field">
-                        <label>Shipped By:<div class="line"></div></label>
                     </div>
                 </div>
             `;

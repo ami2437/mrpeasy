@@ -55,6 +55,7 @@
             margin: 6px 0;
             border-bottom: 2px solid #000;
             padding-bottom: 6px;
+            padding-left: 96px;
             padding-right: 96px;
             line-height: 1.1;
             min-height: 46px;
@@ -67,7 +68,7 @@
         .label-field { display: flex; flex-direction: column; padding: 8px; border: 1px solid #000; }
         .label-field.item-field { min-height: 88px; }
         .label-field.qty-field { margin-top: 8px; }
-        .label-field-label { font-size: 11px; color: #000; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+        .label-field-label { font-size: 13px; color: #000; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; }
         .label-field-value { font-size: 15px; color: #000; font-weight: 500; }
         .label-field-value.item-multiline { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; min-height: 56px; max-height: 56px; overflow: hidden; }
         .label-field-value.large { font-size: 22px; font-weight: 700; color: #000; }
@@ -75,7 +76,7 @@
         .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
         .dashboard-btn:hover { background: #ffffff; }
         @media print {
-            @page { size: 6in 4in landscape; margin: 0; }
+            @page { size: 6in 4in; margin: 0; }
             body { background: white; padding: 0; }
             .header, .controls, .labels-header { display: none; }
             .labels-container { box-shadow: none; padding: 0; }
@@ -238,6 +239,15 @@
                 .replace(/'/g, '&#39;');
         }
 
+        function stripPoPrefix(value) {
+            return String(value ?? '').replace(/^\s*po\s*#?\s*/i, '').trim();
+        }
+
+        function buildLabelsDocumentTitle(shipmentCode, jobNumber) {
+            const hasJobNumber = jobNumber && String(jobNumber).trim() && String(jobNumber).trim().toUpperCase() !== 'N/A';
+            return hasJobNumber ? `${shipmentCode}-${jobNumber}-Labels` : `${shipmentCode}-Labels`;
+        }
+
         function getLabelLogoMarkup() {
             if (!COMPANY_LOGO_URL) {
                 return '<div class="label-logo-slot" aria-hidden="true"></div>';
@@ -282,11 +292,15 @@
             count.textContent = `${data.total_labels} label(s)`;
             list.innerHTML = '';
             
+            // Default save/print filename: SHIPMENT-JOB#-Labels (job # omitted if none)
+            const firstJobNumber = data.labels && data.labels.length > 0 ? data.labels[0].job_number : null;
+            document.title = buildLabelsDocumentTitle(data.shipment_code, firstJobNumber);
+            
             data.labels.forEach((label, index) => {
                 const labelCard = document.createElement('div');
                 labelCard.className = 'label-card';
                 const customerName = label.customer_name || 'Customer';
-                const poNumber = label.reference || label.customer_order || 'N/A';
+                const poNumber = stripPoPrefix(label.reference || label.customer_order || 'N/A');
                 const orderNumber = label.customer_order || 'N/A';
                 const jobNumber = label.job_number || 'N/A';
                 const itemCode = escapeHtml(label.item_code || 'N/A');

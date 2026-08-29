@@ -496,7 +496,8 @@
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
-                const orders = await response.json();
+                const responseData = await response.json();
+                const orders = Array.isArray(responseData) ? responseData : [];
                 
                 // Debug: log first order structure
                 if (orders.length > 0) {
@@ -569,13 +570,15 @@
         }
 
         function renderPartialShipments(data, updateOriginal = true) {
+            const normalizedOrders = Array.isArray(data?.orders) ? data.orders : [];
+
             // Store original data for filtering only on initial load
             if (updateOriginal) {
-                window['partial-shipments_originalData'] = JSON.parse(JSON.stringify(data.orders || []));
+                window['partial-shipments_originalData'] = JSON.parse(JSON.stringify(normalizedOrders));
             }
-            window['partial-shipments_filteredData'] = JSON.parse(JSON.stringify(data.orders || []));
+            window['partial-shipments_filteredData'] = JSON.parse(JSON.stringify(normalizedOrders));
 
-            const orders = data.orders || [];
+            const orders = normalizedOrders;
             const currencyTotals = orders.reduce((totals, order) => {
                 totals.orderValue += Number(order.total_price) || 0;
                 totals.deliveredValue += Number(order.shipped_value) || 0;
@@ -607,32 +610,37 @@
             html += '</tr></thead><tbody>';
 
             orders.forEach((order, index) => {
-                const products = order.products || [];
+                const safeOrder = order && typeof order === 'object' ? order : {};
+                const products = Array.isArray(safeOrder.products) ? safeOrder.products : [];
                 const rowId = `order-${index}`;
-                const jobNumber = order.job_number || 'N/A';
-                const shipmentSummary = order.shipment_summary || {};
-                const invoices = order.invoices || [];
+                const jobNumber = safeOrder.job_number || 'N/A';
+                const shipmentSummary = safeOrder.shipment_summary && typeof safeOrder.shipment_summary === 'object' ? safeOrder.shipment_summary : {};
+                const invoices = Array.isArray(safeOrder.invoices) ? safeOrder.invoices : [];
+                const totalItems = Number(shipmentSummary.total_items) || 0;
+                const notShippedItems = Number(shipmentSummary.not_shipped) || 0;
+                const fullyShippedItems = Number(shipmentSummary.fully_shipped) || 0;
+                const partiallyShippedItems = Number(shipmentSummary.partially_shipped) || 0;
                 
                 // Create shipment status badge
                 let shipmentBadge = '';
-                if (shipmentSummary.not_shipped === shipmentSummary.total_items) {
+                if (totalItems === 0 || notShippedItems === totalItems) {
                     shipmentBadge = '<span class="badge badge-danger">Undelivered</span>';
-                } else if (shipmentSummary.fully_shipped === shipmentSummary.total_items) {
+                } else if (fullyShippedItems === totalItems) {
                     shipmentBadge = '<span class="badge badge-success">Fully Shipped</span>';
                 } else {
-                    shipmentBadge = `<span class="badge badge-warning">Partial (${shipmentSummary.partially_shipped + shipmentSummary.fully_shipped}/${shipmentSummary.total_items})</span>`;
+                    shipmentBadge = `<span class="badge badge-warning">Partial (${partiallyShippedItems + fullyShippedItems}/${totalItems})</span>`;
                 }
                 
-                html += `<tr class="order-row" onclick="toggleOrderItems('${rowId}')">`;                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${order.code}</strong></td>`;
-                html += `<td>${order.customer_name}</td>`;
-                html += `<td>${order.reference || 'N/A'}</td>`;
+                html += `<tr class="order-row" onclick="toggleOrderItems('${rowId}')">`;                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${safeOrder.code || 'N/A'}</strong></td>`;
+                html += `<td>${safeOrder.customer_name || 'N/A'}</td>`;
+                html += `<td>${safeOrder.reference || 'N/A'}</td>`;
                 html += `<td><strong>${jobNumber}</strong></td>`;
                 html += `<td>${shipmentBadge}</td>`;
-                html += `<td>${order.currency || '$'}${(order.total_price || 0).toLocaleString()}</td>`;
-                html += `<td><strong style="color: #10b981;">${order.currency || '$'}${(order.shipped_value || 0).toLocaleString()}</strong></td>`;
-                html += `<td><strong style="color: #ef4444;">${order.currency || '$'}${(order.remaining_value || 0).toLocaleString()}</strong></td>`;
-                html += `<td>${formatMRPeasyDate(order.delivery_date)}</td>`;
-                html += `<td><span style="font-size: 12px; color: #64748b;">${order.status_txt || 'N/A'}</span></td>`;
+                html += `<td>${safeOrder.currency || '$'}${(safeOrder.total_price || 0).toLocaleString()}</td>`;
+                html += `<td><strong style="color: #10b981;">${safeOrder.currency || '$'}${(safeOrder.shipped_value || 0).toLocaleString()}</strong></td>`;
+                html += `<td><strong style="color: #ef4444;">${safeOrder.currency || '$'}${(safeOrder.remaining_value || 0).toLocaleString()}</strong></td>`;
+                html += `<td>${formatMRPeasyDate(safeOrder.delivery_date)}</td>`;
+                html += `<td><span style="font-size: 12px; color: #64748b;">${safeOrder.status_txt || 'N/A'}</span></td>`;
                 html += `<td>${invoices.length} invoice(s)</td>`;
                 html += '</tr>';
                 
@@ -644,28 +652,28 @@
                 html += '<div style="margin-bottom: 15px; padding: 10px; background: #f0f9ff; border-radius: 6px;">';
                 html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📅 Order Dates:</h4>';
                 html += '<div style="display: flex; gap: 15px; flex-wrap: wrap; font-size: 13px;">';
-                if (order.created) {
-                    html += `<div><strong>Created:</strong> ${formatMRPeasyDate(order.created)}</div>`;
+                if (safeOrder.created) {
+                    html += `<div><strong>Created:</strong> ${formatMRPeasyDate(safeOrder.created)}</div>`;
                 }
-                if (order.confirmed_at) {
-                    html += `<div><strong>Confirmed:</strong> ${formatMRPeasyDate(order.confirmed_at)}</div>`;
+                if (safeOrder.confirmed_at) {
+                    html += `<div><strong>Confirmed:</strong> ${formatMRPeasyDate(safeOrder.confirmed_at)}</div>`;
                 }
-                if (order.modified) {
-                    html += `<div><strong>Modified:</strong> ${formatMRPeasyDate(order.modified)}</div>`;
+                if (safeOrder.modified) {
+                    html += `<div><strong>Modified:</strong> ${formatMRPeasyDate(safeOrder.modified)}</div>`;
                 }
-                if (order.delivery_date) {
-                    html += `<div><strong>Expected Delivery:</strong> ${formatMRPeasyDate(order.delivery_date)}</div>`;
+                if (safeOrder.delivery_date) {
+                    html += `<div><strong>Expected Delivery:</strong> ${formatMRPeasyDate(safeOrder.delivery_date)}</div>`;
                 }
-                if (order.actual_delivery_date) {
-                    html += `<div><strong>Actual Delivery:</strong> ${formatMRPeasyDate(order.actual_delivery_date)}</div>`;
+                if (safeOrder.actual_delivery_date) {
+                    html += `<div><strong>Actual Delivery:</strong> ${formatMRPeasyDate(safeOrder.actual_delivery_date)}</div>`;
                 }
-                if (order.latest_shipment_date) {
-                    html += `<div><strong>Latest Shipment:</strong> ${formatMRPeasyDate(order.latest_shipment_date)}</div>`;
+                if (safeOrder.latest_shipment_date) {
+                    html += `<div><strong>Latest Shipment:</strong> ${formatMRPeasyDate(safeOrder.latest_shipment_date)}</div>`;
                 }
                 html += '</div></div>';
                 
                 // Shipments section
-                const shipments = order.shipments || [];
+                const shipments = Array.isArray(safeOrder.shipments) ? safeOrder.shipments : [];
                 if (shipments.length > 0) {
                     html += '<div style="margin-bottom: 15px; padding: 10px; background: #fef3c7; border-radius: 6px;">';
                     html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📦 Shipments:</h4>';
@@ -687,10 +695,11 @@
                     html += '<h4 style="margin: 0 0 10px 0; font-size: 14px; color: #2d3748;">📄 Order Invoices:</h4>';
                     html += '<div style="display: flex; gap: 10px; flex-wrap: wrap;">';
                     invoices.forEach(inv => {
-                        const statusBadge = inv.status === 40 ? 'badge-success' : inv.status === 20 ? 'badge-danger' : 'badge-warning';
+                        const safeInvoice = inv && typeof inv === 'object' ? inv : {};
+                        const statusBadge = safeInvoice.status === 40 ? 'badge-success' : safeInvoice.status === 20 ? 'badge-danger' : 'badge-warning';
                         html += `<div style="padding: 5px 10px; background: white; border-radius: 4px; border: 1px solid #e2e8f0;">`;
-                        html += `<strong>${inv.code}</strong> - <span class="badge ${statusBadge}">${inv.status_txt}</span>`;
-                        html += `<span style="margin-left: 8px; color: #718096;">${inv.currency}${(inv.total_price_cur || 0).toFixed(2)}</span>`;
+                        html += `<strong>${safeInvoice.code || 'N/A'}</strong> - <span class="badge ${statusBadge}">${safeInvoice.status_txt || 'N/A'}</span>`;
+                        html += `<span style="margin-left: 8px; color: #718096;">${safeInvoice.currency || '$'}${(safeInvoice.total_price_cur || 0).toFixed(2)}</span>`;
                         html += '</div>';
                     });
                     html += '</div></div>';
@@ -712,29 +721,30 @@
                 html += '</tr></thead><tbody>';
                 
                 products.forEach(product => {
-                    const itemInvoices = product.invoices || [];
+                    const safeProduct = product && typeof product === 'object' ? product : {};
+                    const itemInvoices = Array.isArray(safeProduct.invoices) ? safeProduct.invoices : [];
                     let invoiceInfo = 'N/A';
                     if (itemInvoices.length > 0) {
                         invoiceInfo = itemInvoices.map(inv => 
-                            `${inv.invoice_code} (${inv.invoice_status})`
+                            `${inv?.invoice_code || 'N/A'} (${inv?.invoice_status || 'N/A'})`
                         ).join('<br>');
                     }
                     
                     html += '<tr>';
-                    html += `<td><strong>${product.item_code || 'N/A'}</strong></td>`;
-                    html += `<td style="max-width: 120px; word-wrap: break-word;">${product.item_title || 'N/A'}</td>`;
-                    html += `<td>${product.quantity || 0}</td>`;
-                    html += `<td>$${(product.item_price || 0).toFixed(2)}</td>`;
-                    html += `<td>${product.shipped || 0}</td>`;
-                    html += `<td>$${(product.shipped_price || 0).toFixed(2)}</td>`;
-                    html += `<td>${product.remaining || 0}</td>`;
-                    html += `<td>$${(product.remaining_price || 0).toFixed(2)}</td>`;
+                    html += `<td><strong>${safeProduct.item_code || 'N/A'}</strong></td>`;
+                    html += `<td style="max-width: 120px; word-wrap: break-word;">${safeProduct.item_title || 'N/A'}</td>`;
+                    html += `<td>${safeProduct.quantity || 0}</td>`;
+                    html += `<td>$${(safeProduct.item_price || 0).toFixed(2)}</td>`;
+                    html += `<td>${safeProduct.shipped || 0}</td>`;
+                    html += `<td>$${(safeProduct.shipped_price || 0).toFixed(2)}</td>`;
+                    html += `<td>${safeProduct.remaining || 0}</td>`;
+                    html += `<td>$${(safeProduct.remaining_price || 0).toFixed(2)}</td>`;
                     
                     // Status badge based on item status
                     let statusBadge = '';
-                    if (product.status === 'Not Shipped') {
+                    if (safeProduct.status === 'Not Shipped') {
                         statusBadge = '<span class="badge badge-danger">Undelivered</span>';
-                    } else if (product.status === 'Fully Shipped') {
+                    } else if (safeProduct.status === 'Fully Shipped') {
                         statusBadge = '<span class="badge badge-success">Fully Shipped</span>';
                     } else {
                         statusBadge = '<span class="badge badge-warning">Partial Items</span>';
@@ -819,10 +829,11 @@
             if (!originalData) return;
 
             const filteredData = originalData.filter(order => {
-                const code = (order.code || '').toLowerCase();
-                const customer = (order.customer_name || '').toLowerCase();
-                const jobNumber = (order.job_number || '').toLowerCase();
-                const reference = (order.reference || '').toLowerCase();
+                const safeOrder = order && typeof order === 'object' ? order : {};
+                const code = (safeOrder.code || '').toLowerCase();
+                const customer = (safeOrder.customer_name || '').toLowerCase();
+                const jobNumber = (safeOrder.job_number || '').toLowerCase();
+                const reference = (safeOrder.reference || '').toLowerCase();
 
                 if (!searchInput) {
                     return true;
@@ -833,7 +844,7 @@
                     jobNumber.includes(searchInput) ||
                     reference.includes(searchInput);
 
-                const matchesProduct = (order.products || []).some(product => {
+                const matchesProduct = (Array.isArray(safeOrder.products) ? safeOrder.products : []).some(product => {
                     const itemCode = (product.item_code || '').toLowerCase();
                     const itemTitle = (product.item_title || '').toLowerCase();
                     return itemCode.includes(searchInput) || itemTitle.includes(searchInput);

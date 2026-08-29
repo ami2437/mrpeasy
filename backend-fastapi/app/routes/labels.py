@@ -1,13 +1,16 @@
 """
 Label generation routes
 """
-from fastapi import APIRouter, HTTPException, Depends, Body
-from typing import Literal, Dict, Optional
+from fastapi import APIRouter, HTTPException, Depends, Body, UploadFile, File
+from typing import Literal, Dict, List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime
 import json
+import io
+import re
+import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
 from app.models import ShipmentBox, Label
@@ -16,7 +19,149 @@ class FinalizeShipmentRequest(BaseModel):
     pallet_number: Optional[str] = None
     product_configs: Dict = {}
 
+
+class PastePackSizesRequest(BaseModel):
+    text: str
+
+
 router = APIRouter(prefix="/api/labels", tags=["labels"])
+
+
+def _normalize_item_code(value) -> str:
+    """
+    Normalize item code variants so e.g. "15437-NUTS", "15437-NUT", "15437-nut"
+    and "15437 - NUTS" all match the same underlying item code.
+    """
+    text = str(value or '').strip().upper()
+    text = re.sub(r'\s+', '', text)  # "15437 - NUT" -> "15437-NUT"
+    text = re.sub(r'NUTS$', 'NUT', text)  # treat plural NUTS suffix as NUT
+    return text
+
+
+def _extract_pack_sizes_from_rows(rows: List[list]) -> Dict[str, int]:
+    """
+    Given rows of raw cell values (first row may be a header), detect
+    "item"/"pack" header columns (case-insensitive) or fall back to
+    column 1 = item #, column 2 = pack size. Blank pack sizes are skipped
+    so the caller keeps its own default (typically the full order quantity).
+    """
+    if not rows:
+        return {}
+
+    item_col = 0
+    pack_col = 1
+
+    header_row = rows[0]
+    item_col_match = None
+    pack_col_match = None
+    for col_idx, header_value in enumerate(header_row):
+        if header_value is None or pd.isna(header_value):
+            continue
+        header_text = str(header_value).strip().lower()
+        if not header_text:
+            continue
+        if item_col_match is None and 'item' in header_text:
+            item_col_match = col_idx
+        if pack_col_match is None and 'pack' in header_text:
+            pack_col_match = col_idx
+
+    data_rows = rows
+    if item_col_match is not None and pack_col_match is not None:
+        item_col = item_col_match
+        pack_col = pack_col_match
+        data_rows = rows[1:]
+
+    pack_sizes: Dict[str, int] = {}
+    for row in data_rows:
+        if len(row) <= max(item_col, pack_col):
+            continue
+        item_code_raw = row[item_col]
+        pack_size_raw = row[pack_col]
+
+        if item_code_raw is None or pd.isna(item_code_raw):
+            continue
+        item_code_raw = str(item_code_raw).strip()
+        if not item_code_raw:
+            continue
+
+        normalized_code = _normalize_item_code(item_code_raw)
+        if not normalized_code:
+            continue
+
+        if pack_size_raw is None or pd.isna(pack_size_raw):
+            continue  # blank pack size -> caller keeps its own default (order qty)
+        pack_size_text = str(pack_size_raw).strip()
+        if not pack_size_text:
+            continue
+
+        try:
+            pack_size = int(float(pack_size_text))
+        except (ValueError, TypeError):
+            continue
+
+        if pack_size <= 0:
+            continue
+
+        pack_sizes[normalized_code] = pack_size
+
+    return pack_sizes
+
+
+@router.post("/pack-sizes/parse")
+async def parse_pack_sizes_excel(file: UploadFile = File(...)):
+    """
+    Parse an uploaded Excel sheet of pack sizes.
+
+    If the header row contains a column with "item" in its name and a column
+    with "pack" in its name (case-insensitive), those columns are used.
+    Otherwise falls back to column 1 = item #, column 2 = pack size.
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents), header=None, dtype=str)
+        pack_sizes = _extract_pack_sizes_from_rows(df.values.tolist())
+
+        if not pack_sizes:
+            raise HTTPException(status_code=400, detail="No valid item #/pack size rows found in the uploaded file")
+
+        return {
+            'success': True,
+            'count': len(pack_sizes),
+            'pack_sizes': pack_sizes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(e)}")
+
+
+@router.post("/pack-sizes/parse-text")
+async def parse_pack_sizes_text(payload: PastePackSizesRequest):
+    """
+    Parse pasted item #/pack size data (e.g. copied straight out of Excel).
+    Cells are split on tabs when present, otherwise on commas or 2+ spaces.
+    """
+    try:
+        lines = [line for line in payload.text.splitlines() if line.strip() != '']
+        rows = []
+        for line in lines:
+            cells = line.split('\t') if '\t' in line else re.split(r',|\s{2,}', line.strip())
+            rows.append([cell.strip() for cell in cells])
+
+        pack_sizes = _extract_pack_sizes_from_rows(rows)
+
+        if not pack_sizes:
+            raise HTTPException(status_code=400, detail="No valid item #/pack size rows found in the pasted text")
+
+        return {
+            'success': True,
+            'count': len(pack_sizes),
+            'pack_sizes': pack_sizes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse pasted text: {str(e)}")
 
 
 def _get_primary_customer_order_link(shipment: dict):
@@ -56,6 +201,49 @@ def _get_customer_order_details(shipment: dict):
         "customer_order_id": customer_order_id,
         "customer_order_code": customer_order_code,
     }
+
+
+def _format_shipping_address(address_obj) -> Optional[str]:
+    """
+    Format a raw MRPeasy address object/string into a multi-line address:
+    Company / Street 1 / Street 2 / City State Zip / Country
+    """
+    if not address_obj:
+        return None
+
+    if isinstance(address_obj, str):
+        try:
+            address_obj = json.loads(address_obj)
+        except (ValueError, TypeError):
+            stripped = address_obj.strip()
+            return stripped or None
+
+    if not isinstance(address_obj, dict):
+        return None
+
+    company = address_obj.get('company') or address_obj.get('name')
+    street1 = address_obj.get('street_line_1') or address_obj.get('line1') or address_obj.get('address_1')
+    street2 = address_obj.get('street_line_2') or address_obj.get('line2') or address_obj.get('address_2')
+    city = address_obj.get('city')
+    state = address_obj.get('state')
+    postal_code = address_obj.get('postal_code') or address_obj.get('zip')
+    country = address_obj.get('country')
+
+    lines = []
+    if company:
+        lines.append(str(company).strip())
+    if street1:
+        lines.append(str(street1).strip())
+    if street2:
+        lines.append(str(street2).strip())
+
+    city_state_zip = ' '.join(str(p).strip() for p in [city, state, postal_code] if p)
+    if city_state_zip:
+        lines.append(city_state_zip)
+    if country:
+        lines.append(str(country).strip())
+
+    return '\n'.join(lines) if lines else None
 
 
 def extract_job_number(order: dict) -> str:
@@ -389,6 +577,32 @@ async def generate_labels(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/finalize/{shipment_code}")
+async def delete_finalized_shipment(shipment_code: str, db: Session = Depends(get_db)):
+    """
+    Delete the finalized box configuration for a shipment so it can be regenerated
+    """
+    try:
+        deleted_count = db.query(ShipmentBox).filter(
+            ShipmentBox.shipment_code == shipment_code
+        ).delete()
+        db.commit()
+
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail=f"No finalized boxes found for {shipment_code}")
+
+        return {
+            'success': True,
+            'shipment_code': shipment_code,
+            'deleted_boxes': deleted_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/finalize/{shipment_code}")
 async def finalize_shipment_configuration(
     shipment_code: str,
@@ -418,61 +632,45 @@ async def finalize_shipment_configuration(
         pallet_number = request.pallet_number
         product_configs = request.product_configs
         
-        # Fetch PO number, customer name, and shipping address from customer order
+        # Fetch PO number, customer name, job #, and shipping address from customer order
         po_number = None
         customer_name = None
         shipping_address = None
+        job_number = None
         if customer_order:
             try:
                 po_number = customer_order.get('reference') or customer_order.get('code')
                 customer_name = customer_order.get('customer_name')
+                job_number = extract_job_number(customer_order)
 
                 address_obj = (
                     customer_order.get('delivery_address')
                     or customer_order.get('shipping_address')
                     or customer_order.get('address')
                 )
-                if isinstance(address_obj, dict):
-                    addr_parts = [
-                        address_obj.get('line1'),
-                        address_obj.get('line2'),
-                        address_obj.get('city'),
-                        address_obj.get('state'),
-                        address_obj.get('zip'),
-                        address_obj.get('country')
-                    ]
-                    shipping_address = ', '.join([p for p in addr_parts if p])
-                elif isinstance(address_obj, str):
-                    shipping_address = address_obj
+                shipping_address = _format_shipping_address(address_obj)
             except Exception as e:
                 print(f"Warning: Could not fetch customer order info: {e}")
 
         if not shipping_address:
             address_obj = shipment.get('delivery_address') or shipment.get('shipping_address')
-            if isinstance(address_obj, dict):
-                addr_parts = [
-                    address_obj.get('line1'),
-                    address_obj.get('line2'),
-                    address_obj.get('city'),
-                    address_obj.get('state'),
-                    address_obj.get('zip'),
-                    address_obj.get('country')
-                ]
-                shipping_address = ', '.join([p for p in addr_parts if p])
-            elif isinstance(address_obj, str):
-                shipping_address = address_obj
+            shipping_address = _format_shipping_address(address_obj)
+
+        # Delivery date comes from the shipment itself (falls back to the customer order)
+        delivery_date = shipment.get('delivery_date') or (customer_order.get('delivery_date') if customer_order else None)
         
         # Delete existing records for this shipment (if re-finalizing)
         db.query(ShipmentBox).filter(ShipmentBox.shipment_code == shipment_code).delete()
         db.commit()
         
-        # Create new shipment box records
-        saved_boxes = []
+        # Pool all lots for the same item_code + order_line before splitting into boxes,
+        # so the box breakdown reflects the pack size entered for that item, not per-lot MRP quantities.
+        groups = {}
         for product_key, config in product_configs.items():
             item_code = config.get('item_code')
             order_line = config.get('order_line', '1')
             pack_size = config.get('pack_size', 1)
-            
+
             try:
                 prod_index = int(product_key.split('-')[-1])
                 if prod_index >= len(shipment_products):
@@ -480,14 +678,29 @@ async def finalize_shipment_configuration(
                 product = shipment_products[prod_index]
             except (ValueError, IndexError):
                 continue
-            
+
             lot_code = product.get('lot_code', '')
             quantity_booked = product.get('quantity_booked', 0)
             item_title = product.get('item_title', '')
-            
-            # Calculate boxes for this product
-            boxes = calculate_boxes(quantity_booked, pack_size)
-            
+
+            group_key = (item_code, order_line)
+            if group_key not in groups:
+                groups[group_key] = {
+                    'item_title': item_title,
+                    'pack_size': pack_size,
+                    'total_quantity': 0,
+                    'lot_codes': []
+                }
+            groups[group_key]['total_quantity'] += quantity_booked
+            groups[group_key]['pack_size'] = pack_size
+            if lot_code:
+                groups[group_key]['lot_codes'].append(lot_code)
+
+        # Create new shipment box records from the pooled per-item totals
+        saved_boxes = []
+        for (item_code, order_line), group in groups.items():
+            boxes = calculate_boxes(group['total_quantity'], group['pack_size'])
+
             for box in boxes:
                 shipment_box = ShipmentBox(
                     shipment_code=shipment_code,
@@ -495,14 +708,16 @@ async def finalize_shipment_configuration(
                     po_number=po_number,
                     customer_name=customer_name,
                     shipping_address=shipping_address,
+                    job_number=job_number,
+                    delivery_date=str(delivery_date) if delivery_date else None,
                     item_code=item_code,
-                    item_title=item_title,
+                    item_title=group['item_title'],
                     order_line=order_line,
-                    pack_size=pack_size,
+                    pack_size=group['pack_size'],
                     box_number=box['box_number'],
                     quantity_in_box=box['quantity'],
-                    total_quantity=quantity_booked,
-                    lot_codes=json.dumps([lot_code]) if lot_code else json.dumps([]),
+                    total_quantity=group['total_quantity'],
+                    lot_codes=json.dumps(group['lot_codes']),
                     pallet_number=pallet_number,
                     generated_from='finalized'
                 )
@@ -540,10 +755,10 @@ async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db
     Shows: Item, Description, Total Qty Shipped, Box breakdown (e.g., 3 box of 30 + 2 box of 5)
     """
     try:
-        # Get all box records for this shipment
+        # Get all box records for this shipment, preserving original entry order (not alphabetical)
         boxes = db.query(ShipmentBox).filter(
             ShipmentBox.shipment_code == shipment_code
-        ).order_by(ShipmentBox.item_code, ShipmentBox.order_line, ShipmentBox.box_number).all()
+        ).order_by(ShipmentBox.id).all()
         
         if not boxes:
             raise HTTPException(status_code=404, detail=f"No finalized boxes found for {shipment_code}")
@@ -697,6 +912,8 @@ async def list_packing_slip_shipments(db: Session = Depends(get_db)):
                 ShipmentBox.po_number,
                 ShipmentBox.customer_name,
                 ShipmentBox.shipping_address,
+                ShipmentBox.job_number,
+                ShipmentBox.delivery_date,
                 func.max(ShipmentBox.finalized_at).label("finalized_at"),
                 func.count(ShipmentBox.id).label("total_boxes")
             )
@@ -704,7 +921,9 @@ async def list_packing_slip_shipments(db: Session = Depends(get_db)):
                 ShipmentBox.shipment_code,
                 ShipmentBox.po_number,
                 ShipmentBox.customer_name,
-                ShipmentBox.shipping_address
+                ShipmentBox.shipping_address,
+                ShipmentBox.job_number,
+                ShipmentBox.delivery_date
             )
             .order_by(ShipmentBox.shipment_code)
             .all()
@@ -716,6 +935,8 @@ async def list_packing_slip_shipments(db: Session = Depends(get_db)):
                 "po_number": r.po_number,
                 "customer_name": r.customer_name,
                 "shipping_address": r.shipping_address,
+                "job_number": r.job_number,
+                "delivery_date": r.delivery_date,
                 "finalized_at": r.finalized_at.isoformat() if r.finalized_at else None,
                 "total_boxes": r.total_boxes
             }

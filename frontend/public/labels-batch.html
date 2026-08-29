@@ -71,6 +71,7 @@
             margin: 6px 0;
             border-bottom: 2px solid #000;
             padding-bottom: 6px;
+            padding-left: 96px;
             padding-right: 96px;
             line-height: 1.1;
             min-height: 46px;
@@ -83,7 +84,7 @@
         .label-field { display: flex; flex-direction: column; padding: 8px; border: 1px solid #000; }
         .label-field.item-field { min-height: 88px; }
         .label-field.qty-field { margin-top: 8px; }
-        .label-field-label { font-size: 11px; color: #000; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+        .label-field-label { font-size: 13px; color: #000; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; }
         .label-field-value { font-size: 15px; color: #000; font-weight: 500; }
         .label-field-value.item-multiline { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; min-height: 56px; max-height: 56px; overflow: hidden; }
         .label-field-value.large { font-size: 22px; font-weight: 700; color: #000; }
@@ -97,7 +98,7 @@
         .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
         .dashboard-btn:hover { background: #ffffff; }
         @media print {
-            @page { size: 6in 4in landscape; margin: 0; }
+            @page { size: 6in 4in; margin: 0; }
             body { background: white; padding: 0; }
             .header, .controls, .labels-header { display: none; }
             .labels-container { box-shadow: none; padding: 0; }
@@ -204,6 +205,104 @@
             }
         }
         
+        async function uploadPackSizesForShipment(index) {
+            const shipment = allShipments[index];
+            const fileInput = document.getElementById(`pack-size-file-${shipment.code}`);
+            const statusEl = document.getElementById(`pack-size-upload-status-${shipment.code}`);
+            
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                if (statusEl) statusEl.textContent = 'Please choose an Excel file first.';
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            
+            if (statusEl) statusEl.textContent = 'Uploading...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pack-sizes/parse`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (!response.ok || !data.success) {
+                    if (statusEl) statusEl.textContent = `❌ ${data.detail || 'Failed to parse file'}`;
+                    return;
+                }
+                
+                const appliedCount = applyPackSizesToShipment(shipment, data.pack_sizes || {});
+                if (statusEl) statusEl.textContent = `✓ Applied pack sizes to ${appliedCount} item row(s) from ${data.count} entries in file.`;
+            } catch (error) {
+                if (statusEl) statusEl.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+        
+        async function applyPastedPackSizesForShipment(index) {
+            const shipment = allShipments[index];
+            const textarea = document.getElementById(`pack-size-paste-${shipment.code}`);
+            const statusEl = document.getElementById(`pack-size-upload-status-${shipment.code}`);
+            const text = textarea ? textarea.value.trim() : '';
+            
+            if (!text) {
+                if (statusEl) statusEl.textContent = 'Please paste item # and pack size data first.';
+                return;
+            }
+            
+            if (statusEl) statusEl.textContent = 'Parsing pasted text...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pack-sizes/parse-text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+                const data = await response.json();
+                
+                if (!response.ok || !data.success) {
+                    if (statusEl) statusEl.textContent = `❌ ${data.detail || 'Failed to parse pasted text'}`;
+                    return;
+                }
+                
+                const appliedCount = applyPackSizesToShipment(shipment, data.pack_sizes || {});
+                if (statusEl) statusEl.textContent = `✓ Applied pack sizes to ${appliedCount} item row(s) from ${data.count} pasted entries.`;
+            } catch (error) {
+                if (statusEl) statusEl.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+        
+        function normalizeItemCode(value) {
+            // Treat "15437-NUTS", "15437-NUT", "15437-nut", "15437 - NUTS" etc. as the same item
+            return String(value ?? '')
+                .toUpperCase()
+                .replace(/\s+/g, '')
+                .replace(/NUTS$/, 'NUT');
+        }
+        
+        function buildLabelsDocumentTitle(shipmentCode, jobNumber) {
+            const hasJobNumber = jobNumber && String(jobNumber).trim() && String(jobNumber).trim().toUpperCase() !== 'N/A';
+            return hasJobNumber ? `${shipmentCode}-${jobNumber}-Labels` : `${shipmentCode}-Labels`;
+        }
+        
+        function applyPackSizesToShipment(shipment, packSizes) {
+            const normalizedPackSizes = {};
+            Object.entries(packSizes).forEach(([code, size]) => {
+                normalizedPackSizes[normalizeItemCode(code)] = size;
+            });
+            
+            let appliedCount = 0;
+            document.querySelectorAll(`.pack-size-input[data-shipment-code="${shipment.code}"]`).forEach(input => {
+                const normalizedCode = normalizeItemCode(input.dataset.itemCode);
+                if (Object.prototype.hasOwnProperty.call(normalizedPackSizes, normalizedCode)) {
+                    input.value = normalizedPackSizes[normalizedCode];
+                    appliedCount++;
+                }
+            });
+            
+            return appliedCount;
+        }
+        
         function escapeHtml(value) {
             return String(value ?? '')
                 .replace(/&/g, '&amp;')
@@ -211,6 +310,10 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        function stripPoPrefix(value) {
+            return String(value ?? '').replace(/^\s*po\s*#?\s*/i, '').trim();
         }
 
         function getLabelLogoMarkup() {
@@ -257,27 +360,15 @@
             count.textContent = `${data.total_labels} label(s)`;
             list.innerHTML = '';
             
-            // Extract PO # and Shipment code for filename
-            let poNumber = 'Labels';
-            let shipmentCode = data.shipment_code;
-            
-            if (data.labels && data.labels.length > 0) {
-                const firstLabel = data.labels[0];
-                if (firstLabel.reference) {
-                    poNumber = firstLabel.reference.replace(/[^a-zA-Z0-9]/g, '_');
-                } else if (firstLabel.customer_order) {
-                    poNumber = firstLabel.customer_order;
-                }
-            }
-            
-            // Set document title for PDF filename
-            document.title = 'American Traders LLC';
+            // Default save/print filename: SHIPMENT-JOB#-Labels (job # omitted if none)
+            const firstJobNumber = data.labels && data.labels.length > 0 ? data.labels[0].job_number : null;
+            document.title = buildLabelsDocumentTitle(data.shipment_code, firstJobNumber);
             
             data.labels.forEach((label, index) => {
                 const labelCard = document.createElement('div');
                 labelCard.className = 'label-card';
                 const customerName = label.customer_name || 'Customer';
-                const poNumber = label.reference || label.customer_order || 'N/A';
+                const poNumber = stripPoPrefix(label.reference || label.customer_order || 'N/A');
                 const orderNumber = label.customer_order || 'N/A';
                 const jobNumber = label.job_number || 'N/A';
                 const itemCode = escapeHtml(label.item_code || 'N/A');
@@ -312,7 +403,7 @@
                             <div class="label-field-value large">${label.quantity_in_box}</div>
                         </div>
                     </div>
-                    <div class="label-footer">American Traders LLC - ATind Supplies</div>
+                    <div class="label-footer">American Traders LLC - ATind Supplies<br>Questions? Email sales@atindsupplies.com</div>
                 `;
                 list.appendChild(labelCard);
             });
@@ -431,6 +522,17 @@
                                 </div>
                                 <button class="btn btn-primary" onclick="finalizeShipment(${index})" style="padding: 10px 20px;">🔒 Finalize & Lock</button>
                             </div>
+                            <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                                <label style="font-weight: 600; color: #333;">Import Pack Sizes (Excel, optional):</label>
+                                <input type="file" id="pack-size-file-${shipment.code}" accept=".xlsx,.xls">
+                                <button class="btn btn-secondary" onclick="uploadPackSizesForShipment(${index})" style="padding: 8px 16px;">⬆️ Apply from File</button>
+                                <span id="pack-size-upload-status-${shipment.code}" style="font-size: 13px; color: #666;"></span>
+                            </div>
+                            <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: flex-start;">
+                                <label style="font-weight: 600; color: #333; margin-top: 6px;">Or Paste Pack Sizes:</label>
+                                <textarea id="pack-size-paste-${shipment.code}" rows="3" placeholder="Paste Item / Pack columns here, e.g. copied straight from Excel" style="flex: 1; max-width: 420px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 12px;"></textarea>
+                                <button class="btn btn-secondary" onclick="applyPastedPackSizesForShipment(${index})" style="padding: 8px 16px;">📋 Apply Pasted</button>
+                            </div>
                         </div>
                         <table class="items-table">
                             <thead>
@@ -512,6 +614,10 @@
                         const packInput = document.createElement('input');
                         packInput.type = 'number';
                         packInput.id = `pack-size-${shipment.code}-${itemCode}-${prodIndex}`;
+                        packInput.dataset.itemCode = itemCode;
+                        packInput.dataset.shipmentCode = shipment.code;
+                        packInput.dataset.defaultQty = qty.toString();
+                        packInput.className = 'pack-size-input';
                         packInput.min = '1';
                         packInput.value = qty.toString();
                         packSizeCell.appendChild(packInput);
@@ -898,7 +1004,9 @@
                     const shipmentLabelMode = document.getElementById(`label-mode-${shipment.code}-${itemCode}-${firstProdIndex}`);
                     
                     if (bulkPackInput && shipmentPackInput) {
-                        shipmentPackInput.value = bulkPackInput.value;
+                        const bulkValue = bulkPackInput.value.trim();
+                        // Blank bulk entry -> fall back to this shipment's own order quantity for the item
+                        shipmentPackInput.value = bulkValue || shipmentPackInput.dataset.defaultQty || shipmentPackInput.value;
                         appliedCount++;
                     }
                     

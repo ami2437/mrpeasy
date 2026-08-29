@@ -38,6 +38,14 @@ def _get_invoice_match_key(product):
     return None
 
 
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value):
+    return value if isinstance(value, list) else []
+
+
 def _allocate_invoice_quantities(products, order_invoices):
     allocations_by_index = {index: [] for index in range(len(products))}
     invoice_pools = {}
@@ -122,7 +130,7 @@ def get_shipment_status_orders(
     """
     try:
         # Fetch all customer orders
-        all_orders = mrpeasy_client.get_customer_orders()
+        all_orders = _as_list(mrpeasy_client.get_customer_orders())
         
         if not all_orders:
             return []
@@ -130,14 +138,21 @@ def get_shipment_status_orders(
         # Debug logging removed after identifying job number field.
         
         # Fetch all invoices for matching
-        all_invoices = mrpeasy_client.get_invoices()
+        all_invoices = _as_list(mrpeasy_client.get_invoices())
         
         # Fetch all shipments for delivery dates
-        all_shipments = mrpeasy_client.get_shipments()
+        all_shipments = _as_list(mrpeasy_client.get_shipments())
+
+        valid_filters = {"all_active", "any_undelivered", "not_shipped", "partially_shipped"}
+        if filter_type not in valid_filters:
+            raise HTTPException(status_code=400, detail=f"Invalid filter_type: {filter_type}")
         
         # Create invoice lookup by customer order ID
         invoices_by_order = {}
-        for invoice in all_invoices:
+        for raw_invoice in all_invoices:
+            invoice = _as_dict(raw_invoice)
+            if not invoice:
+                continue
             cust_ord_id = invoice.get('cust_ord_id')
             if cust_ord_id:
                 if cust_ord_id not in invoices_by_order:
@@ -153,12 +168,15 @@ def get_shipment_status_orders(
                     'currency': invoice.get('currency'),
                     'created': invoice.get('created'),
                     'due_date': invoice.get('due_date'),
-                    'products': invoice.get('products', [])
+                    'products': _as_list(invoice.get('products'))
                 })
         
         # Create shipment lookup by customer order ID
         shipments_by_order = {}
-        for shipment in all_shipments:
+        for raw_shipment in all_shipments:
+            shipment = _as_dict(raw_shipment)
+            if not shipment:
+                continue
             cust_ord_id = shipment.get('cust_ord_id')
             if cust_ord_id:
                 if cust_ord_id not in shipments_by_order:
@@ -173,7 +191,10 @@ def get_shipment_status_orders(
         
         filtered_orders = []
         
-        for order in all_orders:
+        for raw_order in all_orders:
+            order = _as_dict(raw_order)
+            if not order:
+                continue
             status = order.get('status')
             
             # Pre-filter: exclude cancelled (90) and delivered (80) for all filter types
@@ -185,7 +206,7 @@ def get_shipment_status_orders(
                 if status in [80, 90]:
                     continue
             
-            products = order.get('products', [])
+            products = _as_list(order.get('products'))
             cust_ord_id = order.get('cust_ord_id')
             
             # Calculate shipment statistics
@@ -200,7 +221,10 @@ def get_shipment_status_orders(
             invoice_allocations = _allocate_invoice_quantities(products, order_invoices)
             enriched_products = []
             
-            for product_index, product in enumerate(products):
+            for product_index, raw_product in enumerate(products):
+                product = _as_dict(raw_product)
+                if not product:
+                    continue
                 quantity = _to_number(product.get('quantity', 0), 0)
                 shipped = _to_number(product.get('shipped', 0), 0)
                 item_price = _to_number(product.get('item_price', 0), 0)

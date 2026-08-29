@@ -153,6 +153,8 @@ class ShipmentBox(Base):
     po_number = Column(String, nullable=True)  # PO/Reference number
     customer_name = Column(String, nullable=True)
     shipping_address = Column(Text, nullable=True)
+    job_number = Column(String, nullable=True)
+    delivery_date = Column(String, nullable=True)
     item_code = Column(String, nullable=False)
     item_title = Column(String, nullable=False)
     order_line = Column(String, nullable=False, default="1")
