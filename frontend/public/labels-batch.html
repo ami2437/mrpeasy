@@ -110,7 +110,7 @@
         .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #667eea; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .loading-text { color: white; font-size: 18px; margin-top: 20px; font-weight: 600; }
-        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 9998; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
         .dashboard-btn:hover { background: #ffffff; }
         @media (max-width: 900px) { .processor-grid { grid-template-columns: 1fr; } }
         @media print {
@@ -218,6 +218,13 @@
         let allShipments = [];
         let savedPackSizes = {};
         let packSizeCatalog = [];
+        let bulkFinalizationInProgress = false;
+
+        window.addEventListener('beforeunload', event => {
+            if (!bulkFinalizationInProgress) return;
+            event.preventDefault();
+            event.returnValue = '';
+        });
         
         // Helper functions - define early so they can be used by other functions
         function showError(message) {
@@ -1316,7 +1323,8 @@
                 return;
             }
             
-            showLoading(`Finalizing all ${allShipments.length} shipments...`);
+            bulkFinalizationInProgress = true;
+            showLoading(`Finalizing all ${allShipments.length} shipments. Keep this page open...`);
             
             let successCount = 0;
             let totalBoxesSaved = 0;
@@ -1326,7 +1334,7 @@
                 const shipment = allShipments[index];
                 
                 try {
-                    showLoading(`Finalizing ${shipment.code} (${index + 1} of ${allShipments.length})...`);
+                    showLoading(`Finalizing ${shipment.code} (${index + 1} of ${allShipments.length}). Keep this page open...`);
 
                     let details = shipment.details;
                     if (!details || !Array.isArray(details.products)) {
@@ -1408,6 +1416,7 @@
                 }
             }
             
+            bulkFinalizationInProgress = false;
             hideLoading();
             
             if (failures.length === 0) {
