@@ -51,6 +51,19 @@ try:
         print("✅ Column added successfully!")
     else:
         print("delivery_date column already exists")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pack_sizes (
+            id INTEGER PRIMARY KEY,
+            item_code TEXT NOT NULL UNIQUE,
+            pack_size INTEGER NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_pack_sizes_item_code ON pack_sizes (item_code)")
+    conn.commit()
+    print("pack_sizes table is ready")
 except Exception as e:
     print(f"❌ Error: {e}")
 finally:

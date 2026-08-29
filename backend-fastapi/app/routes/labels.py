@@ -6,6 +6,7 @@ from typing import Literal, Dict, List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 import json
 import io
@@ -13,7 +14,7 @@ import re
 import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
-from app.models import ShipmentBox, Label
+from app.models import ShipmentBox, PackSize, Label
 
 class FinalizeShipmentRequest(BaseModel):
     pallet_number: Optional[str] = None
@@ -22,6 +23,16 @@ class FinalizeShipmentRequest(BaseModel):
 
 class PastePackSizesRequest(BaseModel):
     text: str
+
+
+class ProcessPackSizesRequest(BaseModel):
+    text: str
+    confirm_blank_duplicates: bool = False
+
+
+class UpdatePackSizeRequest(BaseModel):
+    item_code: str
+    pack_size: int
 
 
 router = APIRouter(prefix="/api/labels", tags=["labels"])
@@ -105,6 +116,225 @@ def _extract_pack_sizes_from_rows(rows: List[list]) -> Dict[str, int]:
         pack_sizes[normalized_code] = pack_size
 
     return pack_sizes
+
+
+def _parse_pack_size_processor_text(text: str):
+    occurrences = {}
+    invalid_rows = []
+    tab_item_col = None
+    tab_pack_col = None
+
+    for row_number, raw_line in enumerate(text.splitlines(), start=1):
+        if not raw_line.strip():
+            continue
+
+        if '\t' in raw_line:
+            cells = [cell.strip() for cell in raw_line.split('\t')]
+            if tab_item_col is None and tab_pack_col is None:
+                lowered_cells = [cell.lower() for cell in cells]
+                detected_item_col = next(
+                    (index for index, value in enumerate(lowered_cells) if 'item' in value),
+                    None
+                )
+                detected_pack_col = next(
+                    (index for index, value in enumerate(lowered_cells) if 'pack' in value),
+                    None
+                )
+                if detected_item_col is not None and detected_pack_col is not None:
+                    tab_item_col = detected_item_col
+                    tab_pack_col = detected_pack_col
+                    continue
+
+            if tab_item_col is not None and tab_pack_col is not None:
+                item_code_raw = cells[tab_item_col] if len(cells) > tab_item_col else ''
+                pack_size_raw = cells[tab_pack_col] if len(cells) > tab_pack_col else ''
+            else:
+                item_index = next((index for index, value in enumerate(cells) if value), 0)
+                item_code_raw = cells[item_index] if cells else ''
+                following_cells = cells[item_index + 1:]
+                pack_size_raw = next(
+                    (
+                        value for value in following_cells
+                        if value and re.fullmatch(r'\d+(?:\.0+)?', value)
+                    ),
+                    following_cells[0] if following_cells else ''
+                )
+        elif ',' in raw_line:
+            item_code_raw, pack_size_raw = (part.strip() for part in raw_line.split(',', 1))
+        else:
+            parts = raw_line.strip().rsplit(None, 1)
+            item_code_raw = parts[0]
+            pack_size_raw = parts[1] if len(parts) > 1 else ''
+
+        if row_number == 1 and 'item' in item_code_raw.lower() and 'pack' in pack_size_raw.lower():
+            continue
+
+        item_code = _normalize_item_code(item_code_raw)
+        if not item_code:
+            invalid_rows.append({'row': row_number, 'reason': 'Missing item number'})
+            continue
+
+        pack_size = None
+        if pack_size_raw:
+            try:
+                numeric_size = float(pack_size_raw)
+                pack_size = int(numeric_size)
+                if numeric_size != pack_size or pack_size <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                invalid_rows.append({
+                    'row': row_number,
+                    'item_code': item_code,
+                    'reason': 'Pack size must be a positive whole number'
+                })
+                continue
+
+        occurrences.setdefault(item_code, []).append({
+            'row': row_number,
+            'pack_size': pack_size
+        })
+
+    valid_pack_sizes = {}
+    conflicts = []
+    blank_warnings = []
+
+    for item_code, entries in occurrences.items():
+        sizes = sorted({entry['pack_size'] for entry in entries if entry['pack_size'] is not None})
+        blank_rows = [entry['row'] for entry in entries if entry['pack_size'] is None]
+
+        if len(sizes) > 1:
+            conflicts.append({
+                'item_code': item_code,
+                'pack_sizes': sizes,
+                'rows': [entry['row'] for entry in entries]
+            })
+            continue
+
+        if len(sizes) == 1:
+            valid_pack_sizes[item_code] = sizes[0]
+            if blank_rows:
+                blank_warnings.append({
+                    'item_code': item_code,
+                    'pack_size': sizes[0],
+                    'blank_rows': blank_rows
+                })
+        else:
+            invalid_rows.append({
+                'rows': blank_rows,
+                'item_code': item_code,
+                'reason': 'No pack size provided'
+            })
+
+    return valid_pack_sizes, conflicts, blank_warnings, invalid_rows
+
+
+def _serialize_pack_size(record: PackSize):
+    return {
+        'id': record.id,
+        'item_code': record.item_code,
+        'pack_size': record.pack_size,
+        'created_at': record.created_at.isoformat() if record.created_at else None,
+        'updated_at': record.updated_at.isoformat() if record.updated_at else None
+    }
+
+
+@router.get("/pack-sizes/catalog")
+async def list_pack_size_catalog(db: Session = Depends(get_db)):
+    records = db.query(PackSize).order_by(PackSize.item_code).all()
+    return {'success': True, 'items': [_serialize_pack_size(record) for record in records]}
+
+
+@router.post("/pack-sizes/process")
+async def process_pack_sizes(
+    payload: ProcessPackSizesRequest,
+    db: Session = Depends(get_db)
+):
+    valid_pack_sizes, conflicts, blank_warnings, invalid_rows = _parse_pack_size_processor_text(payload.text)
+
+    if blank_warnings and not payload.confirm_blank_duplicates:
+        return {
+            'success': False,
+            'requires_confirmation': True,
+            'blank_warnings': blank_warnings,
+            'conflicts': conflicts,
+            'invalid_rows': invalid_rows,
+            'valid_count': len(valid_pack_sizes)
+        }
+
+    saved_items = []
+    try:
+        for item_code, pack_size in valid_pack_sizes.items():
+            record = db.query(PackSize).filter(PackSize.item_code == item_code).first()
+            if record:
+                record.pack_size = pack_size
+                record.updated_at = datetime.utcnow()
+            else:
+                record = PackSize(item_code=item_code, pack_size=pack_size)
+                db.add(record)
+            saved_items.append(record)
+
+        db.commit()
+        for record in saved_items:
+            db.refresh(record)
+
+        return {
+            'success': True,
+            'saved_count': len(saved_items),
+            'items': [_serialize_pack_size(record) for record in saved_items],
+            'conflicts': conflicts,
+            'blank_warnings': blank_warnings,
+            'invalid_rows': invalid_rows
+        }
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="One or more items already exist")
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@router.put("/pack-sizes/catalog/{pack_size_id}")
+async def update_pack_size_catalog_entry(
+    pack_size_id: int,
+    payload: UpdatePackSizeRequest,
+    db: Session = Depends(get_db)
+):
+    record = db.query(PackSize).filter(PackSize.id == pack_size_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Pack-size entry not found")
+
+    item_code = _normalize_item_code(payload.item_code)
+    if not item_code or payload.pack_size <= 0:
+        raise HTTPException(status_code=400, detail="Item number and a positive pack size are required")
+
+    duplicate = db.query(PackSize).filter(
+        PackSize.item_code == item_code,
+        PackSize.id != pack_size_id
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail=f"Item {item_code} already exists")
+
+    record.item_code = item_code
+    record.pack_size = payload.pack_size
+    record.updated_at = datetime.utcnow()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Item {item_code} already exists")
+    db.refresh(record)
+    return {'success': True, 'item': _serialize_pack_size(record)}
+
+
+@router.delete("/pack-sizes/catalog/{pack_size_id}")
+async def delete_pack_size_catalog_entry(pack_size_id: int, db: Session = Depends(get_db)):
+    record = db.query(PackSize).filter(PackSize.id == pack_size_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Pack-size entry not found")
+
+    db.delete(record)
+    db.commit()
+    return {'success': True, 'deleted_id': pack_size_id}
 
 
 @router.post("/pack-sizes/parse")

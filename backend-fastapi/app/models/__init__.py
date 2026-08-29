@@ -170,6 +170,17 @@ class ShipmentBox(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PackSize(Base):
+    """Persistent default pack size mapped to a normalized item code."""
+    __tablename__ = "pack_sizes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_code = Column(String, unique=True, nullable=False, index=True)
+    pack_size = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Label(Base):
     """Label Record - Stores individual label data"""
     __tablename__ = "labels"

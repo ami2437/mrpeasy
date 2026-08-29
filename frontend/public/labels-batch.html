@@ -22,6 +22,21 @@
         .bulk-items-table tr:hover { background: #f8f9fa; }
         .apply-bulk-btn { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 10px 25px; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 15px; }
         .apply-bulk-btn:hover { opacity: 0.9; }
+        .pack-size-processor { padding: 20px 0 24px; margin-bottom: 25px; border-bottom: 2px solid #e0e0e0; }
+        .pack-size-processor h3 { color: #333; margin-bottom: 8px; font-size: 20px; }
+        .processor-grid { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.4fr); gap: 24px; align-items: start; }
+        .processor-input { width: 100%; min-height: 170px; padding: 12px; border: 2px solid #cfd4da; border-radius: 6px; font-family: Consolas, monospace; font-size: 14px; resize: vertical; }
+        .processor-input:focus { outline: none; border-color: #667eea; }
+        .processor-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+        .processor-status { margin-top: 10px; color: #495057; font-size: 14px; white-space: pre-line; }
+        .catalog-table-wrap { max-height: 310px; overflow: auto; border: 1px solid #dee2e6; }
+        .catalog-table { width: 100%; border-collapse: collapse; }
+        .catalog-table th { position: sticky; top: 0; background: #495057; color: white; padding: 10px; text-align: left; font-size: 13px; }
+        .catalog-table td { padding: 8px 10px; border-bottom: 1px solid #e9ecef; font-size: 13px; }
+        .catalog-table input { width: 100%; min-width: 90px; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; }
+        .catalog-actions { display: flex; gap: 6px; }
+        .catalog-actions button { padding: 6px 9px; border: 1px solid #adb5bd; border-radius: 4px; background: white; cursor: pointer; }
+        .catalog-actions .delete { color: #b02a37; border-color: #dc3545; }
         .shipments-table-container { background: white; border-radius: 6px; overflow-x: auto; margin-bottom: 20px; }
         .shipments-table { width: 100%; border-collapse: collapse; }
         .shipments-table th { background: #667eea; color: white; padding: 12px; text-align: left; font-size: 13px; font-weight: 600; white-space: nowrap; }
@@ -97,6 +112,7 @@
         .loading-text { color: white; font-size: 18px; margin-top: 20px; font-weight: 600; }
         .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
         .dashboard-btn:hover { background: #ffffff; }
+        @media (max-width: 900px) { .processor-grid { grid-template-columns: 1fr; } }
         @media print {
             @page { size: 6in 4in; margin: 0; }
             body { background: white; padding: 0; }
@@ -121,6 +137,34 @@
         <div class="controls">
             <div id="loading" class="loading">Loading shipments...</div>
             <div id="shipments-container" style="display: none;">
+                <section class="pack-size-processor" aria-labelledby="pack-size-processor-title">
+                    <h3 id="pack-size-processor-title">Pack Size Processor</h3>
+                    <div class="processor-grid">
+                        <div>
+                            <textarea id="processor-input" class="processor-input" placeholder="Item #    Pack size&#10;16421     250&#10;20015     100"></textarea>
+                            <div class="processor-actions">
+                                <button class="btn btn-primary" id="process-pack-sizes-btn" onclick="processPackSizes()">Process & Save</button>
+                                <button class="btn btn-secondary" onclick="document.getElementById('processor-input').value = ''">Clear</button>
+                            </div>
+                            <div id="processor-status" class="processor-status" role="status"></div>
+                        </div>
+                        <div>
+                            <div class="catalog-table-wrap">
+                                <table class="catalog-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item #</th>
+                                            <th>Pack Size</th>
+                                            <th>Updated</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pack-size-catalog"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
                 <!-- Bulk Pack Size Entry Section -->
                 <div class="bulk-items-section" id="bulk-items-section" style="display: none;">
                     <h3>⚡ Quick Pack Size Entry - Apply to All Shipments</h3>
@@ -172,6 +216,8 @@
         const API_BASE = 'http://localhost:8000';
         const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
         let allShipments = [];
+        let savedPackSizes = {};
+        let packSizeCatalog = [];
         
         // Helper functions - define early so they can be used by other functions
         function showError(message) {
@@ -301,6 +347,169 @@
             });
             
             return appliedCount;
+        }
+
+        async function loadPackSizeCatalog() {
+            const response = await fetch(`${API_BASE}/api/labels/pack-sizes/catalog`);
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.detail || 'Failed to load saved pack sizes');
+            }
+
+            packSizeCatalog = data.items || [];
+            savedPackSizes = {};
+            packSizeCatalog.forEach(item => {
+                savedPackSizes[normalizeItemCode(item.item_code)] = item.pack_size;
+            });
+            renderPackSizeCatalog();
+        }
+
+        function renderPackSizeCatalog() {
+            const tbody = document.getElementById('pack-size-catalog');
+            if (!tbody) return;
+
+            if (packSizeCatalog.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#6c757d;padding:20px;">No saved pack sizes yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = packSizeCatalog.map(item => {
+                const updated = item.updated_at ? new Date(item.updated_at).toLocaleDateString() : 'N/A';
+                return `
+                    <tr>
+                        <td><input id="catalog-item-${item.id}" value="${escapeHtml(item.item_code)}" aria-label="Item number"></td>
+                        <td><input id="catalog-size-${item.id}" type="number" min="1" value="${item.pack_size}" aria-label="Pack size"></td>
+                        <td>${updated}</td>
+                        <td class="catalog-actions">
+                            <button onclick="updatePackSizeEntry(${item.id})">Save</button>
+                            <button class="delete" onclick="deletePackSizeEntry(${item.id})">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function applySavedPackSizesToAllShipments() {
+            let appliedCount = 0;
+            document.querySelectorAll('.pack-size-input, .bulk-pack-size-input').forEach(input => {
+                const savedSize = savedPackSizes[normalizeItemCode(input.dataset.itemCode)];
+                if (savedSize) {
+                    input.value = savedSize;
+                    appliedCount++;
+                }
+            });
+            return appliedCount;
+        }
+
+        function restoreVisiblePackSizeDefaults(itemCode) {
+            const normalizedCode = normalizeItemCode(itemCode);
+            document.querySelectorAll('.pack-size-input, .bulk-pack-size-input').forEach(input => {
+                if (normalizeItemCode(input.dataset.itemCode) !== normalizedCode) return;
+                input.value = input.dataset.defaultQty || '';
+            });
+        }
+
+        async function processPackSizes(confirmBlankDuplicates = false) {
+            const textarea = document.getElementById('processor-input');
+            const status = document.getElementById('processor-status');
+            const button = document.getElementById('process-pack-sizes-btn');
+            const text = textarea.value;
+
+            if (!text.trim()) {
+                status.textContent = 'Paste item numbers and pack sizes first.';
+                return;
+            }
+
+            button.disabled = true;
+            status.textContent = 'Checking entries...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pack-sizes/process`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text,
+                        confirm_blank_duplicates: confirmBlankDuplicates
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Pack-size processing failed');
+
+                if (data.requires_confirmation) {
+                    const warningText = data.blank_warnings.map(warning =>
+                        `${warning.item_code}: use ${warning.pack_size} despite blank row(s) ${warning.blank_rows.join(', ')}?`
+                    ).join('\n');
+                    button.disabled = false;
+                    if (confirm(`Blank duplicate pack sizes were found:\n\n${warningText}\n\nContinue using the nonblank sizes?`)) {
+                        await processPackSizes(true);
+                    } else {
+                        status.textContent = 'Nothing was saved. Correct the blank entries and process again.';
+                    }
+                    return;
+                }
+
+                await loadPackSizeCatalog();
+                const appliedCount = applySavedPackSizesToAllShipments();
+                const messages = [`Saved ${data.saved_count} item(s); applied saved defaults to ${appliedCount} visible pack-size field(s).`];
+                if (data.conflicts.length) {
+                    messages.push(`Fix conflicting items: ${data.conflicts.map(conflict => `${conflict.item_code} (${conflict.pack_sizes.join(' vs ')})`).join(', ')}. These items were not saved.`);
+                }
+                if (data.invalid_rows.length) {
+                    messages.push(`Skipped invalid/blank rows: ${data.invalid_rows.map(row => row.row || row.rows?.join(', ')).join(', ')}.`);
+                }
+                if (data.blank_warnings.length) {
+                    messages.push('Confirmed blank duplicate rows; nonblank pack sizes were used.');
+                }
+                status.textContent = messages.join('\n');
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function updatePackSizeEntry(id) {
+            const status = document.getElementById('processor-status');
+            const itemCode = document.getElementById(`catalog-item-${id}`).value.trim();
+            const packSizeRaw = document.getElementById(`catalog-size-${id}`).value.trim();
+            const packSize = Number(packSizeRaw);
+
+            if (!itemCode || !Number.isInteger(packSize) || packSize <= 0) {
+                status.textContent = 'Enter an item number and a positive whole-number pack size.';
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pack-sizes/catalog/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_code: itemCode, pack_size: packSize })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Update failed');
+                await loadPackSizeCatalog();
+                const appliedCount = applySavedPackSizesToAllShipments();
+                status.textContent = `Updated ${data.item.item_code}; applied saved defaults to ${appliedCount} visible field(s).`;
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function deletePackSizeEntry(id) {
+            const item = packSizeCatalog.find(entry => entry.id === id);
+            if (!confirm(`Delete the saved pack size for ${item?.item_code || 'this item'}?`)) return;
+
+            const status = document.getElementById('processor-status');
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pack-sizes/catalog/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Delete failed');
+                await loadPackSizeCatalog();
+                restoreVisiblePackSizeDefaults(item?.item_code);
+                status.textContent = `Deleted the saved pack size for ${item?.item_code || 'the item'}.`;
+            } catch (error) {
+                status.textContent = `Error: ${error.message}`;
+            }
         }
         
         function escapeHtml(value) {
@@ -434,6 +643,15 @@
 
                 if (data.shipments && data.shipments.length > 0) {
                     allShipments = data.shipments;
+                    try {
+                        await loadPackSizeCatalog();
+                    } catch (error) {
+                        savedPackSizes = {};
+                        packSizeCatalog = [];
+                        renderPackSizeCatalog();
+                        document.getElementById('processor-status').textContent =
+                            `Saved pack-size defaults unavailable: ${error.message}. Shipments will continue loading.`;
+                    }
                     await loadShipmentDetails();
                     renderShipmentsTable();
                     document.getElementById('loading').style.display = 'none';
@@ -696,7 +914,7 @@
                         packInput.dataset.defaultQty = qty.toString();
                         packInput.className = 'pack-size-input';
                         packInput.min = '1';
-                        packInput.value = qty.toString();
+                        packInput.value = savedPackSizes[normalizeItemCode(itemCode)] || qty.toString();
                         packSizeCell.appendChild(packInput);
                         
                         const labelModeCell = document.createElement('td');
@@ -1024,8 +1242,11 @@
                 const packInput = document.createElement('input');
                 packInput.type = 'number';
                 packInput.id = `bulk-pack-size-${item.item_code}`;
+                packInput.dataset.itemCode = item.item_code;
+                packInput.dataset.defaultQty = item.total_quantity.toString();
+                packInput.className = 'bulk-pack-size-input';
                 packInput.min = '1';
-                packInput.value = item.total_quantity.toString();
+                packInput.value = savedPackSizes[normalizeItemCode(item.item_code)] || item.total_quantity.toString();
                 packInput.style.width = '120px';
                 packSizeCell.appendChild(packInput);
                 
