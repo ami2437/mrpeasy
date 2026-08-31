@@ -183,7 +183,17 @@
 
         function formatDeliveryDate(rawValue) {
             if (!rawValue) return 'N/A';
-            const parsed = new Date(rawValue);
+            const textValue = String(rawValue).trim();
+            let parsed;
+
+            if (/^\d{10}$/.test(textValue)) {
+                parsed = new Date(Number(textValue) * 1000);
+            } else if (/^\d{13}$/.test(textValue)) {
+                parsed = new Date(Number(textValue));
+            } else {
+                parsed = new Date(rawValue);
+            }
+
             if (!isNaN(parsed.getTime())) {
                 return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
             }
