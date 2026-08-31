@@ -569,6 +569,15 @@
             return new Date(dateValue).toLocaleDateString();
         }
 
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function renderPartialShipments(data, updateOriginal = true) {
             const normalizedOrders = Array.isArray(data?.orders) ? data.orders : [];
 
@@ -710,6 +719,7 @@
                 html += '<thead><tr>';
                 html += '<th>Item Code</th>';
                 html += '<th style="max-width: 120px;">Item Name</th>';
+                html += '<th>BOX info per item</th>';
                 html += '<th>Qty</th>';
                 html += '<th>Unit Price</th>';
                 html += '<th>Shipped Qty</th>';
@@ -733,6 +743,7 @@
                     html += '<tr>';
                     html += `<td><strong>${safeProduct.item_code || 'N/A'}</strong></td>`;
                     html += `<td style="max-width: 120px; word-wrap: break-word;">${safeProduct.item_title || 'N/A'}</td>`;
+                    html += `<td style="min-width: 150px; white-space: pre-line; word-break: break-word;">${escapeHtml(safeProduct.box_info_per_item) || 'N/A'}</td>`;
                     html += `<td>${safeProduct.quantity || 0}</td>`;
                     html += `<td>$${(safeProduct.item_price || 0).toFixed(2)}</td>`;
                     html += `<td>${safeProduct.shipped || 0}</td>`;

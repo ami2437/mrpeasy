@@ -253,6 +253,7 @@ def get_shipment_status_orders(
                     'article_id': product.get('article_id'),
                     'item_code': product.get('item_code'),
                     'item_title': product.get('item_title'),
+                    'box_info_per_item': product.get('description') or '',
                     'quantity': quantity,
                     'shipped': shipped,
                     'remaining': quantity - shipped,
@@ -492,6 +493,7 @@ def get_partially_shipped_orders_with_invoices(
                     partially_shipped_items.append({
                         'item_code': product.get('item_code'),
                         'item_title': product.get('item_title'),
+                        'box_info_per_item': product.get('description') or '',
                         'quantity': quantity,
                         'shipped': shipped,
                         'remaining': quantity - shipped
@@ -603,6 +605,7 @@ def get_uninvoiced_shipments(
                     shipped_items.append({
                         'item_code': product.get('item_code'),
                         'item_title': product.get('item_title'),
+                        'box_info_per_item': product.get('description') or '',
                         'quantity': quantity,
                         'shipped': shipped,
                         'remaining': quantity - shipped,
