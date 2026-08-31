@@ -537,6 +537,104 @@ def calculate_boxes(quantity: int, pack_size: int):
     
     return boxes
 
+
+def _format_box_info(boxes: List[ShipmentBox]) -> str:
+    boxes_by_quantity = {}
+    for box in boxes:
+        boxes_by_quantity[box.quantity_in_box] = boxes_by_quantity.get(box.quantity_in_box, 0) + 1
+
+    return '\r\n'.join(
+        f"{quantity} x {count} Box"
+        for quantity, count in sorted(boxes_by_quantity.items(), reverse=True)
+    )
+
+
+@router.get("/shipments/{shipment_code}/box-info-preview")
+def preview_shipment_box_info_for_order(
+    shipment_code: str,
+    db: Session = Depends(get_db)
+):
+    """Preview finalized box data matched to MRPeasy customer-order lines without writing."""
+    boxes = (
+        db.query(ShipmentBox)
+        .filter(ShipmentBox.shipment_code == shipment_code)
+        .order_by(ShipmentBox.id)
+        .all()
+    )
+    if not boxes:
+        raise HTTPException(status_code=404, detail=f"No finalized boxes found for {shipment_code}")
+
+    customer_order_code = boxes[0].customer_order_code
+    if not customer_order_code:
+        raise HTTPException(status_code=400, detail="Finalized shipment has no linked customer order")
+    if any(box.customer_order_code != customer_order_code for box in boxes):
+        raise HTTPException(status_code=409, detail="Shipment box rows reference multiple customer orders")
+
+    matching_orders = mrpeasy_client.get_customer_orders({'code': customer_order_code})
+    customer_order = next(
+        (order for order in matching_orders if order.get('code') == customer_order_code),
+        None
+    )
+    if not customer_order:
+        raise HTTPException(status_code=404, detail=f"Customer order {customer_order_code} not found")
+
+    customer_order_id = customer_order.get('customer_order_id') or customer_order.get('cust_ord_id')
+    if customer_order_id is None:
+        raise HTTPException(status_code=400, detail=f"Customer order {customer_order_code} has no ID")
+
+    order_lines = {}
+    for product in customer_order.get('products', []) or []:
+        key = (_normalize_item_code(product.get('item_code')), str(product.get('ord') or ''))
+        order_lines.setdefault(key, []).append(product)
+
+    grouped_boxes = {}
+    for box in boxes:
+        key = (_normalize_item_code(box.item_code), str(box.order_line or ''))
+        grouped_boxes.setdefault(key, []).append(box)
+
+    updates = []
+    for key, line_boxes in grouped_boxes.items():
+        matches = order_lines.get(key, [])
+        if len(matches) != 1:
+            item_code, order_line = key
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Expected exactly one order line for item {item_code}, line {order_line}; "
+                    f"found {len(matches)}"
+                )
+            )
+
+        order_line = matches[0]
+        line_id = order_line.get('line_id')
+        quantity = order_line.get('quantity')
+        if line_id is None or quantity is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Order line {order_line.get('ord')} is missing line_id or quantity"
+            )
+
+        updates.append({
+            'line_id': line_id,
+            'quantity': quantity,
+            'description': _format_box_info(line_boxes)
+        })
+
+    return {
+        'success': True,
+        'read_only': True,
+        'shipment_code': shipment_code,
+        'customer_order_id': customer_order_id,
+        'customer_order_code': customer_order_code,
+        'line_mappings': [
+            {
+                'line_id': update['line_id'],
+                'box_info_per_item': update['description']
+            }
+            for update in updates
+        ]
+    }
+
 @router.get("/shipments/ready")
 async def get_ready_shipments():
     """Get all shipments that are ready for labeling"""
