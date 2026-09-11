@@ -14,7 +14,8 @@ import re
 import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
-from app.models import ShipmentBox, PackSize, Label
+from app.dependencies import require_permission
+from app.models import ShipmentBox, PackSize, Label, User
 
 class FinalizeShipmentRequest(BaseModel):
     pallet_number: Optional[str] = None
@@ -55,6 +56,45 @@ def _normalize_item_code(value) -> str:
     text = re.sub(r'\s+', '', text)  # "15437 - NUT" -> "15437-NUT"
     text = re.sub(r'NUTS$', 'NUT', text)  # treat plural NUTS suffix as NUT
     return text
+
+
+def _serialize_finalized_labels(boxes: List[ShipmentBox]) -> List[Dict]:
+    total_boxes_by_item = {}
+    for box in boxes:
+        group_key = (box.item_code, box.order_line)
+        total_boxes_by_item[group_key] = total_boxes_by_item.get(group_key, 0) + 1
+
+    labels = []
+    for box in boxes:
+        lot_codes = []
+        if box.lot_codes:
+            try:
+                parsed_lot_codes = json.loads(box.lot_codes)
+                lot_codes = parsed_lot_codes if isinstance(parsed_lot_codes, list) else [parsed_lot_codes]
+            except (TypeError, json.JSONDecodeError):
+                lot_codes = [box.lot_codes]
+
+        group_key = (box.item_code, box.order_line)
+        labels.append({
+            'shipment_code': box.shipment_code,
+            'customer_order': box.customer_order_code,
+            'customer_name': box.customer_name,
+            'reference': box.po_number,
+            'job_number': box.job_number,
+            'item_code': box.item_code,
+            'item_title': box.item_title,
+            'order_line': box.order_line,
+            'lot_code': ', '.join(str(code) for code in lot_codes if code),
+            'box_number': box.box_number,
+            'total_boxes': total_boxes_by_item[group_key],
+            'quantity_in_box': box.quantity_in_box,
+            'total_quantity': box.total_quantity,
+            'label_type': 'individual',
+            'pack_size': box.pack_size,
+            'finalized_at': box.finalized_at.isoformat() if box.finalized_at else None
+        })
+
+    return labels
 
 
 def _extract_pack_sizes_from_rows(rows: List[list]) -> Dict[str, int]:
@@ -549,12 +589,7 @@ def _format_box_info(boxes: List[ShipmentBox]) -> str:
     )
 
 
-@router.get("/shipments/{shipment_code}/box-info-preview")
-def preview_shipment_box_info_for_order(
-    shipment_code: str,
-    db: Session = Depends(get_db)
-):
-    """Preview finalized box data matched to MRPeasy customer-order lines without writing."""
+def _prepare_shipment_box_info_sync(shipment_code: str, db: Session) -> Dict:
     boxes = (
         db.query(ShipmentBox)
         .filter(ShipmentBox.shipment_code == shipment_code)
@@ -593,6 +628,7 @@ def preview_shipment_box_info_for_order(
         grouped_boxes.setdefault(key, []).append(box)
 
     updates = []
+    allowed_lot_ids = set()
     for key, line_boxes in grouped_boxes.items():
         matches = order_lines.get(key, [])
         if len(matches) != 1:
@@ -614,6 +650,44 @@ def preview_shipment_box_info_for_order(
                 detail=f"Order line {order_line.get('ord')} is missing line_id or quantity"
             )
 
+        shipment_lot_codes = set()
+        for box in line_boxes:
+            try:
+                shipment_lot_codes.update(json.loads(box.lot_codes or '[]'))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Shipment {shipment_code} has invalid lot data for order line {box.order_line}"
+                )
+        shipment_lot_codes.discard(None)
+        shipment_lot_codes.discard('')
+        if not shipment_lot_codes:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Shipment {shipment_code} has no lots for order line {order_line.get('ord')}"
+            )
+
+        source_lot_ids = {
+            source.get('lot_code'): source.get('lot_id')
+            for source in order_line.get('source', []) or []
+        }
+        missing_lots = sorted(shipment_lot_codes - set(source_lot_ids))
+        if missing_lots:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Shipment lots are not booked on order line {order_line.get('ord')}: "
+                    f"{', '.join(missing_lots)}"
+                )
+            )
+        line_lot_ids = {source_lot_ids[lot_code] for lot_code in shipment_lot_codes}
+        if None in line_lot_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=f"MRPeasy lot ID is missing on order line {order_line.get('ord')}"
+            )
+        allowed_lot_ids.update(line_lot_ids)
+
         updates.append({
             'line_id': line_id,
             'quantity': quantity,
@@ -621,18 +695,112 @@ def preview_shipment_box_info_for_order(
         })
 
     return {
-        'success': True,
-        'read_only': True,
         'shipment_code': shipment_code,
+        'customer_order': customer_order,
         'customer_order_id': customer_order_id,
         'customer_order_code': customer_order_code,
+        'updates': updates,
+        'allowed_lot_ids': sorted(allowed_lot_ids)
+    }
+
+
+@router.get("/shipments/{shipment_code}/box-info-preview")
+def preview_shipment_box_info_for_order(
+    shipment_code: str,
+    db: Session = Depends(get_db)
+):
+    """Preview finalized box data matched to MRPeasy customer-order lines without writing."""
+    prepared = _prepare_shipment_box_info_sync(shipment_code, db)
+    return {
+        'success': True,
+        'read_only': True,
+        'shipment_code': prepared['shipment_code'],
+        'customer_order_id': prepared['customer_order_id'],
+        'customer_order_code': prepared['customer_order_code'],
+        'allowed_lot_ids': prepared['allowed_lot_ids'],
         'line_mappings': [
             {
                 'line_id': update['line_id'],
                 'box_info_per_item': update['description']
             }
-            for update in updates
+            for update in prepared['updates']
         ]
+    }
+
+
+@router.post("/shipments/{shipment_code}/box-info-sync")
+def sync_shipment_box_info_to_order(
+    shipment_code: str,
+    current_user: User = Depends(require_permission("sync")),
+    db: Session = Depends(get_db)
+):
+    """Write finalized box data while preventing MRPeasy from booking unrelated stock."""
+    prepared = _prepare_shipment_box_info_sync(shipment_code, db)
+    before = prepared['customer_order']
+    before_lines = {
+        product.get('line_id'): product
+        for product in before.get('products', []) or []
+    }
+    changed_updates = [
+        update for update in prepared['updates']
+        if before_lines[update['line_id']].get('description') != update['description']
+    ]
+    if not changed_updates:
+        return {
+            'success': True,
+            'updated': False,
+            'shipment_code': shipment_code,
+            'customer_order_code': prepared['customer_order_code'],
+            'changed_line_count': 0
+        }
+
+    before_status = before.get('status')
+    before_sources = {
+        line_id: product.get('source', []) or []
+        for line_id, product in before_lines.items()
+    }
+    mrpeasy_client.update_customer_order(
+        prepared['customer_order_id'],
+        {
+            'lot_id': prepared['allowed_lot_ids'],
+            'products': changed_updates
+        }
+    )
+
+    after = mrpeasy_client.get_customer_order(prepared['customer_order_id'])
+    after_lines = {
+        product.get('line_id'): product
+        for product in after.get('products', []) or []
+    }
+    after_sources = {
+        line_id: product.get('source', []) or []
+        for line_id, product in after_lines.items()
+    }
+    if after.get('status') != before_status or after_sources != before_sources:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "MRPeasy changed the order status or stock bookings unexpectedly. "
+                "Review the order before attempting another synchronization."
+            )
+        )
+
+    failed_line_ids = [
+        update['line_id'] for update in changed_updates
+        if after_lines.get(update['line_id'], {}).get('description') != update['description']
+    ]
+    if failed_line_ids:
+        raise HTTPException(
+            status_code=502,
+            detail=f"MRPeasy did not save box info for line IDs: {failed_line_ids}"
+        )
+
+    return {
+        'success': True,
+        'updated': True,
+        'shipment_code': shipment_code,
+        'customer_order_code': prepared['customer_order_code'],
+        'changed_line_count': len(changed_updates)
     }
 
 @router.get("/shipments/ready")
@@ -1146,6 +1314,26 @@ def finalize_shipment_batch(
         'total_boxes_saved': total_boxes_saved,
         'results': results,
         'failures': failures
+    }
+
+
+@router.get("/shipments/{shipment_code}/finalized-labels")
+def get_finalized_labels(shipment_code: str, db: Session = Depends(get_db)):
+    """Return finalized box labels without modifying shipment data."""
+    boxes = (
+        db.query(ShipmentBox)
+        .filter(ShipmentBox.shipment_code == shipment_code)
+        .order_by(ShipmentBox.item_code, ShipmentBox.order_line, ShipmentBox.box_number, ShipmentBox.id)
+        .all()
+    )
+    labels = _serialize_finalized_labels(boxes)
+    return {
+        'success': True,
+        'read_only': True,
+        'finalized': bool(labels),
+        'shipment_code': shipment_code,
+        'total_labels': len(labels),
+        'labels': labels
     }
 
 

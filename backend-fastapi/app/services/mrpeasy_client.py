@@ -116,6 +116,10 @@ class MRPeasyAPIClient:
         """Get specific customer order"""
         return self._request("GET", f"/customer-orders/{order_id}")
 
+    def update_customer_order(self, order_id: int, payload: Dict[str, Any]) -> Optional[Dict[Any, Any]]:
+        """Update a customer order."""
+        return self._request("PUT", f"/customer-orders/{order_id}", json=payload)
+
     def get_stock_items(self, filters: Optional[Dict] = None) -> list:
         """Get all stock items with automatic pagination"""
         return self._paginated_request("GET", "/items", params=filters or {})

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>On-Demand Labels</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; font-family: Georgia, 'Times New Roman', serif; color: #202426; background: linear-gradient(145deg, #edf3ef 0%, #dce8e1 55%, #f3eee4 100%); }
+        button, input, select, textarea { font: inherit; }
+        .topbar { min-height: 72px; padding: 14px clamp(18px, 4vw, 52px); display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #173c34; color: white; }
+        .topbar h1 { margin: 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: 0; }
+        .topbar p { margin: 3px 0 0; color: #c9dbd5; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
+        .back-link { color: white; text-decoration: none; font: 600 14px 'Segoe UI', sans-serif; border: 1px solid #82a89d; padding: 9px 13px; border-radius: 6px; white-space: nowrap; }
+        .workspace { max-width: 1500px; margin: 0 auto; padding: 26px clamp(16px, 3vw, 42px) 46px; display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(600px, 1.35fr); gap: 28px; align-items: start; }
+        .editor { background: #fff; border: 1px solid #bac9c2; box-shadow: 0 12px 34px rgba(31, 55, 47, 0.12); }
+        .tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid #bac9c2; }
+        .tab { border: 0; border-right: 1px solid #bac9c2; background: #edf3ef; color: #31554b; padding: 13px 8px; font: 700 13px 'Segoe UI', sans-serif; cursor: pointer; }
+        .tab:last-child { border-right: 0; }
+        .tab.active { background: #fff; color: #173c34; box-shadow: inset 0 -3px #c65e3a; }
+        .panel { display: none; padding: 22px; }
+        .panel.active { display: block; }
+        .section-title { margin: 0 0 16px; font-size: 19px; }
+        .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .field { min-width: 0; }
+        .field.full { grid-column: 1 / -1; }
+        .field label { display: block; margin-bottom: 6px; font: 700 12px 'Segoe UI', sans-serif; color: #3d514b; text-transform: uppercase; }
+        .field input, .field select, .field textarea { width: 100%; min-height: 40px; border: 1px solid #aabbb5; border-radius: 4px; padding: 9px 10px; background: #fff; color: #202426; }
+        .field textarea { min-height: 76px; resize: vertical; }
+        .field input:focus, .field select:focus, .field textarea:focus { outline: 3px solid rgba(198, 94, 58, 0.18); border-color: #c65e3a; }
+        .source-controls { padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #d8e0dc; }
+        .source-note { margin: 10px 0 0; min-height: 18px; color: #536963; font: 13px/1.4 'Segoe UI', sans-serif; }
+        .source-note.error { color: #a2342b; }
+        .source-note.success { color: #176b4d; }
+        .inline-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+        .actions { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 22px 22px; }
+        .action { border: 0; border-radius: 5px; padding: 10px 17px; font: 700 14px 'Segoe UI', sans-serif; cursor: pointer; }
+        .action.primary { background: #c65e3a; color: white; }
+        .action.secondary { background: #e4ebe7; color: #28473f; border: 1px solid #aabbb5; }
+        .action.print { margin-left: auto; background: #173c34; color: white; }
+        .action:disabled { opacity: 0.5; cursor: not-allowed; }
+        .preview-region { min-width: 0; overflow: hidden; }
+        .preview-heading { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; color: #25483e; }
+        .preview-heading h2 { margin: 0; font-size: 20px; }
+        .preview-heading span { font: 13px 'Segoe UI', sans-serif; }
+        .label-sheet { width: 6in; height: 4in; max-width: 100%; margin: 0 auto; background: white; border: 2px solid #000; padding: 14px; position: relative; display: flex; flex-direction: column; color: #000; overflow: hidden; box-shadow: 0 16px 40px rgba(25, 48, 41, 0.18); }
+        .label-logo-slot { position: absolute; top: 10px; right: 10px; width: 86px; height: 44px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        .label-logo { width: 100%; height: 100%; object-fit: contain; }
+        .label-customer { text-align: center; font: 700 22px/1.1 'Segoe UI', sans-serif; margin: 6px 0; border-bottom: 2px solid #000; padding: 0 96px 6px; min-height: 46px; display: flex; align-items: center; justify-content: center; overflow-wrap: anywhere; }
+        .label-body { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+        .label-field { display: flex; flex-direction: column; padding: 8px; border: 1px solid #000; min-width: 0; }
+        .label-field.item-field { min-height: 88px; grid-column: span 4; }
+        .label-field.qty-field { margin-top: 8px; grid-column: span 4; }
+        .label-field-label { font: 800 13px 'Segoe UI', sans-serif; text-transform: uppercase; margin-bottom: 4px; }
+        .label-field-value { font: 500 15px 'Segoe UI', sans-serif; overflow-wrap: anywhere; }
+        .label-field-value.item-multiline { line-height: 1.2; min-height: 56px; max-height: 56px; overflow: hidden; }
+        .label-field-value.large { font-size: 22px; font-weight: 700; }
+        .label-footer { margin-top: auto; text-align: center; font: 600 12px/1.25 'Segoe UI', sans-serif; border-top: 2px solid #000; padding-top: 6px; white-space: pre-line; }
+        .free-sheet { padding: 0.35in; justify-content: center; }
+        .free-text-preview { width: 100%; max-height: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Segoe UI', sans-serif; line-height: 1.2; }
+        .hidden { display: none !important; }
+        .loading-overlay { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(14, 32, 27, 0.72); color: white; align-items: center; justify-content: center; font: 700 17px 'Segoe UI', sans-serif; }
+        .loading-overlay.active { display: flex; }
+        @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } }
+        @media (max-width: 650px) {
+            .topbar { align-items: flex-start; }
+            .field-grid, .inline-fields { grid-template-columns: 1fr; }
+            .tabs { grid-template-columns: 1fr; }
+            .tab { border-right: 0; border-bottom: 1px solid #bac9c2; }
+            .label-sheet { width: 100%; height: auto; aspect-ratio: 3 / 2; padding: 8px; }
+            .label-logo-slot { width: 54px; height: 30px; top: 7px; right: 7px; }
+            .label-customer { min-height: 34px; padding: 0 58px 4px; font-size: 16px; }
+            .label-body { gap: 4px; margin-top: 4px; }
+            .label-field { padding: 4px; }
+            .label-field.item-field { min-height: 58px; }
+            .label-field.qty-field { margin-top: 3px; }
+            .label-field-label { font-size: 9px; }
+            .label-field-value { font-size: 11px; }
+            .label-field-value.item-multiline { min-height: 36px; max-height: 36px; }
+            .label-field-value.large { font-size: 17px; }
+            .label-footer { font-size: 9px; padding-top: 3px; }
+        }
+        @media print {
+            @page { size: 6in 4in; margin: 0; }
+            body { background: white; }
+            .topbar, .editor, .preview-heading, .loading-overlay { display: none !important; }
+            .workspace { display: block; margin: 0; padding: 0; max-width: none; }
+            .preview-region { margin: 0; padding: 0; }
+            .label-sheet { width: 6in; height: 4in; max-width: none; margin: 0; border: 2px solid #000; box-shadow: none; transform: none; page-break-after: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div><h1>On-Demand Labels</h1><p>Edit a temporary shipment label or compose a blank 6x4 label.</p></div>
+        <a class="back-link" href="./labels-batch.html">Batch Labels</a>
+    </header>
+
+    <main class="workspace">
+        <section class="editor" aria-label="Label editor">
+            <div class="tabs" role="tablist">
+                <button class="tab active" type="button" data-mode="current" role="tab" aria-selected="true">Current Label</button>
+                <button class="tab" type="button" data-mode="structured" role="tab" aria-selected="false">Structured Blank</button>
+                <button class="tab" type="button" data-mode="free" role="tab" aria-selected="false">Free Text</button>
+            </div>
+
+            <div class="panel active" id="panel-current">
+                <div class="source-controls">
+                    <h2 class="section-title">Choose Source Label</h2>
+                    <div class="field-grid">
+                        <div class="field full"><label for="shipment-select">Shipment</label><select id="shipment-select"><option value="">Loading shipments...</option></select></div>
+                        <div class="field full"><label for="source-label-select">Item / Label Quantity</label><select id="source-label-select" disabled><option value="">Select a shipment first</option></select></div>
+                    </div>
+                    <div class="inline-fields hidden" id="live-options">
+                        <div class="field"><label for="live-pack-size">Pack Size</label><input id="live-pack-size" type="number" min="1" value="1"></div>
+                        <div class="field"><label for="live-label-mode">Source Mode</label><select id="live-label-mode"><option value="individual">Individual</option><option value="grouped">Grouped</option></select></div>
+                    </div>
+                    <button class="action secondary hidden" id="generate-source-btn" type="button" style="margin-top:12px">Generate Source Labels</button>
+                    <p class="source-note" id="source-status" role="status"></p>
+                </div>
+                <h2 class="section-title">Temporary Edits</h2>
+                <div class="field-grid" id="current-fields"></div>
+            </div>
+
+            <div class="panel" id="panel-structured">
+                <h2 class="section-title">Structured Blank Label</h2>
+                <div class="field-grid" id="structured-fields"></div>
+            </div>
+
+            <div class="panel" id="panel-free">
+                <h2 class="section-title">Free Text Label</h2>
+                <div class="field-grid">
+                    <div class="field full"><label for="free-text">Label Text</label><textarea id="free-text" rows="12" placeholder="Type anything you need on the label..."></textarea></div>
+                    <div class="field"><label for="free-size">Font Size</label><select id="free-size"><option value="20">Small</option><option value="28" selected>Medium</option><option value="38">Large</option><option value="52">Extra Large</option></select></div>
+                    <div class="field"><label for="free-align">Alignment</label><select id="free-align"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select></div>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button class="action secondary" id="reset-btn" type="button">Reset</button>
+                <button class="action print" id="print-btn" type="button">Print Label</button>
+            </div>
+        </section>
+
+        <section class="preview-region" aria-label="Print preview">
+            <div class="preview-heading"><h2>6x4 Preview</h2><span>Print-only changes are never saved</span></div>
+            <div id="structured-preview" class="label-sheet">
+                <div class="label-logo-slot" id="logo-slot"></div>
+                <div class="label-customer" data-preview="customer_name">Customer</div>
+                <div class="label-body">
+                    <div class="label-field"><div class="label-field-label">Shipment</div><div class="label-field-value" data-preview="shipment_code"></div></div>
+                    <div class="label-field"><div class="label-field-label">Order #</div><div class="label-field-value" data-preview="customer_order"></div></div>
+                    <div class="label-field"><div class="label-field-label">PO #</div><div class="label-field-value" data-preview="reference"></div></div>
+                    <div class="label-field"><div class="label-field-label">Job #</div><div class="label-field-value" data-preview="job_number"></div></div>
+                    <div class="label-field item-field"><div class="label-field-value item-multiline"><strong data-preview="item_code"></strong><br><span data-preview="item_title"></span></div></div>
+                    <div class="label-field qty-field"><div class="label-field-label">Quantity in Box</div><div class="label-field-value large" data-preview="quantity_in_box"></div></div>
+                </div>
+                <div class="label-footer" data-preview="footer"></div>
+            </div>
+            <div id="free-preview" class="label-sheet free-sheet hidden"><div class="free-text-preview" id="free-text-preview"></div></div>
+        </section>
+    </main>
+
+    <div class="loading-overlay" id="loading-overlay">Loading label data...</div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const DEFAULT_FOOTER = 'American Traders LLC - ATind Supplies\nQuestions? Email sales@atindsupplies.com';
+        const FIELD_DEFINITIONS = [
+            ['customer_name', 'Customer'], ['shipment_code', 'Shipment'], ['customer_order', 'Order #'],
+            ['reference', 'PO #'], ['job_number', 'Job #'], ['item_code', 'Item Code'],
+            ['item_title', 'Item Description'], ['quantity_in_box', 'Quantity in Box'], ['footer', 'Footer']
+        ];
+        const blankDraft = () => Object.fromEntries(FIELD_DEFINITIONS.map(([key]) => [key, key === 'footer' ? DEFAULT_FOOTER : '']));
+        let mode = 'current';
+        let currentSource = blankDraft();
+        let currentDraft = blankDraft();
+        let structuredDraft = blankDraft();
+        let dirty = false;
+        let shipments = new Map();
+        let sourceLabels = [];
+        let liveShipment = null;
+        let liveGroups = [];
+
+        function setLoading(active, text = 'Loading label data...') {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.textContent = text;
+            overlay.classList.toggle('active', active);
+        }
+
+        function setStatus(message, type = '') {
+            const status = document.getElementById('source-status');
+            status.textContent = message;
+            status.className = `source-note ${type}`.trim();
+        }
+
+        function normalizeDraft(label = {}) {
+            return {
+                customer_name: label.customer_name || '',
+                shipment_code: label.shipment_code || '',
+                customer_order: label.customer_order || '',
+                reference: String(label.reference || '').replace(/^\s*po\s*#?\s*/i, '').trim(),
+                job_number: label.job_number || '',
+                item_code: label.item_code || '',
+                item_title: label.item_title || '',
+                quantity_in_box: label.quantity_in_box ?? '',
+                footer: label.footer || DEFAULT_FOOTER
+            };
+        }
+
+        function uniqueQuantityLabels(labels) {
+            const uniqueLabels = new Map();
+            labels.forEach(label => {
+                const key = [label.item_code || '', label.order_line || '1', label.quantity_in_box ?? ''].join(':');
+                if (!uniqueLabels.has(key)) uniqueLabels.set(key, label);
+            });
+            return [...uniqueLabels.values()];
+        }
+
+        function createFieldInputs(containerId, draftName) {
+            const container = document.getElementById(containerId);
+            FIELD_DEFINITIONS.forEach(([key, label]) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = `field ${key === 'item_title' || key === 'footer' ? 'full' : ''}`;
+                const labelElement = document.createElement('label');
+                labelElement.htmlFor = `${draftName}-${key}`;
+                labelElement.textContent = label;
+                const input = key === 'item_title' || key === 'footer' ? document.createElement('textarea') : document.createElement('input');
+                input.id = `${draftName}-${key}`;
+                input.dataset.key = key;
+                input.dataset.draft = draftName;
+                if (key === 'quantity_in_box') input.inputMode = 'numeric';
+                input.addEventListener('input', handleDraftInput);
+                wrapper.append(labelElement, input);
+                container.appendChild(wrapper);
+            });
+        }
+
+        function handleDraftInput(event) {
+            const targetDraft = event.target.dataset.draft === 'current' ? currentDraft : structuredDraft;
+            targetDraft[event.target.dataset.key] = event.target.value;
+            dirty = true;
+            renderPreview();
+        }
+
+        function populateFields(draftName) {
+            const draft = draftName === 'current' ? currentDraft : structuredDraft;
+            document.querySelectorAll(`[data-draft="${draftName}"]`).forEach(input => {
+                input.value = draft[input.dataset.key] ?? '';
+            });
+        }
+
+        function renderPreview() {
+            const isFree = mode === 'free';
+            document.getElementById('structured-preview').classList.toggle('hidden', isFree);
+            document.getElementById('free-preview').classList.toggle('hidden', !isFree);
+            if (isFree) {
+                const preview = document.getElementById('free-text-preview');
+                preview.textContent = document.getElementById('free-text').value;
+                preview.style.fontSize = `${document.getElementById('free-size').value}px`;
+                preview.style.textAlign = document.getElementById('free-align').value;
+                return;
+            }
+
+            const draft = mode === 'current' ? currentDraft : structuredDraft;
+            document.querySelectorAll('[data-preview]').forEach(element => {
+                const value = draft[element.dataset.preview] || '';
+                element.textContent = element.dataset.preview === 'item_code' && value ? `ITEM # ${value}` : value;
+            });
+            fitPreviewText();
+        }
+
+        function fitPreviewText() {
+            const element = document.querySelector('.item-multiline');
+            element.style.fontSize = '15px';
+            let size = 15;
+            while (element.scrollHeight > element.clientHeight && size > 10) {
+                size -= 0.5;
+                element.style.fontSize = `${size}px`;
+            }
+        }
+
+        function confirmDiscard() {
+            return !dirty || confirm('Discard the temporary edits on this label?');
+        }
+
+        function switchMode(nextMode) {
+            if (nextMode === mode || !confirmDiscard()) return;
+            mode = nextMode;
+            dirty = false;
+            document.querySelectorAll('.tab').forEach(tab => {
+                const active = tab.dataset.mode === mode;
+                tab.classList.toggle('active', active);
+                tab.setAttribute('aria-selected', String(active));
+            });
+            document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+            document.getElementById(`panel-${mode}`).classList.add('active');
+            renderPreview();
+        }
+
+        async function fetchJson(url, options) {
+            const response = await fetch(url, options);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.success === false) throw new Error(data.detail || `Request failed with HTTP ${response.status}`);
+            return data;
+        }
+
+        async function loadShipmentChoices() {
+            setLoading(true, 'Loading shipments...');
+            try {
+                const [readyResult, finalizedResult] = await Promise.allSettled([
+                    fetchJson(`${API_BASE}/api/labels/shipments/ready`),
+                    fetchJson(`${API_BASE}/api/labels/packing-slip/shipments/list`)
+                ]);
+                if (readyResult.status === 'fulfilled') {
+                    (readyResult.value.shipments || []).forEach(shipment => shipments.set(shipment.code, { code: shipment.code, ready: true, summary: shipment }));
+                }
+                if (finalizedResult.status === 'fulfilled') {
+                    (finalizedResult.value.shipments || []).forEach(shipment => {
+                        const code = shipment.shipment_code;
+                        shipments.set(code, { ...(shipments.get(code) || { code }), finalized: true, finalizedSummary: shipment });
+                    });
+                }
+                const select = document.getElementById('shipment-select');
+                select.innerHTML = '<option value="">-- Select a shipment --</option>';
+                [...shipments.values()].sort((a, b) => a.code.localeCompare(b.code)).forEach(shipment => {
+                    const option = document.createElement('option');
+                    option.value = shipment.code;
+                    option.textContent = `${shipment.code}${shipment.finalized ? ' — Finalized' : ' — Ready'}`;
+                    select.appendChild(option);
+                });
+                if (!shipments.size) setStatus('No ready or finalized shipments are available.', 'error');
+            } catch (error) {
+                setStatus(error.message, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function selectShipment(shipmentCode) {
+            if (!confirmDiscard()) {
+                document.getElementById('shipment-select').value = currentSource.shipment_code || '';
+                return;
+            }
+            dirty = false;
+            sourceLabels = [];
+            liveShipment = null;
+            liveGroups = [];
+            const sourceSelect = document.getElementById('source-label-select');
+            sourceSelect.disabled = true;
+            sourceSelect.innerHTML = '<option value="">Loading labels...</option>';
+            document.getElementById('live-options').classList.add('hidden');
+            document.getElementById('generate-source-btn').classList.add('hidden');
+            if (!shipmentCode) return;
+
+            setLoading(true, `Loading ${shipmentCode}...`);
+            try {
+                const finalized = await fetchJson(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipmentCode)}/finalized-labels`);
+                if (finalized.finalized && finalized.labels.length) {
+                    sourceLabels = uniqueQuantityLabels(finalized.labels);
+                    populateSourceLabelSelect('Select an item quantity');
+                    setStatus(`Loaded ${sourceLabels.length} distinct item quantity label(s). Changes will be print-only.`, 'success');
+                } else {
+                    await loadLiveShipment(shipmentCode);
+                }
+            } catch (error) {
+                const shipment = shipments.get(shipmentCode);
+                if (shipment?.ready) {
+                    try { await loadLiveShipment(shipmentCode); }
+                    catch (fallbackError) { setStatus(fallbackError.message, 'error'); }
+                } else {
+                    setStatus(error.message, 'error');
+                }
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function loadLiveShipment(shipmentCode) {
+            const data = await fetchJson(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipmentCode)}`);
+            liveShipment = data.shipment;
+            const grouped = new Map();
+            (liveShipment.products || []).forEach((product, index) => {
+                const orderLine = product.order_line || '1';
+                const key = `${product.item_code}:${orderLine}`;
+                if (!grouped.has(key)) grouped.set(key, { key, item_code: product.item_code, item_title: product.item_title || '', order_line: orderLine, quantity: 0, indices: [] });
+                const group = grouped.get(key);
+                group.quantity += Number(product.quantity_booked || 0);
+                group.indices.push(index);
+            });
+            liveGroups = [...grouped.values()];
+            const select = document.getElementById('source-label-select');
+            select.innerHTML = '<option value="">-- Select an item / order line --</option>';
+            liveGroups.forEach((group, index) => {
+                const option = document.createElement('option');
+                option.value = `group:${index}`;
+                option.textContent = `${group.item_code} — Line ${group.order_line} — Qty ${group.quantity}`;
+                select.appendChild(option);
+            });
+            select.disabled = false;
+            document.getElementById('live-options').classList.remove('hidden');
+            document.getElementById('generate-source-btn').classList.remove('hidden');
+            setStatus('This shipment is not finalized. Select an item, pack size, and source mode, then generate a temporary source label.');
+        }
+
+        function populateSourceLabelSelect(placeholder) {
+            const select = document.getElementById('source-label-select');
+            select.innerHTML = `<option value="">-- ${placeholder} --</option>`;
+            sourceLabels.forEach((label, index) => {
+                const option = document.createElement('option');
+                option.value = `label:${index}`;
+                option.textContent = `${label.item_code} — Line ${label.order_line || '1'} — Qty ${label.quantity_in_box}`;
+                select.appendChild(option);
+            });
+            if (liveGroups.length) {
+                const group = document.createElement('optgroup');
+                group.label = 'Generate another item';
+                liveGroups.forEach((item, index) => {
+                    const option = document.createElement('option');
+                    option.value = `group:${index}`;
+                    option.textContent = `${item.item_code} — Line ${item.order_line} — Qty ${item.quantity}`;
+                    group.appendChild(option);
+                });
+                select.appendChild(group);
+            }
+            select.disabled = false;
+        }
+
+        function selectSourceLabel(index) {
+            if (!confirmDiscard()) return;
+            const label = sourceLabels[index];
+            if (!label) return;
+            currentSource = normalizeDraft(label);
+            currentDraft = { ...currentSource };
+            dirty = false;
+            populateFields('current');
+            renderPreview();
+        }
+
+        async function generateLiveSource() {
+            const selected = document.getElementById('source-label-select').value;
+            if (!selected.startsWith('group:')) {
+                setStatus('Select an item and order line first.', 'error');
+                return;
+            }
+            const group = liveGroups[Number(selected.split(':')[1])];
+            const packSize = Number.parseInt(document.getElementById('live-pack-size').value, 10);
+            const labelMode = document.getElementById('live-label-mode').value;
+            if (!Number.isInteger(packSize) || packSize < 1) {
+                setStatus('Pack size must be a positive whole number.', 'error');
+                return;
+            }
+            const configs = {};
+            group.indices.forEach(index => {
+                configs[`${group.item_code}-${index}`] = { item_code: group.item_code, order_line: group.order_line, pack_size: packSize };
+            });
+            setLoading(true, 'Generating temporary source labels...');
+            try {
+                const data = await fetchJson(`${API_BASE}/api/labels/generate/${encodeURIComponent(liveShipment.code)}?label_mode=${encodeURIComponent(labelMode)}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configs)
+                });
+                sourceLabels = uniqueQuantityLabels(data.labels || []);
+                populateSourceLabelSelect('Select an item quantity');
+                document.getElementById('source-label-select').value = sourceLabels.length ? 'label:0' : '';
+                if (sourceLabels.length) selectSourceLabel(0);
+                setStatus(`Generated ${sourceLabels.length} temporary source label(s). Nothing was saved.`, 'success');
+            } catch (error) {
+                setStatus(error.message, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function resetEditor() {
+            if (mode === 'current') currentDraft = { ...currentSource };
+            if (mode === 'structured') structuredDraft = blankDraft();
+            if (mode === 'free') document.getElementById('free-text').value = '';
+            dirty = false;
+            populateFields(mode === 'current' ? 'current' : 'structured');
+            renderPreview();
+        }
+
+        function initializeLogo() {
+            const logoUrl = localStorage.getItem('company_logo_url') || '';
+            if (!logoUrl) return;
+            const image = document.createElement('img');
+            image.className = 'label-logo';
+            image.src = logoUrl;
+            image.alt = '';
+            document.getElementById('logo-slot').appendChild(image);
+        }
+
+        createFieldInputs('current-fields', 'current');
+        createFieldInputs('structured-fields', 'structured');
+        populateFields('current');
+        populateFields('structured');
+        initializeLogo();
+        renderPreview();
+        loadShipmentChoices();
+
+        document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => switchMode(tab.dataset.mode)));
+        document.getElementById('shipment-select').addEventListener('change', event => selectShipment(event.target.value));
+        document.getElementById('source-label-select').addEventListener('change', event => {
+            if (event.target.value.startsWith('label:')) selectSourceLabel(Number(event.target.value.split(':')[1]));
+            if (event.target.value.startsWith('group:')) {
+                const group = liveGroups[Number(event.target.value.split(':')[1])];
+                document.getElementById('live-pack-size').value = group?.quantity || 1;
+            }
+        });
+        document.getElementById('generate-source-btn').addEventListener('click', generateLiveSource);
+        document.getElementById('free-text').addEventListener('input', () => { dirty = true; renderPreview(); });
+        document.getElementById('free-size').addEventListener('change', () => { dirty = true; renderPreview(); });
+        document.getElementById('free-align').addEventListener('change', () => { dirty = true; renderPreview(); });
+        document.getElementById('reset-btn').addEventListener('click', resetEditor);
+        document.getElementById('print-btn').addEventListener('click', () => window.print());
+    </script>
+</body>
+</html>

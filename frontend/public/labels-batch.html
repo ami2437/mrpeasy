@@ -46,6 +46,9 @@
         .expand-btn:hover { color: #764ba2; }
         .print-shipment-btn { cursor: pointer; font-size: 20px; color: #667eea; padding: 5px 10px; border-radius: 4px; background: transparent; border: 1px solid #667eea; transition: all 0.2s; }
         .print-shipment-btn:hover { background: #667eea; color: white; }
+        .print-item-btn { cursor: pointer; color: #495057; padding: 6px 9px; border-radius: 4px; background: white; border: 1px solid #adb5bd; font-size: 14px; font-weight: 600; white-space: nowrap; }
+        .print-item-btn:hover { background: #495057; color: white; }
+        .print-item-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .items-row { display: none; background: #f8f9fa; }
         .items-row.expanded { display: table-row; }
         .items-table { width: 100%; margin: 15px 0; border: 1px solid #e0e0e0; }
@@ -57,7 +60,12 @@
         .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .btn-secondary { background: #6c757d; color: white; }
+        .btn-sync { background: #176b4d; color: white; }
+        .btn-sync:hover { background: #11533b; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .shipment-action-status { font-size: 13px; color: #495057; min-height: 18px; }
+        .shipment-action-status.success { color: #176b4d; }
+        .shipment-action-status.error { color: #b02a37; }
         .labels-container { display: none; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
         .labels-header { display: flex; justify-content: space-between; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px solid #e0e0e0; }
         .label-card { border: 2px solid #000; padding: 14px; margin-bottom: 20px; width: 6in; height: 4in; page-break-after: always; position: relative; display: flex; flex-direction: column; box-sizing: border-box; }
@@ -110,8 +118,12 @@
         .spinner { border: 8px solid #f3f3f3; border-top: 8px solid #667eea; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .loading-text { color: white; font-size: 18px; margin-top: 20px; font-weight: 600; }
-        .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 9998; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
-        .dashboard-btn:hover { background: #ffffff; }
+        .tools-menu { position: fixed; top: 16px; right: 16px; z-index: 9998; font-family: 'Segoe UI', sans-serif; }
+        .tools-menu summary { list-style: none; cursor: pointer; width: 42px; height: 42px; display: grid; place-items: center; background: rgba(255,255,255,0.97); color: #333; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 24px; line-height: 1; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .tools-menu summary::-webkit-details-marker { display: none; }
+        .tools-menu nav { position: absolute; right: 0; top: 48px; width: 220px; padding: 6px; background: white; border: 1px solid #d0d0d0; border-radius: 6px; box-shadow: 0 10px 28px rgba(0,0,0,0.2); }
+        .tools-menu a { display: block; padding: 10px 12px; color: #263a35; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 600; }
+        .tools-menu a:hover { background: #edf3ef; }
         @media (max-width: 900px) { .processor-grid { grid-template-columns: 1fr; } }
         @media print {
             @page { size: 6in 4in; margin: 0; }
@@ -119,12 +131,18 @@
             .header, .controls, .labels-header { display: none; }
             .labels-container { box-shadow: none; padding: 0; }
             .label-card { margin: 0; }
-            .dashboard-btn { display: none !important; }
+            .tools-menu { display: none !important; }
         }
     </style>
 </head>
 <body>
-    <a href="./dashboard.html" class="dashboard-btn">← Dashboard</a>
+    <details class="tools-menu">
+        <summary aria-label="Open label tools" title="Label tools">☰</summary>
+        <nav aria-label="Label tools">
+            <a href="./dashboard.html">Dashboard</a>
+            <a href="./labels-on-demand.html">On-Demand Labels</a>
+        </nav>
+    </details>
     <div class="loading-overlay" id="loading-overlay">
         <div class="spinner"></div>
         <div class="loading-text" id="loading-text">Generating labels...</div>
@@ -176,6 +194,7 @@
                                 <th>Description</th>
                                 <th>Total Qty Across All Shipments</th>
                                 <th>Pack Size</th>
+                                    <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="bulk-items-list"></tbody>
@@ -218,6 +237,10 @@
         let allShipments = [];
         let savedPackSizes = {};
         let packSizeCatalog = [];
+
+        function getToken() {
+            return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+        }
         
         // Helper functions - define early so they can be used by other functions
         function showError(message) {
@@ -325,7 +348,128 @@
                 .replace(/\s+/g, '')
                 .replace(/NUTS$/, 'NUT');
         }
-        
+
+        function groupShipmentProducts(details) {
+            const groupedProducts = {};
+            (details?.products || []).forEach((product, prodIndex) => {
+                const itemCode = product.item_code;
+                const orderLine = product.order_line || '1';
+                const groupKey = `${itemCode}:${orderLine}`;
+                if (!groupedProducts[groupKey]) {
+                    groupedProducts[groupKey] = {
+                        item_code: itemCode,
+                        order_line: orderLine,
+                        product_indices: []
+                    };
+                }
+                groupedProducts[groupKey].product_indices.push(prodIndex);
+            });
+            return groupedProducts;
+        }
+
+        function buildItemConfigs(shipment, group, labelMode, packSizeOverride = null) {
+            const firstProdIndex = group.product_indices[0];
+            const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${group.item_code}-${firstProdIndex}`);
+            const packSize = Number.parseInt(packSizeOverride ?? packSizeInput?.value, 10);
+            if (!Number.isInteger(packSize) || packSize < 1) {
+                throw new Error(`Enter a valid pack size for ${group.item_code} in shipment ${shipment.code}.`);
+            }
+
+            const configs = {};
+            group.product_indices.forEach(prodIndex => {
+                configs[`${group.item_code}-${prodIndex}`] = {
+                    item_code: group.item_code,
+                    order_line: group.order_line,
+                    pack_size: packSize,
+                    label_mode: labelMode
+                };
+            });
+            return configs;
+        }
+
+        async function requestGeneratedLabels(shipmentCode, labelMode, productConfigs) {
+            const response = await fetch(`${API_BASE}/api/labels/generate/${encodeURIComponent(shipmentCode)}?label_mode=${encodeURIComponent(labelMode)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(productConfigs)
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                throw new Error(data.detail || `Label generation failed with HTTP ${response.status}`);
+            }
+            return data.labels || [];
+        }
+
+        async function generateAndPrintShipmentItem(index, groupKey, button) {
+            const shipment = allShipments[index];
+            const group = groupShipmentProducts(shipment.details)[groupKey];
+            if (!group) {
+                showError('The selected shipment item is no longer available.');
+                return;
+            }
+
+            const modeSelect = document.getElementById(`label-mode-${shipment.code}-${group.item_code}-${group.product_indices[0]}`);
+            const labelMode = modeSelect?.value || 'individual';
+            button.disabled = true;
+            showLoading(`Generating ${group.item_code} labels for ${shipment.code}...`);
+            showError('');
+            try {
+                const labels = await requestGeneratedLabels(shipment.code, labelMode, buildItemConfigs(shipment, group, labelMode));
+                if (!labels.length) throw new Error('No labels were generated for this item.');
+                displayLabels({ shipment_code: shipment.code, total_labels: labels.length, labels });
+                hideLoading();
+                setTimeout(() => window.print(), 300);
+            } catch (error) {
+                hideLoading();
+                showError(error.message);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        async function generateCrossShipmentItemLabels(itemCode, labelMode) {
+            const normalizedCode = normalizeItemCode(itemCode);
+            const allLabels = [];
+            const failures = [];
+            const bulkPackSizeInput = document.getElementById(`bulk-pack-size-${itemCode}`);
+            const bulkPackSize = Number.parseInt(bulkPackSizeInput?.value, 10);
+            if (!Number.isInteger(bulkPackSize) || bulkPackSize < 1) {
+                showError(`Enter a valid pack size for ${itemCode} before printing across shipments.`);
+                return;
+            }
+            showLoading(`Generating ${itemCode} labels across shipments...`);
+            showError('');
+
+            for (const shipment of allShipments) {
+                const matchingGroups = Object.values(groupShipmentProducts(shipment.details)).filter(
+                    group => normalizeItemCode(group.item_code) === normalizedCode
+                );
+                if (!matchingGroups.length) continue;
+
+                try {
+                    const productConfigs = {};
+                    matchingGroups.forEach(group => Object.assign(productConfigs, buildItemConfigs(shipment, group, labelMode, bulkPackSize)));
+                    allLabels.push(...await requestGeneratedLabels(shipment.code, labelMode, productConfigs));
+                } catch (error) {
+                    failures.push(`${shipment.code}: ${error.message}`);
+                }
+            }
+
+            hideLoading();
+            if (!allLabels.length) {
+                showError(failures.length ? `No labels generated. ${failures.join(' | ')}` : `No loaded shipments contain ${itemCode}.`);
+                return;
+            }
+            if (failures.length && !confirm(`${allLabels.length} label(s) were generated, but ${failures.length} shipment(s) failed:\n\n${failures.join('\n')}\n\nPrint the successful labels?`)) {
+                showError('Partial label generation was not printed.');
+                return;
+            }
+
+            displayLabels({ shipment_code: `${itemCode} - Multiple Shipments`, total_labels: allLabels.length, labels: allLabels });
+            if (failures.length) showError(`Printed successful labels. Skipped: ${failures.join(' | ')}`);
+            setTimeout(() => window.print(), 300);
+        }
+
         function buildLabelsDocumentTitle(shipmentCode, jobNumber) {
             const hasJobNumber = jobNumber && String(jobNumber).trim() && String(jobNumber).trim().toUpperCase() !== 'N/A';
             return hasJobNumber ? `${shipmentCode}-${jobNumber}-Labels` : `${shipmentCode}-Labels`;
@@ -849,13 +993,15 @@
                 itemsRow.innerHTML = `
                     <td colspan="8">
                         <div style="padding: 15px 0;">
-                            <div style="margin-bottom: 15px; display: flex; gap: 20px; align-items: center;">
+                            <div style="margin-bottom: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <div>
                                     <label style="font-weight: 600; color: #333;">Pallet #:</label>
                                     <input type="text" id="pallet-${shipment.code}" placeholder="Optional - for grouping on pallets" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
                                 </div>
                                 <button class="btn btn-primary" onclick="finalizeShipment(${index})" style="padding: 10px 20px;">🔒 Finalize & Lock</button>
+                                <button class="btn btn-sync" id="sync-box-info-${shipment.code}" onclick="syncBoxInfo(${index})" style="padding: 10px 20px;" title="Send finalized box quantities to the matching MRPeasy order lines">Sync Box Info</button>
                             </div>
+                            <div id="sync-box-info-status-${shipment.code}" class="shipment-action-status" role="status" aria-live="polite"></div>
                             <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
                                 <label style="font-weight: 600; color: #333;">Import Pack Sizes (Excel, optional):</label>
                                 <input type="file" id="pack-size-file-${shipment.code}" accept=".xlsx,.xls">
@@ -878,6 +1024,7 @@
                                     <th>Order Line</th>
                                     <th>Pack Size</th>
                                     <th>Label Mode</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="items-list-${index}"></tbody>
@@ -962,6 +1109,16 @@
                         modeSelect.innerHTML = '<option value="grouped">Grouped</option><option value="individual">Individual</option>';
                         modeSelect.value = 'grouped';
                         labelModeCell.appendChild(modeSelect);
+
+                        const actionsCell = document.createElement('td');
+                        const printButton = document.createElement('button');
+                        printButton.type = 'button';
+                        printButton.className = 'print-item-btn';
+                        printButton.textContent = '🖨️';
+                        printButton.title = `Print ${itemCode} labels for shipment ${shipment.code}`;
+                        printButton.setAttribute('aria-label', printButton.title);
+                        printButton.addEventListener('click', () => generateAndPrintShipmentItem(index, groupKey, printButton));
+                        actionsCell.appendChild(printButton);
                         
                         row.appendChild(itemCodeCell);
                         row.appendChild(descCell);
@@ -970,6 +1127,7 @@
                         row.appendChild(orderLineCell);
                         row.appendChild(packSizeCell);
                         row.appendChild(labelModeCell);
+                        row.appendChild(actionsCell);
                         itemsList.appendChild(row);
                     });
                 }
@@ -1247,6 +1405,9 @@
                         palletInput.disabled = true;
                         palletInput.style.opacity = '0.6';
                     }
+
+                    const syncButton = document.getElementById(`sync-box-info-${shipment.code}`);
+                    if (syncButton) syncButton.disabled = false;
                 } else {
                     hideLoading();
                     showError(`Error: ${data.detail || 'Failed to finalize shipment'}`);
@@ -1255,6 +1416,62 @@
                 hideLoading();
                 showError(`Error finalizing shipment: ${error.message}`);
                 console.error('Finalize error:', error);
+            }
+        }
+
+        async function syncBoxInfo(index) {
+            const shipment = allShipments[index];
+            const button = document.getElementById(`sync-box-info-${shipment.code}`);
+            const status = document.getElementById(`sync-box-info-status-${shipment.code}`);
+            const token = getToken();
+
+            if (!token) {
+                window.location.href = './login.html';
+                return;
+            }
+
+            if (!confirm(`Send finalized box information for ${shipment.code} to its matching MRPeasy order lines?`)) {
+                return;
+            }
+
+            button.disabled = true;
+            status.className = 'shipment-action-status';
+            status.textContent = 'Syncing box information...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipment.code)}/box-info-sync`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                const responseText = await response.text();
+                let data = {};
+                if (responseText) {
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (error) {
+                        throw new Error(`Backend returned an invalid response (HTTP ${response.status})`);
+                    }
+                }
+
+                if (response.status === 401) {
+                    window.location.href = './login.html';
+                    return;
+                }
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Sync failed with HTTP ${response.status}`);
+                }
+
+                status.className = 'shipment-action-status success';
+                status.textContent = data.updated
+                    ? `Box info synced to ${data.changed_line_count} MRPeasy order line(s).`
+                    : 'MRPeasy box info is already up to date.';
+            } catch (error) {
+                status.className = 'shipment-action-status error';
+                status.textContent = `Box info was not synced: ${error.message}`;
+            } finally {
+                button.disabled = false;
             }
         }
         
@@ -1290,11 +1507,22 @@
                 packInput.value = savedPackSizes[normalizeItemCode(item.item_code)] || item.total_quantity.toString();
                 packInput.style.width = '120px';
                 packSizeCell.appendChild(packInput);
+
+                const actionsCell = document.createElement('td');
+                const printButton = document.createElement('button');
+                printButton.type = 'button';
+                printButton.className = 'print-item-btn';
+                printButton.textContent = '🖨️ All shipments';
+                printButton.title = `Print ${item.item_code} labels from every loaded matching shipment`;
+                printButton.setAttribute('aria-label', printButton.title);
+                printButton.addEventListener('click', () => generateCrossShipmentItemLabels(item.item_code, 'grouped'));
+                actionsCell.appendChild(printButton);
                 
                 row.appendChild(itemCodeCell);
                 row.appendChild(descCell);
                 row.appendChild(qtyCell);
                 row.appendChild(packSizeCell);
+                row.appendChild(actionsCell);
                 bulkItemsList.appendChild(row);
             });
             
