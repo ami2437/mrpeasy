@@ -834,6 +834,37 @@ async def get_ready_shipments():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/shipments/archived")
+async def get_archived_shipments():
+    """Shipments no longer in 'ready' status (e.g. already shipped in MRPeasy).
+
+    These fall out of /shipments/ready once MRPeasy marks them shipped, but
+    their product/lot data is still available from MRPeasy so labels and
+    packing slips can still be generated/reprinted after the fact.
+    """
+    try:
+        shipments = mrpeasy_client.get_shipments()
+
+        archived_shipments = [
+            {
+                'code': s.get('code'),
+                'customer_order_code': _get_primary_customer_order_link(s)[1],
+                'status_txt': s.get('status_txt'),
+                'status_id': s.get('status_id'),
+                'products_count': len(s.get('products', []))
+            }
+            for s in shipments
+            if 'ready' not in s.get('status_txt', '').lower()
+        ]
+
+        return {
+            'success': True,
+            'count': len(archived_shipments),
+            'shipments': archived_shipments
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/shipments/{shipment_code}")
 async def get_shipment_details(shipment_code: str):
     """Get detailed information about a specific shipment"""
@@ -892,7 +923,7 @@ async def get_shipment_details(shipment_code: str):
             # Now assign each shipment product to the appropriate order line
             for product in shipment_products:
                 lot_code = product.get('lot_code')
-                qty_booked = product.get('quantity_booked', 0)
+                qty_booked = product.get('quantity_booked') or product.get('quantity') or 0
                 item_code = product.get('item_code')
                 
                 # Find which order line this product belongs to
@@ -1004,7 +1035,7 @@ async def generate_labels(
                 }
             
             combined_groups[group_key]['lot_codes'].append(product.get('lot_code'))
-            combined_groups[group_key]['total_quantity'] += product.get('quantity_booked', 0)
+            combined_groups[group_key]['total_quantity'] += product.get('quantity_booked') or product.get('quantity') or 0
             combined_groups[group_key]['products'].append(product)
         
         all_labels = []
@@ -1187,7 +1218,7 @@ def finalize_shipment_configuration(
                 continue
 
             lot_code = product.get('lot_code', '')
-            quantity_booked = product.get('quantity_booked', 0)
+            quantity_booked = product.get('quantity_booked') or product.get('quantity') or 0
             item_title = product.get('item_title', '')
 
             group_key = (item_code, order_line)

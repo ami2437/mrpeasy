@@ -152,11 +152,15 @@
         <div class="header">
             <h1>📦 Batch Shipment Labeling System</h1>
             <p>American Traders LLC - Process multiple shipments at once</p>
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button class="btn btn-primary" id="view-toggle-active" onclick="switchShipmentView('active')">Active (Ready)</button>
+                <button class="btn btn-secondary" id="view-toggle-archived" onclick="switchShipmentView('archived')">Archived (Shipped)</button>
+            </div>
         </div>
         <div class="controls">
             <div id="loading" class="loading">Loading shipments...</div>
             <div id="shipments-container" style="display: none;">
-                <section class="pack-size-processor" aria-labelledby="pack-size-processor-title">
+                <section class="pack-size-processor" id="pack-size-processor-section" aria-labelledby="pack-size-processor-title">
                     <h3 id="pack-size-processor-title">Pack Size Processor</h3>
                     <div class="processor-grid">
                         <div>
@@ -221,7 +225,7 @@
                 </div>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="generateAllLabels()">Generate All Labels</button>
-                    <button class="btn btn-primary" onclick="finalizeAllShipments()" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);">🔒 Finalize & Lock All</button>
+                    <button class="btn btn-primary" id="finalize-all-btn" onclick="finalizeAllShipments()" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);">🔒 Finalize & Lock All</button>
                     <button class="btn btn-secondary" onclick="window.print()" style="display: none;" id="print-btn">Print Labels</button>
                 </div>
             </div>
@@ -238,6 +242,7 @@
         let allShipments = [];
         let savedPackSizes = {};
         let packSizeCatalog = [];
+        let currentShipmentView = 'active';
 
         function getToken() {
             return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
@@ -262,17 +267,31 @@
             overlay.classList.remove('active');
         }
         
-        function toggleItems(index) {
+        async function toggleItems(index) {
             const itemsRow = document.getElementById(`items-row-${index}`);
             const expandBtn = document.querySelectorAll('.expand-btn')[index];
             
             if (itemsRow.classList.contains('expanded')) {
                 itemsRow.classList.remove('expanded');
                 expandBtn.textContent = '▶';
-            } else {
-                itemsRow.classList.add('expanded');
-                expandBtn.textContent = '▼';
+                return;
             }
+
+            const shipment = allShipments[index];
+            if (currentShipmentView === 'archived' && !shipment.details && !shipment.detailsError) {
+                expandBtn.textContent = '⏳';
+                try {
+                    await fetchShipmentDetails(shipment, 1);
+                } catch (error) {
+                    // detailsError is already set on the shipment; row will show it on re-render.
+                }
+                renderShipmentsTable();
+                await toggleItems(index);
+                return;
+            }
+
+            itemsRow.classList.add('expanded');
+            expandBtn.textContent = '▼';
         }
         
         async function uploadPackSizesForShipment(index) {
@@ -409,14 +428,39 @@
                 return;
             }
 
-            const modeSelect = document.getElementById(`label-mode-${shipment.code}-${group.item_code}-${group.product_indices[0]}`);
-            const labelMode = modeSelect?.value || 'individual';
             button.disabled = true;
             showLoading(`Generating ${group.item_code} labels for ${shipment.code}...`);
             showError('');
+
+            if (currentShipmentView === 'archived') {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipment.code)}/finalized-labels`);
+                    const data = await response.json();
+                    const matching = groupFinalizedLabels((data.labels || []).filter(label =>
+                        normalizeItemCode(label.item_code) === normalizeItemCode(group.item_code) &&
+                        String(label.order_line) === String(group.order_line)
+                    ));
+                    if (response.ok && data.finalized && matching.length) {
+                        displayLabels({ shipment_code: shipment.code, total_labels: matching.length, labels: matching });
+                        hideLoading();
+                        setTimeout(() => window.print(), 300);
+                        button.disabled = false;
+                        return;
+                    }
+                } catch (error) {
+                    console.warn(`No finalized labels available for ${shipment.code}/${group.item_code}, falling back to live generation:`, error);
+                }
+            }
+
+            const modeSelect = document.getElementById(`label-mode-${shipment.code}-${group.item_code}-${group.product_indices[0]}`);
+            const labelMode = modeSelect?.value || 'individual';
             try {
                 const labels = await requestGeneratedLabels(shipment.code, labelMode, buildItemConfigs(shipment, group, labelMode));
-                if (!labels.length) throw new Error('No labels were generated for this item.');
+                if (!labels.length) {
+                    throw new Error(currentShipmentView === 'archived'
+                        ? 'No labels were generated for this item. This shipment was never finalized in the portal before shipping.'
+                        : 'No labels were generated for this item.');
+                }
                 displayLabels({ shipment_code: shipment.code, total_labels: labels.length, labels });
                 hideLoading();
                 setTimeout(() => window.print(), 300);
@@ -783,7 +827,8 @@
                 return;
             }
             try {
-                const response = await fetch(`${API_BASE}/api/labels/shipments/ready`);
+                const endpoint = currentShipmentView === 'archived' ? 'archived' : 'ready';
+                const response = await fetch(`${API_BASE}/api/labels/shipments/${endpoint}`);
                 const data = await response.json();
 
                 if (data.shipments && data.shipments.length > 0) {
@@ -797,17 +842,67 @@
                         document.getElementById('processor-status').textContent =
                             `Saved pack-size defaults unavailable: ${error.message}. Shipments will continue loading.`;
                     }
-                    await loadShipmentDetails();
+                    if (currentShipmentView === 'archived') {
+                        // Archived can include many historical shipments; skip the eager
+                        // per-shipment detail fetch (slow with retries) and load details
+                        // lazily only when a row is expanded or printed.
+                        document.getElementById('loading').textContent = 'Loading archived (shipped) shipments...';
+                    } else {
+                        await loadShipmentDetails();
+                    }
                     renderShipmentsTable();
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('shipments-container').style.display = 'block';
                 } else {
-                    document.getElementById('loading').textContent = 'No ready shipments found';
+                    const emptyMessage = currentShipmentView === 'archived'
+                        ? 'No archived (already shipped) shipments found'
+                        : 'No ready shipments found';
+                    document.getElementById('loading').textContent = emptyMessage;
+                    document.getElementById('loading').style.display = 'block';
+                    document.getElementById('shipments-container').style.display = 'none';
                 }
             } catch (error) {
                 document.getElementById('loading').textContent = 'Error loading shipments';
                 showError('Failed to load shipments: ' + error.message);
             }
+        }
+
+        function openPackingList() {
+            const popup = window.open('packing-list.html', '_blank');
+            if (!popup) {
+                showError('Popup blocked. Please allow popups for this site, then click the packing list button again.');
+            }
+        }
+
+        function groupFinalizedLabels(labels) {
+            // Finalized labels are stored one per physical box; collapse boxes that
+            // share the same item/order line/quantity into a single printed label,
+            // matching the "grouped" label mode used for active shipments.
+            const seen = new Map();
+            (labels || []).forEach(label => {
+                const key = `${label.item_code}|${label.order_line}|${label.quantity_in_box}`;
+                if (!seen.has(key)) {
+                    seen.set(key, label);
+                }
+            });
+            return Array.from(seen.values());
+        }
+
+        function switchShipmentView(view) {
+            if (view === currentShipmentView) return;
+            currentShipmentView = view;
+            document.getElementById('view-toggle-active').className = view === 'active' ? 'btn btn-primary' : 'btn btn-secondary';
+            document.getElementById('view-toggle-archived').className = view === 'archived' ? 'btn btn-primary' : 'btn btn-secondary';
+            document.getElementById('pack-size-processor-section').style.display = view === 'archived' ? 'none' : '';
+            document.getElementById('finalize-all-btn').style.display = view === 'archived' ? 'none' : '';
+            allShipments = [];
+            document.getElementById('shipments-container').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loading').textContent = view === 'archived'
+                ? 'Loading archived (shipped) shipments...'
+                : 'Loading shipments...';
+            showError('');
+            loadShipments();
         }
         
         async function loadShipmentDetails() {
@@ -940,10 +1035,10 @@
             
             // Build unique items map for bulk entry
             const uniqueItems = {};
-            
+
             allShipments.forEach((shipment, index) => {
                 const details = shipment.details || {};
-                
+
                 if (details.products) {
                     details.products.forEach(product => {
                         const itemCode = product.item_code;
@@ -954,14 +1049,16 @@
                                 total_quantity: 0
                             };
                         }
-                        uniqueItems[itemCode].total_quantity += product.quantity_booked || 0;
+                        uniqueItems[itemCode].total_quantity += product.quantity_booked || product.quantity || 0;
                     });
                 }
             });
-            
-            // Render bulk items table if we have items
-            if (Object.keys(uniqueItems).length > 0) {
+
+            // Render bulk items table if we have items (not applicable to read-only archived view)
+            if (currentShipmentView !== 'archived' && Object.keys(uniqueItems).length > 0) {
                 renderBulkItemsTable(uniqueItems);
+            } else {
+                document.getElementById('bulk-items-section').style.display = 'none';
             }
             
             allShipments.forEach((shipment, index) => {
@@ -969,6 +1066,9 @@
                 const customerName = details.customer_name || 'N/A';
                 const reference = details.reference || 'N/A';
                 const detailsUnavailable = !Array.isArray(details.products);
+                // Archived shipments print from locally finalized data, which doesn't
+                // require the live shipment-detail fetch to have succeeded.
+                const printDisabled = detailsUnavailable && currentShipmentView !== 'archived';
                 
                 // Main shipment row
                 const shipmentRow = document.createElement('tr');
@@ -983,7 +1083,10 @@
                     <td>${detailsUnavailable ? shipment.detailsError || 'Load failed' : reference}</td>
                     <td>${shipment.status_txt || 'N/A'}</td>
                     <td>${shipment.products_count || 0}</td>
-                    <td><button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="${detailsUnavailable ? 'Shipment details unavailable' : 'Print this shipment'}" ${detailsUnavailable ? 'disabled' : ''}>🖨️</button></td>
+                    <td style="white-space: nowrap;">
+                        <button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="${printDisabled ? 'Shipment details unavailable' : 'Print this shipment'}" ${printDisabled ? 'disabled' : ''}>🖨️</button>
+                        ${currentShipmentView === 'archived' ? `<button class="print-shipment-btn" onclick="openPackingList()" title="View packing list for finalized shipments" style="margin-left: 6px;">📄</button>` : ''}
+                    </td>
                 `;
                 tbody.appendChild(shipmentRow);
                 
@@ -991,9 +1094,10 @@
                 const itemsRow = document.createElement('tr');
                 itemsRow.className = 'items-row';
                 itemsRow.id = `items-row-${index}`;
-                itemsRow.innerHTML = `
-                    <td colspan="8">
-                        <div style="padding: 15px 0;">
+                const archivedNotice = currentShipmentView === 'archived'
+                    ? `<p style="margin-bottom: 12px; color: #495057; font-size: 13px;">This shipment has already left MRPeasy's "ready" status. It is shown read-only — pack sizes cannot be changed. Use the print buttons to generate labels or view the packing list.</p>`
+                    : '';
+                const editingControls = currentShipmentView === 'archived' ? '' : `
                             <div style="margin-bottom: 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <div>
                                     <label style="font-weight: 600; color: #333;">Pallet #:</label>
@@ -1013,7 +1117,11 @@
                                 <label style="font-weight: 600; color: #333; margin-top: 6px;">Or Paste Pack Sizes:</label>
                                 <textarea id="pack-size-paste-${shipment.code}" rows="3" placeholder="Paste Item / Pack columns here, e.g. copied straight from Excel" style="flex: 1; max-width: 420px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 12px;"></textarea>
                                 <button class="btn btn-secondary" onclick="applyPastedPackSizesForShipment(${index})" style="padding: 8px 16px;">📋 Apply Pasted</button>
-                            </div>
+                            </div>`;
+                itemsRow.innerHTML = `
+                    <td colspan="8">
+                        <div style="padding: 15px 0;">
+                            ${archivedNotice}${editingControls}
                         </div>
                         <table class="items-table">
                             <thead>
@@ -1057,7 +1165,7 @@
                             };
                         }
                         
-                        groupedProducts[groupKey].total_quantity += product.quantity_booked || 0;
+                        groupedProducts[groupKey].total_quantity += product.quantity_booked || product.quantity || 0;
                         groupedProducts[groupKey].lot_codes.push(product.lot_code || 'N/A');
                         groupedProducts[groupKey].product_indices.push(prodIndex);
                     });
@@ -1101,7 +1209,11 @@
                         packInput.dataset.defaultQty = qty.toString();
                         packInput.className = 'pack-size-input';
                         packInput.min = '1';
-                        packInput.value = savedPackSizes[normalizeItemCode(itemCode)] || qty.toString();
+                        packInput.value = savedPackSizes[normalizeItemCode(itemCode)] || qty.toString() || '1';
+                        if (currentShipmentView === 'archived') {
+                            packInput.disabled = true;
+                            packInput.title = 'Read-only for archived (already shipped) shipments';
+                        }
                         packSizeCell.appendChild(packInput);
                         
                         const labelModeCell = document.createElement('td');
@@ -1109,6 +1221,10 @@
                         modeSelect.id = `label-mode-${shipment.code}-${itemCode}-${prodIndex}`;
                         modeSelect.innerHTML = '<option value="grouped">Grouped</option><option value="individual">Individual</option>';
                         modeSelect.value = 'grouped';
+                        if (currentShipmentView === 'archived') {
+                            modeSelect.disabled = true;
+                            modeSelect.title = 'Read-only for archived (already shipped) shipments';
+                        }
                         labelModeCell.appendChild(modeSelect);
 
                         const actionsCell = document.createElement('td');
@@ -1140,8 +1256,29 @@
             
             const shipment = allShipments[index];
             const details = shipment.details;
+
+            // Archived (already-shipped) shipments: MRPeasy zeroes out live booked
+            // quantities once a shipment ships, so prefer the box breakdown locked
+            // in at finalize time, if it exists, instead of recomputing live.
+            if (currentShipmentView === 'archived') {
+                try {
+                    const response = await fetch(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipment.code)}/finalized-labels`);
+                    const data = await response.json();
+                    const groupedLabels = groupFinalizedLabels(data.labels);
+                    if (response.ok && data.finalized && groupedLabels.length) {
+                        displayLabels({ shipment_code: shipment.code, total_labels: groupedLabels.length, labels: groupedLabels });
+                        hideLoading();
+                        setTimeout(() => window.print(), 500);
+                        return;
+                    }
+                } catch (error) {
+                    console.warn(`No finalized labels available for ${shipment.code}, falling back to live generation:`, error);
+                }
+            }
+
             if (!details || !details.products) {
                 hideLoading();
+                showError(`No product details available for shipment ${shipment.code}`);
                 return;
             }
             
@@ -1227,7 +1364,9 @@
                     setTimeout(() => window.print(), 500);
                 } else {
                     hideLoading();
-                    showError(`No labels generated for shipment ${shipment.code}`);
+                    showError(currentShipmentView === 'archived'
+                        ? `No labels generated for shipment ${shipment.code}. It was never finalized in the portal before shipping in MRPeasy, so box quantities can't be reconstructed after the fact.`
+                        : `No labels generated for shipment ${shipment.code}`);
                 }
             } catch (error) {
                 hideLoading();
@@ -1241,6 +1380,20 @@
             const allLabels = [];
             
             for (const shipment of allShipments) {
+                if (currentShipmentView === 'archived') {
+                    try {
+                        const response = await fetch(`${API_BASE}/api/labels/shipments/${encodeURIComponent(shipment.code)}/finalized-labels`);
+                        const data = await response.json();
+                        const groupedLabels = groupFinalizedLabels(data.labels);
+                        if (response.ok && data.finalized && groupedLabels.length) {
+                            allLabels.push(...groupedLabels);
+                            continue;
+                        }
+                    } catch (error) {
+                        console.warn(`No finalized labels available for ${shipment.code}, falling back to live generation:`, error);
+                    }
+                }
+
                 const details = shipment.details;
                 if (!details || !details.products) continue;
                 
@@ -1624,7 +1777,7 @@
                             };
                         }
                         groupedProducts[groupKey].product_indices.push(prodIndex);
-                        groupedProducts[groupKey].total_quantity += product.quantity_booked || 0;
+                        groupedProducts[groupKey].total_quantity += product.quantity_booked || product.quantity || 0;
                     });
                     
                     const productConfigs = {};
