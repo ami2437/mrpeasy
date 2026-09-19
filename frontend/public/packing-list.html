@@ -36,6 +36,12 @@
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .btn-secondary { background: #6c757d; color: white; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status-tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+        .status-tab { border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; }
+        .status-tab.active { background: #1d4ed8; border-color: #1d4ed8; color: white; }
+        .status-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; }
+        .status-shipped { background: #dcfce7; color: #166534; }
+        .status-in-progress { background: #fee2e2; color: #991b1b; }
         .packing-list-container { display: none; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
         .packing-list {
             page-break-after: auto;
@@ -128,6 +134,11 @@
         <div class="controls">
             <div id="loading" class="loading">Loading shipments...</div>
             <div id="shipments-container" style="display: none;">
+                <div class="status-tabs" aria-label="Shipment status filter">
+                    <button class="status-tab active" data-status="all" type="button">All</button>
+                    <button class="status-tab" data-status="shipped" type="button">Shipped</button>
+                    <button class="status-tab" data-status="in-progress" type="button">In Progress</button>
+                </div>
                 <div class="shipments-table-container">
                     <table class="shipments-table">
                         <thead>
@@ -136,6 +147,7 @@
                                 <th>Shipment Code</th>
                                 <th>PO #</th>
                                 <th>Customer</th>
+                                <th>Status</th>
                                 <th>Finalized Date</th>
                                 <th>Total Boxes</th>
                                 <th>Items</th>
@@ -160,6 +172,15 @@
         const API_BASE = 'http://localhost:8000';
         const COMPANY_LOGO_URL = localStorage.getItem('company_logo_url') || '';
         let allShipments = [];
+        let activeStatusFilter = 'all';
+        let shipmentStatusMap = {};
+
+        function getShipmentStatus(shipmentCode) {
+            const normalizedCode = String(shipmentCode || '').trim();
+            if (!normalizedCode) return 'in-progress';
+            const status = shipmentStatusMap[normalizedCode];
+            return status === 'shipped' ? 'shipped' : 'in-progress';
+        }
 
         function setBoxDetailsOption(index, includeBoxDetails) {
             allShipments[index].includeBoxDetails = includeBoxDetails;
@@ -221,6 +242,33 @@
             }
         }
         
+        async function loadShipmentStatusMap() {
+            try {
+                const [readyResponse, archivedResponse] = await Promise.all([
+                    fetch(`${API_BASE}/api/labels/shipments/ready`),
+                    fetch(`${API_BASE}/api/labels/shipments/archived`)
+                ]);
+
+                const readyData = readyResponse.ok ? await readyResponse.json() : { shipments: [] };
+                const archivedData = archivedResponse.ok ? await archivedResponse.json() : { shipments: [] };
+
+                shipmentStatusMap = {};
+
+                (readyData.shipments || []).forEach(shipment => {
+                    const code = shipment.code || shipment.shipment_code;
+                    if (code) shipmentStatusMap[String(code)] = 'in-progress';
+                });
+
+                (archivedData.shipments || []).forEach(shipment => {
+                    const code = shipment.code || shipment.shipment_code;
+                    if (code) shipmentStatusMap[String(code)] = 'shipped';
+                });
+            } catch (error) {
+                console.error('Failed to load shipment status map:', error);
+                shipmentStatusMap = {};
+            }
+        }
+
         async function loadShipments() {
             if (!(await checkBackend())) {
                 document.getElementById('loading').textContent = 'Backend not running';
@@ -242,6 +290,7 @@
                         total_boxes: s.total_boxes,
                         includeBoxDetails: true
                     }));
+                    await loadShipmentStatusMap();
                     await loadShipmentDetails();
                     renderShipmentsTable();
                     document.getElementById('loading').style.display = 'none';
@@ -270,29 +319,41 @@
         function renderShipmentsTable() {
             const tbody = document.getElementById('shipments-list');
             tbody.innerHTML = '';
+
+            const filteredShipments = allShipments.filter(shipment => {
+                const status = getShipmentStatus(shipment.code);
+                if (activeStatusFilter === 'all') return true;
+                if (activeStatusFilter === 'shipped') return status === 'shipped';
+                return status === 'in-progress';
+            });
             
-            allShipments.forEach((shipment, index) => {
+            filteredShipments.forEach((shipment) => {
+                const originalIndex = allShipments.findIndex(item => item.code === shipment.code);
                 const packingSlip = shipment.packingSlip || {};
                 const itemsCount = packingSlip.items ? packingSlip.items.length : 0;
                 const finalizedDate = shipment.finalized_at ? new Date(shipment.finalized_at).toLocaleDateString() : 'N/A';
+                const shipmentStatus = getShipmentStatus(shipment.code);
+                const badgeClass = shipmentStatus === 'shipped' ? 'status-shipped' : 'status-in-progress';
+                const badgeText = shipmentStatus === 'shipped' ? 'Shipped' : 'In Progress';
 
                 // Main shipment row
                 const shipmentRow = document.createElement('tr');
                 shipmentRow.innerHTML = `
-                    <td><span class="expand-btn" onclick="toggleItems(${index})">▶</span></td>
+                    <td><span class="expand-btn" onclick="toggleItems(${originalIndex})">▶</span></td>
                     <td><strong>${shipment.code}</strong></td>
                     <td>${stripPoPrefix(shipment.po_number) || 'N/A'}</td>
                     <td>${shipment.customer_name || 'N/A'}</td>
+                    <td><span class="status-badge ${badgeClass}">${badgeText}</span></td>
                     <td>${finalizedDate}</td>
                     <td>${shipment.total_boxes || 0}</td>
                     <td>${itemsCount}</td>
                     <td>
                         <label>
-                            <input type="checkbox" ${shipment.includeBoxDetails ? 'checked' : ''} onchange="setBoxDetailsOption(${index}, this.checked)">
+                            <input type="checkbox" ${shipment.includeBoxDetails ? 'checked' : ''} onchange="setBoxDetailsOption(${originalIndex}, this.checked)">
                             Box details
                         </label>
-                        <button class="print-shipment-btn" onclick="generateAndPrintPackingList(${index})" title="Generate packing list">📋</button>
-                        <button class="delete-shipment-btn" onclick="deleteFinalizedShipment(${index})" title="Delete finalized packing list">🗑️</button>
+                        <button class="print-shipment-btn" onclick="generateAndPrintPackingList(${originalIndex})" title="Generate packing list">📋</button>
+                        <button class="delete-shipment-btn" onclick="deleteFinalizedShipment(${originalIndex})" title="Delete finalized packing list">🗑️</button>
                     </td>
                 `;
                 tbody.appendChild(shipmentRow);
@@ -300,9 +361,9 @@
                 // Items row
                 const itemsRow = document.createElement('tr');
                 itemsRow.className = 'items-row';
-                itemsRow.id = `items-row-${index}`;
+                itemsRow.id = `items-row-${originalIndex}`;
                 itemsRow.innerHTML = `
-                    <td colspan="8">
+                    <td colspan="9">
                         <table class="packing-details">
                             <thead>
                                 <tr>
@@ -314,7 +375,7 @@
                                     <th>Box Breakdown</th>
                                 </tr>
                             </thead>
-                            <tbody id="items-list-${index}"></tbody>
+                            <tbody id="items-list-${originalIndex}"></tbody>
                         </table>
                     </td>
                 `;
@@ -322,7 +383,7 @@
                 
                 // Populate items from packing slip data (shipment_boxes)
                 if (packingSlip.items) {
-                    const itemsList = document.getElementById(`items-list-${index}`);
+                    const itemsList = document.getElementById(`items-list-${originalIndex}`);
 
                     packingSlip.items.forEach(item => {
                         const row = document.createElement('tr');
@@ -574,6 +635,14 @@ E-mail: sales@atindsupplies.com</div>
             errorDiv.textContent = message;
         }
         
+        document.querySelectorAll('.status-tab').forEach(button => {
+            button.addEventListener('click', () => {
+                activeStatusFilter = button.dataset.status || 'all';
+                document.querySelectorAll('.status-tab').forEach(tab => tab.classList.toggle('active', tab === button));
+                renderShipmentsTable();
+            });
+        });
+
         AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
             if (user) loadShipments();
         });
