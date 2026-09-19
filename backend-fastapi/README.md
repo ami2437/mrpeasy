@@ -12,7 +12,7 @@ High-performance FastAPI backend for MRPeasy custom portal with SQLite database 
 - ❌ Never modifies MRPeasy production data
 - ❌ Never sends write requests to MRPeasy
 
-See [DATA_FLOW.md](DATA_FLOW.md) for architecture details.
+See [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for architecture details.
 
 ## Features
 

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auth | Manufacturing Portal</title>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <script src="./auth-guard.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: #eef1f0; color: #1c2925; font-family: 'Segoe UI', sans-serif; }
+        .topbar { background: #173c34; color: white; padding: 18px clamp(20px, 4vw, 56px); display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+        .topbar h1 { margin: 0; font-family: Georgia, serif; font-size: 30px; letter-spacing: 0; }
+        .topbar p { margin: 3px 0 0; color: #c9dbd5; font-size: 13px; }
+        .back { color: white; text-decoration: none; border: 1px solid #82a89d; border-radius: 5px; padding: 8px 12px; font-weight: 700; }
+        main { width: min(1320px, calc(100% - 32px)); margin: 28px auto 50px; }
+        .notice { display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: 5px; font-size: 14px; }
+        .notice.show { display: block; }
+        .notice.success { background: #dcefe6; color: #155d43; border: 1px solid #8ac4aa; }
+        .notice.error { background: #f9e1dd; color: #8d2f27; border: 1px solid #dfa096; }
+        .layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 22px; align-items: start; }
+        .panel { background: white; border: 1px solid #cad4d0; box-shadow: 0 10px 28px rgba(23, 60, 52, 0.08); }
+        .panel-header { padding: 18px 20px; border-bottom: 1px solid #dbe2df; }
+        .panel-header h2 { margin: 0 0 4px; font-family: Georgia, serif; font-size: 21px; }
+        .panel-header p { margin: 0; color: #687a74; font-size: 13px; }
+        .form { padding: 20px; display: grid; gap: 14px; }
+        label { display: grid; gap: 6px; color: #344a43; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+        input, select { width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid #aebdb8; border-radius: 4px; background: white; color: #1c2925; }
+        input:focus, select:focus { outline: 3px solid rgba(198, 94, 58, 0.16); border-color: #c65e3a; }
+        button { border: 0; border-radius: 4px; min-height: 38px; padding: 8px 13px; font-weight: 750; cursor: pointer; }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        .primary { background: #c65e3a; color: white; }
+        .secondary { background: #e5ebe8; color: #28473f; border: 1px solid #b7c4bf; }
+        .danger { background: white; color: #a2342b; border: 1px solid #d99b93; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; min-width: 820px; }
+        th { background: #244b41; color: white; padding: 11px 12px; text-align: left; font-size: 12px; text-transform: uppercase; }
+        td { padding: 11px 12px; border-bottom: 1px solid #e0e6e3; vertical-align: middle; font-size: 14px; }
+        td input, td select { min-width: 125px; }
+        .identity strong { display: block; }
+        .identity small { color: #71817c; }
+        .status { display: inline-flex; align-items: center; gap: 7px; text-transform: none; font-weight: 600; }
+        .row-actions { display: flex; gap: 7px; white-space: nowrap; }
+        .empty { padding: 34px; color: #687a74; text-align: center; }
+        .role-key { margin-top: 14px; padding: 14px; background: #f4f7f5; border-left: 3px solid #5f8e80; color: #4f625c; font-size: 13px; line-height: 1.5; }
+        @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div><h1>Auth</h1><p>Account and role administration</p></div>
+        <a class="back" href="./dashboard.html">Dashboard</a>
+    </header>
+    <main>
+        <div id="notice" class="notice" role="status"></div>
+        <div class="layout">
+            <section class="panel">
+                <div class="panel-header"><h2>Create Account</h2><p>Set the initial password and hand it directly to the user.</p></div>
+                <form class="form" id="create-form">
+                    <label>Username<input name="username" required minlength="3" autocomplete="off"></label>
+                    <label>Full Name<input name="full_name" autocomplete="off"></label>
+                    <label>Email<input name="email" type="email" required autocomplete="off"></label>
+                    <label>Role<select name="role"><option value="employee">Employee</option><option value="admin">Admin</option><option value="super_admin">Super Admin</option></select></label>
+                    <label>Temporary Password<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>
+                    <button class="primary" type="submit">Create Account</button>
+                    <div class="role-key"><strong>Employee:</strong> Batch Labels and Shipments only.<br><strong>Admin:</strong> all operational modules except Auth.<br><strong>Super Admin:</strong> unrestricted access.</div>
+                </form>
+            </section>
+            <section class="panel">
+                <div class="panel-header"><h2>Accounts</h2><p>Passwords are never displayed. Reset creates a new password hash.</p></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>User</th><th>Email</th><th>Full Name</th><th>Role</th><th>Active</th><th>Actions</th></tr></thead>
+                        <tbody id="users-body"><tr><td colspan="5" class="empty">Loading accounts...</td></tr></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let currentUser = null;
+        let users = [];
+
+        function showNotice(message, type = 'success') {
+            const notice = document.getElementById('notice');
+            notice.textContent = message;
+            notice.className = `notice show ${type}`;
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(`${API_BASE}${path}`, options);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.detail || data.message || `Request failed with HTTP ${response.status}`);
+            return data;
+        }
+
+        async function loadUsers() {
+            try {
+                users = await api('/api/auth/users');
+                renderUsers();
+            } catch (error) {
+                showNotice(error.message, 'error');
+            }
+        }
+
+        function renderUsers() {
+            const body = document.getElementById('users-body');
+            body.replaceChildren();
+            if (!users.length) {
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 6;
+                cell.className = 'empty';
+                cell.textContent = 'No accounts found.';
+                return;
+            }
+
+            users.forEach(user => {
+                const row = body.insertRow();
+                row.dataset.userId = user.id;
+
+                const identity = row.insertCell();
+                identity.className = 'identity';
+                const usernameInput = document.createElement('input');
+                usernameInput.value = user.username || '';
+                usernameInput.required = true;
+                usernameInput.dataset.field = 'username';
+                identity.appendChild(usernameInput);
+
+                const emailCell = row.insertCell();
+                const emailInput = document.createElement('input');
+                emailInput.type = 'email';
+                emailInput.value = user.email || '';
+                emailInput.required = true;
+                emailInput.dataset.field = 'email';
+                emailCell.appendChild(emailInput);
+
+                const nameCell = row.insertCell();
+                const nameInput = document.createElement('input');
+                nameInput.value = user.full_name || '';
+                nameInput.dataset.field = 'full_name';
+                nameCell.appendChild(nameInput);
+
+                const roleCell = row.insertCell();
+                const roleSelect = document.createElement('select');
+                roleSelect.dataset.field = 'role';
+                ['employee', 'admin', 'super_admin'].forEach(role => {
+                    const option = document.createElement('option');
+                    option.value = role;
+                    option.textContent = role.replace('_', ' ');
+                    option.selected = user.role === role;
+                    roleSelect.appendChild(option);
+                });
+                roleCell.appendChild(roleSelect);
+
+                const activeCell = row.insertCell();
+                const activeLabel = document.createElement('label');
+                activeLabel.className = 'status';
+                const activeInput = document.createElement('input');
+                activeInput.type = 'checkbox';
+                activeInput.checked = user.is_active;
+                activeInput.dataset.field = 'is_active';
+                activeLabel.append(activeInput, document.createTextNode('Active'));
+                activeCell.appendChild(activeLabel);
+
+                const actionsCell = row.insertCell();
+                const actions = document.createElement('div');
+                actions.className = 'row-actions';
+                const saveButton = document.createElement('button');
+                saveButton.className = 'secondary';
+                saveButton.textContent = 'Save';
+                saveButton.addEventListener('click', () => saveUser(user.id, row));
+                const passwordButton = document.createElement('button');
+                passwordButton.className = 'secondary';
+                passwordButton.textContent = 'Reset Password';
+                passwordButton.addEventListener('click', () => resetPassword(user.id, user.username));
+                const deleteButton = document.createElement('button');
+                deleteButton.className = 'danger';
+                deleteButton.textContent = 'Delete';
+                deleteButton.disabled = currentUser && currentUser.id === user.id;
+                deleteButton.addEventListener('click', () => deleteUser(user.id, user.username));
+                actions.append(saveButton, passwordButton, deleteButton);
+                actionsCell.appendChild(actions);
+            });
+        }
+
+        async function saveUser(userId, row) {
+            const payload = {
+                username: row.querySelector('[data-field="username"]').value.trim(),
+                email: row.querySelector('[data-field="email"]').value.trim(),
+                full_name: row.querySelector('[data-field="full_name"]').value.trim(),
+                role: row.querySelector('[data-field="role"]').value,
+                is_active: row.querySelector('[data-field="is_active"]').checked
+            };
+            try {
+                await api(`/api/auth/users/${userId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                showNotice('Account updated.');
+                await loadUsers();
+            } catch (error) { showNotice(error.message, 'error'); }
+        }
+
+        async function resetPassword(userId, username) {
+            const password = prompt(`Enter a new temporary password for ${username} (minimum 10 characters):`);
+            if (password === null) return;
+            if (password.length < 10) { showNotice('Password must be at least 10 characters.', 'error'); return; }
+            try {
+                await api(`/api/auth/users/${userId}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+                showNotice(`Password reset for ${username}.`);
+            } catch (error) { showNotice(error.message, 'error'); }
+        }
+
+        async function deleteUser(userId, username) {
+            if (!confirm(`Delete account ${username}? This cannot be undone.`)) return;
+            try {
+                await api(`/api/auth/users/${userId}`, { method: 'DELETE' });
+                showNotice(`Account ${username} deleted.`);
+                await loadUsers();
+            } catch (error) { showNotice(error.message, 'error'); }
+        }
+
+        document.getElementById('create-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            const formElement = event.currentTarget;
+            const form = new FormData(formElement);
+            const payload = Object.fromEntries(form.entries());
+            try {
+                await api('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                formElement.reset();
+                showNotice(`Account ${payload.username} created.`);
+                await loadUsers();
+            } catch (error) { showNotice(error.message, 'error'); }
+        });
+
+        AuthGuard.requireRoles(['super_admin']).then(user => {
+            if (!user) return;
+            currentUser = user;
+            loadUsers();
+        });
+    </script>
+</body>
+</html>

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American Traders LLC</title>
     <link rel="stylesheet" href="./styles/theme.css">
+    <script src="./auth-guard.js"></script>
     <style>
         * {
             margin: 0;
@@ -17,6 +18,11 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 40px 20px;
+        }
+
+        body.auth-pending .modules-grid,
+        body.auth-pending .settings-panel {
+            visibility: hidden;
         }
 
         .container {
@@ -271,7 +277,7 @@
         }
     </style>
 </head>
-<body>
+<body class="auth-pending">
     <div class="user-info">
         <span id="userName">User</span>
         <div class="user-avatar">👤</div>
@@ -286,7 +292,7 @@
 
         <div class="modules-grid">
             <!-- Shipments Module -->
-            <a href="packing-list.html" class="module-card">
+            <a href="packing-list.html" class="module-card" data-roles="employee,admin,super_admin">
                 <span class="module-icon">📦</span>
                 <div class="module-title">Shipments</div>
                 <div class="module-description">Manage and track shipments</div>
@@ -294,7 +300,7 @@
             </a>
 
             <!-- Invoicing Module -->
-            <a href="invoicing.html" class="module-card">
+            <a href="invoicing.html" class="module-card" data-roles="admin,super_admin">
                 <span class="module-icon">📋</span>
                 <div class="module-title">Invoicing</div>
                 <div class="module-description">Track invoices and discrepancies</div>
@@ -302,7 +308,7 @@
             </a>
 
             <!-- Customer Orders Module -->
-            <a href="customer_orders.html" class="module-card">
+            <a href="customer_orders.html" class="module-card" data-roles="admin,super_admin">
                 <span class="module-icon">📦</span>
                 <div class="module-title">Customer Orders</div>
                 <div class="module-description">View order status and partial shipments</div>
@@ -310,41 +316,33 @@
             </a>
 
             <!-- Batch Labeling Module -->
-            <a href="labels-batch.html" class="module-card">
+            <a href="labels-batch.html" class="module-card" data-roles="employee,admin,super_admin">
                 <span class="module-icon">🏷️</span>
                 <div class="module-title">Batch Labels</div>
                 <div class="module-description">Create batch shipment labels</div>
                 <span class="module-badge">Active</span>
             </a>
 
-            <!-- Individual Labels Module -->
-            <a href="labels.html" class="module-card">
-                <span class="module-icon">🎫</span>
-                <div class="module-title">Labels</div>
-                <div class="module-description">Generate individual labels</div>
-                <span class="module-badge">Active</span>
-            </a>
-
-            <!-- Packing Slips Module -->
-            <a href="packing-slip.html" class="module-card">
-                <span class="module-icon">📄</span>
-                <div class="module-title">Packing Slips</div>
-                <div class="module-description">Print packing slips</div>
-                <span class="module-badge">Active</span>
-            </a>
-
             <!-- Reports Module -->
-            <a href="reports.html" class="module-card">
+            <a href="reports.html" class="module-card" data-roles="admin,super_admin">
                 <span class="module-icon">📊</span>
                 <div class="module-title">Reports</div>
                 <div class="module-description">View analytics and reports</div>
                 <span class="module-badge">Active</span>
             </a>
+
+            <!-- Authentication Module -->
+            <a href="auth.html" class="module-card" data-roles="super_admin">
+                <span class="module-icon">🔐</span>
+                <div class="module-title">Auth</div>
+                <div class="module-description">Create accounts, assign roles, and reset passwords</div>
+                <span class="module-badge">Super Admin</span>
+            </a>
         </div>
 
-        <div class="settings-panel">
+        <div class="settings-panel" data-roles="admin,super_admin">
             <div class="settings-title">Print Logo Settings</div>
-            <div class="settings-subtitle">Used on labels, packing lists, packing slips, and invoice PDFs.</div>
+            <div class="settings-subtitle">Used on labels, shipment documents, and invoice PDFs.</div>
 
             <div class="logo-grid">
                 <div class="logo-controls">
@@ -456,16 +454,16 @@
         }
 
         // Load user info from localStorage
-        window.addEventListener('DOMContentLoaded', function() {
-            const user = localStorage.getItem('user') || sessionStorage.getItem('user');
-            if (!user) {
-                window.location.href = './login.html';
-            } else {
-                const userData = JSON.parse(user);
-                // Try different field names for username
-                const displayName = userData.name || userData.username || userData.full_name || 'User';
-                document.getElementById('userName').textContent = displayName;
-            }
+        window.addEventListener('DOMContentLoaded', async function() {
+            const userData = await AuthGuard.requireRoles(['employee', 'admin', 'super_admin']);
+            if (!userData) return;
+            const displayName = userData.full_name || userData.username || 'User';
+            document.getElementById('userName').textContent = `${displayName} · ${userData.role.replace('_', ' ')}`;
+            document.querySelectorAll('[data-roles]').forEach(card => {
+                const roles = card.dataset.roles.split(',');
+                card.hidden = !roles.includes(userData.role);
+            });
+            document.body.classList.remove('auth-pending');
 
             updateLogoPreview();
 
@@ -476,11 +474,7 @@
         });
 
         function logout() {
-            localStorage.removeItem('user');
-            localStorage.removeItem('access_token');
-            sessionStorage.removeItem('user');
-            sessionStorage.removeItem('access_token');
-            window.location.href = './login.html';
+            AuthGuard.logout();
         }
     </script>
 </body>

@@ -1,6 +1,6 @@
-"""
-Script to create owner user: amittal
-"""
+"""Securely bootstrap the first super-admin account."""
+import getpass
+import os
 import sys
 from pathlib import Path
 
@@ -10,49 +10,52 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.config.database import SessionLocal
 from app.services.auth import AuthService
 
-def create_owner_user():
-    """Create owner user amittal"""
+
+def _required_value(environment_name: str, prompt: str, secret: bool = False) -> str:
+    value = os.getenv(environment_name)
+    if value:
+        return value.strip()
+    reader = getpass.getpass if secret else input
+    return reader(prompt).strip()
+
+
+def create_super_admin():
+    """Create a super-admin account without embedding or displaying credentials."""
+    username = _required_value("SUPER_ADMIN_USERNAME", "Username: ")
+    email = _required_value("SUPER_ADMIN_EMAIL", "Email: ")
+    full_name = _required_value("SUPER_ADMIN_FULL_NAME", "Full name: ")
+    password = _required_value("SUPER_ADMIN_PASSWORD", "Temporary password: ", secret=True)
+    if not username or not email or not full_name:
+        raise ValueError("Username, email, and full name are required")
+    if len(password) < 10:
+        raise ValueError("Temporary password must contain at least 10 characters")
+
     db = SessionLocal()
     try:
-        # Check if user already exists
-        existing_user = AuthService.get_user_by_username(db, "amittal")
+        existing_user = AuthService.get_user_by_username(db, username)
         if existing_user:
-            print("❌ User 'amittal' already exists!")
-            print(f"   Username: {existing_user.username}")
-            print(f"   Email: {existing_user.email}")
-            print(f"   Role: {existing_user.role}")
+            print(f"User '{username}' already exists with role '{existing_user.role}'.")
             return
-        
-        # Create owner user
-        print("🔧 Creating owner user...")
+
         user = AuthService.create_user(
             db=db,
-            username="amittal",
-            email="amittal@americantraders.com",
-            password="test1",
-            full_name="Amit Mittal",
-            role="owner"
+            username=username,
+            email=email,
+            password=password,
+            full_name=full_name,
+            role="super_admin"
         )
-        
         db.commit()
         db.refresh(user)
-        
-        print("✅ Owner user created successfully!")
-        print(f"   Username: {user.username}")
-        print(f"   Email: {user.email}")
-        print(f"   Full Name: {user.full_name}")
-        print(f"   Role: {user.role}")
-        print(f"   Active: {user.is_active}")
-        print("\n🔐 Login Credentials:")
-        print(f"   Username: amittal")
-        print(f"   Password: test1")
-        
+
+        print(f"Super-admin account '{user.username}' created successfully.")
     except Exception as e:
-        print(f"❌ Error creating user: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        db.rollback()
+        print(f"Error creating super-admin account: {str(e)}")
+        raise
     finally:
         db.close()
 
+
 if __name__ == "__main__":
-    create_owner_user()
+    create_super_admin()

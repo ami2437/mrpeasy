@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American Traders LLC</title>
     <link rel="stylesheet" href="./styles/theme.css">
+    <script src="./auth-guard.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
@@ -1385,7 +1386,7 @@
                 
                 if (data.success) {
                     hideLoading();
-                    const packingSlipLink = `<a href="packing-slip.html?shipment=${shipment.code}" target="_blank" style="color: #1976d2; text-decoration: underline; margin-left: 10px;">View Packing Slip</a>`;
+                    const packingSlipLink = `<a href="packing-list.html" target="_blank" style="color: #1976d2; text-decoration: underline; margin-left: 10px;">View Shipments</a>`;
                     showError(`✓ Finalized ${shipment.code}: ${data.total_boxes_saved} boxes saved to database with ${palletNumber ? `pallet #${palletNumber}` : 'no pallet assignment'} ${packingSlipLink}`);
                     
                     // Disable pack size inputs after finalization
@@ -1710,7 +1711,9 @@
             }
         }
         
-        loadShipments();
+        AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
+            if (user) loadShipments();
+        });
     </script>
 </body>
 </html>

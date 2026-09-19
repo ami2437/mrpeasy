@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.config.database import get_db
-from app.schemas import UserCreate, UserResponse, Token, UserUpdate
+from app.schemas import UserCreate, UserPasswordReset, UserResponse, Token, UserUpdate
 from app.services.auth import AuthService
 from app.services.sync_service import SyncService
 from app.models import User
@@ -18,20 +18,35 @@ class LoginRequest(BaseModel):
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+VALID_ROLES = {"employee", "admin", "super_admin"}
+
+
+def _ensure_super_admin_remains(db: Session, user: User, next_role: Optional[str] = None, next_active: Optional[bool] = None):
+    removes_access = (next_role is not None and next_role != "super_admin") or next_active is False
+    if user.role != "super_admin" or not user.is_active or not removes_access:
+        return
+    active_super_admins = db.query(User).filter(User.role == "super_admin", User.is_active.is_(True)).count()
+    if active_super_admins <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one active super admin account is required"
+        )
+
 
 @router.post("/register", response_model=UserResponse)
 async def register(
     user_data: UserCreate,
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db)
 ):
     """
-    Register a new user.
+    Create a user account. Super admin only.
     
     - **username**: Unique username (required)
     - **email**: User email (required)
     - **password**: User password (required)
     - **full_name**: User full name (optional)
-    - **role**: User role - owner, admin, editor, or viewer (default: viewer)
+    - **role**: employee, admin, or super_admin
     """
     # Check if user already exists
     existing_user = AuthService.get_user_by_username(db, user_data.username)
@@ -50,8 +65,8 @@ async def register(
         )
     
     # Create user with role validation
-    valid_roles = ["owner", "admin", "editor", "viewer"]
-    role = user_data.role if user_data.role in valid_roles else "viewer"
+    if user_data.role not in VALID_ROLES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
     
     user = AuthService.create_user(
         db=db,
@@ -59,7 +74,7 @@ async def register(
         email=user_data.email,
         password=user_data.password,
         full_name=user_data.full_name,
-        role=role
+        role=user_data.role
     )
     
     return user
@@ -155,14 +170,14 @@ async def login_with_sync(
     )
     
     # Trigger background sync if user has sync permission
-    if user.role in ["owner", "admin", "editor"]:
+    if user.role in ["super_admin", "admin"]:
         background_tasks.add_task(sync_all_data, db)
     
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "user": user,
-        "sync_status": "started" if user.role in ["owner", "admin", "editor"] else "skipped"
+        "sync_status": "started" if user.role in ["super_admin", "admin"] else "skipped"
     }
 
 
@@ -239,6 +254,23 @@ async def update_current_user(
     - **full_name**: Update full name (optional)
     - **role**: Update role - only admin can change role (optional)
     """
+    if user_update.username is not None:
+        existing = db.query(User).filter(
+            User.username == user_update.username,
+            User.id != user_id
+        ).first()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already in use"
+            )
+        if not user_update.username.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username cannot be empty"
+            )
+        user.username = user_update.username.strip()
+
     if user_update.email:
         # Check if email already exists
         existing = db.query(User).filter(
@@ -252,19 +284,8 @@ async def update_current_user(
             )
         current_user.email = user_update.email
     
-    if user_update.full_name:
+    if user_update.full_name is not None:
         current_user.full_name = user_update.full_name
-    
-    if user_update.role:
-        # Only allow role changes for admin users
-        if current_user.role not in ["owner", "admin"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only owners/admins can change user roles"
-            )
-        valid_roles = ["owner", "admin", "editor", "viewer"]
-        if user_update.role in valid_roles:
-            current_user.role = user_update.role
     
     db.commit()
     db.refresh(current_user)
@@ -273,7 +294,7 @@ async def update_current_user(
 
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db)
 ):
     """
@@ -287,7 +308,7 @@ async def list_users(
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: int,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db)
 ):
     """
@@ -301,13 +322,6 @@ async def get_user(
             detail="User not found"
         )
     
-    # Only allow viewing own profile or admin viewing others
-    if current_user.id != user_id and current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
     return user
 
 
@@ -315,7 +329,7 @@ async def get_user(
 async def update_user(
     user_id: int,
     user_update: UserUpdate,
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db)
 ):
     """
@@ -341,23 +355,45 @@ async def update_user(
             )
         user.email = user_update.email
     
-    if user_update.full_name:
+    if user_update.full_name is not None:
         user.full_name = user_update.full_name
     
-    if user_update.role:
-        valid_roles = ["admin", "editor", "viewer"]
-        if user_update.role in valid_roles:
-            user.role = user_update.role
+    if user_update.role is not None:
+        if user_update.role not in VALID_ROLES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
+        _ensure_super_admin_remains(db, user, next_role=user_update.role)
+        user.role = user_update.role
+
+    if user_update.is_active is not None:
+        if user.id == current_user.id and not user_update.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+        _ensure_super_admin_remains(db, user, next_active=user_update.is_active)
+        user.is_active = user_update.is_active
     
     db.commit()
     db.refresh(user)
     return user
 
 
+@router.put("/users/{user_id}/password")
+async def reset_user_password(
+    user_id: int,
+    password_reset: UserPasswordReset,
+    current_user: User = Depends(require_role("super_admin")),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    user.hashed_password = AuthService.hash_password(password_reset.password)
+    db.commit()
+    return {"message": "Password updated successfully"}
+
+
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
-    current_user: User = Depends(require_role("admin")),
+    current_user: User = Depends(require_role("super_admin")),
     db: Session = Depends(get_db)
 ):
     """
@@ -376,7 +412,8 @@ async def delete_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+    _ensure_super_admin_remains(db, user, next_active=False)
+
     db.delete(user)
     db.commit()
     return {"message": "User deleted successfully"}

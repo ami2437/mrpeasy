@@ -1,9 +1,10 @@
+from fastapi import APIRouter, HTTPException, Depends, Body, UploadFile, File
 from datetime import datetime, timezone
 from io import BytesIO
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from app.dependencies import require_module
 from app.services.mrpeasy_client import mrpeasy_client
 
 try:
@@ -11,7 +12,11 @@ try:
 except Exception:  # pragma: no cover - handled at runtime when feature is used
     pd = None
 
-router = APIRouter(prefix="/api/invoicing", tags=["invoicing"])
+router = APIRouter(
+    prefix="/api/invoicing",
+    tags=["invoicing"],
+    dependencies=[Depends(require_module("invoicing"))]
+)
 
 _generated_invoice_drafts = []
 _generated_invoice_keys = set()

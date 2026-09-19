@@ -5,9 +5,13 @@ from app.schemas import CustomerOrderResponse, CustomerOrderCreate, CustomerOrde
 from app.services.crud import CustomerOrderService
 from app.services.mrpeasy_client import mrpeasy_client
 from app.models import User
-from app.dependencies import get_current_active_user, require_permission
+from app.dependencies import get_current_active_user, require_module, require_permission
 
-router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"])
+router = APIRouter(
+    prefix="/api/customer-orders",
+    tags=["customer-orders"],
+    dependencies=[Depends(require_module("customer_orders"))]
+)
 
 
 def _to_number(value, default=0.0):

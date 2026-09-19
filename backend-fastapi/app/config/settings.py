@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # JWT Configuration
-    secret_key: str = "your-secret-key-change-in-production-12345"
+    secret_key: str = ""
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours
 
@@ -30,3 +30,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.secret_key or settings.secret_key == "your-secret-key-change-in-production-12345":
+    raise RuntimeError("SECRET_KEY must be configured with a strong, private value")

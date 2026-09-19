@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American Traders LLC</title>
+    <script src="./auth-guard.js"></script>
     <link rel="stylesheet" href="./styles/theme.css">
     <style>
         * {
@@ -1014,7 +1015,9 @@
         }
 
         // Load on page load
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
+            const user = await AuthGuard.requireRoles(['admin', 'super_admin']);
+            if (!user) return;
             // Tab switching
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', () => {

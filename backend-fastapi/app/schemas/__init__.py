@@ -8,17 +8,23 @@ class UserBase(BaseModel):
     username: str
     email: str
     full_name: Optional[str] = None
-    role: str = "viewer"  # owner, admin, editor, viewer
+    role: str = "employee"  # employee, admin, super_admin
 
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(min_length=10)
 
 
 class UserUpdate(BaseModel):
+    username: Optional[str] = None
     email: Optional[str] = None
     full_name: Optional[str] = None
     role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class UserPasswordReset(BaseModel):
+    password: str = Field(min_length=10)
 
 
 class UserResponse(UserBase):

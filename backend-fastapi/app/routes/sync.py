@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.services.sync_service import SyncService
 from app.models import User
-from app.dependencies import get_current_active_user, require_permission
+from app.dependencies import get_current_active_user, require_module, require_permission
 
-router = APIRouter(prefix="/sync", tags=["sync"])
+router = APIRouter(prefix="/sync", tags=["sync"], dependencies=[Depends(require_module("admin_ops"))])
 
 
 @router.post("/customer-orders")

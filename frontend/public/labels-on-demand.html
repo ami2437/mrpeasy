@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>On-Demand Labels</title>
     <link rel="stylesheet" href="./styles/theme.css">
+    <script src="./auth-guard.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { margin: 0; min-height: 100vh; font-family: Georgia, 'Times New Roman', serif; color: #202426; background: linear-gradient(145deg, #edf3ef 0%, #dce8e1 55%, #f3eee4 100%); }
@@ -311,7 +312,7 @@
             try {
                 const [readyResult, finalizedResult] = await Promise.allSettled([
                     fetchJson(`${API_BASE}/api/labels/shipments/ready`),
-                    fetchJson(`${API_BASE}/api/labels/packing-slip/shipments/list`)
+                    fetchJson(`${API_BASE}/api/labels/shipments/finalized/list`)
                 ]);
                 if (readyResult.status === 'fulfilled') {
                     (readyResult.value.shipments || []).forEach(shipment => shipments.set(shipment.code, { code: shipment.code, ready: true, summary: shipment }));
@@ -497,7 +498,9 @@
         populateFields('structured');
         initializeLogo();
         renderPreview();
-        loadShipmentChoices();
+        AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
+            if (user) loadShipmentChoices();
+        });
 
         document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => switchMode(tab.dataset.mode)));
         document.getElementById('shipment-select').addEventListener('change', event => selectShipment(event.target.value));

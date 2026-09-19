@@ -28,8 +28,11 @@ mrpeasy/
 │   ├── package.json
 │   └── README.md
 │
+├── docs/             # Consolidated documentation (architecture, RBAC, packing slip, setup, security)
 └── README.md         # This file
 ```
+
+See [docs/README.md](docs/README.md) for the full documentation index.
 
 ## Quick Start
 
@@ -191,6 +194,15 @@ Restart server - that's it!
    - User dashboard customization
 4. **Testing**: Add unit and integration tests
 5. **Deployment**: Deploy to production server
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — data model, MRPeasy API client, order/invoice structures
+- [docs/PACKING_SLIP.md](docs/PACKING_SLIP.md) — packing slip / shipment labeling system
+- [docs/RBAC.md](docs/RBAC.md) — authentication & role-based access control
+- [docs/SETUP.md](docs/SETUP.md) — backend environment setup
+- [docs/SECURITY.md](docs/SECURITY.md) — MRPeasy read-only verification
+- [docs/ROLLBACK_PLAN.md](docs/ROLLBACK_PLAN.md) — label tools rollback/data-protection plan
 
 ## Support
 

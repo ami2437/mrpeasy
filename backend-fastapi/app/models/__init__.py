@@ -14,7 +14,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False, index=True)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
-    role = Column(String, default="viewer")  # owner, admin, editor, viewer
+    role = Column(String, default="employee")  # employee, admin, super_admin
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -25,7 +25,7 @@ class Role(Base):
     __tablename__ = "roles"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)  # owner, admin, editor, viewer
+    name = Column(String, unique=True, nullable=False)  # employee, admin, super_admin
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

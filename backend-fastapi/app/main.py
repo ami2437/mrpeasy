@@ -3,12 +3,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config.settings import settings
-from app.config.database import engine, Base
+from app.config.database import engine, Base, SessionLocal
 from app.models import CustomerOrder, StockItem, ManufacturingOrder, Vendor, Inventory, SyncLog, User, Role
+from app.services.auth import initialize_auth_roles
 from app.routes import customer_orders, stock_items, manufacturing_orders, vendors, sync, auth, labels, invoicing, reports
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+
+def initialize_auth_data():
+    db = SessionLocal()
+    try:
+        initialize_auth_roles(db)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+initialize_auth_data()
 
 # Create FastAPI app
 app = FastAPI(

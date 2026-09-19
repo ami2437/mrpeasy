@@ -4,7 +4,30 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from app.config.settings import settings
 from sqlalchemy.orm import Session
-from app.models import User
+from app.models import Role, User
+
+
+VALID_ROLES = {"employee", "admin", "super_admin"}
+
+
+def initialize_auth_roles(db: Session) -> None:
+    """Seed requested roles and migrate legacy role names without changing credentials."""
+    role_descriptions = {
+        "employee": "Batch Labels and Shipments access",
+        "admin": "All operational modules except Auth",
+        "super_admin": "Unrestricted access including account management",
+    }
+    legacy_roles = {
+        "owner": "super_admin",
+        "editor": "employee",
+        "viewer": "employee",
+    }
+    for role_name, description in role_descriptions.items():
+        if not db.query(Role).filter(Role.name == role_name).first():
+            db.add(Role(name=role_name, description=description))
+    for legacy_role, new_role in legacy_roles.items():
+        db.query(User).filter(User.role == legacy_role).update({User.role: new_role})
+    db.commit()
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -75,7 +98,7 @@ class AuthService:
         email: str,
         password: str,
         full_name: Optional[str] = None,
-        role: str = "viewer"
+        role: str = "employee"
     ) -> User:
         """Create a new user in the database."""
         hashed_password = AuthService.hash_password(password)
@@ -101,18 +124,18 @@ class AuthService:
     
     @staticmethod
     def is_owner(user: User) -> bool:
-        """Check if user has owner role."""
-        return user.role == "owner"
+        """Legacy alias for super-admin checks."""
+        return user.role == "super_admin"
     
     @staticmethod
     def is_admin(user: User) -> bool:
-        """Check if user has admin or owner role."""
-        return user.role in ["owner", "admin"]
+        """Check if user has admin-level module access."""
+        return user.role in ["super_admin", "admin"]
     
     @staticmethod
     def is_editor(user: User) -> bool:
-        """Check if user is owner, admin or editor."""
-        return user.role in ["owner", "admin", "editor"]
+        """Legacy alias for authenticated operational access."""
+        return user.role in ["super_admin", "admin", "employee"]
 
 
 class RBACService:
@@ -120,42 +143,51 @@ class RBACService:
     
     # Define role permissions
     PERMISSIONS = {
-        "owner": {
+        "super_admin": {
             "read": True,
             "write": True,
             "delete": True,
             "sync": True,
             "manage_users": True,
-            "manage_roles": True,
-            "full_access": True
+            "auth": True,
+            "batch_labels": True,
+            "shipments": True,
+            "invoicing": True,
+            "customer_orders": True,
+            "reports": True,
+            "admin_ops": True,
+            "full_access": True,
         },
         "admin": {
             "read": True,
             "write": True,
             "delete": True,
             "sync": True,
-            "manage_users": True,
-            "manage_roles": False,
-            "full_access": False
+            "manage_users": False,
+            "auth": False,
+            "batch_labels": True,
+            "shipments": True,
+            "invoicing": True,
+            "customer_orders": True,
+            "reports": True,
+            "admin_ops": True,
+            "full_access": False,
         },
-        "editor": {
+        "employee": {
             "read": True,
             "write": True,
             "delete": False,
-            "sync": True,
-            "manage_users": False,
-            "manage_roles": False,
-            "full_access": False
-        },
-        "viewer": {
-            "read": True,
-            "write": False,
-            "delete": False,
             "sync": False,
             "manage_users": False,
-            "manage_roles": False,
-            "full_access": False
-        }
+            "auth": False,
+            "batch_labels": True,
+            "shipments": True,
+            "invoicing": False,
+            "customer_orders": False,
+            "reports": False,
+            "admin_ops": False,
+            "full_access": False,
+        },
     }
     
     @staticmethod
@@ -194,5 +226,5 @@ class RBACService:
     
     @staticmethod
     def require_admin(user: User) -> bool:
-        """Check if user is admin or owner."""
-        return user.role in ["owner", "admin"]
+        """Check if user has admin-level access."""
+        return user.role in ["super_admin", "admin"]

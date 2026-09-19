@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American Traders LLC</title>
     <link rel="stylesheet" href="./styles/theme.css">
+    <script src="./auth-guard.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
@@ -226,7 +227,7 @@
                 return;
             }
             try {
-                const response = await fetch(`${API_BASE}/api/labels/packing-slip/shipments/list`);
+                const response = await fetch(`${API_BASE}/api/labels/shipments/finalized/list`);
                 const data = await response.json();
 
                 if (data.shipments && data.shipments.length > 0) {
@@ -257,7 +258,7 @@
         async function loadShipmentDetails() {
             for (let shipment of allShipments) {
                 try {
-                    const response = await fetch(`${API_BASE}/api/labels/packing-slip/${shipment.code}`);
+                    const response = await fetch(`${API_BASE}/api/labels/shipments/finalized/${shipment.code}/packing-data`);
                     const data = await response.json();
                     shipment.packingSlip = data;
                 } catch (error) {
@@ -573,7 +574,9 @@ E-mail: sales@atindsupplies.com</div>
             errorDiv.textContent = message;
         }
         
-        loadShipments();
+        AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
+            if (user) loadShipments();
+        });
     </script>
 </body>
 </html>

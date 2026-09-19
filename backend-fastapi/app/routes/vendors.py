@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import VendorResponse
 from app.services.crud import VendorService
+from app.dependencies import require_module
 
-router = APIRouter(prefix="/vendors", tags=["vendors"])
+router = APIRouter(prefix="/vendors", tags=["vendors"], dependencies=[Depends(require_module("admin_ops"))])
 
 
 @router.get("/", response_model=list[VendorResponse])

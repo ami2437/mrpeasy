@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import ManufacturingOrderResponse
 from app.services.crud import ManufacturingOrderService
+from app.dependencies import require_module
 
-router = APIRouter(prefix="/manufacturing-orders", tags=["manufacturing-orders"])
+router = APIRouter(prefix="/manufacturing-orders", tags=["manufacturing-orders"], dependencies=[Depends(require_module("admin_ops"))])
 
 
 @router.get("/", response_model=list[ManufacturingOrderResponse])

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>American Traders LLC</title>
+    <script src="./auth-guard.js"></script>
     <link rel="stylesheet" href="./styles/theme.css">
     <style>
         * {
@@ -696,8 +697,9 @@
             downloadCsv('recent_shipments.csv', rows);
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
-            loadReports();
+        window.addEventListener('DOMContentLoaded', async () => {
+            const user = await AuthGuard.requireRoles(['admin', 'super_admin']);
+            if (user) loadReports();
         });
     </script>
 </body>

@@ -14,7 +14,7 @@ import re
 import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
-from app.dependencies import require_permission
+from app.dependencies import require_module, require_permission
 from app.models import ShipmentBox, PackSize, Label, User
 
 class FinalizeShipmentRequest(BaseModel):
@@ -44,7 +44,11 @@ class UpdatePackSizeRequest(BaseModel):
     pack_size: int
 
 
-router = APIRouter(prefix="/api/labels", tags=["labels"])
+router = APIRouter(
+    prefix="/api/labels",
+    tags=["labels"],
+    dependencies=[Depends(require_module("batch_labels"))]
+)
 
 
 def _normalize_item_code(value) -> str:
@@ -1337,7 +1341,7 @@ def get_finalized_labels(shipment_code: str, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/packing-slip/{shipment_code}")
+@router.get("/shipments/finalized/{shipment_code}/packing-data")
 async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db)):
     """
     Get packing slip data from database for a finalized shipment
@@ -1491,7 +1495,7 @@ async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/packing-slip/shipments/list")
+@router.get("/shipments/finalized/list")
 async def list_packing_slip_shipments(db: Session = Depends(get_db)):
     """
     List shipments available in shipment_boxes table

@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import StockItemResponse
 from app.services.crud import StockItemService
+from app.dependencies import require_module
 
-router = APIRouter(prefix="/stock-items", tags=["stock-items"])
+router = APIRouter(prefix="/stock-items", tags=["stock-items"], dependencies=[Depends(require_module("admin_ops"))])
 
 
 @router.get("/", response_model=list[StockItemResponse])

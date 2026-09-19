@@ -95,6 +95,18 @@ def require_permission(permission: str):
     
     return check_permission
 
+def require_module(module: str):
+    """Require access to an application module for the current active user."""
+    async def check_module(current_user: User = Depends(get_current_active_user)):
+        if not RBACService.can_perform_action(current_user, module):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied for module: {module}"
+            )
+        return current_user
+
+    return check_module
+
 
 async def get_current_user_optional(
     db: Session = Depends(get_db),

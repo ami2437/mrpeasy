@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, require_module
 from app.models import User
 from app.services.mrpeasy_client import mrpeasy_client
 import time
 
-router = APIRouter(prefix="/api/reports", tags=["reports"])
+router = APIRouter(
+    prefix="/api/reports",
+    tags=["reports"],
+    dependencies=[Depends(require_module("reports"))]
+)
 
 
 @router.get("/summary")
