@@ -58,6 +58,12 @@
         .items-table td.description { max-width: 300px; word-wrap: break-word; white-space: normal; }
         .items-table input, .items-table select { width: 100px; padding: 6px; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 13px; }
         .button-group { display: flex; gap: 15px; margin-top: 20px; }
+        .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+        .search-wrap { display: flex; flex-direction: column; gap: 6px; min-width: min(100%, 260px); }
+        .search-label { font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; }
+        .search-input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 14px; }
+        .sortable-header { cursor: pointer; user-select: none; }
+        .sortable-header .sort-indicator { display: inline-block; min-width: 10px; margin-left: 6px; color: rgba(255,255,255,0.85); }
         .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .btn-secondary { background: #6c757d; color: white; }
@@ -206,17 +212,23 @@
                     </table>
                     <button class="apply-bulk-btn" onclick="applyBulkPackSizes()">✓ Apply to All Shipments</button>
                 </div>
+                <div class="table-toolbar">
+                    <div class="search-wrap">
+                        <label class="search-label" for="shipment-search">Search</label>
+                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, order, customer, or PO" aria-label="Search shipments" />
+                    </div>
+                </div>
                 <div class="shipments-table-container">
                     <table class="shipments-table">
                         <thead>
                             <tr>
                                 <th></th>
-                                <th>Shipment Code</th>
-                                <th>Customer Order</th>
-                                <th>Customer Name</th>
-                                <th>PO #</th>
-                                <th>Status</th>
-                                <th>Items</th>
+                                <th class="sortable-header" data-sort-key="code">Shipment Code <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="customer_order_code">Customer Order <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="customer_name">Customer Name <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="po_number">PO # <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="status_txt">Status <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="products_count">Items <span class="sort-indicator">↕</span></th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -243,6 +255,7 @@
         let savedPackSizes = {};
         let packSizeCatalog = [];
         let currentShipmentView = 'active';
+        let shipmentSortState = { key: 'code', direction: 'asc' };
 
         function getToken() {
             return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
@@ -267,17 +280,21 @@
             overlay.classList.remove('active');
         }
         
-        async function toggleItems(index) {
-            const itemsRow = document.getElementById(`items-row-${index}`);
-            const expandBtn = document.querySelectorAll('.expand-btn')[index];
+        async function toggleItems(codeOrIndex) {
+            const shipmentCode = String(codeOrIndex);
+            const actualIndex = Number.isInteger(codeOrIndex) ? codeOrIndex : allShipments.findIndex(item => item.code === shipmentCode);
+            const itemsRow = document.getElementById(`items-row-${shipmentCode}`) || document.getElementById(`items-row-${actualIndex}`);
+            const expandBtn = document.querySelector(`.expand-btn[data-shipment-code="${shipmentCode}"]`) || document.querySelectorAll('.expand-btn')[actualIndex];
             
+            if (!itemsRow || !expandBtn) return;
+
             if (itemsRow.classList.contains('expanded')) {
                 itemsRow.classList.remove('expanded');
                 expandBtn.textContent = '▶';
                 return;
             }
 
-            const shipment = allShipments[index];
+            const shipment = allShipments[actualIndex];
             if (currentShipmentView === 'archived' && !shipment.details && !shipment.detailsError) {
                 expandBtn.textContent = '⏳';
                 try {
@@ -286,7 +303,7 @@
                     // detailsError is already set on the shipment; row will show it on re-render.
                 }
                 renderShipmentsTable();
-                await toggleItems(index);
+                await toggleItems(shipment.code);
                 return;
             }
 
@@ -850,6 +867,7 @@
                     } else {
                         await loadShipmentDetails();
                     }
+                    updateSortIndicators();
                     renderShipmentsTable();
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('shipments-container').style.display = 'block';
@@ -896,6 +914,7 @@
             document.getElementById('pack-size-processor-section').style.display = view === 'archived' ? 'none' : '';
             document.getElementById('finalize-all-btn').style.display = view === 'archived' ? 'none' : '';
             allShipments = [];
+            shipmentSortState = { key: 'code', direction: 'asc' };
             document.getElementById('shipments-container').style.display = 'none';
             document.getElementById('loading').style.display = 'block';
             document.getElementById('loading').textContent = view === 'archived'
@@ -1029,14 +1048,81 @@
             throw lastError || new Error('Batch finalization failed');
         }
         
+        function getShipmentSortValue(shipment, key) {
+            switch (key) {
+                case 'code':
+                    return String(shipment.code || '').toLowerCase();
+                case 'customer_order_code':
+                    return String(shipment.customer_order_code || '').toLowerCase();
+                case 'customer_name':
+                    return String(shipment.details?.customer_name || '').toLowerCase();
+                case 'po_number':
+                    return String(shipment.po_number || '').replace(/^\s*po\s*#?\s*/i, '').toLowerCase();
+                case 'status_txt':
+                    return String(shipment.status_txt || '').toLowerCase();
+                case 'products_count':
+                    return Number(shipment.products_count) || 0;
+                default:
+                    return '';
+            }
+        }
+
+        function sortShipments(shipments) {
+            const { key, direction } = shipmentSortState;
+            return [...shipments].sort((a, b) => {
+                const left = getShipmentSortValue(a, key);
+                const right = getShipmentSortValue(b, key);
+                const leftNumber = Number(left);
+                const rightNumber = Number(right);
+                let comparison = 0;
+
+                if (typeof left === 'string' && typeof right === 'string' && Number.isNaN(leftNumber) && Number.isNaN(rightNumber)) {
+                    comparison = left.localeCompare(right);
+                } else {
+                    comparison = leftNumber > rightNumber ? 1 : leftNumber < rightNumber ? -1 : 0;
+                }
+
+                return direction === 'asc' ? comparison : -comparison;
+            });
+        }
+
+        function getVisibleShipments() {
+            const searchInput = document.getElementById('shipment-search');
+            const searchValue = String(searchInput ? searchInput.value : '').trim().toLowerCase();
+            const source = Array.isArray(allShipments) ? allShipments : [];
+
+            return sortShipments(source.filter(shipment => {
+                if (!searchValue) return true;
+                const haystack = [
+                    shipment.code,
+                    shipment.customer_order_code,
+                    shipment.po_number,
+                    shipment.status_txt,
+                    shipment.details?.customer_name,
+                    shipment.details?.reference
+                ].join(' ').toLowerCase();
+                return haystack.includes(searchValue);
+            }));
+        }
+
+        function updateSortIndicators() {
+            document.querySelectorAll('.sortable-header').forEach(header => {
+                const indicator = header.querySelector('.sort-indicator');
+                if (!indicator) return;
+                const isActive = header.dataset.sortKey === shipmentSortState.key;
+                indicator.textContent = isActive ? (shipmentSortState.direction === 'asc' ? '↑' : '↓') : '↕';
+            });
+        }
+
         function renderShipmentsTable() {
             const tbody = document.getElementById('shipments-list');
             tbody.innerHTML = '';
+            const visibleShipments = getVisibleShipments();
             
             // Build unique items map for bulk entry
             const uniqueItems = {};
 
-            allShipments.forEach((shipment, index) => {
+            visibleShipments.forEach((shipment, index) => {
                 const details = shipment.details || {};
 
                 if (details.products) {
@@ -1061,11 +1147,12 @@
                 document.getElementById('bulk-items-section').style.display = 'none';
             }
             
-            allShipments.forEach((shipment, index) => {
+            visibleShipments.forEach((shipment) => {
                 const details = shipment.details || {};
                 const customerName = details.customer_name || 'N/A';
                 const reference = details.reference || 'N/A';
                 const detailsUnavailable = !Array.isArray(details.products);
+                const shipmentIndex = allShipments.findIndex(item => item.code === shipment.code);
                 // Archived shipments print from locally finalized data, which doesn't
                 // require the live shipment-detail fetch to have succeeded.
                 const printDisabled = detailsUnavailable && currentShipmentView !== 'archived';
@@ -1076,7 +1163,7 @@
                     shipmentRow.title = `Details unavailable: ${shipment.detailsError || 'Unknown error'}`;
                 }
                 shipmentRow.innerHTML = `
-                    <td><span class="expand-btn" onclick="toggleItems(${index})">▶</span></td>
+                    <td><span class="expand-btn" data-shipment-code="${shipment.code}" onclick="toggleItems('${shipment.code}')">▶</span></td>
                     <td><strong>${shipment.code}</strong></td>
                     <td>${shipment.customer_order_code || 'N/A'}</td>
                     <td>${detailsUnavailable ? 'Details unavailable' : customerName}</td>
@@ -1084,7 +1171,7 @@
                     <td>${shipment.status_txt || 'N/A'}</td>
                     <td>${shipment.products_count || 0}</td>
                     <td style="white-space: nowrap;">
-                        <button class="print-shipment-btn" onclick="generateAndPrintShipment(${index})" title="${printDisabled ? 'Shipment details unavailable' : 'Print this shipment'}" ${printDisabled ? 'disabled' : ''}>🖨️</button>
+                        <button class="print-shipment-btn" onclick="generateAndPrintShipment(${shipmentIndex})" title="${printDisabled ? 'Shipment details unavailable' : 'Print this shipment'}" ${printDisabled ? 'disabled' : ''}>🖨️</button>
                         ${currentShipmentView === 'archived' ? `<button class="print-shipment-btn" onclick="openPackingList()" title="View packing list for finalized shipments" style="margin-left: 6px;">📄</button>` : ''}
                     </td>
                 `;
@@ -1093,7 +1180,7 @@
                 // Items row (hidden by default)
                 const itemsRow = document.createElement('tr');
                 itemsRow.className = 'items-row';
-                itemsRow.id = `items-row-${index}`;
+                itemsRow.id = `items-row-${shipment.code}`;
                 const archivedNotice = currentShipmentView === 'archived'
                     ? `<p style="margin-bottom: 12px; color: #495057; font-size: 13px;">This shipment has already left MRPeasy's "ready" status. It is shown read-only — pack sizes cannot be changed. Use the print buttons to generate labels or view the packing list.</p>`
                     : '';
@@ -1103,20 +1190,20 @@
                                     <label style="font-weight: 600; color: #333;">Pallet #:</label>
                                     <input type="text" id="pallet-${shipment.code}" placeholder="Optional - for grouping on pallets" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 250px;">
                                 </div>
-                                <button class="btn btn-primary" onclick="finalizeShipment(${index})" style="padding: 10px 20px;">🔒 Finalize & Lock</button>
-                                <button class="btn btn-sync" id="sync-box-info-${shipment.code}" onclick="syncBoxInfo(${index})" style="padding: 10px 20px;" title="Send finalized box quantities to the matching MRPeasy order lines">Sync Box Info</button>
+                                <button class="btn btn-primary" onclick="finalizeShipment(${shipmentIndex})" style="padding: 10px 20px;">🔒 Finalize & Lock</button>
+                                <button class="btn btn-sync" id="sync-box-info-${shipment.code}" onclick="syncBoxInfo(${shipmentIndex})" style="padding: 10px 20px;" title="Send finalized box quantities to the matching MRPeasy order lines">Sync Box Info</button>
                             </div>
                             <div id="sync-box-info-status-${shipment.code}" class="shipment-action-status" role="status" aria-live="polite"></div>
                             <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
                                 <label style="font-weight: 600; color: #333;">Import Pack Sizes (Excel, optional):</label>
                                 <input type="file" id="pack-size-file-${shipment.code}" accept=".xlsx,.xls">
-                                <button class="btn btn-secondary" onclick="uploadPackSizesForShipment(${index})" style="padding: 8px 16px;">⬆️ Apply from File</button>
+                                <button class="btn btn-secondary" onclick="uploadPackSizesForShipment(${shipmentIndex})" style="padding: 8px 16px;">⬆️ Apply from File</button>
                                 <span id="pack-size-upload-status-${shipment.code}" style="font-size: 13px; color: #666;"></span>
                             </div>
                             <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: flex-start;">
                                 <label style="font-weight: 600; color: #333; margin-top: 6px;">Or Paste Pack Sizes:</label>
                                 <textarea id="pack-size-paste-${shipment.code}" rows="3" placeholder="Paste Item / Pack columns here, e.g. copied straight from Excel" style="flex: 1; max-width: 420px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 12px;"></textarea>
-                                <button class="btn btn-secondary" onclick="applyPastedPackSizesForShipment(${index})" style="padding: 8px 16px;">📋 Apply Pasted</button>
+                                <button class="btn btn-secondary" onclick="applyPastedPackSizesForShipment(${shipmentIndex})" style="padding: 8px 16px;">📋 Apply Pasted</button>
                             </div>`;
                 itemsRow.innerHTML = `
                     <td colspan="8">
@@ -1136,7 +1223,7 @@
                                     <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody id="items-list-${index}"></tbody>
+                            <tbody id="items-list-${shipment.code}"></tbody>
                         </table>
                     </td>
                 `;
@@ -1144,7 +1231,7 @@
                 
                 // Populate items - group by item_code + order_line to show combined items
                 if (details.products) {
-                    const itemsList = document.getElementById(`items-list-${index}`);
+                    const itemsList = document.getElementById(`items-list-${shipment.code}`);
                     
                     // Group products by item_code + order_line
                     const groupedProducts = {};
@@ -1234,7 +1321,7 @@
                         printButton.textContent = '🖨️';
                         printButton.title = `Print ${itemCode} labels for shipment ${shipment.code}`;
                         printButton.setAttribute('aria-label', printButton.title);
-                        printButton.addEventListener('click', () => generateAndPrintShipmentItem(index, groupKey, printButton));
+                        printButton.addEventListener('click', () => generateAndPrintShipmentItem(shipmentIndex, groupKey, printButton));
                         actionsCell.appendChild(printButton);
                         
                         row.appendChild(itemCodeCell);
@@ -1629,6 +1716,23 @@
             }
         }
         
+        document.getElementById('shipment-search')?.addEventListener('input', renderShipmentsTable);
+        document.querySelectorAll('.sortable-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const key = header.dataset.sortKey;
+                if (!key) return;
+                if (shipmentSortState.key === key) {
+                    shipmentSortState.direction = shipmentSortState.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    shipmentSortState.key = key;
+                    shipmentSortState.direction = key === 'products_count' ? 'desc' : 'asc';
+                }
+                updateSortIndicators();
+                renderShipmentsTable();
+            });
+        });
+        updateSortIndicators();
+
         function renderBulkItemsTable(uniqueItems) {
             const bulkItemsList = document.getElementById('bulk-items-list');
             const bulkSection = document.getElementById('bulk-items-section');

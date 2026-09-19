@@ -42,6 +42,12 @@
         .status-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; }
         .status-shipped { background: #dcfce7; color: #166534; }
         .status-in-progress { background: #fee2e2; color: #991b1b; }
+        .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+        .search-wrap { display: flex; flex-direction: column; gap: 6px; min-width: min(100%, 240px); }
+        .search-label { font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; }
+        .search-input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 14px; }
+        .sortable-header { cursor: pointer; user-select: none; }
+        .sortable-header .sort-indicator { display: inline-block; min-width: 10px; margin-left: 6px; color: rgba(255,255,255,0.85); }
         .packing-list-container { display: none; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); margin-bottom: 30px; }
         .packing-list {
             page-break-after: auto;
@@ -139,18 +145,24 @@
                     <button class="status-tab" data-status="shipped" type="button">Shipped</button>
                     <button class="status-tab" data-status="in-progress" type="button">In Progress</button>
                 </div>
+                <div class="table-toolbar">
+                    <div class="search-wrap">
+                        <label class="search-label" for="shipment-search">Search</label>
+                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, customer, or PO" aria-label="Search shipments" />
+                    </div>
+                </div>
                 <div class="shipments-table-container">
                     <table class="shipments-table">
                         <thead>
                             <tr>
                                 <th></th>
-                                <th>Shipment Code</th>
-                                <th>PO #</th>
-                                <th>Customer</th>
-                                <th>Status</th>
-                                <th>Finalized Date</th>
-                                <th>Total Boxes</th>
-                                <th>Items</th>
+                                <th class="sortable-header" data-sort-key="code">Shipment Code <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="po_number">PO # <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="customer_name">Customer <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="status">Status <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="finalized_at">Finalized Date <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="total_boxes">Total Boxes <span class="sort-indicator">↕</span></th>
+                                <th class="sortable-header" data-sort-key="items">Items <span class="sort-indicator">↕</span></th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -174,6 +186,7 @@
         let allShipments = [];
         let activeStatusFilter = 'all';
         let shipmentStatusMap = {};
+        let shipmentSortState = { key: 'finalized_at', direction: 'desc' };
 
         function getShipmentStatus(shipmentCode) {
             const normalizedCode = String(shipmentCode || '').trim();
@@ -316,16 +329,65 @@
             }
         }
         
+        function getShipmentSortValue(shipment, key) {
+            switch (key) {
+                case 'code':
+                    return String(shipment.code || '').toLowerCase();
+                case 'po_number':
+                    return String(stripPoPrefix(shipment.po_number) || '').toLowerCase();
+                case 'customer_name':
+                    return String(shipment.customer_name || '').toLowerCase();
+                case 'status':
+                    return getShipmentStatus(shipment.code);
+                case 'finalized_at':
+                    return shipment.finalized_at ? new Date(shipment.finalized_at).getTime() : 0;
+                case 'total_boxes':
+                    return Number(shipment.total_boxes) || 0;
+                case 'items':
+                    return (shipment.packingSlip && shipment.packingSlip.items) ? shipment.packingSlip.items.length : 0;
+                default:
+                    return '';
+            }
+        }
+
+        function sortShipments(shipments) {
+            const { key, direction } = shipmentSortState;
+            return [...shipments].sort((a, b) => {
+                const left = getShipmentSortValue(a, key);
+                const right = getShipmentSortValue(b, key);
+                let comparison = 0;
+
+                if (typeof left === 'string' && typeof right === 'string') {
+                    comparison = left.localeCompare(right);
+                } else {
+                    comparison = Number(left) > Number(right) ? 1 : Number(left) < Number(right) ? -1 : 0;
+                }
+
+                return direction === 'asc' ? comparison : -comparison;
+            });
+        }
+
         function renderShipmentsTable() {
             const tbody = document.getElementById('shipments-list');
             tbody.innerHTML = '';
+            const searchInput = document.getElementById('shipment-search');
+            const searchValue = String(searchInput ? searchInput.value : '').trim().toLowerCase();
 
-            const filteredShipments = allShipments.filter(shipment => {
+            const filteredShipments = sortShipments(allShipments.filter(shipment => {
                 const status = getShipmentStatus(shipment.code);
-                if (activeStatusFilter === 'all') return true;
-                if (activeStatusFilter === 'shipped') return status === 'shipped';
-                return status === 'in-progress';
-            });
+                if (activeStatusFilter !== 'all' && status !== activeStatusFilter) return false;
+                if (!searchValue) return true;
+                const haystack = [
+                    shipment.code,
+                    shipment.po_number,
+                    shipment.customer_name,
+                    status,
+                    shipment.finalized_at,
+                    shipment.total_boxes,
+                    shipment.packingSlip && shipment.packingSlip.items ? shipment.packingSlip.items.length : 0
+                ].join(' ').toLowerCase();
+                return haystack.includes(searchValue);
+            }));
             
             filteredShipments.forEach((shipment) => {
                 const originalIndex = allShipments.findIndex(item => item.code === shipment.code);
@@ -339,7 +401,7 @@
                 // Main shipment row
                 const shipmentRow = document.createElement('tr');
                 shipmentRow.innerHTML = `
-                    <td><span class="expand-btn" onclick="toggleItems(${originalIndex})">▶</span></td>
+                    <td><span class="expand-btn" data-shipment-code="${shipment.code}" onclick="toggleItems('${shipment.code}')">▶</span></td>
                     <td><strong>${shipment.code}</strong></td>
                     <td>${stripPoPrefix(shipment.po_number) || 'N/A'}</td>
                     <td>${shipment.customer_name || 'N/A'}</td>
@@ -420,10 +482,14 @@
             });
         }
         
-        function toggleItems(index) {
-            const itemsRow = document.getElementById(`items-row-${index}`);
-            const expandBtn = document.querySelectorAll('.expand-btn')[index];
+        function toggleItems(indexOrCode) {
+            const shipmentCode = String(indexOrCode);
+            const actualIndex = Number.isInteger(indexOrCode) ? indexOrCode : allShipments.findIndex(item => item.code === shipmentCode);
+            const itemsRow = document.getElementById(`items-row-${actualIndex}`);
+            const expandBtn = document.querySelector(`.expand-btn[data-shipment-code="${shipmentCode}"]`) || document.querySelectorAll('.expand-btn')[actualIndex];
             
+            if (!itemsRow || !expandBtn) return;
+
             if (itemsRow.classList.contains('expanded')) {
                 itemsRow.classList.remove('expanded');
                 expandBtn.textContent = '▶';
@@ -635,6 +701,15 @@ E-mail: sales@atindsupplies.com</div>
             errorDiv.textContent = message;
         }
         
+        function updateSortIndicators() {
+            document.querySelectorAll('.sortable-header').forEach(header => {
+                const indicator = header.querySelector('.sort-indicator');
+                if (!indicator) return;
+                const isActive = header.dataset.sortKey === shipmentSortState.key;
+                indicator.textContent = isActive ? (shipmentSortState.direction === 'asc' ? '↑' : '↓') : '↕';
+            });
+        }
+
         document.querySelectorAll('.status-tab').forEach(button => {
             button.addEventListener('click', () => {
                 activeStatusFilter = button.dataset.status || 'all';
@@ -642,6 +717,25 @@ E-mail: sales@atindsupplies.com</div>
                 renderShipmentsTable();
             });
         });
+
+        document.getElementById('shipment-search')?.addEventListener('input', renderShipmentsTable);
+
+        document.querySelectorAll('.sortable-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const key = header.dataset.sortKey;
+                if (!key) return;
+                if (shipmentSortState.key === key) {
+                    shipmentSortState.direction = shipmentSortState.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    shipmentSortState.key = key;
+                    shipmentSortState.direction = key === 'finalized_at' || key === 'total_boxes' || key === 'items' ? 'desc' : 'asc';
+                }
+                updateSortIndicators();
+                renderShipmentsTable();
+            });
+        });
+
+        updateSortIndicators();
 
         AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
             if (user) loadShipments();
