@@ -15,7 +15,7 @@ import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
 from app.dependencies import require_module, require_permission
-from app.models import ShipmentBox, PackSize, Label, User
+from app.models import ShipmentBox, PackSize, Label, User, PalletWeight
 
 class FinalizeShipmentRequest(BaseModel):
     pallet_number: Optional[str] = None
@@ -42,6 +42,20 @@ class ProcessPackSizesRequest(BaseModel):
 class UpdatePackSizeRequest(BaseModel):
     item_code: str
     pack_size: int
+
+
+class PastePalletNumbersRequest(BaseModel):
+    text: str
+
+
+class UpdatePalletNumbersRequest(BaseModel):
+    # Keyed by "item_code:order_line" -> pallet number (blank string clears it)
+    pallet_numbers: Dict[str, str] = {}
+
+
+class UpdatePalletWeightsRequest(BaseModel):
+    # Keyed by pallet number -> weight
+    weights: Dict[str, Optional[float]] = {}
 
 
 router = APIRouter(
@@ -99,6 +113,102 @@ def _serialize_finalized_labels(boxes: List[ShipmentBox]) -> List[Dict]:
         })
 
     return labels
+
+
+def _extract_pallet_numbers_from_rows(rows: List[list]):
+    """
+    Given rows of raw cell values (first row may be a header), detect
+    "item"/"pallet"/"weight" header columns (case-insensitive) or fall back to
+    column 1 = item #, column 2 = pallet number, column 3 = weight (optional).
+    Blank pallet numbers are skipped (pallet assignment is optional per item).
+
+    The same pallet number can repeat across rows (multiple items on one
+    pallet); weight only needs to be filled in on one of those rows. If two
+    rows for the same pallet number have different non-blank weights, that's
+    reported as a conflict instead of guessing which one is correct.
+
+    Returns (pallet_numbers, pallet_weights, weight_conflicts):
+      - pallet_numbers: {item_code: pallet_number}
+      - pallet_weights: {pallet_number: weight} (only for pallets with a single, consistent weight)
+      - weight_conflicts: [{pallet_number, weights: [...]}] for pallets with conflicting weights
+    """
+    if not rows:
+        return {}, {}, []
+
+    item_col = 0
+    pallet_col = 1
+    weight_col = 2
+
+    header_row = rows[0]
+    item_col_match = None
+    pallet_col_match = None
+    weight_col_match = None
+    for col_idx, header_value in enumerate(header_row):
+        if header_value is None or pd.isna(header_value):
+            continue
+        header_text = str(header_value).strip().lower()
+        if not header_text:
+            continue
+        if item_col_match is None and 'item' in header_text:
+            item_col_match = col_idx
+        if pallet_col_match is None and 'pallet' in header_text:
+            pallet_col_match = col_idx
+        if weight_col_match is None and 'weight' in header_text:
+            weight_col_match = col_idx
+
+    data_rows = rows
+    if item_col_match is not None and pallet_col_match is not None:
+        item_col = item_col_match
+        pallet_col = pallet_col_match
+        weight_col = weight_col_match if weight_col_match is not None else weight_col
+        data_rows = rows[1:]
+
+    pallet_numbers: Dict[str, str] = {}
+    weight_occurrences: Dict[str, List[float]] = {}
+
+    for row in data_rows:
+        if len(row) <= max(item_col, pallet_col):
+            continue
+        item_code_raw = row[item_col]
+        pallet_raw = row[pallet_col]
+
+        if item_code_raw is None or pd.isna(item_code_raw):
+            continue
+        item_code = str(item_code_raw).strip()
+        if not item_code:
+            continue
+
+        if pallet_raw is None or pd.isna(pallet_raw):
+            continue
+        pallet_number = str(pallet_raw).strip()
+        if not pallet_number:
+            continue
+
+        pallet_numbers[item_code] = pallet_number
+
+        if weight_col is not None and len(row) > weight_col:
+            weight_raw = row[weight_col]
+            if weight_raw is not None and not pd.isna(weight_raw):
+                weight_text = str(weight_raw).strip()
+                if weight_text:
+                    # Accept "2,169.00" style thousands separators (and stray currency symbols).
+                    cleaned_weight_text = re.sub(r'[,$\s]', '', weight_text)
+                    try:
+                        weight_value = float(cleaned_weight_text)
+                        weight_occurrences.setdefault(pallet_number, []).append(weight_value)
+                    except (TypeError, ValueError):
+                        pass
+
+    pallet_weights: Dict[str, float] = {}
+    weight_conflicts = []
+    for pallet_number, weights in weight_occurrences.items():
+        unique_weights = sorted(set(weights))
+        if len(unique_weights) > 1:
+            weight_conflicts.append({'pallet_number': pallet_number, 'weights': unique_weights})
+        elif unique_weights:
+            pallet_weights[pallet_number] = unique_weights[0]
+
+    return pallet_numbers, pallet_weights, weight_conflicts
 
 
 def _extract_pack_sizes_from_rows(rows: List[list]) -> Dict[str, int]:
@@ -439,6 +549,87 @@ async def parse_pack_sizes_text(payload: PastePackSizesRequest):
             'success': True,
             'count': len(pack_sizes),
             'pack_sizes': pack_sizes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse pasted text: {str(e)}")
+
+
+@router.post("/pallet-numbers/parse")
+async def parse_pallet_numbers_excel(file: UploadFile = File(...)):
+    """
+    Parse an uploaded Excel sheet mapping item # to pallet number (and optional weight).
+
+    If the header row contains a column with "item", "pallet", and/or "weight"
+    in its name (case-insensitive), those columns are used. Otherwise falls
+    back to column 1 = item #, column 2 = pallet number, column 3 = weight.
+    If the same pallet number has conflicting weight values across rows, the
+    whole upload is rejected so the file can be fixed and re-submitted.
+    """
+    try:
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents), header=None, dtype=str)
+        pallet_numbers, pallet_weights, weight_conflicts = _extract_pallet_numbers_from_rows(df.values.tolist())
+
+        if not pallet_numbers:
+            raise HTTPException(status_code=400, detail="No valid item #/pallet number rows found in the uploaded file")
+
+        if weight_conflicts:
+            conflict_summary = '; '.join(
+                f"pallet {c['pallet_number']} has conflicting weights {c['weights']}" for c in weight_conflicts
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Weight discrepancy found, nothing was applied: {conflict_summary}. Fix the file and try again."
+            )
+
+        return {
+            'success': True,
+            'count': len(pallet_numbers),
+            'pallet_numbers': pallet_numbers,
+            'pallet_weights': pallet_weights
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(e)}")
+
+
+@router.post("/pallet-numbers/parse-text")
+async def parse_pallet_numbers_text(payload: PastePalletNumbersRequest):
+    """
+    Parse pasted item #/pallet number/weight data (e.g. copied straight out of Excel).
+    Cells are split on tabs when present, otherwise on commas or 2+ spaces.
+    If the same pallet number has conflicting weight values across rows, the
+    whole paste is rejected so the data can be fixed and re-submitted.
+    """
+    try:
+        lines = [line for line in payload.text.splitlines() if line.strip() != '']
+        rows = []
+        for line in lines:
+            cells = line.split('\t') if '\t' in line else re.split(r',|\s{2,}', line.strip())
+            rows.append([cell.strip() for cell in cells])
+
+        pallet_numbers, pallet_weights, weight_conflicts = _extract_pallet_numbers_from_rows(rows)
+
+        if not pallet_numbers:
+            raise HTTPException(status_code=400, detail="No valid item #/pallet number rows found in the pasted text")
+
+        if weight_conflicts:
+            conflict_summary = '; '.join(
+                f"pallet {c['pallet_number']} has conflicting weights {c['weights']}" for c in weight_conflicts
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Weight discrepancy found, nothing was applied: {conflict_summary}. Fix the pasted data and try again."
+            )
+
+        return {
+            'success': True,
+            'count': len(pallet_numbers),
+            'pallet_numbers': pallet_numbers,
+            'pallet_weights': pallet_weights
         }
     except HTTPException:
         raise
@@ -1372,6 +1563,80 @@ def get_finalized_labels(shipment_code: str, db: Session = Depends(get_db)):
     }
 
 
+@router.put("/shipments/finalized/{shipment_code}/pallet-numbers")
+def update_pallet_numbers(
+    shipment_code: str,
+    payload: UpdatePalletNumbersRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Assign/edit pallet numbers per item on an already-finalized shipment.
+
+    This is the only field allowed to change after finalize (pack sizes,
+    box breakdowns, and other finalized data stay locked). Works the same
+    whether the shipment is still 'ready' in MRPeasy or already archived,
+    since pallet data is purely local. Keyed by "item_code:order_line";
+    a blank value clears the pallet number for that item.
+    """
+    boxes = db.query(ShipmentBox).filter(ShipmentBox.shipment_code == shipment_code).all()
+    if not boxes:
+        raise HTTPException(status_code=404, detail=f"No finalized boxes found for {shipment_code}")
+
+    updated_count = 0
+    for key, pallet_number in payload.pallet_numbers.items():
+        item_code, _, order_line = key.partition(':')
+        order_line = order_line or '1'
+        normalized_pallet = (pallet_number or '').strip() or None
+
+        for box in boxes:
+            if box.item_code == item_code and str(box.order_line or '1') == order_line:
+                box.pallet_number = normalized_pallet
+                updated_count += 1
+
+    db.commit()
+    return {'success': True, 'shipment_code': shipment_code, 'updated_boxes': updated_count}
+
+
+@router.get("/shipments/finalized/{shipment_code}/pallet-weights")
+def get_pallet_weights(shipment_code: str, db: Session = Depends(get_db)):
+    records = db.query(PalletWeight).filter(PalletWeight.shipment_code == shipment_code).all()
+    return {
+        'success': True,
+        'shipment_code': shipment_code,
+        'weights': {record.pallet_number: record.weight for record in records}
+    }
+
+
+@router.put("/shipments/finalized/{shipment_code}/pallet-weights")
+def update_pallet_weights(
+    shipment_code: str,
+    payload: UpdatePalletWeightsRequest,
+    db: Session = Depends(get_db)
+):
+    """Save the weight entered for each pallet number within a shipment."""
+    updated = []
+    for pallet_number, weight in payload.weights.items():
+        pallet_number = (pallet_number or '').strip()
+        if not pallet_number:
+            continue
+
+        record = db.query(PalletWeight).filter(
+            PalletWeight.shipment_code == shipment_code,
+            PalletWeight.pallet_number == pallet_number
+        ).first()
+
+        if record:
+            record.weight = weight
+            record.updated_at = datetime.utcnow()
+        else:
+            record = PalletWeight(shipment_code=shipment_code, pallet_number=pallet_number, weight=weight)
+            db.add(record)
+        updated.append(pallet_number)
+
+    db.commit()
+    return {'success': True, 'shipment_code': shipment_code, 'updated_pallets': updated}
+
+
 @router.get("/shipments/finalized/{shipment_code}/packing-data")
 async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db)):
     """
@@ -1511,11 +1776,56 @@ async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db
                 'lot_codes': unique_lot_codes,
                 'all_boxes': item_data['all_boxes']
             })
-        
+
+        # Nut variants (e.g. "15353-NUTS", "15353-NUT", "15353 - nut") inherit their
+        # matching bolt/base item's pallet number when no pallet # was explicitly set for them.
+        base_item_pallets = {}
+        for item_data in packing_slip_items:
+            normalized_code = _normalize_item_code(item_data['item_code'])
+            if not normalized_code.endswith('-NUT') and item_data.get('pallet_number'):
+                base_item_pallets[normalized_code] = item_data['pallet_number']
+
+        for item_data in packing_slip_items:
+            if item_data.get('pallet_number'):
+                continue
+            normalized_code = _normalize_item_code(item_data['item_code'])
+            if normalized_code.endswith('-NUT'):
+                base_code = normalized_code[:-len('-NUT')]
+                if base_code in base_item_pallets:
+                    item_data['pallet_number'] = base_item_pallets[base_code]
+
+        # Group items by pallet number for the pallet summary table (optional field, skip unassigned items)
+        pallet_groups = {}
+        for item_data in packing_slip_items:
+            pallet_number = item_data.get('pallet_number')
+            if not pallet_number:
+                continue
+            if pallet_number not in pallet_groups:
+                pallet_groups[pallet_number] = {
+                    'pallet_number': pallet_number,
+                    'item_codes': [],
+                    'po_number': item_data.get('po_number')
+                }
+            pallet_groups[pallet_number]['item_codes'].append(item_data['item_code'])
+
+        weight_records = db.query(PalletWeight).filter(PalletWeight.shipment_code == shipment_code).all()
+        weight_by_pallet = {record.pallet_number: record.weight for record in weight_records}
+
+        pallets = [
+            {
+                'pallet_number': group['pallet_number'],
+                'item_codes': group['item_codes'],
+                'po_number': group['po_number'],
+                'weight': weight_by_pallet.get(group['pallet_number'])
+            }
+            for group in sorted(pallet_groups.values(), key=lambda g: g['pallet_number'])
+        ]
+
         return {
             'success': True,
             'shipment_code': shipment_code,
             'items': packing_slip_items,
+            'pallets': pallets,
             'total_items': len(packing_slip_items),
             'note': 'Qty remaining uses customer order API fields: quantity - shipped'
         }

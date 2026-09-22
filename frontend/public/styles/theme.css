@@ -196,4 +196,8 @@ textarea:focus,
     .dashboard-btn {
         box-shadow: none !important;
     }
+
+    .shared-dashboard-button {
+        display: none !important;
+    }
 }

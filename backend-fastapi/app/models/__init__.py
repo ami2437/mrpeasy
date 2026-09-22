@@ -170,6 +170,18 @@ class ShipmentBox(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PalletWeight(Base):
+    """Weight entered per pallet number within a finalized shipment."""
+    __tablename__ = "pallet_weights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_code = Column(String, nullable=False, index=True)
+    pallet_number = Column(String, nullable=False)
+    weight = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class PackSize(Base):
     """Persistent default pack size mapped to a normalized item code."""
     __tablename__ = "pack_sizes"

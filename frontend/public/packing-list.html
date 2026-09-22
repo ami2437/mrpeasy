@@ -31,6 +31,23 @@
         .packing-details th { background: #2c3e50; color: #fff; padding: 10px; text-align: left; font-size: 12px; border-bottom: 2px solid #1f2d3a; font-weight: 600; border: 1px solid #1f2d3a; }
         .packing-details td { padding: 10px; border-bottom: 1px solid #e0e0e0; font-size: 13px; border: 1px solid #e0e0e0; }
         .packing-details td.description { max-width: 300px; word-wrap: break-word; white-space: normal; }
+        .pallet-input { width: 90px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; }
+        .pallet-tools { margin: 10px 0; padding: 10px; background: #f1f5f9; border-radius: 6px; display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+        .pallet-tools textarea { flex: 1; min-width: 220px; max-width: 360px; min-height: 54px; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-family: monospace; font-size: 12px; }
+        .pallet-tools .btn-mini { padding: 6px 12px; border: 1px solid #667eea; background: white; color: #667eea; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }
+        .pallet-tools .btn-mini:hover { background: #667eea; color: white; }
+        .pallet-status { font-size: 12px; color: #475569; align-self: center; }
+        .pallet-weights-table { width: 100%; max-width: 480px; margin-top: 10px; border-collapse: collapse; }
+        .pallet-weights-table th, .pallet-weights-table td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 12px; text-align: left; }
+        .pallet-weights-table th { background: #e2e8f0; }
+        .pallet-weights-table input { width: 100px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; }
+        .pallet-summary-table { width: 100%; border-collapse: collapse; margin-top: 24px; table-layout: fixed; border: 1px solid #1f2d3a; }
+        .pallet-summary-table th { background: #e5e7eb; color: #000; padding: 6px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; border: 1px solid #7f8b96; }
+        .pallet-summary-table td { padding: 6px 8px; font-size: 11px; border: 1px solid #9aa4ad; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; }
+        .pallet-summary-table th:nth-child(1), .pallet-summary-table td:nth-child(1) { width: 9%; }
+        .pallet-summary-table th:nth-child(2), .pallet-summary-table td:nth-child(2) { width: 44%; }
+        .pallet-summary-table th:nth-child(3), .pallet-summary-table td:nth-child(3) { width: 12%; }
+        .pallet-summary-table th:nth-child(4), .pallet-summary-table td:nth-child(4) { width: 22%; }
         .button-group { display: flex; gap: 15px; margin-top: 20px; }
         .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
@@ -55,29 +72,29 @@
             padding: 16px;
             margin-bottom: 30px;
             position: relative;
-            overflow: hidden;
             font-family: "Century Gothic", "Trebuchet MS", "Segoe UI", sans-serif;
             font-size: 11px;
             line-height: 1.35;
         }
         .packing-list:not(:last-child) { page-break-after: always; }
         .packing-list-header {
-            text-align: center;
+            display: table;
+            width: 100%;
+            table-layout: fixed;
             margin-bottom: 12px;
-            border-bottom: 2px solid #1f2d3a;
             padding-bottom: 8px;
+            border-bottom: 2px solid #1f2d3a;
+            break-inside: avoid;
+            page-break-inside: avoid;
         }
-        .packing-list-logo-slot {
-            position: absolute;
-            top: 10px;
-            right: 10px;
+        .packing-list-header-text { display: table-cell; vertical-align: middle; text-align: center; }
+        .packing-list-logo-slot, .packing-list-logo-spacer {
+            display: table-cell;
             width: 120px;
             height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            vertical-align: middle;
+            text-align: center;
             overflow: hidden;
-            z-index: 2;
         }
         .packing-list-logo {
             width: 100%;
@@ -102,7 +119,7 @@
         .info-value.address, .info-value.supplier { white-space: pre-line; font-weight: 500; }
         .items-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; border: 1px solid #1f2d3a; }
         .items-table th:first-child, .items-table td:first-child { width: 11%; }
-        .items-table th { background: #2c3e50; color: white; padding: 7px 8px; text-align: left; font-size: 10px; font-weight: 700; border: 1px solid #7f8b96; letter-spacing: 0.03em; text-transform: uppercase; white-space: normal; word-break: normal; overflow-wrap: normal; hyphens: none; }
+        .items-table th { background: #e5e7eb; color: #000; padding: 7px 8px; text-align: left; font-size: 10px; font-weight: 800; border: 1px solid #7f8b96; letter-spacing: 0.03em; text-transform: uppercase; white-space: normal; word-break: normal; overflow-wrap: normal; hyphens: none; }
         .items-table td { padding: 7px 8px; border: 1px solid #9aa4ad; font-size: 11px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
         .items-table tr:nth-child(even) { background: #f8f9fa; }
         .packing-list-footer { text-align: center; margin-top: 12px; padding-top: 8px; border-top: 1px solid #7f8b96; font-size: 11px; color: #666; }
@@ -117,11 +134,19 @@
         .dashboard-btn { position: fixed; top: 16px; right: 16px; z-index: 10001; background: rgba(255, 255, 255, 0.95); color: #333; border: 1px solid #d0d0d0; padding: 8px 14px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
         .dashboard-btn:hover { background: #ffffff; }
         @media print {
-            @page { size: Letter portrait; margin: 0.2in; }
+            @page {
+                size: Letter portrait;
+                margin: 0.2in 0.2in 0.4in;
+                @bottom-right {
+                    content: "Page " counter(page);
+                    font-size: 9px;
+                    color: #444;
+                }
+            }
             body { background: white; padding: 0; }
             .header, .controls, .shipments-table-container, .button-group { display: none; }
             .packing-list-container { box-shadow: none !important; border-radius: 0 !important; padding: 0; }
-            .packing-list { border: none; box-shadow: none !important; }
+            .packing-list { border: none; box-shadow: none !important; overflow: visible !important; }
             .dashboard-btn { display: none !important; }
         }
     </style>
@@ -203,6 +228,14 @@
             return shipment.includeBoxDetails !== false;
         }
 
+        function setPalletDetailsOption(index, includePalletNumbers) {
+            allShipments[index].includePalletNumbers = includePalletNumbers;
+        }
+
+        function shouldIncludePalletNumbers(shipment) {
+            return shipment.includePalletNumbers === true;
+        }
+
         function escapeAttribute(value) {
             return String(value ?? '')
                 .replace(/&/g, '&amp;')
@@ -214,6 +247,15 @@
 
         function stripPoPrefix(value) {
             return String(value ?? '').replace(/^\s*po\s*#?\s*/i, '').trim();
+        }
+
+        function getDocumentLogoMarkup(slotClass, imageClass) {
+            if (!COMPANY_LOGO_URL) {
+                return '';
+            }
+
+            const safeLogoUrl = escapeAttribute(COMPANY_LOGO_URL);
+            return `<div class="${slotClass}" aria-hidden="true"><img class="${imageClass}" src="${safeLogoUrl}" alt=""></div>`;
         }
 
         function formatDeliveryDate(rawValue) {
@@ -233,15 +275,6 @@
                 return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
             }
             return String(rawValue);
-        }
-
-        function getDocumentLogoMarkup(slotClass, imageClass) {
-            if (!COMPANY_LOGO_URL) {
-                return '';
-            }
-
-            const safeLogoUrl = escapeAttribute(COMPANY_LOGO_URL);
-            return `<div class="${slotClass}" aria-hidden="true"><img class="${imageClass}" src="${safeLogoUrl}" alt=""></div>`;
         }
 
         async function checkBackend() {
@@ -301,7 +334,8 @@
                         delivery_date: s.delivery_date,
                         finalized_at: s.finalized_at,
                         total_boxes: s.total_boxes,
-                        includeBoxDetails: true
+                        includeBoxDetails: true,
+                        includePalletNumbers: false
                     }));
                     await loadShipmentStatusMap();
                     await loadShipmentDetails();
@@ -414,6 +448,10 @@
                             <input type="checkbox" ${shipment.includeBoxDetails ? 'checked' : ''} onchange="setBoxDetailsOption(${originalIndex}, this.checked)">
                             Box details
                         </label>
+                        <label style="margin-left: 8px;">
+                            <input type="checkbox" ${shipment.includePalletNumbers ? 'checked' : ''} onchange="setPalletDetailsOption(${originalIndex}, this.checked)">
+                            Pallet #
+                        </label>
                         <button class="print-shipment-btn" onclick="generateAndPrintPackingList(${originalIndex})" title="Generate packing list">📋</button>
                         <button class="delete-shipment-btn" onclick="deleteFinalizedShipment(${originalIndex})" title="Delete finalized packing list">🗑️</button>
                     </td>
@@ -426,6 +464,15 @@
                 itemsRow.id = `items-row-${originalIndex}`;
                 itemsRow.innerHTML = `
                     <td colspan="9">
+                        <div class="pallet-tools">
+                            <textarea id="pallet-paste-${originalIndex}" placeholder="Item&#9;Pallet&#9;Weight (optional)&#10;16713&#9;PLT-1&#9;250&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300"></textarea>
+                            <button class="btn-mini" onclick="applyPastedPalletNumbers(${originalIndex})">📋 Apply Pasted</button>
+                            <input type="file" id="pallet-file-${originalIndex}" accept=".xlsx,.xls" style="max-width: 200px;">
+                            <button class="btn-mini" onclick="uploadPalletNumbersFile(${originalIndex})">⬆️ Apply from File</button>
+                            <button class="btn-mini" onclick="savePalletNumbers(${originalIndex})">💾 Save Pallet #s</button>
+                            <span id="pallet-status-${originalIndex}" class="pallet-status"></span>
+                        </div>
+                        <div class="pallet-status" style="margin: -4px 0 8px;">Columns: Item #, Pallet #, Weight (optional, 3rd column). Same pallet # can repeat across rows; only fill weight once per pallet.</div>
                         <table class="packing-details">
                             <thead>
                                 <tr>
@@ -435,10 +482,12 @@
                                     <th>Qty Shipped</th>
                                     <th>Qty Remaining</th>
                                     <th>Box Breakdown</th>
+                                    <th>Pallet #</th>
                                 </tr>
                             </thead>
                             <tbody id="items-list-${originalIndex}"></tbody>
                         </table>
+                        <div id="pallet-weights-container-${originalIndex}"></div>
                     </td>
                 `;
                 tbody.appendChild(itemsRow);
@@ -469,15 +518,29 @@
                         const boxCell = document.createElement('td');
                         boxCell.textContent = item.box_breakdown || '';
 
+                        const palletCell = document.createElement('td');
+                        const palletInput = document.createElement('input');
+                        palletInput.type = 'text';
+                        palletInput.className = 'pallet-input';
+                        palletInput.placeholder = 'Optional';
+                        palletInput.value = item.pallet_number || '';
+                        palletInput.dataset.itemCode = item.item_code;
+                        palletInput.dataset.orderLine = item.order_line || '1';
+                        palletInput.addEventListener('input', () => renderPalletWeightRows(originalIndex));
+                        palletCell.appendChild(palletInput);
+
                         row.appendChild(itemCodeCell);
                         row.appendChild(descCell);
                         row.appendChild(orderedCell);
                         row.appendChild(qtyCell);
                         row.appendChild(remainingCell);
                         row.appendChild(boxCell);
+                        row.appendChild(palletCell);
 
                         itemsList.appendChild(row);
                     });
+
+                    renderPalletWeightRows(originalIndex);
                 }
             });
         }
@@ -513,6 +576,244 @@
             displayPackingList(shipment, packingSlip);
             hideLoading();
             setTimeout(() => window.print(), 500);
+        }
+
+        function applyPalletNumbersMap(index, palletNumbers, palletWeights) {
+            const itemsList = document.getElementById(`items-list-${index}`);
+            if (!itemsList) return;
+
+            let appliedCount = 0;
+            itemsList.querySelectorAll('.pallet-input').forEach(input => {
+                const value = palletNumbers[input.dataset.itemCode];
+                if (value) {
+                    input.value = value;
+                    appliedCount++;
+                }
+            });
+
+            const shipment = allShipments[index];
+            shipment._pendingPalletWeights = palletWeights || {};
+            renderPalletWeightRows(index);
+            return appliedCount;
+        }
+
+        async function applyPastedPalletNumbers(index) {
+            const textarea = document.getElementById(`pallet-paste-${index}`);
+            const status = document.getElementById(`pallet-status-${index}`);
+            const text = textarea ? textarea.value.trim() : '';
+
+            if (!text) {
+                if (status) status.textContent = 'Paste item # / pallet # data first.';
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pallet-numbers/parse-text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    const message = data.detail || 'Failed to parse pasted text';
+                    if (status) status.textContent = `❌ ${message}`;
+                    alert(message);
+                    return;
+                }
+
+                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {});
+                if (status) status.textContent = `✓ Applied pallet #s to ${appliedCount} item row(s) from ${data.count} pasted entries.`;
+            } catch (error) {
+                if (status) status.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+
+        async function uploadPalletNumbersFile(index) {
+            const fileInput = document.getElementById(`pallet-file-${index}`);
+            const status = document.getElementById(`pallet-status-${index}`);
+
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                if (status) status.textContent = 'Please choose an Excel file first.';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            if (status) status.textContent = 'Uploading...';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/pallet-numbers/parse`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    const message = data.detail || 'Failed to parse file';
+                    if (status) status.textContent = `❌ ${message}`;
+                    alert(message);
+                    return;
+                }
+
+                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {});
+                if (status) status.textContent = `✓ Applied pallet #s to ${appliedCount} item row(s) from ${data.count} entries in file.`;
+            } catch (error) {
+                if (status) status.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+
+        async function savePalletNumbers(index) {
+            const shipment = allShipments[index];
+            const itemsList = document.getElementById(`items-list-${index}`);
+            const status = document.getElementById(`pallet-status-${index}`);
+            if (!itemsList) return;
+
+            const palletNumbers = {};
+            itemsList.querySelectorAll('.pallet-input').forEach(input => {
+                const key = `${input.dataset.itemCode}:${input.dataset.orderLine}`;
+                palletNumbers[key] = input.value.trim();
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/finalized/${shipment.code}/pallet-numbers`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pallet_numbers: palletNumbers })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    if (status) status.textContent = `❌ ${data.detail || 'Failed to save pallet numbers'}`;
+                    return;
+                }
+
+                if (shipment.packingSlip && shipment.packingSlip.items) {
+                    shipment.packingSlip.items.forEach(item => {
+                        const key = `${item.item_code}:${item.order_line || '1'}`;
+                        if (key in palletNumbers) {
+                            item.pallet_number = palletNumbers[key] || null;
+                        }
+                    });
+                }
+
+                renderPalletWeightRows(index);
+                // A single "Save" also persists any weights typed/pasted alongside the pallet #s,
+                // so the user doesn't have to click two separate save buttons.
+                const weightResult = await savePalletWeights(index, false);
+                if (status) {
+                    status.textContent = weightResult.success
+                        ? `✓ Saved pallet #s for ${data.updated_boxes} box row(s) and their pallet weights.`
+                        : `✓ Saved pallet #s for ${data.updated_boxes} box row(s), but weights failed: ${weightResult.detail}`;
+                }
+            } catch (error) {
+                if (status) status.textContent = `❌ Error: ${error.message}`;
+            }
+        }
+
+        function renderPalletWeightRows(index) {
+            const container = document.getElementById(`pallet-weights-container-${index}`);
+            const itemsList = document.getElementById(`items-list-${index}`);
+            if (!container || !itemsList) return;
+
+            const shipment = allShipments[index];
+            const existingWeights = {};
+            (shipment.packingSlip?.pallets || []).forEach(pallet => {
+                existingWeights[pallet.pallet_number] = pallet.weight;
+            });
+            Object.assign(existingWeights, shipment._pendingPalletWeights || {});
+
+            if (!shipment._manualPalletNumbers) {
+                shipment._manualPalletNumbers = new Set();
+            }
+
+            const palletNumbersFromItems = Array.from(itemsList.querySelectorAll('.pallet-input'))
+                .map(input => input.value.trim())
+                .filter(Boolean);
+
+            const palletNumbers = [...new Set([...palletNumbersFromItems, ...shipment._manualPalletNumbers])].sort();
+
+            const rows = palletNumbers.map(palletNumber => {
+                const currentWeight = existingWeights[palletNumber];
+                return `
+                    <tr>
+                        <td>${palletNumber}</td>
+                        <td>
+                            <input type="number" step="0.01" min="0" class="pallet-weight-input" data-pallet-number="${escapeAttribute(palletNumber)}" value="${currentWeight ?? ''}" placeholder="lbs">
+                        </td>
+                    </tr>
+                `;
+            }).join('') || `<tr><td colspan="2" style="color: #64748b; font-style: italic;">No pallets yet. Type a Pallet # above or add one below.</td></tr>`;
+
+            container.innerHTML = `
+                <div style="font-weight: 700; color: #2c3e50; margin-top: 12px; margin-bottom: 6px;">Pallet Weights</div>
+                <table class="pallet-weights-table">
+                    <thead><tr><th>Pallet #</th><th>Weight</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
+                    <input type="text" id="pallet-manual-add-${index}" class="pallet-input" placeholder="New pallet #" style="width: 130px;">
+                    <button class="btn-mini" onclick="addManualPalletNumber(${index})">+ Add Pallet</button>
+                    <button class="btn-mini" onclick="savePalletWeights(${index})">💾 Save Pallet Weights</button>
+                    <span id="pallet-weight-status-${index}" class="pallet-status"></span>
+                </div>
+            `;
+        }
+
+        function addManualPalletNumber(index) {
+            const input = document.getElementById(`pallet-manual-add-${index}`);
+            if (!input) return;
+            const palletNumber = input.value.trim();
+            if (!palletNumber) return;
+
+            const shipment = allShipments[index];
+            if (!shipment._manualPalletNumbers) {
+                shipment._manualPalletNumbers = new Set();
+            }
+            shipment._manualPalletNumbers.add(palletNumber);
+            renderPalletWeightRows(index);
+        }
+
+        async function savePalletWeights(index, updateStatusMessage = true) {
+            const shipment = allShipments[index];
+            const container = document.getElementById(`pallet-weights-container-${index}`);
+            const status = document.getElementById(`pallet-weight-status-${index}`);
+            if (!container) return { success: false, detail: 'Pallet weights section not found' };
+
+            const weights = {};
+            container.querySelectorAll('.pallet-weight-input').forEach(input => {
+                const value = input.value.trim();
+                weights[input.dataset.palletNumber] = value ? Number(value) : null;
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/shipments/finalized/${shipment.code}/pallet-weights`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weights })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    const message = data.detail || 'Failed to save pallet weights';
+                    if (status && updateStatusMessage) status.textContent = `❌ ${message}`;
+                    return { success: false, detail: message };
+                }
+
+                if (shipment.packingSlip) {
+                    shipment.packingSlip.pallets = Object.entries(weights).map(([pallet_number, weight]) => ({
+                        pallet_number,
+                        weight,
+                        item_codes: (shipment.packingSlip.items || [])
+                            .filter(item => (item.pallet_number || '') === pallet_number)
+                            .map(item => item.item_code),
+                        po_number: shipment.po_number
+                    }));
+                }
+
+                shipment._pendingPalletWeights = {};
+                if (status && updateStatusMessage) status.textContent = `✓ Saved weight for ${data.updated_pallets.length} pallet(s).`;
+                return { success: true, updatedCount: data.updated_pallets.length };
+            } catch (error) {
+                if (status) status.textContent = `❌ Error: ${error.message}`;
+                return { success: false, detail: error.message };
+            }
         }
         
         async function deleteFinalizedShipment(index) {
@@ -584,6 +885,7 @@
             
             const items = packingSlip.items || [];
             const includeBoxDetails = shouldIncludeBoxDetails(shipment);
+            const includePalletNumbers = shouldIncludePalletNumbers(shipment);
             const finalizedDate = shipment.finalized_at
                 ? new Date(shipment.finalized_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
                 : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -601,6 +903,7 @@
                             <th>Qty shipped</th>
                             <th>Backordered</th>
                             ${includeBoxDetails ? '<th>Box Breakdown</th>' : ''}
+                            ${includePalletNumbers ? '<th>Pallet #</th>' : ''}
                         </tr>
                     </thead>
                     <tbody>
@@ -617,6 +920,7 @@
                         <td>${item.qty_shipped || 0}</td>
                         <td>${item.qty_remaining || 0}</td>
                         ${includeBoxDetails ? `<td>${item.box_breakdown || ''}</td>` : ''}
+                        ${includePalletNumbers ? `<td>${item.pallet_number || ''}</td>` : ''}
                     </tr>
                 `;
             });
@@ -625,53 +929,86 @@
                 </tbody>
             </table>
             `;
+
+            const pallets = packingSlip.pallets || [];
+            let palletSummaryHTML = '';
+            if (includePalletNumbers && pallets.length > 0) {
+                const palletRows = pallets.map(pallet => `
+                    <tr>
+                        <td>${pallet.pallet_number}</td>
+                        <td>${(pallet.item_codes || []).join(', ')}</td>
+                        <td>${pallet.weight ?? 'N/A'}</td>
+                        <td>${stripPoPrefix(pallet.po_number) || 'N/A'}</td>
+                    </tr>
+                `).join('');
+
+                palletSummaryHTML = `
+                    <table class="pallet-summary-table">
+                        <thead>
+                            <tr><th>Pallet #</th><th>Customer Item #</th><th>Weight (lbs)</th><th>Customer PO #</th></tr>
+                        </thead>
+                        <tbody>${palletRows}</tbody>
+                    </table>
+                `;
+            }
+
             
             const hasJobNumber = shipment.job_number && String(shipment.job_number).trim() && String(shipment.job_number).trim().toUpperCase() !== 'N/A';
+            // The real cause of the recurring top-left logo on every page was a separate
+            // fixed-position element injected by auth-guard.js (now hidden in print via
+            // theme.css), not this header's own logo - safe to keep this one.
+            const logoMarkup = getDocumentLogoMarkup('packing-list-logo-slot', 'packing-list-logo');
 
             packingList.innerHTML = `
-                ${getDocumentLogoMarkup('packing-list-logo-slot', 'packing-list-logo')}
-                <div class="packing-list-header">
-                    <div class="company-name">American Traders LLC - ATind Supplies</div>
-                    <div class="packing-list-title">Packing list ${shipment.code}</div>
-                </div>
-                <div class="shipment-info">
-                    <div class="info-column">
-                        <div class="info-field">
-                            <div class="info-label">Date</div>
-                            <div class="info-value">${finalizedDate}</div>
+                <div class="packing-list-page1">
+                    <div class="packing-list-header">
+                        ${logoMarkup ? '<div class="packing-list-logo-spacer" aria-hidden="true"></div>' : ''}
+                        <div class="packing-list-header-text">
+                            <div class="company-name">American Traders LLC - ATind Supplies</div>
+                            <div class="packing-list-title">Packing list ${shipment.code}</div>
                         </div>
-                        <div class="info-field">
-                            <div class="info-label">Delivery Date</div>
-                            <div class="info-value">${deliveryDate}</div>
-                        </div>
-                        <div class="info-field">
-                            <div class="info-label">Customer</div>
-                            <div class="info-value">${shipment.customer_name || 'N/A'}</div>
-                        </div>
-                        <div class="info-field">
-                            <div class="info-label">Shipping Address</div>
-                            <div class="info-value address">${shipment.shipping_address || 'N/A'}</div>
-                        </div>
+                        ${logoMarkup}
                     </div>
-                    <div class="info-column">
-                        <div class="info-field">
-                            <div class="info-label">Reference</div>
-                            <div class="info-value">${stripPoPrefix(shipment.po_number) || 'N/A'}</div>
+                    <div class="shipment-info">
+                        <div class="info-column">
+                            <div class="info-field">
+                                <div class="info-label">Date</div>
+                                <div class="info-value">${finalizedDate}</div>
+                            </div>
+                            <div class="info-field">
+                                <div class="info-label">Delivery Date</div>
+                                <div class="info-value">${deliveryDate}</div>
+                            </div>
+                            <div class="info-field">
+                                <div class="info-label">Customer</div>
+                                <div class="info-value">${shipment.customer_name || 'N/A'}</div>
+                            </div>
+                            <div class="info-field">
+                                <div class="info-label">Shipping Address</div>
+                                <div class="info-value address">${shipment.shipping_address || 'N/A'}</div>
+                            </div>
                         </div>
-                        <div class="info-field">
-                            <div class="info-label">Job #</div>
-                            <div class="info-value">${hasJobNumber ? shipment.job_number : 'N/A'}</div>
-                        </div>
-                        <div class="info-field">
-                            <div class="info-label">Supplier</div>
-                            <div class="info-value supplier">American Traders LLC - ATind Supplies
+                        <div class="info-column">
+                            <div class="info-field">
+                                <div class="info-label">Reference</div>
+                                <div class="info-value">${stripPoPrefix(shipment.po_number) || 'N/A'}</div>
+                            </div>
+                            <div class="info-field">
+                                <div class="info-label">Job #</div>
+                                <div class="info-value">${hasJobNumber ? shipment.job_number : 'N/A'}</div>
+                            </div>
+                            <div class="info-field">
+                                <div class="info-label">Supplier</div>
+                                <div class="info-value supplier">American Traders LLC - ATind Supplies
 Phone: 703-223-4919
 Website: https://atindsupplies.com/
 E-mail: sales@atindsupplies.com</div>
+                            </div>
                         </div>
                     </div>
                 </div>
                 ${itemsHTML}
+                ${palletSummaryHTML}
                 <div class="packing-list-footer">
                     <div class="signature-row">Received by: __________________ &nbsp;&nbsp;&nbsp; Date: __________________</div>
                     <div class="thank-you">Thank You For Your Business.</div>
