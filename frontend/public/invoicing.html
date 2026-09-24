@@ -751,6 +751,10 @@
 
             <div class="generator-section-title">Generated Drafts</div>
             <div id="invoice-generator-drafts"></div>
+
+            <div class="generator-section-title">Pending MRP Submissions</div>
+            <p style="color:#64748b; font-size:13px; margin-top:-8px;">Invoices staged from "Send to MRP" below, awaiting confirmation before they're actually created in MRPeasy.</p>
+            <div id="mrp-submission-pending"></div>
         </div>
 
         <!-- Under-Invoiced Tab -->
@@ -1029,12 +1033,133 @@
             try {
                 await Promise.all([
                     loadInvoiceGeneratorCandidates(),
-                    loadGeneratedInvoiceDrafts()
+                    loadGeneratedInvoiceDrafts(),
+                    loadPendingMrpSubmissions()
                 ]);
             } finally {
                 if (showOverlay) {
                     hideLoading();
                 }
+            }
+        }
+
+        async function sendShipmentInvoiceToMRP(orderCode, shipmentNumbersCsv) {
+            const shipmentNumbers = String(shipmentNumbersCsv || '').split(',').map(s => s.trim()).filter(Boolean);
+            if (!orderCode || !shipmentNumbers.length) return;
+
+            const label = shipmentNumbers.length > 1 ? `combined shipments ${shipmentNumbers.join(', ')}` : `shipment ${shipmentNumbers[0]}`;
+            if (!confirm(`Stage an invoice for ${orderCode} covering ${label}?\n\nAll items in ${shipmentNumbers.length > 1 ? 'these shipments' : 'this shipment'} will be billed together, plus a $295 shipping line. Nothing is sent to MRPeasy until you confirm it in "Pending MRP Submissions" below.`)) {
+                return;
+            }
+
+            showLoading('Building invoice preview', 'Pulling shipment items from MRPeasy...');
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/mrp-submission/preview`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_code: orderCode, shipment_numbers: shipmentNumbers })
+                });
+                const data = await response.json().catch(() => ({}));
+                hideLoading();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to build invoice preview (HTTP ${response.status})`);
+                }
+                await loadPendingMrpSubmissions();
+                alert(`Invoice staged for ${orderCode} (${label}). Review it in "Pending MRP Submissions" below before confirming.`);
+            } catch (error) {
+                hideLoading();
+                alert(`Error building invoice preview: ${error.message}`);
+            }
+        }
+
+        async function loadPendingMrpSubmissions() {
+            const container = document.getElementById('mrp-submission-pending');
+            if (!container) return;
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/mrp-submission/pending`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) throw new Error(data.detail || `Failed to load pending submissions (HTTP ${response.status})`);
+                renderPendingMrpSubmissions(data.pending || []);
+            } catch (error) {
+                container.innerHTML = `<p style="color:#b91c1c;">Error loading pending MRP submissions: ${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        function renderPendingMrpSubmissions(submissions) {
+            const container = document.getElementById('mrp-submission-pending');
+            if (!container) return;
+            if (!submissions.length) {
+                container.innerHTML = '<p style="padding:12px;color:#64748b;">No invoices staged for MRP submission.</p>';
+                return;
+            }
+            container.innerHTML = submissions.map(sub => {
+                const payload = sub.payload || {};
+                const lineRows = (payload.products || []).map(p => `
+                    <tr>
+                        <td>${escapeHtml(p.description || String(p.article_id || ''))}</td>
+                        <td>${toSafeNumber(p.quantity)}</td>
+                        <td>${formatCurrency('$', p.item_price)}</td>
+                        <td>${formatCurrency('$', p.total_price)}</td>
+                    </tr>
+                `).join('');
+                const shipmentCodes = [...new Set((sub.lines || []).map(l => l.shipment_code).filter(Boolean))].join(', ');
+                const submittedAt = sub.submitted_at ? new Date(sub.submitted_at).toLocaleString() : 'N/A';
+                const statusNote = sub.status === 'failed'
+                    ? `<p style="color:#b91c1c; margin:6px 0;">Last attempt failed: ${escapeHtml(sub.error_message || 'unknown error')}. You can retry.</p>`
+                    : '';
+
+                return `
+                    <div class="pending-submission-card" style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;">
+                        <strong>${escapeHtml(sub.order_code || 'N/A')}</strong> — shipment(s): ${escapeHtml(shipmentCodes || 'N/A')}
+                        <span style="color:#64748b;font-size:12px;"> · submitted by ${escapeHtml(sub.submitted_by || 'N/A')} at ${submittedAt}</span>
+                        ${statusNote}
+                        <table class="table" style="margin-top:8px;">
+                            <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+                            <tbody>${lineRows}</tbody>
+                        </table>
+                        <div style="margin-top:8px;">
+                            <button class="btn-generate btn-primary" onclick="confirmMrpSubmission(${sub.id})">✓ Confirm &amp; Send to MRP</button>
+                            <button class="btn-generate btn-secondary" onclick="rejectMrpSubmission(${sub.id})">✕ Discard</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function confirmMrpSubmission(submissionId) {
+            if (!confirm('Send this invoice to MRPeasy now? This creates a real invoice document.')) return;
+            showLoading('Sending to MRPeasy', 'Creating the invoice...');
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/mrp-submission/${submissionId}/confirm`, { method: 'POST' });
+                const data = await response.json().catch(() => ({}));
+                hideLoading();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to send invoice (HTTP ${response.status})`);
+                }
+                const code = data.submission?.mrp_invoice_code || data.submission?.mrp_invoice_id || 'N/A';
+                alert(`Invoice ${code} created in MRPeasy.`);
+                await Promise.all([loadPendingMrpSubmissions(), loadInvoiceGeneratorCandidates()]);
+            } catch (error) {
+                hideLoading();
+                alert(`Error sending invoice to MRPeasy: ${error.message}`);
+                loadPendingMrpSubmissions();
+            }
+        }
+
+        async function rejectMrpSubmission(submissionId) {
+            const reason = prompt('Reason for discarding this staged invoice? (optional)');
+            if (reason === null) return;
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/mrp-submission/${submissionId}/reject`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) throw new Error(data.detail || 'Failed to discard submission');
+                loadPendingMrpSubmissions();
+            } catch (error) {
+                alert(`Error discarding submission: ${error.message}`);
             }
         }
 
@@ -1370,7 +1495,8 @@
                     const groupStyle = groupBy === 'none' ? '' : ' style="display:none;"';
 
                     html += `<tr id="${orderId}" class="generator-order-row${groupClass}"${groupStyle}>`;
-                    const lineShipments = [...new Set((invoice.lines || []).map(l => l.shipment_number).filter(s => s && s !== 'N/A'))].join(', ') || order.shipment_number || 'N/A';
+                    const uniqueShipments = [...new Set((invoice.lines || []).map(l => l.shipment_number).filter(s => s && s !== 'N/A'))];
+                    const lineShipments = uniqueShipments.join(', ') || order.shipment_number || 'N/A';
                     const lineDates = [...new Set((invoice.lines || []).map(l => l.delivery_date).filter(d => d && d !== 'N/A'))].join(', ') || order.delivery_date || 'N/A';
 
                     html += `<td><input type="checkbox" onchange="toggleOrderItemsSelection('${order.code || ''}', this.checked)"></td>`;
@@ -1378,7 +1504,12 @@
                     html += `<td>${order.customer_name || 'N/A'}</td>`;
                     html += `<td>${order.reference || 'N/A'}</td>`;
                     html += `<td>${order.job_number || 'N/A'}</td>`;
-                    html += `<td>${lineShipments}</td>`;
+                    html += `<td>` + (uniqueShipments.length
+                        ? uniqueShipments.map(sn => `<button class="btn-generate btn-primary" style="padding:3px 8px; margin:2px 2px 0 0; font-size:11px;" onclick="event.stopPropagation(); sendShipmentInvoiceToMRP('${order.code || ''}', '${sn}')" title="Send only shipment ${sn} to MRP as one invoice">📤 ${sn}</button>`).join('')
+                            + (uniqueShipments.length > 1
+                                ? `<br><button class="btn-generate btn-secondary" style="padding:3px 8px; margin-top:4px; font-size:11px;" onclick="event.stopPropagation(); sendShipmentInvoiceToMRP('${order.code || ''}', '${uniqueShipments.join(',')}')" title="Combine all shipments into one invoice (not usually recommended)">⚠ Combine All</button>`
+                                : '')
+                        : 'N/A') + `</td>`;
                     html += `<td><input type="date" class="invoice-generator-date" data-order-row="${orderId}" value="${lineDates && lineDates !== 'N/A' ? lineDates : ''}" style="width:140px"></td>`;
                     html += `<td><strong>${(invoice.lines || []).length} items</strong></td>`;
                     html += `<td><label style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:#475569;">Shipping<input type="number" min="0" step="0.01" class="invoice-generator-shipping" data-order-row="${orderId}" data-order="${order.code || ''}" value="${toSafeNumber(invoice.shipping)}" style="width:120px" oninput="recalculateGeneratorOrderTotal('${orderId}','${order.currency || '$'}')"></label></td>`;

@@ -4,8 +4,13 @@ from io import BytesIO
 from uuid import uuid4
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from app.dependencies import require_module
+from sqlalchemy.orm import Session
+import json
+from app.dependencies import require_module, require_role
 from app.services.mrpeasy_client import mrpeasy_client
+from app.config.database import get_db
+from app.config.settings import settings
+from app.models import User, PendingInvoiceSubmission, PendingInvoiceSubmissionLine
 
 try:
     import pandas as pd
@@ -61,6 +66,17 @@ class InvoiceGenerationRequest(BaseModel):
     shipping_overrides: List[InvoiceGenerationShippingOverride] = Field(default_factory=list)
     selection_applied: bool = False
     generation_mode: Optional[str] = "order"
+
+
+class InvoiceMRPSubmissionRequest(BaseModel):
+    order_code: str
+    shipment_numbers: List[str] = Field(default_factory=list)
+    due_date: Optional[str] = None
+    free_text: Optional[str] = None
+
+
+class RejectInvoiceSubmissionRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 def _ensure_bulk_dependencies():
@@ -1133,6 +1149,339 @@ def create_generated_invoice_drafts(payload: InvoiceGenerationRequest):
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create invoice drafts: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Send Invoices to MRP: build a real MRPeasy invoice from one (or more, when
+# combining) shipment's worth of not-yet-invoiced lines, staged locally for
+# admin/super_admin confirmation before the actual POST to MRPeasy.
+# ---------------------------------------------------------------------------
+
+INVOICE_TYPE_INVOICE = 30
+INVOICE_STATUS_DUMMY = 10
+
+# Fixed shipping-charge line appended to every invoice sent to MRP. The item's
+# own selling_price in MRPeasy is 0 -- this is a flat fee, not derived pricing.
+SHIPPING_ARTICLE_ID = 251
+SHIPPING_PRODUCT_ID = 251
+SHIPPING_GROUP_ID = 19
+SHIPPING_ITEM_TITLE = "Shipping Charge"
+SHIPPING_PRICE = 295.0
+
+
+def _resolve_order_line_lookup(cust_ord_id: int):
+    """
+    article_id -> {group_id, product_id, co_line_id} for one live MRPeasy order.
+
+    The discrepancy engine's candidate lines don't carry group_id/product_id
+    (MRPeasy's create-invoice endpoint undocumentedly requires both alongside
+    article_id -- see Step 0 verification), so these are resolved fresh here.
+    """
+    orders = mrpeasy_client.get_customer_orders({"cust_ord_id": cust_ord_id}) or []
+    order = next((o for o in orders if o.get("cust_ord_id") == cust_ord_id), None)
+    lookup = {}
+    if order:
+        for line in order.get("products", []) or []:
+            article_id = line.get("article_id")
+            if article_id is not None:
+                lookup[str(article_id)] = {
+                    "group_id": line.get("group_id"),
+                    "product_id": line.get("product_id") or article_id,
+                    "co_line_id": line.get("line_id"),
+                }
+    return lookup, order
+
+
+def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due_date: Optional[str], free_text: Optional[str]):
+    """
+    Build the exact InvoiceInput payload for every not-yet-invoiced line
+    belonging to the given shipment(s) of one order, plus the fixed shipping
+    line. Every item that shipped together must be billed together, so this
+    always includes ALL matching lines -- there is no partial line selection.
+    """
+    shipment_set = {code.strip() for code in shipment_numbers if code and code.strip()}
+    if not shipment_set:
+        raise HTTPException(status_code=400, detail="At least one shipment number is required")
+
+    candidates = _build_not_invoiced_candidates([order_code])
+    candidate = next((c for c in candidates if c.get("order", {}).get("code") == order_code), None)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=f"No invoiceable items found for order {order_code}")
+
+    order = candidate["order"]
+    matching_lines = [
+        line for line in candidate["invoice"]["lines"]
+        if line.get("shipment_number") in shipment_set
+    ]
+    if not matching_lines:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No invoiceable items found for shipment(s) {', '.join(sorted(shipment_set))} on order {order_code}"
+        )
+
+    cust_ord_id = order.get("cust_ord_id")
+    line_lookup, order_detail = _resolve_order_line_lookup(cust_ord_id)
+    if not order_detail:
+        raise HTTPException(status_code=404, detail=f"Customer order {order_code} not found in MRPeasy")
+
+    customer_id = order_detail.get("customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail=f"Customer order {order_code} has no linked customer")
+    pricelist_id = order_detail.get("pricelist_id")
+
+    product_lines = []
+    submission_lines = []
+    for line in matching_lines:
+        article_id = line.get("article_id")
+        lookup_entry = line_lookup.get(str(article_id), {}) if article_id is not None else {}
+        quantity = _to_number(line.get("quantity"), 0)
+        unit_price = _to_number(line.get("unit_price"), 0)
+        total = round(quantity * unit_price, 2)
+
+        product_lines.append({
+            "ord": len(product_lines) + 1,
+            "article_id": article_id,
+            "product_id": lookup_entry.get("product_id") or article_id,
+            "group_id": lookup_entry.get("group_id"),
+            "description": line.get("item_title") or line.get("item_code") or "",
+            "quantity": quantity,
+            "item_price": unit_price,
+            "item_price_cur": unit_price,
+            "total_price": total,
+            "total_price_cur": total,
+            "cust_ord_id": cust_ord_id,
+            "customer_order_code": order_code,
+            "co_line_id": lookup_entry.get("co_line_id"),
+        })
+        submission_lines.append({
+            "shipment_code": line.get("shipment_number"),
+            "co_line_id": lookup_entry.get("co_line_id"),
+            "article_id": article_id,
+            "item_code": line.get("item_code"),
+            "quantity": quantity,
+            "unit_price": unit_price,
+        })
+
+    shipping_total = round(SHIPPING_PRICE * 1, 2)
+    product_lines.append({
+        "ord": len(product_lines) + 1,
+        "article_id": SHIPPING_ARTICLE_ID,
+        "product_id": SHIPPING_PRODUCT_ID,
+        "group_id": SHIPPING_GROUP_ID,
+        "description": SHIPPING_ITEM_TITLE,
+        "quantity": 1,
+        "item_price": SHIPPING_PRICE,
+        "item_price_cur": SHIPPING_PRICE,
+        "total_price": shipping_total,
+        "total_price_cur": shipping_total,
+        "cust_ord_id": cust_ord_id,
+        "customer_order_code": order_code,
+    })
+
+    payload = {
+        "type": INVOICE_TYPE_INVOICE,
+        "status": INVOICE_STATUS_DUMMY,
+        "customer_id": customer_id,
+        "customer_orders": [{"cust_ord_id": cust_ord_id}],
+        "products": product_lines,
+    }
+    if pricelist_id:
+        payload["pricelist_id"] = pricelist_id
+    if free_text:
+        payload["free_text"] = free_text
+    if due_date:
+        try:
+            payload["due_date"] = int(datetime.fromisoformat(due_date).replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            pass
+
+    return payload, submission_lines, order, customer_id, pricelist_id
+
+
+def _serialize_pending_invoice_submission(submission: PendingInvoiceSubmission, lines: List[PendingInvoiceSubmissionLine]):
+    try:
+        payload = json.loads(submission.payload_json)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    return {
+        "id": submission.id,
+        "order_code": submission.order_code,
+        "cust_ord_id": submission.cust_ord_id,
+        "customer_id": submission.customer_id,
+        "invoice_status": submission.invoice_status,
+        "status": submission.status,
+        "payload": payload,
+        "lines": [
+            {
+                "shipment_code": line.shipment_code,
+                "co_line_id": line.co_line_id,
+                "article_id": line.article_id,
+                "item_code": line.item_code,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+            }
+            for line in lines
+        ],
+        "submitted_by": submission.submitted_by,
+        "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else None,
+        "reviewed_by": submission.reviewed_by,
+        "reviewed_at": submission.reviewed_at.isoformat() if submission.reviewed_at else None,
+        "rejection_reason": submission.rejection_reason,
+        "error_message": submission.error_message,
+        "mrp_invoice_id": submission.mrp_invoice_id,
+        "mrp_invoice_code": submission.mrp_invoice_code,
+    }
+
+
+@router.post("/mrp-submission/preview")
+def preview_mrp_invoice_submission(
+    request: InvoiceMRPSubmissionRequest,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """Build and stage a real MRPeasy invoice payload for one order's shipment(s), pending confirmation."""
+    payload, submission_lines, order, customer_id, pricelist_id = _build_mrp_invoice_payload(
+        request.order_code, request.shipment_numbers, request.due_date, request.free_text
+    )
+
+    submission = PendingInvoiceSubmission(
+        cust_ord_id=order.get("cust_ord_id"),
+        order_code=request.order_code,
+        customer_id=customer_id,
+        pricelist_id=pricelist_id,
+        invoice_type=INVOICE_TYPE_INVOICE,
+        invoice_status=INVOICE_STATUS_DUMMY,
+        free_text=request.free_text,
+        due_date=request.due_date,
+        payload_json=json.dumps(payload),
+        status="pending",
+        submitted_by=current_user.username,
+        submitted_at=datetime.utcnow(),
+    )
+    db.add(submission)
+    db.flush()
+
+    for line in submission_lines:
+        db.add(PendingInvoiceSubmissionLine(submission_id=submission.id, **line))
+
+    db.commit()
+    db.refresh(submission)
+
+    lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+
+    return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+
+
+@router.get("/mrp-submission/pending", dependencies=[Depends(require_module("invoice_mrp_submission"))])
+def list_pending_mrp_invoice_submissions(db: Session = Depends(get_db)):
+    submissions = (
+        db.query(PendingInvoiceSubmission)
+        .filter(PendingInvoiceSubmission.status.in_(["pending", "failed"]))
+        .order_by(PendingInvoiceSubmission.submitted_at.desc())
+        .all()
+    )
+    result = []
+    for submission in submissions:
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        result.append(_serialize_pending_invoice_submission(submission, lines))
+    return {"success": True, "pending": result}
+
+
+@router.get("/mrp-submission/history", dependencies=[Depends(require_module("invoice_mrp_submission"))])
+def list_mrp_invoice_submission_history(db: Session = Depends(get_db), limit: int = 100):
+    submissions = (
+        db.query(PendingInvoiceSubmission)
+        .filter(PendingInvoiceSubmission.status.in_(["approved", "rejected"]))
+        .order_by(PendingInvoiceSubmission.reviewed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for submission in submissions:
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        result.append(_serialize_pending_invoice_submission(submission, lines))
+    return {"success": True, "history": result}
+
+
+@router.post("/mrp-submission/{submission_id}/confirm")
+def confirm_mrp_invoice_submission(
+    submission_id: int,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """Actually POST the staged invoice payload to MRPeasy. Trusts the stored
+    payload frozen at preview time -- never re-derives it from fresh input."""
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}', not pending")
+
+    if not settings.allow_mrp_invoice_creation:
+        raise HTTPException(
+            status_code=403,
+            detail="Sending invoices to MRPeasy is currently disabled (allow_mrp_invoice_creation is off)"
+        )
+
+    payload = json.loads(submission.payload_json)
+
+    try:
+        result = mrpeasy_client.create_invoice(payload)
+        invoice_id = result if isinstance(result, int) else (result or {}).get("invoice_id") or (result or {}).get("id")
+        if invoice_id is None:
+            raise ValueError(f"Unexpected create_invoice response shape: {result!r}")
+
+        submission.mrp_invoice_id = int(invoice_id)
+        try:
+            created_invoice = mrpeasy_client.get_invoice(int(invoice_id))
+            submission.mrp_invoice_code = created_invoice.get("code")
+        except Exception:
+            pass
+
+        submission.status = "approved"
+        submission.reviewed_by = current_user.username
+        submission.reviewed_at = datetime.utcnow()
+        submission.error_message = None
+        db.commit()
+        db.refresh(submission)
+
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+    except Exception as exc:
+        submission.status = "failed"
+        submission.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Failed to create invoice in MRPeasy: {exc}")
+
+
+@router.post("/mrp-submission/{submission_id}/reject")
+def reject_mrp_invoice_submission(
+    submission_id: int,
+    payload: RejectInvoiceSubmissionRequest = Body(default=RejectInvoiceSubmissionRequest()),
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status not in ("pending", "failed"):
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}'")
+
+    submission.status = "rejected"
+    submission.reviewed_by = current_user.username
+    submission.reviewed_at = datetime.utcnow()
+    submission.rejection_reason = (payload.reason or "").strip() or None
+    db.commit()
+
+    return {"success": True, "submission_id": submission_id, "status": "rejected"}
 
 
 @router.get("/generator/drafts")
