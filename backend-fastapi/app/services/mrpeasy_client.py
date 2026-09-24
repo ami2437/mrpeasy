@@ -44,6 +44,9 @@ class MRPeasyAPIClient:
             )
             response.raise_for_status()
             return response.json() if response.text else None
+        except requests.exceptions.HTTPError as e:
+            detail = e.response.text if e.response is not None else ""
+            raise Exception(f"MRPeasy API Error: {str(e)} | Response body: {detail}")
         except requests.exceptions.RequestException as e:
             raise Exception(f"MRPeasy API Error: {str(e)}")
     
@@ -167,6 +170,10 @@ class MRPeasyAPIClient:
     def update_invoice(self, invoice_id: int, payload: Dict[str, Any]) -> Optional[Dict[Any, Any]]:
         """Update a sales invoice"""
         return self._request("PUT", f"/invoices/{invoice_id}", json=payload)
+
+    def create_invoice(self, payload: Dict[str, Any]) -> Optional[Dict[Any, Any]]:
+        """Create a sales invoice in MRPeasy (POST /invoices)."""
+        return self._request("POST", "/invoices", json=payload)
 
 
 # Global instance
