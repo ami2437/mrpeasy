@@ -1065,7 +1065,8 @@
                     throw new Error(data.detail || `Failed to build invoice preview (HTTP ${response.status})`);
                 }
                 await loadPendingMrpSubmissions();
-                alert(`Invoice staged for ${orderCode} (${label}). Review it in "Pending MRP Submissions" below before confirming.`);
+                const note = data.reused_existing ? 'was already staged' : 'staged';
+                alert(`Invoice for ${orderCode} (${label}) ${note}. Review it in "Pending MRP Submissions" below before confirming.`);
             } catch (error) {
                 hideLoading();
                 alert(`Error building invoice preview: ${error.message}`);

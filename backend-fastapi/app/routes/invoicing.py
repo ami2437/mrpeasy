@@ -1353,6 +1353,24 @@ def preview_mrp_invoice_submission(
     db: Session = Depends(get_db)
 ):
     """Build and stage a real MRPeasy invoice payload for one order's shipment(s), pending confirmation."""
+    requested_shipment_set = {s.strip() for s in request.shipment_numbers if s and s.strip()}
+
+    # Reuse an already-staged pending submission covering the exact same
+    # shipment(s) instead of creating a duplicate (e.g. a double-click).
+    for candidate in db.query(PendingInvoiceSubmission).filter(
+        PendingInvoiceSubmission.order_code == request.order_code,
+        PendingInvoiceSubmission.status == "pending",
+    ).all():
+        candidate_lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == candidate.id
+        ).all()
+        if {line.shipment_code for line in candidate_lines if line.shipment_code} == requested_shipment_set:
+            return {
+                "success": True,
+                "reused_existing": True,
+                "submission": _serialize_pending_invoice_submission(candidate, candidate_lines),
+            }
+
     payload, submission_lines, order, customer_id, pricelist_id = _build_mrp_invoice_payload(
         request.order_code, request.shipment_numbers, request.due_date, request.free_text
     )
