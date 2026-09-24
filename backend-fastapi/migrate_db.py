@@ -64,6 +64,16 @@ try:
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_pack_sizes_item_code ON pack_sizes (item_code)")
     conn.commit()
     print("pack_sizes table is ready")
+
+    cursor.execute("PRAGMA table_info(pallet_weights)")
+    pallet_weight_columns = [col[1] for col in cursor.fetchall()]
+    if pallet_weight_columns and 'dimensions' not in pallet_weight_columns:
+        print("Adding dimensions column to pallet_weights table...")
+        cursor.execute("ALTER TABLE pallet_weights ADD COLUMN dimensions TEXT")
+        conn.commit()
+        print("✅ Column added successfully!")
+    elif pallet_weight_columns:
+        print("dimensions column already exists")
 except Exception as e:
     print(f"❌ Error: {e}")
 finally:

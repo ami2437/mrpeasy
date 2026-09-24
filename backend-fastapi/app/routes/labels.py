@@ -56,6 +56,8 @@ class UpdatePalletNumbersRequest(BaseModel):
 class UpdatePalletWeightsRequest(BaseModel):
     # Keyed by pallet number -> weight
     weights: Dict[str, Optional[float]] = {}
+    # Keyed by pallet number -> raw dimensions text (e.g. "48x54x21")
+    dimensions: Dict[str, Optional[str]] = {}
 
 
 router = APIRouter(
@@ -74,6 +76,36 @@ def _normalize_item_code(value) -> str:
     text = re.sub(r'\s+', '', text)  # "15437 - NUT" -> "15437-NUT"
     text = re.sub(r'NUTS$', 'NUT', text)  # treat plural NUTS suffix as NUT
     return text
+
+
+_DIMENSIONS_PATTERN = re.compile(
+    r'^\s*([\d]+(?:\.\d+)?)\s*(?:in\.?|")?\s*[xX×*]\s*([\d]+(?:\.\d+)?)\s*(?:in\.?|")?\s*[xX×*]\s*([\d]+(?:\.\d+)?)\s*(?:in\.?|")?\s*$'
+)
+
+
+def _normalize_pallet_dimensions(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize a pallet dimensions entry like "48x54x21", "48 x 54 x 21",
+    "48X54X21", "48*54*21", or "48in x 54in x 21in" into a consistent
+    "L x W x H" string. Falls back to the trimmed raw text if it doesn't
+    match the L x W x H pattern, so an unexpected format isn't silently lost.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    match = _DIMENSIONS_PATTERN.match(text)
+    if not match:
+        return text
+
+    def _format_number(value: str) -> str:
+        number = float(value)
+        return str(int(number)) if number.is_integer() else str(number)
+
+    length, width, height = (_format_number(value) for value in match.groups())
+    return f"{length} x {width} x {height}"
 
 
 def _serialize_finalized_labels(boxes: List[ShipmentBox]) -> List[Dict]:
@@ -118,31 +150,37 @@ def _serialize_finalized_labels(boxes: List[ShipmentBox]) -> List[Dict]:
 def _extract_pallet_numbers_from_rows(rows: List[list]):
     """
     Given rows of raw cell values (first row may be a header), detect
-    "item"/"pallet"/"weight" header columns (case-insensitive) or fall back to
-    column 1 = item #, column 2 = pallet number, column 3 = weight (optional).
+    "item"/"pallet"/"weight"/"dimension" header columns (case-insensitive) or
+    fall back to column 1 = item #, column 2 = pallet number, column 3 =
+    weight (optional), column 4 = dimensions (optional, "LxWxH" e.g. "48x54x21").
     Blank pallet numbers are skipped (pallet assignment is optional per item).
 
     The same pallet number can repeat across rows (multiple items on one
-    pallet); weight only needs to be filled in on one of those rows. If two
-    rows for the same pallet number have different non-blank weights, that's
-    reported as a conflict instead of guessing which one is correct.
+    pallet); weight/dimensions only need to be filled in on one of those rows.
+    If two rows for the same pallet number have different non-blank
+    weights/dimensions, that's reported as a conflict instead of guessing
+    which one is correct.
 
-    Returns (pallet_numbers, pallet_weights, weight_conflicts):
+    Returns (pallet_numbers, pallet_weights, weight_conflicts, pallet_dimensions, dimension_conflicts):
       - pallet_numbers: {item_code: pallet_number}
       - pallet_weights: {pallet_number: weight} (only for pallets with a single, consistent weight)
       - weight_conflicts: [{pallet_number, weights: [...]}] for pallets with conflicting weights
+      - pallet_dimensions: {pallet_number: "L x W x H"} (only for pallets with a single, consistent value)
+      - dimension_conflicts: [{pallet_number, dimensions: [...]}] for pallets with conflicting values
     """
     if not rows:
-        return {}, {}, []
+        return {}, {}, [], {}, []
 
     item_col = 0
     pallet_col = 1
     weight_col = 2
+    dimensions_col = 3
 
     header_row = rows[0]
     item_col_match = None
     pallet_col_match = None
     weight_col_match = None
+    dimensions_col_match = None
     for col_idx, header_value in enumerate(header_row):
         if header_value is None or pd.isna(header_value):
             continue
@@ -155,16 +193,20 @@ def _extract_pallet_numbers_from_rows(rows: List[list]):
             pallet_col_match = col_idx
         if weight_col_match is None and 'weight' in header_text:
             weight_col_match = col_idx
+        if dimensions_col_match is None and 'dimension' in header_text:
+            dimensions_col_match = col_idx
 
     data_rows = rows
     if item_col_match is not None and pallet_col_match is not None:
         item_col = item_col_match
         pallet_col = pallet_col_match
         weight_col = weight_col_match if weight_col_match is not None else weight_col
+        dimensions_col = dimensions_col_match if dimensions_col_match is not None else dimensions_col
         data_rows = rows[1:]
 
     pallet_numbers: Dict[str, str] = {}
     weight_occurrences: Dict[str, List[float]] = {}
+    dimension_occurrences: Dict[str, List[str]] = {}
 
     for row in data_rows:
         if len(row) <= max(item_col, pallet_col):
@@ -199,6 +241,15 @@ def _extract_pallet_numbers_from_rows(rows: List[list]):
                     except (TypeError, ValueError):
                         pass
 
+        if dimensions_col is not None and len(row) > dimensions_col:
+            dimensions_raw = row[dimensions_col]
+            if dimensions_raw is not None and not pd.isna(dimensions_raw):
+                dimensions_text = str(dimensions_raw).strip()
+                if dimensions_text:
+                    normalized = _normalize_pallet_dimensions(dimensions_text)
+                    if normalized:
+                        dimension_occurrences.setdefault(pallet_number, []).append(normalized)
+
     pallet_weights: Dict[str, float] = {}
     weight_conflicts = []
     for pallet_number, weights in weight_occurrences.items():
@@ -208,7 +259,16 @@ def _extract_pallet_numbers_from_rows(rows: List[list]):
         elif unique_weights:
             pallet_weights[pallet_number] = unique_weights[0]
 
-    return pallet_numbers, pallet_weights, weight_conflicts
+    pallet_dimensions: Dict[str, str] = {}
+    dimension_conflicts = []
+    for pallet_number, dimensions_list in dimension_occurrences.items():
+        unique_dimensions = sorted(set(dimensions_list))
+        if len(unique_dimensions) > 1:
+            dimension_conflicts.append({'pallet_number': pallet_number, 'dimensions': unique_dimensions})
+        elif unique_dimensions:
+            pallet_dimensions[pallet_number] = unique_dimensions[0]
+
+    return pallet_numbers, pallet_weights, weight_conflicts, pallet_dimensions, dimension_conflicts
 
 
 def _extract_pack_sizes_from_rows(rows: List[list]) -> Dict[str, int]:
@@ -559,18 +619,21 @@ async def parse_pack_sizes_text(payload: PastePackSizesRequest):
 @router.post("/pallet-numbers/parse")
 async def parse_pallet_numbers_excel(file: UploadFile = File(...)):
     """
-    Parse an uploaded Excel sheet mapping item # to pallet number (and optional weight).
+    Parse an uploaded Excel sheet mapping item # to pallet number (and optional weight, dimensions).
 
-    If the header row contains a column with "item", "pallet", and/or "weight"
-    in its name (case-insensitive), those columns are used. Otherwise falls
-    back to column 1 = item #, column 2 = pallet number, column 3 = weight.
-    If the same pallet number has conflicting weight values across rows, the
-    whole upload is rejected so the file can be fixed and re-submitted.
+    If the header row contains a column with "item", "pallet", "weight",
+    and/or "dimension" in its name (case-insensitive), those columns are
+    used. Otherwise falls back to column 1 = item #, column 2 = pallet
+    number, column 3 = weight, column 4 = dimensions (e.g. "48x54x21").
+    If the same pallet number has conflicting weight or dimension values
+    across rows, the whole upload is rejected so the file can be fixed and
+    re-submitted.
     """
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents), header=None, dtype=str)
-        pallet_numbers, pallet_weights, weight_conflicts = _extract_pallet_numbers_from_rows(df.values.tolist())
+        pallet_numbers, pallet_weights, weight_conflicts, pallet_dimensions, dimension_conflicts = \
+            _extract_pallet_numbers_from_rows(df.values.tolist())
 
         if not pallet_numbers:
             raise HTTPException(status_code=400, detail="No valid item #/pallet number rows found in the uploaded file")
@@ -584,11 +647,21 @@ async def parse_pallet_numbers_excel(file: UploadFile = File(...)):
                 detail=f"Weight discrepancy found, nothing was applied: {conflict_summary}. Fix the file and try again."
             )
 
+        if dimension_conflicts:
+            conflict_summary = '; '.join(
+                f"pallet {c['pallet_number']} has conflicting dimensions {c['dimensions']}" for c in dimension_conflicts
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dimensions discrepancy found, nothing was applied: {conflict_summary}. Fix the file and try again."
+            )
+
         return {
             'success': True,
             'count': len(pallet_numbers),
             'pallet_numbers': pallet_numbers,
-            'pallet_weights': pallet_weights
+            'pallet_weights': pallet_weights,
+            'pallet_dimensions': pallet_dimensions
         }
     except HTTPException:
         raise
@@ -599,10 +672,11 @@ async def parse_pallet_numbers_excel(file: UploadFile = File(...)):
 @router.post("/pallet-numbers/parse-text")
 async def parse_pallet_numbers_text(payload: PastePalletNumbersRequest):
     """
-    Parse pasted item #/pallet number/weight data (e.g. copied straight out of Excel).
+    Parse pasted item #/pallet number/weight/dimensions data (e.g. copied straight out of Excel).
     Cells are split on tabs when present, otherwise on commas or 2+ spaces.
-    If the same pallet number has conflicting weight values across rows, the
-    whole paste is rejected so the data can be fixed and re-submitted.
+    If the same pallet number has conflicting weight or dimension values
+    across rows, the whole paste is rejected so the data can be fixed and
+    re-submitted.
     """
     try:
         lines = [line for line in payload.text.splitlines() if line.strip() != '']
@@ -611,7 +685,8 @@ async def parse_pallet_numbers_text(payload: PastePalletNumbersRequest):
             cells = line.split('\t') if '\t' in line else re.split(r',|\s{2,}', line.strip())
             rows.append([cell.strip() for cell in cells])
 
-        pallet_numbers, pallet_weights, weight_conflicts = _extract_pallet_numbers_from_rows(rows)
+        pallet_numbers, pallet_weights, weight_conflicts, pallet_dimensions, dimension_conflicts = \
+            _extract_pallet_numbers_from_rows(rows)
 
         if not pallet_numbers:
             raise HTTPException(status_code=400, detail="No valid item #/pallet number rows found in the pasted text")
@@ -625,11 +700,21 @@ async def parse_pallet_numbers_text(payload: PastePalletNumbersRequest):
                 detail=f"Weight discrepancy found, nothing was applied: {conflict_summary}. Fix the pasted data and try again."
             )
 
+        if dimension_conflicts:
+            conflict_summary = '; '.join(
+                f"pallet {c['pallet_number']} has conflicting dimensions {c['dimensions']}" for c in dimension_conflicts
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dimensions discrepancy found, nothing was applied: {conflict_summary}. Fix the pasted data and try again."
+            )
+
         return {
             'success': True,
             'count': len(pallet_numbers),
             'pallet_numbers': pallet_numbers,
-            'pallet_weights': pallet_weights
+            'pallet_weights': pallet_weights,
+            'pallet_dimensions': pallet_dimensions
         }
     except HTTPException:
         raise
@@ -1603,7 +1688,8 @@ def get_pallet_weights(shipment_code: str, db: Session = Depends(get_db)):
     return {
         'success': True,
         'shipment_code': shipment_code,
-        'weights': {record.pallet_number: record.weight for record in records}
+        'weights': {record.pallet_number: record.weight for record in records},
+        'dimensions': {record.pallet_number: record.dimensions for record in records}
     }
 
 
@@ -1613,24 +1699,26 @@ def update_pallet_weights(
     payload: UpdatePalletWeightsRequest,
     db: Session = Depends(get_db)
 ):
-    """Save the weight entered for each pallet number within a shipment."""
-    updated = []
-    for pallet_number, weight in payload.weights.items():
-        pallet_number = (pallet_number or '').strip()
-        if not pallet_number:
-            continue
+    """Save the weight and/or dimensions entered for each pallet number within a shipment."""
+    weights = {(k or '').strip(): v for k, v in payload.weights.items() if (k or '').strip()}
+    dimensions = {(k or '').strip(): v for k, v in payload.dimensions.items() if (k or '').strip()}
 
+    updated = []
+    for pallet_number in {*weights.keys(), *dimensions.keys()}:
         record = db.query(PalletWeight).filter(
             PalletWeight.shipment_code == shipment_code,
             PalletWeight.pallet_number == pallet_number
         ).first()
 
-        if record:
-            record.weight = weight
-            record.updated_at = datetime.utcnow()
-        else:
-            record = PalletWeight(shipment_code=shipment_code, pallet_number=pallet_number, weight=weight)
+        if not record:
+            record = PalletWeight(shipment_code=shipment_code, pallet_number=pallet_number)
             db.add(record)
+
+        if pallet_number in weights:
+            record.weight = weights[pallet_number]
+        if pallet_number in dimensions:
+            record.dimensions = _normalize_pallet_dimensions(dimensions[pallet_number])
+        record.updated_at = datetime.utcnow()
         updated.append(pallet_number)
 
     db.commit()
@@ -1810,13 +1898,15 @@ async def get_packing_slip_data(shipment_code: str, db: Session = Depends(get_db
 
         weight_records = db.query(PalletWeight).filter(PalletWeight.shipment_code == shipment_code).all()
         weight_by_pallet = {record.pallet_number: record.weight for record in weight_records}
+        dimensions_by_pallet = {record.pallet_number: record.dimensions for record in weight_records}
 
         pallets = [
             {
                 'pallet_number': group['pallet_number'],
                 'item_codes': group['item_codes'],
                 'po_number': group['po_number'],
-                'weight': weight_by_pallet.get(group['pallet_number'])
+                'weight': weight_by_pallet.get(group['pallet_number']),
+                'dimensions': dimensions_by_pallet.get(group['pallet_number'])
             }
             for group in sorted(pallet_groups.values(), key=lambda g: g['pallet_number'])
         ]

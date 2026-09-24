@@ -178,6 +178,7 @@ class PalletWeight(Base):
     shipment_code = Column(String, nullable=False, index=True)
     pallet_number = Column(String, nullable=False)
     weight = Column(Float, nullable=True)
+    dimensions = Column(String, nullable=True)  # normalized "L x W x H" (inches)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

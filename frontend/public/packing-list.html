@@ -37,17 +37,35 @@
         .pallet-tools .btn-mini { padding: 6px 12px; border: 1px solid #667eea; background: white; color: #667eea; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }
         .pallet-tools .btn-mini:hover { background: #667eea; color: white; }
         .pallet-status { font-size: 12px; color: #475569; align-self: center; }
-        .pallet-weights-table { width: 100%; max-width: 480px; margin-top: 10px; border-collapse: collapse; }
+        .pallet-weights-table { width: 100%; max-width: 620px; margin-top: 10px; border-collapse: collapse; }
         .pallet-weights-table th, .pallet-weights-table td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 12px; text-align: left; }
         .pallet-weights-table th { background: #e2e8f0; }
         .pallet-weights-table input { width: 100px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; }
+        .pallet-weights-table input.pallet-dimensions-input { width: 140px; }
         .pallet-summary-table { width: 100%; border-collapse: collapse; margin-top: 24px; table-layout: fixed; border: 1px solid #1f2d3a; }
         .pallet-summary-table th { background: #e5e7eb; color: #000; padding: 6px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; border: 1px solid #7f8b96; }
         .pallet-summary-table td { padding: 6px 8px; font-size: 11px; border: 1px solid #9aa4ad; word-wrap: break-word; overflow-wrap: anywhere; white-space: normal; }
-        .pallet-summary-table th:nth-child(1), .pallet-summary-table td:nth-child(1) { width: 9%; }
-        .pallet-summary-table th:nth-child(2), .pallet-summary-table td:nth-child(2) { width: 44%; }
-        .pallet-summary-table th:nth-child(3), .pallet-summary-table td:nth-child(3) { width: 12%; }
-        .pallet-summary-table th:nth-child(4), .pallet-summary-table td:nth-child(4) { width: 22%; }
+        .pallet-summary-table th:nth-child(1), .pallet-summary-table td:nth-child(1) { width: 8%; }
+        .pallet-summary-table th:nth-child(2), .pallet-summary-table td:nth-child(2) { width: 34%; }
+        .pallet-summary-table th:nth-child(3), .pallet-summary-table td:nth-child(3) { width: 11%; }
+        .pallet-summary-table th:nth-child(4), .pallet-summary-table td:nth-child(4) { width: 17%; }
+        .pallet-summary-table th:nth-child(5), .pallet-summary-table td:nth-child(5) { width: 20%; }
+        .pallet-section {
+            break-before: page;
+            page-break-before: always;
+        }
+        .pallet-section-heading {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1f2d3a;
+            text-align: center;
+            margin: 0 0 6px;
+        }
+        .pallet-section-divider {
+            border: none;
+            border-top: 2px solid #1f2d3a;
+            margin: 0 0 16px;
+        }
         .button-group { display: flex; gap: 15px; margin-top: 20px; }
         .btn { padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
@@ -465,14 +483,14 @@
                 itemsRow.innerHTML = `
                     <td colspan="9">
                         <div class="pallet-tools">
-                            <textarea id="pallet-paste-${originalIndex}" placeholder="Item&#9;Pallet&#9;Weight (optional)&#10;16713&#9;PLT-1&#9;250&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300"></textarea>
+                            <textarea id="pallet-paste-${originalIndex}" placeholder="Item&#9;Pallet&#9;Weight (optional)&#9;Dimensions (optional)&#10;16713&#9;PLT-1&#9;250&#9;48x54x21&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300&#9;48x54x21"></textarea>
                             <button class="btn-mini" onclick="applyPastedPalletNumbers(${originalIndex})">📋 Apply Pasted</button>
                             <input type="file" id="pallet-file-${originalIndex}" accept=".xlsx,.xls" style="max-width: 200px;">
                             <button class="btn-mini" onclick="uploadPalletNumbersFile(${originalIndex})">⬆️ Apply from File</button>
                             <button class="btn-mini" onclick="savePalletNumbers(${originalIndex})">💾 Save Pallet #s</button>
                             <span id="pallet-status-${originalIndex}" class="pallet-status"></span>
                         </div>
-                        <div class="pallet-status" style="margin: -4px 0 8px;">Columns: Item #, Pallet #, Weight (optional, 3rd column). Same pallet # can repeat across rows; only fill weight once per pallet.</div>
+                        <div class="pallet-status" style="margin: -4px 0 8px;">Columns: Item #, Pallet #, Weight (optional, 3rd column), Dimensions (optional, 4th column, e.g. 48x54x21 = L x W x H). Same pallet # can repeat across rows; only fill weight/dimensions once per pallet.</div>
                         <table class="packing-details">
                             <thead>
                                 <tr>
@@ -578,7 +596,7 @@
             setTimeout(() => window.print(), 500);
         }
 
-        function applyPalletNumbersMap(index, palletNumbers, palletWeights) {
+        function applyPalletNumbersMap(index, palletNumbers, palletWeights, palletDimensions) {
             const itemsList = document.getElementById(`items-list-${index}`);
             if (!itemsList) return;
 
@@ -593,6 +611,7 @@
 
             const shipment = allShipments[index];
             shipment._pendingPalletWeights = palletWeights || {};
+            shipment._pendingPalletDimensions = palletDimensions || {};
             renderPalletWeightRows(index);
             return appliedCount;
         }
@@ -621,7 +640,7 @@
                     return;
                 }
 
-                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {});
+                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {}, data.pallet_dimensions || {});
                 if (status) status.textContent = `✓ Applied pallet #s to ${appliedCount} item row(s) from ${data.count} pasted entries.`;
             } catch (error) {
                 if (status) status.textContent = `❌ Error: ${error.message}`;
@@ -654,7 +673,7 @@
                     return;
                 }
 
-                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {});
+                const appliedCount = applyPalletNumbersMap(index, data.pallet_numbers || {}, data.pallet_weights || {}, data.pallet_dimensions || {});
                 if (status) status.textContent = `✓ Applied pallet #s to ${appliedCount} item row(s) from ${data.count} entries in file.`;
             } catch (error) {
                 if (status) status.textContent = `❌ Error: ${error.message}`;
@@ -695,13 +714,13 @@
                 }
 
                 renderPalletWeightRows(index);
-                // A single "Save" also persists any weights typed/pasted alongside the pallet #s,
-                // so the user doesn't have to click two separate save buttons.
+                // A single "Save" also persists any weights/dimensions typed/pasted alongside the
+                // pallet #s, so the user doesn't have to click two separate save buttons.
                 const weightResult = await savePalletWeights(index, false);
                 if (status) {
                     status.textContent = weightResult.success
-                        ? `✓ Saved pallet #s for ${data.updated_boxes} box row(s) and their pallet weights.`
-                        : `✓ Saved pallet #s for ${data.updated_boxes} box row(s), but weights failed: ${weightResult.detail}`;
+                        ? `✓ Saved pallet #s for ${data.updated_boxes} box row(s) and their pallet weights/dimensions.`
+                        : `✓ Saved pallet #s for ${data.updated_boxes} box row(s), but weights/dimensions failed: ${weightResult.detail}`;
                 }
             } catch (error) {
                 if (status) status.textContent = `❌ Error: ${error.message}`;
@@ -715,10 +734,13 @@
 
             const shipment = allShipments[index];
             const existingWeights = {};
+            const existingDimensions = {};
             (shipment.packingSlip?.pallets || []).forEach(pallet => {
                 existingWeights[pallet.pallet_number] = pallet.weight;
+                existingDimensions[pallet.pallet_number] = pallet.dimensions;
             });
             Object.assign(existingWeights, shipment._pendingPalletWeights || {});
+            Object.assign(existingDimensions, shipment._pendingPalletDimensions || {});
 
             if (!shipment._manualPalletNumbers) {
                 shipment._manualPalletNumbers = new Set();
@@ -732,20 +754,24 @@
 
             const rows = palletNumbers.map(palletNumber => {
                 const currentWeight = existingWeights[palletNumber];
+                const currentDimensions = existingDimensions[palletNumber];
                 return `
                     <tr>
                         <td>${palletNumber}</td>
                         <td>
                             <input type="number" step="0.01" min="0" class="pallet-weight-input" data-pallet-number="${escapeAttribute(palletNumber)}" value="${currentWeight ?? ''}" placeholder="lbs">
                         </td>
+                        <td>
+                            <input type="text" class="pallet-dimensions-input" data-pallet-number="${escapeAttribute(palletNumber)}" value="${escapeAttribute(currentDimensions ?? '')}" placeholder="L x W x H" onpaste="handleDimensionsPaste(event, ${index})" onblur="this.value = normalizeDimensionsInput(this.value)">
+                        </td>
                     </tr>
                 `;
-            }).join('') || `<tr><td colspan="2" style="color: #64748b; font-style: italic;">No pallets yet. Type a Pallet # above or add one below.</td></tr>`;
+            }).join('') || `<tr><td colspan="3" style="color: #64748b; font-style: italic;">No pallets yet. Type a Pallet # above or add one below.</td></tr>`;
 
             container.innerHTML = `
-                <div style="font-weight: 700; color: #2c3e50; margin-top: 12px; margin-bottom: 6px;">Pallet Weights</div>
+                <div style="font-weight: 700; color: #2c3e50; margin-top: 12px; margin-bottom: 6px;">Pallet Weights &amp; Dimensions</div>
                 <table class="pallet-weights-table">
-                    <thead><tr><th>Pallet #</th><th>Weight</th></tr></thead>
+                    <thead><tr><th>Pallet #</th><th>Weight</th><th>Dimensions (L x W x H, in)</th></tr></thead>
                     <tbody>${rows}</tbody>
                 </table>
                 <div style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
@@ -783,11 +809,18 @@
                 weights[input.dataset.palletNumber] = value ? Number(value) : null;
             });
 
+            const dimensions = {};
+            container.querySelectorAll('.pallet-dimensions-input').forEach(input => {
+                const value = normalizeDimensionsInput(input.value);
+                input.value = value;
+                dimensions[input.dataset.palletNumber] = value || null;
+            });
+
             try {
                 const response = await fetch(`${API_BASE}/api/labels/shipments/finalized/${shipment.code}/pallet-weights`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ weights })
+                    body: JSON.stringify({ weights, dimensions })
                 });
                 const data = await response.json();
                 if (!response.ok || !data.success) {
@@ -800,6 +833,7 @@
                     shipment.packingSlip.pallets = Object.entries(weights).map(([pallet_number, weight]) => ({
                         pallet_number,
                         weight,
+                        dimensions: dimensions[pallet_number] || null,
                         item_codes: (shipment.packingSlip.items || [])
                             .filter(item => (item.pallet_number || '') === pallet_number)
                             .map(item => item.item_code),
@@ -808,12 +842,45 @@
                 }
 
                 shipment._pendingPalletWeights = {};
+                shipment._pendingPalletDimensions = {};
                 if (status && updateStatusMessage) status.textContent = `✓ Saved weight for ${data.updated_pallets.length} pallet(s).`;
                 return { success: true, updatedCount: data.updated_pallets.length };
             } catch (error) {
                 if (status) status.textContent = `❌ Error: ${error.message}`;
                 return { success: false, detail: error.message };
             }
+        }
+
+        function normalizeDimensionsInput(raw) {
+            const text = String(raw || '').trim();
+            if (!text) return '';
+            const match = text.match(/^(\d+(?:\.\d+)?)\s*(?:in\.?|")?\s*[xX×*]\s*(\d+(?:\.\d+)?)\s*(?:in\.?|")?\s*[xX×*]\s*(\d+(?:\.\d+)?)\s*(?:in\.?|")?\s*$/);
+            if (!match) return text;
+            const formatNumber = (value) => {
+                const number = parseFloat(value);
+                return Number.isInteger(number) ? String(number) : String(number);
+            };
+            return `${formatNumber(match[1])} x ${formatNumber(match[2])} x ${formatNumber(match[3])}`;
+        }
+
+        function handleDimensionsPaste(event, index) {
+            const clipboardData = event.clipboardData || window.clipboardData;
+            const text = clipboardData ? clipboardData.getData('text') : '';
+            if (!text || !/[\t\r\n]/.test(text)) return; // single value - let the default paste happen
+
+            event.preventDefault();
+            const lines = text.split(/\r\n|\n|\r/).map(line => line.trim()).filter(line => line !== '');
+            const inputs = Array.from(document.querySelectorAll(`#pallet-weights-container-${index} .pallet-dimensions-input`));
+            const startIndex = inputs.indexOf(event.target);
+            if (startIndex === -1) return;
+
+            lines.forEach((line, offset) => {
+                const targetInput = inputs[startIndex + offset];
+                if (!targetInput) return;
+                const cells = line.split('\t').map(cell => cell.trim()).filter(Boolean);
+                const value = cells.length ? cells[cells.length - 1] : line;
+                targetInput.value = normalizeDimensionsInput(value);
+            });
         }
         
         async function deleteFinalizedShipment(index) {
@@ -938,17 +1005,22 @@
                         <td>${pallet.pallet_number}</td>
                         <td>${(pallet.item_codes || []).join(', ')}</td>
                         <td>${pallet.weight ?? 'N/A'}</td>
+                        <td>${pallet.dimensions || 'N/A'}</td>
                         <td>${stripPoPrefix(pallet.po_number) || 'N/A'}</td>
                     </tr>
                 `).join('');
 
                 palletSummaryHTML = `
-                    <table class="pallet-summary-table">
-                        <thead>
-                            <tr><th>Pallet #</th><th>Customer Item #</th><th>Weight (lbs)</th><th>Customer PO #</th></tr>
-                        </thead>
-                        <tbody>${palletRows}</tbody>
-                    </table>
+                    <div class="pallet-section">
+                        <div class="pallet-section-heading">Pallet Information</div>
+                        <hr class="pallet-section-divider">
+                        <table class="pallet-summary-table">
+                            <thead>
+                                <tr><th>Pallet #</th><th>Customer Item #</th><th>Weight (lbs)</th><th>Dimensions (in)<br>L x W x H</th><th>Customer PO #</th></tr>
+                            </thead>
+                            <tbody>${palletRows}</tbody>
+                        </table>
+                    </div>
                 `;
             }
 
