@@ -74,6 +74,25 @@ try:
         print("✅ Column added successfully!")
     elif pallet_weight_columns:
         print("dimensions column already exists")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_shipment_finalizations (
+            id INTEGER PRIMARY KEY,
+            shipment_code TEXT NOT NULL,
+            pallet_number TEXT,
+            product_configs TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            submitted_by TEXT,
+            submitted_at DATETIME,
+            reviewed_by TEXT,
+            reviewed_at DATETIME,
+            rejection_reason TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS ix_pending_shipment_finalizations_shipment_code ON pending_shipment_finalizations (shipment_code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS ix_pending_shipment_finalizations_status ON pending_shipment_finalizations (status)")
+    conn.commit()
+    print("pending_shipment_finalizations table is ready")
 except Exception as e:
     print(f"❌ Error: {e}")
 finally:

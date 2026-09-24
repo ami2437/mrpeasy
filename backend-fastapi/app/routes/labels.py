@@ -14,8 +14,8 @@ import re
 import pandas as pd
 from app.services.mrpeasy_client import mrpeasy_client
 from app.config.database import get_db
-from app.dependencies import require_module, require_permission
-from app.models import ShipmentBox, PackSize, Label, User, PalletWeight
+from app.dependencies import require_module, require_permission, require_role
+from app.models import ShipmentBox, PackSize, Label, User, PalletWeight, PendingShipmentFinalization
 
 class FinalizeShipmentRequest(BaseModel):
     pallet_number: Optional[str] = None
@@ -1008,12 +1008,7 @@ def preview_shipment_box_info_for_order(
     }
 
 
-@router.post("/shipments/{shipment_code}/box-info-sync")
-def sync_shipment_box_info_to_order(
-    shipment_code: str,
-    current_user: User = Depends(require_permission("sync")),
-    db: Session = Depends(get_db)
-):
+def _sync_shipment_box_info(shipment_code: str, db: Session) -> Dict:
     """Write finalized box data while preventing MRPeasy from booking unrelated stock."""
     prepared = _prepare_shipment_box_info_sync(shipment_code, db)
     before = prepared['customer_order']
@@ -1082,6 +1077,32 @@ def sync_shipment_box_info_to_order(
         'customer_order_code': prepared['customer_order_code'],
         'changed_line_count': len(changed_updates)
     }
+
+
+def _try_auto_sync(shipment_code: str, db: Session) -> Dict:
+    """
+    Best-effort MRP sync run automatically right after an admin/super_admin finalize
+    or approval. A sync failure here (e.g. lots not yet booked on the order line)
+    does not undo the finalize -- it's reported alongside so it can be retried via
+    the manual "Sync box info" action.
+    """
+    try:
+        return _sync_shipment_box_info(shipment_code, db)
+    except HTTPException as error:
+        return {'success': False, 'attempted': True, 'status_code': error.status_code, 'detail': error.detail}
+    except Exception as error:
+        return {'success': False, 'attempted': True, 'status_code': 500, 'detail': str(error)}
+
+
+@router.post("/shipments/{shipment_code}/box-info-sync")
+def sync_shipment_box_info_to_order(
+    shipment_code: str,
+    current_user: User = Depends(require_permission("sync")),
+    db: Session = Depends(get_db)
+):
+    """Write finalized box data while preventing MRPeasy from booking unrelated stock."""
+    return _sync_shipment_box_info(shipment_code, db)
+
 
 @router.get("/shipments/ready")
 async def get_ready_shipments():
@@ -1422,11 +1443,16 @@ async def delete_finalized_shipment(shipment_code: str, db: Session = Depends(ge
 def finalize_shipment_configuration(
     shipment_code: str,
     request: FinalizeShipmentRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_module("batch_labels"))
 ):
     """
     Finalize and lock shipment box configuration - saves to database
-    
+
+    Employees submit for admin/super_admin approval instead of writing directly
+    (see PendingShipmentFinalization); admins/super_admins finalize immediately
+    and the corrected box info is auto-synced to MRPeasy right after.
+
     Args:
         shipment_code: The shipment code
         request: Contains pallet_number and product_configs
@@ -1519,6 +1545,38 @@ def finalize_shipment_configuration(
         if not any(group['total_quantity'] > 0 for group in groups.values()):
             raise HTTPException(status_code=400, detail="Shipment products have no quantity to pack")
 
+        if current_user.role not in ("admin", "super_admin"):
+            # Employees submit for admin/super_admin approval instead of writing/locking
+            # data directly. Nothing is written to shipment_boxes or MRPeasy yet.
+            pending = db.query(PendingShipmentFinalization).filter(
+                PendingShipmentFinalization.shipment_code == shipment_code,
+                PendingShipmentFinalization.status == "pending"
+            ).first()
+            configs_json = json.dumps(product_configs)
+            if pending:
+                pending.pallet_number = pallet_number
+                pending.product_configs = configs_json
+                pending.submitted_by = current_user.username
+                pending.submitted_at = datetime.utcnow()
+            else:
+                pending = PendingShipmentFinalization(
+                    shipment_code=shipment_code,
+                    pallet_number=pallet_number,
+                    product_configs=configs_json,
+                    status="pending",
+                    submitted_by=current_user.username,
+                    submitted_at=datetime.utcnow()
+                )
+                db.add(pending)
+            db.commit()
+
+            return {
+                'success': True,
+                'pending_approval': True,
+                'shipment_code': shipment_code,
+                'message': f'Submitted for admin approval by {current_user.username}'
+            }
+
         # Replace existing rows in the same transaction as the new rows. If any
         # replacement fails, rollback preserves the previous packing list.
         db.query(ShipmentBox).filter(
@@ -1560,17 +1618,23 @@ def finalize_shipment_configuration(
 
         if not saved_boxes:
             raise HTTPException(status_code=400, detail="No packing-list boxes were generated")
-        
+
         db.commit()
-        
+
+        # Best-effort: push the corrected box info to MRPeasy right away. A sync
+        # failure doesn't undo the finalize -- it's reported alongside so it can
+        # be retried manually via the "Sync box info" action.
+        sync_result = _try_auto_sync(shipment_code, db)
+
         return {
             'success': True,
             'shipment_code': shipment_code,
             'pallet_number': pallet_number,
             'total_boxes_saved': len(saved_boxes),
-            'boxes': saved_boxes
+            'boxes': saved_boxes,
+            'sync_result': sync_result
         }
-    
+
     except HTTPException:
         db.rollback()
         raise
@@ -1582,7 +1646,8 @@ def finalize_shipment_configuration(
 @router.post("/finalize-batch")
 def finalize_shipment_batch(
     request: BulkFinalizeRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_module("batch_labels"))
 ):
     """Finalize every submitted shipment server-side, even if the browser disconnects."""
     if not request.shipments:
@@ -1600,7 +1665,8 @@ def finalize_shipment_batch(
                     pallet_number=shipment_request.pallet_number,
                     product_configs=shipment_request.product_configs
                 ),
-                db
+                db,
+                current_user
             )
             results.append(result)
             total_boxes_saved += result.get('total_boxes_saved', 0)
@@ -1626,6 +1692,116 @@ def finalize_shipment_batch(
         'results': results,
         'failures': failures
     }
+
+
+def _serialize_pending_finalization(record: PendingShipmentFinalization) -> Dict:
+    try:
+        product_configs = json.loads(record.product_configs) if record.product_configs else {}
+    except (TypeError, json.JSONDecodeError):
+        product_configs = {}
+    return {
+        'id': record.id,
+        'shipment_code': record.shipment_code,
+        'pallet_number': record.pallet_number,
+        'product_configs': product_configs,
+        'status': record.status,
+        'submitted_by': record.submitted_by,
+        'submitted_at': record.submitted_at.isoformat() if record.submitted_at else None,
+        'reviewed_by': record.reviewed_by,
+        'reviewed_at': record.reviewed_at.isoformat() if record.reviewed_at else None,
+        'rejection_reason': record.rejection_reason
+    }
+
+
+class RejectFinalizationRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.get("/finalize/pending")
+def list_pending_finalizations(
+    current_user: User = Depends(require_role("admin", "super_admin")),
+    db: Session = Depends(get_db)
+):
+    """List shipments awaiting admin/super_admin approval (submitted by employees)."""
+    records = (
+        db.query(PendingShipmentFinalization)
+        .filter(PendingShipmentFinalization.status == "pending")
+        .order_by(PendingShipmentFinalization.submitted_at.desc())
+        .all()
+    )
+    return {
+        'success': True,
+        'pending': [_serialize_pending_finalization(record) for record in records]
+    }
+
+
+@router.post("/finalize/{shipment_code}/approve")
+def approve_pending_finalization(
+    shipment_code: str,
+    current_user: User = Depends(require_role("admin", "super_admin")),
+    db: Session = Depends(get_db)
+):
+    """Approve an employee's pending finalize request: finalizes it and auto-syncs to MRP."""
+    pending = (
+        db.query(PendingShipmentFinalization)
+        .filter(
+            PendingShipmentFinalization.shipment_code == shipment_code,
+            PendingShipmentFinalization.status == "pending"
+        )
+        .order_by(PendingShipmentFinalization.submitted_at.desc())
+        .first()
+    )
+    if not pending:
+        raise HTTPException(status_code=404, detail=f"No pending finalization found for {shipment_code}")
+
+    try:
+        product_configs = json.loads(pending.product_configs) if pending.product_configs else {}
+    except (TypeError, json.JSONDecodeError):
+        raise HTTPException(status_code=500, detail="Stored pending configuration is corrupted")
+
+    result = finalize_shipment_configuration(
+        shipment_code,
+        FinalizeShipmentRequest(pallet_number=pending.pallet_number, product_configs=product_configs),
+        db,
+        current_user
+    )
+
+    pending.status = "approved"
+    pending.reviewed_by = current_user.username
+    pending.reviewed_at = datetime.utcnow()
+    db.commit()
+
+    result['approved_pending_id'] = pending.id
+    return result
+
+
+@router.post("/finalize/{shipment_code}/reject")
+def reject_pending_finalization(
+    shipment_code: str,
+    payload: RejectFinalizationRequest = Body(default=RejectFinalizationRequest()),
+    current_user: User = Depends(require_role("admin", "super_admin")),
+    db: Session = Depends(get_db)
+):
+    """Reject an employee's pending finalize request; they'll need to resubmit."""
+    pending = (
+        db.query(PendingShipmentFinalization)
+        .filter(
+            PendingShipmentFinalization.shipment_code == shipment_code,
+            PendingShipmentFinalization.status == "pending"
+        )
+        .order_by(PendingShipmentFinalization.submitted_at.desc())
+        .first()
+    )
+    if not pending:
+        raise HTTPException(status_code=404, detail=f"No pending finalization found for {shipment_code}")
+
+    pending.status = "rejected"
+    pending.reviewed_by = current_user.username
+    pending.reviewed_at = datetime.utcnow()
+    pending.rejection_reason = (payload.reason or '').strip() or None
+    db.commit()
+
+    return {'success': True, 'shipment_code': shipment_code, 'status': 'rejected'}
 
 
 @router.get("/shipments/{shipment_code}/finalized-labels")

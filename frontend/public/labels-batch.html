@@ -161,6 +161,7 @@
             <div style="margin-top: 15px; display: flex; gap: 10px;">
                 <button class="btn btn-primary" id="view-toggle-active" onclick="switchShipmentView('active')">Active (Ready)</button>
                 <button class="btn btn-secondary" id="view-toggle-archived" onclick="switchShipmentView('archived')">Archived (Shipped)</button>
+                <button class="btn btn-secondary" id="view-toggle-pending" onclick="switchShipmentView('pending')" style="display:none;">Pending Approval</button>
             </div>
         </div>
         <div class="controls">
@@ -241,6 +242,25 @@
                     <button class="btn btn-secondary" onclick="window.print()" style="display: none;" id="print-btn">Print Labels</button>
                 </div>
             </div>
+            <div id="pending-container" style="display: none;">
+                <div id="pending-loading" class="loading">Loading pending approvals...</div>
+                <div id="pending-list-container" style="display:none;">
+                    <table class="shipments-table">
+                        <thead>
+                            <tr>
+                                <th>Shipment Code</th>
+                                <th>Submitted By</th>
+                                <th>Submitted At</th>
+                                <th>Pallet #</th>
+                                <th>Items / Pack Sizes</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pending-list"></tbody>
+                    </table>
+                </div>
+                <div id="pending-empty" style="display:none; padding:20px; color:#666;">No shipments awaiting approval.</div>
+            </div>
             <div id="error-message"></div>
         </div>
         <div class="labels-container" id="labels-container">
@@ -256,6 +276,7 @@
         let packSizeCatalog = [];
         let currentShipmentView = 'active';
         let shipmentSortState = { key: 'code', direction: 'asc' };
+        let currentUserRole = null;
 
         function getToken() {
             return localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
@@ -911,6 +932,21 @@
             currentShipmentView = view;
             document.getElementById('view-toggle-active').className = view === 'active' ? 'btn btn-primary' : 'btn btn-secondary';
             document.getElementById('view-toggle-archived').className = view === 'archived' ? 'btn btn-primary' : 'btn btn-secondary';
+            const pendingToggle = document.getElementById('view-toggle-pending');
+            if (pendingToggle) pendingToggle.className = view === 'pending' ? 'btn btn-primary' : 'btn btn-secondary';
+
+            if (view === 'pending') {
+                document.getElementById('pack-size-processor-section').style.display = 'none';
+                document.getElementById('finalize-all-btn').style.display = 'none';
+                document.getElementById('shipments-container').style.display = 'none';
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('pending-container').style.display = '';
+                showError('');
+                loadPendingApprovals();
+                return;
+            }
+
+            document.getElementById('pending-container').style.display = 'none';
             document.getElementById('pack-size-processor-section').style.display = view === 'archived' ? 'none' : '';
             document.getElementById('finalize-all-btn').style.display = view === 'archived' ? 'none' : '';
             allShipments = [];
@@ -923,7 +959,106 @@
             showError('');
             loadShipments();
         }
-        
+
+        async function loadPendingApprovals() {
+            document.getElementById('pending-loading').style.display = 'block';
+            document.getElementById('pending-list-container').style.display = 'none';
+            document.getElementById('pending-empty').style.display = 'none';
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/finalize/pending`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to load pending approvals (HTTP ${response.status})`);
+                }
+                document.getElementById('pending-loading').style.display = 'none';
+                if (!data.pending || data.pending.length === 0) {
+                    document.getElementById('pending-empty').style.display = 'block';
+                    return;
+                }
+                document.getElementById('pending-list-container').style.display = 'block';
+                renderPendingApprovals(data.pending);
+            } catch (error) {
+                document.getElementById('pending-loading').style.display = 'none';
+                showError(`Error loading pending approvals: ${error.message}`);
+            }
+        }
+
+        function renderPendingApprovals(pendingItems) {
+            const tbody = document.getElementById('pending-list');
+            tbody.innerHTML = pendingItems.map(item => {
+                const configs = Object.values(item.product_configs || {});
+                const seenItems = new Set();
+                const summaryParts = [];
+                configs.forEach(config => {
+                    const key = `${config.item_code}:${config.order_line}`;
+                    if (seenItems.has(key)) return;
+                    seenItems.add(key);
+                    summaryParts.push(`${escapeHtml(config.item_code)} (pack ${escapeHtml(String(config.pack_size))})`);
+                });
+                const summary = summaryParts.join(', ') || '-';
+                const submittedAt = item.submitted_at ? new Date(item.submitted_at).toLocaleString() : '-';
+                const code = escapeHtml(item.shipment_code);
+                return `
+                    <tr>
+                        <td>${code}</td>
+                        <td>${escapeHtml(item.submitted_by || '-')}</td>
+                        <td>${submittedAt}</td>
+                        <td>${escapeHtml(item.pallet_number || '-')}</td>
+                        <td>${summary}</td>
+                        <td>
+                            <button class="btn btn-primary" onclick="approvePendingFinalization('${code}')">✓ Approve</button>
+                            <button class="btn btn-secondary" onclick="rejectPendingFinalization('${code}')">✕ Reject</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function approvePendingFinalization(shipmentCode) {
+            if (!confirm(`Approve and finalize ${shipmentCode}? This locks the packing data and syncs it to MRPeasy.`)) return;
+            showLoading('Approving and finalizing...');
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/finalize/${encodeURIComponent(shipmentCode)}/approve`, { method: 'POST' });
+                const data = await response.json().catch(() => ({}));
+                hideLoading();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Approval failed (HTTP ${response.status})`);
+                }
+                const syncNote = data.sync_result
+                    ? (data.sync_result.success ? ' MRP sync succeeded.' : ` MRP sync failed: ${data.sync_result.detail || 'unknown error'} (retry from the Active view later).`)
+                    : '';
+                showError(`✓ Approved and finalized ${shipmentCode}: ${data.total_boxes_saved} boxes saved.${syncNote}`);
+                loadPendingApprovals();
+            } catch (error) {
+                hideLoading();
+                showError(`Error approving ${shipmentCode}: ${error.message}`);
+            }
+        }
+
+        async function rejectPendingFinalization(shipmentCode) {
+            const reason = prompt(`Reason for rejecting ${shipmentCode}? (optional)`);
+            if (reason === null) return;
+            if (!confirm(`Reject the pending finalization for ${shipmentCode}?`)) return;
+            showLoading('Rejecting...');
+            try {
+                const response = await fetch(`${API_BASE}/api/labels/finalize/${encodeURIComponent(shipmentCode)}/reject`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                const data = await response.json().catch(() => ({}));
+                hideLoading();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Rejection failed (HTTP ${response.status})`);
+                }
+                showError(`Rejected pending finalization for ${shipmentCode}.`);
+                loadPendingApprovals();
+            } catch (error) {
+                hideLoading();
+                showError(`Error rejecting ${shipmentCode}: ${error.message}`);
+            }
+        }
+
         async function loadShipmentDetails() {
             for (let shipment of allShipments) {
                 try {
@@ -1626,26 +1761,39 @@
                 
                 if (data.success) {
                     hideLoading();
-                    const packingSlipLink = `<a href="packing-list.html" target="_blank" style="color: #1976d2; text-decoration: underline; margin-left: 10px;">View Shipments</a>`;
-                    showError(`✓ Finalized ${shipment.code}: ${data.total_boxes_saved} boxes saved to database with ${palletNumber ? `pallet #${palletNumber}` : 'no pallet assignment'} ${packingSlipLink}`);
-                    
-                    // Disable pack size inputs after finalization
-                    Object.keys(productConfigs).forEach(productKey => {
-                        const separatorIndex = productKey.lastIndexOf('-');
-                        const itemCode = productKey.slice(0, separatorIndex);
-                        const prodIndex = productKey.slice(separatorIndex + 1);
-                        const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${prodIndex}`);
-                        if (packSizeInput) {
-                            packSizeInput.disabled = true;
-                            packSizeInput.style.opacity = '0.6';
+
+                    // Employees don't write/lock data directly -- their submission
+                    // just waits for an admin/super_admin to approve it.
+                    const lockInputs = () => {
+                        Object.keys(productConfigs).forEach(productKey => {
+                            const separatorIndex = productKey.lastIndexOf('-');
+                            const itemCode = productKey.slice(0, separatorIndex);
+                            const prodIndex = productKey.slice(separatorIndex + 1);
+                            const packSizeInput = document.getElementById(`pack-size-${shipment.code}-${itemCode}-${prodIndex}`);
+                            if (packSizeInput) {
+                                packSizeInput.disabled = true;
+                                packSizeInput.style.opacity = '0.6';
+                            }
+                        });
+                        if (palletInput) {
+                            palletInput.disabled = true;
+                            palletInput.style.opacity = '0.6';
                         }
-                    });
-                    
-                    // Disable pallet input
-                    if (palletInput) {
-                        palletInput.disabled = true;
-                        palletInput.style.opacity = '0.6';
+                    };
+
+                    if (data.pending_approval) {
+                        lockInputs();
+                        showError(`⏳ ${shipment.code} submitted for admin approval. It will be finalized once an admin/super_admin approves it.`);
+                        return;
                     }
+
+                    const packingSlipLink = `<a href="packing-list.html" target="_blank" style="color: #1976d2; text-decoration: underline; margin-left: 10px;">View Shipments</a>`;
+                    const syncNote = data.sync_result
+                        ? (data.sync_result.success ? ' MRP sync succeeded.' : ` MRP sync failed: ${data.sync_result.detail || 'unknown error'} (use "Sync box info" to retry).`)
+                        : '';
+                    showError(`✓ Finalized ${shipment.code}: ${data.total_boxes_saved} boxes saved to database with ${palletNumber ? `pallet #${palletNumber}` : 'no pallet assignment'}.${syncNote} ${packingSlipLink}`);
+
+                    lockInputs();
 
                     const syncButton = document.getElementById(`sync-box-info-${shipment.code}`);
                     if (syncButton) syncButton.disabled = false;
@@ -1918,6 +2066,8 @@
 
             let successCount = 0;
             let totalBoxesSaved = 0;
+            let pendingCount = 0;
+            const syncFailures = [];
 
             if (batchShipments.length > 0) {
                 try {
@@ -1932,6 +2082,11 @@
 
                     (data.results || []).forEach(result => {
                         const shipmentCode = result.shipment_code;
+                        if (result.pending_approval) pendingCount += 1;
+                        if (result.sync_result && !result.sync_result.success) {
+                            syncFailures.push(`${shipmentCode}: ${result.sync_result.detail || 'sync failed'}`);
+                        }
+
                         const productConfigs = productConfigsByShipment[shipmentCode] || {};
                         Object.keys(productConfigs).forEach(productKey => {
                             const separatorIndex = productKey.lastIndexOf('-');
@@ -1957,19 +2112,28 @@
             }
 
             hideLoading();
-            
+
+            const finalizedCount = successCount - pendingCount;
+            let summary = '';
+            if (finalizedCount > 0) summary += `✓ Finalized ${finalizedCount} shipment(s), ${totalBoxesSaved} boxes saved. `;
+            if (pendingCount > 0) summary += `⏳ ${pendingCount} shipment(s) submitted for admin approval. `;
+            if (syncFailures.length > 0) summary += `MRP sync failed for: ${syncFailures.join(' | ')}. `;
+
             if (failures.length === 0) {
-                showError(`✓ Successfully finalized all ${successCount} shipment(s)! Total ${totalBoxesSaved} boxes saved to database.`);
+                showError(summary.trim() || `✓ Successfully finalized all ${successCount} shipment(s)! Total ${totalBoxesSaved} boxes saved to database.`);
             } else {
-                const successSummary = successCount > 0
-                    ? `Finalized ${successCount} shipment(s) and saved ${totalBoxesSaved} boxes. `
-                    : '';
-                showError(`${successSummary}Failed ${failures.length} shipment(s): ${failures.join(' | ')}`);
+                showError(`${summary}Failed ${failures.length} shipment(s): ${failures.join(' | ')}`);
             }
         }
         
         AuthGuard.requireRoles(['employee', 'admin', 'super_admin']).then(user => {
-            if (user) loadShipments();
+            if (!user) return;
+            currentUserRole = user.role;
+            if (currentUserRole === 'admin' || currentUserRole === 'super_admin') {
+                const pendingToggle = document.getElementById('view-toggle-pending');
+                if (pendingToggle) pendingToggle.style.display = '';
+            }
+            loadShipments();
         });
     </script>
 </body>
