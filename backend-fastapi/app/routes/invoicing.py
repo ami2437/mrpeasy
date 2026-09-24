@@ -1171,11 +1171,22 @@ SHIPPING_PRICE = 295.0
 
 def _resolve_order_line_lookup(cust_ord_id: int):
     """
-    article_id -> {group_id, product_id, co_line_id} for one live MRPeasy order.
+    (article_id, ord) -> {group_id, product_id, co_line_id} for one live
+    MRPeasy order.
 
-    The discrepancy engine's candidate lines don't carry group_id/product_id
-    (MRPeasy's create-invoice endpoint undocumentedly requires both alongside
-    article_id -- see Step 0 verification), so these are resolved fresh here.
+    Keyed by (article_id, ord) rather than article_id alone: the same item
+    can appear on multiple order lines of one order (confirmed in real data --
+    e.g. a partial-shipment split), and keying by article_id alone would
+    collapse them, misattributing every candidate line for that item to
+    whichever order line was processed last. `ord` (the order line's 1-based
+    position) is the same precise field the discrepancy engine already uses
+    to keep these lines distinct (see `_build_discrepancy_line_key`), not a
+    heuristic.
+
+    Also resolves group_id/product_id, which the discrepancy engine's
+    candidate lines don't carry (MRPeasy's create-invoice endpoint
+    undocumentedly requires both alongside article_id -- see Step 0
+    verification).
     """
     orders = mrpeasy_client.get_customer_orders({"cust_ord_id": cust_ord_id}) or []
     order = next((o for o in orders if o.get("cust_ord_id") == cust_ord_id), None)
@@ -1184,7 +1195,8 @@ def _resolve_order_line_lookup(cust_ord_id: int):
         for line in order.get("products", []) or []:
             article_id = line.get("article_id")
             if article_id is not None:
-                lookup[str(article_id)] = {
+                ord_value = str(line.get("ord") or "1")
+                lookup[(str(article_id), ord_value)] = {
                     "group_id": line.get("group_id"),
                     "product_id": line.get("product_id") or article_id,
                     "co_line_id": line.get("line_id"),
@@ -1233,7 +1245,8 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
     submission_lines = []
     for line in matching_lines:
         article_id = line.get("article_id")
-        lookup_entry = line_lookup.get(str(article_id), {}) if article_id is not None else {}
+        order_line_ord = str(line.get("order_line") or "1")
+        lookup_entry = line_lookup.get((str(article_id), order_line_ord), {}) if article_id is not None else {}
         quantity = _to_number(line.get("quantity"), 0)
         unit_price = _to_number(line.get("unit_price"), 0)
         total = round(quantity * unit_price, 2)
