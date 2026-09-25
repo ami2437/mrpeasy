@@ -1185,7 +1185,7 @@ INVOICE_STATUS_DUMMY = 10
 SHIPPING_ARTICLE_ID = 251
 SHIPPING_PRODUCT_ID = 251
 SHIPPING_GROUP_ID = 19
-SHIPPING_ITEM_TITLE = "Shipping Charge"
+SHIPPING_ITEM_TITLE = "Shipping shipping charge"  # matches MRPeasy's own item so it auto-links
 SHIPPING_PRICE = 295.0
 
 
@@ -1222,6 +1222,16 @@ def _resolve_order_line_lookup(cust_ord_id: int):
                     "co_line_id": line.get("line_id"),
                 }
     return lookup, order
+
+
+def _iso_date_to_epoch(value: Optional[str]) -> Optional[int]:
+    """'YYYY-MM-DD' -> Unix timestamp (midnight UTC), or None if unparseable/absent."""
+    if not value or value == "N/A":
+        return None
+    try:
+        return int(datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp())
+    except Exception:
+        return None
 
 
 def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due_date: Optional[str], free_text: Optional[str]):
@@ -1271,6 +1281,12 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
         unit_price = _to_number(line.get("unit_price"), 0)
         total = round(quantity * unit_price, 2)
 
+        # candidate's delivery_date already prefers the shipment's own
+        # created date over the order line's originally-planned date (see
+        # _build_not_invoiced_candidates' display_date) -- exactly what
+        # should appear on the invoice line.
+        line_delivery_epoch = _iso_date_to_epoch(line.get("delivery_date"))
+
         product_lines.append({
             "ord": len(product_lines) + 1,
             "article_id": article_id,
@@ -1282,6 +1298,7 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
             "item_price_cur": unit_price,
             "total_price": total,
             "total_price_cur": total,
+            "delivery_date": line_delivery_epoch,
             "cust_ord_id": cust_ord_id,
             "customer_order_code": order_code,
             "co_line_id": lookup_entry.get("co_line_id"),
