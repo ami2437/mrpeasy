@@ -72,11 +72,31 @@ class InvoiceMRPSubmissionRequest(BaseModel):
     order_code: str
     shipment_numbers: List[str] = Field(default_factory=list)
     due_date: Optional[str] = None
-    free_text: Optional[str] = None
+    free_text: Optional[str] = "Generated via AT portal"
 
 
 class RejectInvoiceSubmissionRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class InvoiceSubmissionLineEdit(BaseModel):
+    article_id: Optional[int] = None
+    product_id: Optional[int] = None
+    group_id: Optional[int] = None
+    description: Optional[str] = None
+    quantity: float
+    item_price: float
+    cust_ord_id: Optional[int] = None
+    customer_order_code: Optional[str] = None
+    co_line_id: Optional[int] = None
+    shipment_code: Optional[str] = None  # None for a manually added/edited line with no shipment origin
+    item_code: Optional[str] = None
+
+
+class UpdatePendingInvoiceSubmissionRequest(BaseModel):
+    lines: List[InvoiceSubmissionLineEdit]
+    free_text: Optional[str] = None
+    due_date: Optional[str] = None
 
 
 def _ensure_bulk_dependencies():
@@ -1405,6 +1425,89 @@ def preview_mrp_invoice_submission(
     return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
 
 
+@router.put("/mrp-submission/{submission_id}")
+def update_pending_mrp_invoice_submission(
+    submission_id: int,
+    request: UpdatePendingInvoiceSubmissionRequest,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """
+    Edit a staged invoice before confirming: adjust/remove/add line items
+    (including the shipping line), quantities, prices, and free text. Only
+    allowed while the submission is still 'pending' -- once confirmed, the
+    real MRPeasy invoice must be edited in MRPeasy itself.
+    """
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}', not pending")
+    if not request.lines:
+        raise HTTPException(status_code=400, detail="An invoice needs at least one line item")
+
+    product_lines = []
+    for line in request.lines:
+        if line.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Every line's quantity must be greater than 0")
+        if line.item_price < 0:
+            raise HTTPException(status_code=400, detail="A line's price cannot be negative")
+        total = round(line.quantity * line.item_price, 2)
+        product_lines.append({
+            "ord": len(product_lines) + 1,
+            "article_id": line.article_id,
+            "product_id": line.product_id or line.article_id,
+            "group_id": line.group_id,
+            "description": line.description or "",
+            "quantity": line.quantity,
+            "item_price": line.item_price,
+            "item_price_cur": line.item_price,
+            "total_price": total,
+            "total_price_cur": total,
+            "cust_ord_id": line.cust_ord_id or submission.cust_ord_id,
+            "customer_order_code": line.customer_order_code or submission.order_code,
+            "co_line_id": line.co_line_id,
+        })
+
+    payload = json.loads(submission.payload_json)
+    payload["products"] = product_lines
+    free_text = request.free_text if request.free_text is not None else submission.free_text
+    if free_text:
+        payload["free_text"] = free_text
+    if request.due_date:
+        try:
+            payload["due_date"] = int(datetime.fromisoformat(request.due_date).replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            pass
+
+    submission.payload_json = json.dumps(payload)
+    submission.free_text = free_text
+    if request.due_date is not None:
+        submission.due_date = request.due_date
+
+    db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).delete()
+    for line in request.lines:
+        db.add(PendingInvoiceSubmissionLine(
+            submission_id=submission.id,
+            shipment_code=line.shipment_code,
+            co_line_id=line.co_line_id,
+            article_id=line.article_id,
+            item_code=line.item_code,
+            quantity=line.quantity,
+            unit_price=line.item_price,
+        ))
+
+    db.commit()
+    db.refresh(submission)
+
+    lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+    return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+
+
 @router.get("/mrp-submission/pending", dependencies=[Depends(require_module("invoice_mrp_submission"))])
 def list_pending_mrp_invoice_submissions(db: Session = Depends(get_db)):
     submissions = (
@@ -1440,6 +1543,74 @@ def list_mrp_invoice_submission_history(db: Session = Depends(get_db), limit: in
     return {"success": True, "history": result}
 
 
+def _check_submission_not_already_invoiced(submission: PendingInvoiceSubmission, lines: List[PendingInvoiceSubmissionLine]):
+    """
+    Re-check, right before the real POST, that none of this submission's
+    order lines have since been covered by another invoice -- created
+    directly in MRPeasy, or by a different pending submission confirmed
+    first while this one sat staged. Raises 409 if adding this submission's
+    quantity on top of what's already invoiced would exceed what shipped.
+
+    Matches by co_line_id, which MRPeasy's own invoice UI (confirmed by
+    inspecting a real captured request) and this feature both set on every
+    line they create -- so this catches duplicates created either way.
+    Older/legacy invoices that predate co_line_id being populated won't be
+    caught by this specific check; the existing Over-Invoiced tab remains
+    the broader (item-level, not line-precise) safety net for those.
+    """
+    line_ids = {line.co_line_id for line in lines if line.co_line_id is not None}
+    if not line_ids:
+        return
+
+    cust_ord_id = submission.cust_ord_id
+    orders = mrpeasy_client.get_customer_orders({"cust_ord_id": cust_ord_id}) or []
+    order = next((o for o in orders if o.get("cust_ord_id") == cust_ord_id), None)
+    if not order:
+        raise HTTPException(status_code=409, detail=f"Customer order {submission.order_code} no longer found in MRPeasy")
+
+    shipped_by_line = {}
+    for product in order.get("products", []) or []:
+        line_id = product.get("line_id")
+        if line_id is not None:
+            shipped_by_line[line_id] = _to_number(product.get("shipped"), 0)
+
+    invoices = mrpeasy_client.get_invoices({"cust_ord_id": cust_ord_id}) or []
+    invoiced_by_line = {}
+    for invoice in invoices:
+        if str(invoice.get("status")) == "50":  # cancelled -- excluded, matching the Over-Invoiced tab's own rule
+            continue
+        for product in invoice.get("products", []) or []:
+            co_line_id = product.get("co_line_id")
+            if co_line_id is None:
+                continue
+            invoiced_by_line[co_line_id] = invoiced_by_line.get(co_line_id, 0) + _to_number(product.get("quantity"), 0)
+
+    our_qty_by_line = {}
+    for line in lines:
+        if line.co_line_id is None:
+            continue
+        our_qty_by_line[line.co_line_id] = our_qty_by_line.get(line.co_line_id, 0) + line.quantity
+
+    conflicts = []
+    for co_line_id, our_qty in our_qty_by_line.items():
+        shipped = shipped_by_line.get(co_line_id, 0)
+        already_invoiced = invoiced_by_line.get(co_line_id, 0)
+        if already_invoiced + our_qty > shipped + 0.001:
+            conflicts.append(
+                f"order line {co_line_id}: shipped {shipped}, already invoiced {already_invoiced} elsewhere, "
+                f"this submission adds {our_qty} (would total {already_invoiced + our_qty})"
+            )
+
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This shipment appears to already be (partially) invoiced elsewhere since it was staged "
+                "-- refusing to create a duplicate. " + "; ".join(conflicts)
+            )
+        )
+
+
 @router.post("/mrp-submission/{submission_id}/confirm")
 def confirm_mrp_invoice_submission(
     submission_id: int,
@@ -1447,7 +1618,10 @@ def confirm_mrp_invoice_submission(
     db: Session = Depends(get_db)
 ):
     """Actually POST the staged invoice payload to MRPeasy. Trusts the stored
-    payload frozen at preview time -- never re-derives it from fresh input."""
+    payload frozen at preview time -- never re-derives it from fresh input --
+    but does re-validate against live MRP data first (see
+    _check_submission_not_already_invoiced) since a submission may have sat
+    staged for a while before being confirmed."""
     submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=404, detail="Pending invoice submission not found")
@@ -1459,6 +1633,11 @@ def confirm_mrp_invoice_submission(
             status_code=403,
             detail="Sending invoices to MRPeasy is currently disabled (allow_mrp_invoice_creation is off)"
         )
+
+    submission_lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+    _check_submission_not_already_invoiced(submission, submission_lines)
 
     payload = json.loads(submission.payload_json)
 

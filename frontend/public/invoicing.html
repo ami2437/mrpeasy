@@ -1095,14 +1095,26 @@
             }
             container.innerHTML = submissions.map(sub => {
                 const payload = sub.payload || {};
-                const lineRows = (payload.products || []).map(p => `
-                    <tr>
-                        <td>${escapeHtml(p.description || String(p.article_id || ''))}</td>
-                        <td>${toSafeNumber(p.quantity)}</td>
-                        <td>${formatCurrency('$', p.item_price)}</td>
-                        <td>${formatCurrency('$', p.total_price)}</td>
-                    </tr>
-                `).join('');
+                const linesByCoLineId = {};
+                (sub.lines || []).forEach(l => { if (l.co_line_id !== null && l.co_line_id !== undefined) linesByCoLineId[l.co_line_id] = l; });
+
+                const lineRows = (payload.products || []).map(p => {
+                    const meta = (p.co_line_id !== null && p.co_line_id !== undefined) ? linesByCoLineId[p.co_line_id] : null;
+                    const total = toSafeNumber(p.quantity) * toSafeNumber(p.item_price);
+                    return `
+                        <tr data-article-id="${p.article_id ?? ''}" data-product-id="${p.product_id ?? ''}" data-group-id="${p.group_id ?? ''}"
+                            data-cust-ord-id="${p.cust_ord_id ?? ''}" data-customer-order-code="${escapeHtml(p.customer_order_code || '')}"
+                            data-co-line-id="${p.co_line_id ?? ''}" data-shipment-code="${escapeHtml(meta?.shipment_code || '')}"
+                            data-item-code="${escapeHtml(meta?.item_code || '')}">
+                            <td><input type="text" class="mrp-edit-desc" value="${escapeHtml(p.description || '')}" style="width:220px;"></td>
+                            <td><input type="number" class="mrp-edit-qty" value="${toSafeNumber(p.quantity)}" min="0.01" step="0.01" style="width:80px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                            <td><input type="number" class="mrp-edit-price" value="${toSafeNumber(p.item_price)}" min="0" step="0.01" style="width:90px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                            <td class="mrp-edit-total">${formatCurrency('$', total)}</td>
+                            <td><button class="btn-generate btn-secondary" style="padding:2px 8px;font-size:11px;" onclick="this.closest('tr').remove()" title="Remove this line">✕</button></td>
+                        </tr>
+                    `;
+                }).join('');
+
                 const shipmentCodes = [...new Set((sub.lines || []).map(l => l.shipment_code).filter(Boolean))].join(', ');
                 const submittedAt = sub.submitted_at ? new Date(sub.submitted_at).toLocaleString() : 'N/A';
                 const statusNote = sub.status === 'failed'
@@ -1110,21 +1122,99 @@
                     : '';
 
                 return `
-                    <div class="pending-submission-card" style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;">
+                    <div class="pending-submission-card" id="mrp-sub-${sub.id}" style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;">
                         <strong>${escapeHtml(sub.order_code || 'N/A')}</strong> — shipment(s): ${escapeHtml(shipmentCodes || 'N/A')}
                         <span style="color:#64748b;font-size:12px;"> · submitted by ${escapeHtml(sub.submitted_by || 'N/A')} at ${submittedAt}</span>
                         ${statusNote}
-                        <table class="table" style="margin-top:8px;">
-                            <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+                        <p style="color:#64748b;font-size:12px;margin:6px 0 0;">Edit quantities, prices, description, or the shipping line below, or remove/add lines, then Save before confirming.</p>
+                        <table class="table mrp-submission-lines-table" style="margin-top:8px;">
+                            <thead><tr><th>Item / Description</th><th>Qty</th><th>Price</th><th>Total</th><th></th></tr></thead>
                             <tbody>${lineRows}</tbody>
                         </table>
+                        <button class="btn-generate btn-secondary" style="padding:3px 8px;font-size:11px;margin-top:6px;" onclick="addMrpSubmissionLine(${sub.id})">+ Add Line</button>
+                        <div style="margin-top:10px;">
+                            <label style="display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:4px;">Free text (shown on the invoice)</label>
+                            <textarea class="mrp-edit-free-text" rows="2" style="width:100%; max-width:480px;">${escapeHtml(payload.free_text || 'Generated via AT portal')}</textarea>
+                        </div>
                         <div style="margin-top:8px;">
+                            <button class="btn-generate btn-secondary" onclick="saveMrpSubmissionEdits(${sub.id})">💾 Save Changes</button>
                             <button class="btn-generate btn-primary" onclick="confirmMrpSubmission(${sub.id})">✓ Confirm &amp; Send to MRP</button>
                             <button class="btn-generate btn-secondary" onclick="rejectMrpSubmission(${sub.id})">✕ Discard</button>
                         </div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function recalcMrpSubmissionLineTotal(input) {
+            const row = input.closest('tr');
+            const qty = toSafeNumber(row.querySelector('.mrp-edit-qty').value);
+            const price = toSafeNumber(row.querySelector('.mrp-edit-price').value);
+            row.querySelector('.mrp-edit-total').textContent = formatCurrency('$', qty * price);
+        }
+
+        function addMrpSubmissionLine(submissionId) {
+            const card = document.getElementById(`mrp-sub-${submissionId}`);
+            if (!card) return;
+            const tbody = card.querySelector('.mrp-submission-lines-table tbody');
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td><input type="text" class="mrp-edit-desc" value="" placeholder="Description" style="width:220px;"></td>
+                <td><input type="number" class="mrp-edit-qty" value="1" min="0.01" step="0.01" style="width:80px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                <td><input type="number" class="mrp-edit-price" value="0" min="0" step="0.01" style="width:90px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                <td class="mrp-edit-total">${formatCurrency('$', 0)}</td>
+                <td><button class="btn-generate btn-secondary" style="padding:2px 8px;font-size:11px;" onclick="this.closest('tr').remove()" title="Remove this line">✕</button></td>
+            `;
+            tbody.appendChild(row);
+        }
+
+        async function saveMrpSubmissionEdits(submissionId) {
+            const card = document.getElementById(`mrp-sub-${submissionId}`);
+            if (!card) return;
+
+            const rows = Array.from(card.querySelectorAll('.mrp-submission-lines-table tbody tr'));
+            const lines = rows.map(row => {
+                const toIntOrNull = value => (value ? parseInt(value, 10) : null);
+                return {
+                    article_id: toIntOrNull(row.dataset.articleId),
+                    product_id: toIntOrNull(row.dataset.productId),
+                    group_id: toIntOrNull(row.dataset.groupId),
+                    description: row.querySelector('.mrp-edit-desc').value.trim(),
+                    quantity: toSafeNumber(row.querySelector('.mrp-edit-qty').value),
+                    item_price: toSafeNumber(row.querySelector('.mrp-edit-price').value),
+                    cust_ord_id: toIntOrNull(row.dataset.custOrdId),
+                    customer_order_code: row.dataset.customerOrderCode || null,
+                    co_line_id: toIntOrNull(row.dataset.coLineId),
+                    shipment_code: row.dataset.shipmentCode || null,
+                    item_code: row.dataset.itemCode || null
+                };
+            }).filter(line => line.quantity > 0);
+
+            if (!lines.length) {
+                alert('An invoice needs at least one line item with a positive quantity.');
+                return;
+            }
+
+            const freeText = card.querySelector('.mrp-edit-free-text').value.trim();
+
+            showLoading('Saving changes', 'Updating the staged invoice...');
+            try {
+                const response = await fetch(`${API_BASE}/api/invoicing/mrp-submission/${submissionId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lines, free_text: freeText })
+                });
+                const data = await response.json().catch(() => ({}));
+                hideLoading();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to save changes (HTTP ${response.status})`);
+                }
+                await loadPendingMrpSubmissions();
+                alert('Changes saved.');
+            } catch (error) {
+                hideLoading();
+                alert(`Error saving changes: ${error.message}`);
+            }
         }
 
         async function confirmMrpSubmission(submissionId) {
