@@ -86,6 +86,7 @@ class InvoiceSubmissionLineEdit(BaseModel):
     description: Optional[str] = None
     quantity: float
     item_price: float
+    delivery_date: Optional[str] = None  # 'YYYY-MM-DD'
     cust_ord_id: Optional[int] = None
     customer_order_code: Optional[str] = None
     co_line_id: Optional[int] = None
@@ -1273,6 +1274,7 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
 
     product_lines = []
     submission_lines = []
+    shared_delivery_epoch = None
     for line in matching_lines:
         article_id = line.get("article_id")
         order_line_ord = str(line.get("order_line") or "1")
@@ -1286,6 +1288,8 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
         # _build_not_invoiced_candidates' display_date) -- exactly what
         # should appear on the invoice line.
         line_delivery_epoch = _iso_date_to_epoch(line.get("delivery_date"))
+        if shared_delivery_epoch is None:
+            shared_delivery_epoch = line_delivery_epoch
 
         product_lines.append({
             "ord": len(product_lines) + 1,
@@ -1324,6 +1328,7 @@ def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due
         "item_price_cur": SHIPPING_PRICE,
         "total_price": shipping_total,
         "total_price_cur": shipping_total,
+        "delivery_date": shared_delivery_epoch,
         "cust_ord_id": cust_ord_id,
         "customer_order_code": order_code,
     })
@@ -1481,6 +1486,7 @@ def update_pending_mrp_invoice_submission(
             "item_price_cur": line.item_price,
             "total_price": total,
             "total_price_cur": total,
+            "delivery_date": _iso_date_to_epoch(line.delivery_date),
             "cust_ord_id": line.cust_ord_id or submission.cust_ord_id,
             "customer_order_code": line.customer_order_code or submission.order_code,
             "co_line_id": line.co_line_id,

@@ -1109,6 +1109,7 @@
                             <td><input type="text" class="mrp-edit-desc" value="${escapeHtml(p.description || '')}" style="width:220px;"></td>
                             <td><input type="number" class="mrp-edit-qty" value="${toSafeNumber(p.quantity)}" min="0.01" step="0.01" style="width:80px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
                             <td><input type="number" class="mrp-edit-price" value="${toSafeNumber(p.item_price)}" min="0" step="0.01" style="width:90px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                            <td><input type="date" class="mrp-edit-date" value="${epochToDateInputValue(p.delivery_date)}" style="width:140px;"></td>
                             <td class="mrp-edit-total">${formatCurrency('$', total)}</td>
                             <td><button class="btn-generate btn-secondary" style="padding:2px 8px;font-size:11px;" onclick="this.closest('tr').remove()" title="Remove this line">✕</button></td>
                         </tr>
@@ -1128,7 +1129,7 @@
                         ${statusNote}
                         <p style="color:#64748b;font-size:12px;margin:6px 0 0;">Edit quantities, prices, description, or the shipping line below, or remove/add lines, then Save before confirming.</p>
                         <table class="table mrp-submission-lines-table" style="margin-top:8px;">
-                            <thead><tr><th>Item / Description</th><th>Qty</th><th>Price</th><th>Total</th><th></th></tr></thead>
+                            <thead><tr><th>Item / Description</th><th>Qty</th><th>Price</th><th>Delivery Date</th><th>Total</th><th></th></tr></thead>
                             <tbody>${lineRows}</tbody>
                         </table>
                         <button class="btn-generate btn-secondary" style="padding:3px 8px;font-size:11px;margin-top:6px;" onclick="addMrpSubmissionLine(${sub.id})">+ Add Line</button>
@@ -1153,6 +1154,15 @@
             row.querySelector('.mrp-edit-total').textContent = formatCurrency('$', qty * price);
         }
 
+        function epochToDateInputValue(epochSeconds) {
+            if (epochSeconds === null || epochSeconds === undefined || epochSeconds === '') return '';
+            try {
+                return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
+            } catch (error) {
+                return '';
+            }
+        }
+
         function addMrpSubmissionLine(submissionId) {
             const card = document.getElementById(`mrp-sub-${submissionId}`);
             if (!card) return;
@@ -1162,6 +1172,7 @@
                 <td><input type="text" class="mrp-edit-desc" value="" placeholder="Description" style="width:220px;"></td>
                 <td><input type="number" class="mrp-edit-qty" value="1" min="0.01" step="0.01" style="width:80px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
                 <td><input type="number" class="mrp-edit-price" value="0" min="0" step="0.01" style="width:90px;" oninput="recalcMrpSubmissionLineTotal(this)"></td>
+                <td><input type="date" class="mrp-edit-date" value="" style="width:140px;"></td>
                 <td class="mrp-edit-total">${formatCurrency('$', 0)}</td>
                 <td><button class="btn-generate btn-secondary" style="padding:2px 8px;font-size:11px;" onclick="this.closest('tr').remove()" title="Remove this line">✕</button></td>
             `;
@@ -1182,6 +1193,7 @@
                     description: row.querySelector('.mrp-edit-desc').value.trim(),
                     quantity: toSafeNumber(row.querySelector('.mrp-edit-qty').value),
                     item_price: toSafeNumber(row.querySelector('.mrp-edit-price').value),
+                    delivery_date: row.querySelector('.mrp-edit-date')?.value || null,
                     cust_ord_id: toIntOrNull(row.dataset.custOrdId),
                     customer_order_code: row.dataset.customerOrderCode || null,
                     co_line_id: toIntOrNull(row.dataset.coLineId),
