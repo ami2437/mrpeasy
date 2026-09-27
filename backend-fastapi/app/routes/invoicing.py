@@ -816,9 +816,19 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
             return []
 
         discrepancy_items = order_data.get("discrepancy_items", [])
+        # Include "under_invoiced" lines too, not just "not_invoiced" ones --
+        # a line that's already been partially invoiced (whether legitimately
+        # split across invoices, or a stray manual invoice covering part of
+        # it) still has a real remaining balance that must be billed. The
+        # quantity below already uses `discrepancy` (the outstanding amount),
+        # which is correct for both types; only the filter was wrong,
+        # silently dropping the remaining balance on any partially-invoiced
+        # line instead of surfacing it. Verified against real data: a manual
+        # 50-unit invoice against a 100-unit line caused this function to
+        # completely omit that line's remaining 50 units.
         not_invoiced_items = [
             item for item in discrepancy_items
-            if item.get("discrepancy_type") == "not_invoiced"
+            if item.get("discrepancy_type") in ("not_invoiced", "under_invoiced")
         ]
         if not not_invoiced_items:
             continue
@@ -2014,11 +2024,18 @@ def get_shipped_uninvoiced_items():
         ignored_items_orders = []  # IMPROVEMENT 2: Track $0 items separately
         total_discrepancy_items = 0
         
-        # Process orders with invoice_status '10' or '20'
+        # Process not invoiced ('10') and partially invoiced ('20') orders
+        # with the full per-line, date-matched allocation below. Fully
+        # invoiced ('30') orders are handled separately further down with a
+        # simpler, more robust per-item total check -- opening this loop to
+        # status 30 was tried and reverted: the per-line date-proximity
+        # allocation heuristic misattributes quantities across lines when an
+        # item spans multiple order lines, producing false "not_invoiced"/
+        # "under_invoiced" noise on orders MRPeasy itself already confirms
+        # are fully invoiced (verified against real data: 38 false positives).
         for order in all_orders:
             invoice_status = order.get('invoice_status')
-            
-            # Only process not invoiced ('10') or partially invoiced ('20') orders
+
             # Note: invoice_status comes as string from API
             if str(invoice_status) not in ['10', '20']:
                 continue
@@ -2219,7 +2236,7 @@ def get_shipped_uninvoiced_items():
                         'customer_name': order.get('customer_name'),
                         'status': order.get('status_txt'),
                         'invoice_status': invoice_status,
-                        'invoice_status_text': 'Not Invoiced' if invoice_status == '10' else 'Partially Invoiced',
+                        'invoice_status_text': {'10': 'Not Invoiced', '20': 'Partially Invoiced'}.get(str(invoice_status), 'Fully Invoiced'),
                         'total_price': order.get('total_price'),
                         'currency': order.get('currency'),
                         'job_number': _extract_job_number(order),
@@ -2242,7 +2259,7 @@ def get_shipped_uninvoiced_items():
                         'customer_name': order.get('customer_name'),
                         'status': order.get('status_txt'),
                         'invoice_status': invoice_status,
-                        'invoice_status_text': 'Not Invoiced' if invoice_status == '10' else 'Partially Invoiced',
+                        'invoice_status_text': {'10': 'Not Invoiced', '20': 'Partially Invoiced'}.get(str(invoice_status), 'Fully Invoiced'),
                         'total_price': order.get('total_price'),
                         'currency': order.get('currency'),
                         'job_number': _extract_job_number(order),
@@ -2251,7 +2268,100 @@ def get_shipped_uninvoiced_items():
                     'ignored_items': ignored_items,
                     'total_ignored_items': len(ignored_items)
                 })
-        
+
+        # Fully invoiced ('30') orders: MRPeasy itself already confirms
+        # nothing is missing, so "not_invoiced"/"under_invoiced" don't apply --
+        # the only meaningful risk left is over-billing (e.g. a duplicate
+        # invoice created directly in MRPeasy after the order was already
+        # fully invoiced). Checked with a simple per-item TOTAL comparison
+        # (all shipped qty for an item across the whole order vs. all
+        # invoiced qty for it), not the per-line/date-matching allocation
+        # above -- that heuristic can misattribute quantities across
+        # multiple lines sharing an item and would otherwise raise false
+        # alarms on orders that are actually fine.
+        for order in all_orders:
+            invoice_status = order.get('invoice_status')
+            if str(invoice_status) != '30':
+                continue
+
+            cust_ord_id = order.get('cust_ord_id')
+            shipped_by_match_key = {}
+            item_by_match_key = {}
+            for product in order.get('products', []) or []:
+                shipped_qty = _to_number(product.get('shipped', 0), 0)
+                if shipped_qty <= 0:
+                    continue
+                match_key = _build_invoice_match_key(product)
+                if not match_key:
+                    continue
+                shipped_by_match_key[match_key] = shipped_by_match_key.get(match_key, 0) + shipped_qty
+                item_by_match_key.setdefault(match_key, product)
+
+            if not shipped_by_match_key:
+                continue
+
+            order_invoice_data = invoice_items_map.get(cust_ord_id, {})
+            over_invoiced_items = []
+            for match_key, shipped_total in shipped_by_match_key.items():
+                invoice_entry = order_invoice_data.get(match_key, {})
+                invoiced_total = invoice_entry.get('total_qty', 0)
+                discrepancy = shipped_total - invoiced_total
+                if discrepancy >= 0:
+                    continue  # invoiced <= shipped -- fine, matches MRPeasy's own "fully invoiced" status
+
+                product = item_by_match_key[match_key]
+                item_price = _to_number(product.get('item_price', 0), 0)
+                total_price = _to_number(product.get('total_price', 0), 0)
+                if _has_zero_selling_price(item_price, total_price, shipped_total):
+                    continue  # matches the existing "ignore $0 items" rule
+
+                over_invoiced_items.append({
+                    'line_key': f"{order.get('code')}|{match_key}|fully-invoiced-check",
+                    'line_index': 0,
+                    'order_line': str(product.get('ord') or product.get('order_line') or '1'),
+                    'delivery_date': _format_epoch_to_iso(product.get('delivery_date')) or 'N/A',
+                    'article_id': product.get('article_id'),
+                    'item_code': product.get('item_code'),
+                    'item_title': product.get('item_title'),
+                    'order_quantity': _to_number(product.get('quantity', 0), 0),
+                    'shipped_quantity': shipped_total,
+                    'invoiced_quantity': invoiced_total,
+                    'discrepancy': discrepancy,
+                    'discrepancy_type': 'over_invoiced',
+                    'alert': (
+                        f"Order is marked fully invoiced but total invoiced quantity ({invoiced_total}) "
+                        f"exceeds total shipped quantity ({shipped_total}) by {abs(discrepancy)} units -- "
+                        f"possible duplicate invoice"
+                    ),
+                    'fulfillment_status': 'complete',
+                    'invoice_codes': invoice_entry.get('invoice_codes', []),
+                    'item_price': item_price,
+                    'total_price': total_price
+                })
+                total_discrepancy_items += 1
+
+            if over_invoiced_items:
+                shipped_uninvoiced_orders.append({
+                    'order': {
+                        'cust_ord_id': cust_ord_id,
+                        'code': order.get('code'),
+                        'reference': order.get('reference'),
+                        'customer_name': order.get('customer_name'),
+                        'status': order.get('status_txt'),
+                        'invoice_status': invoice_status,
+                        'invoice_status_text': 'Fully Invoiced',
+                        'total_price': order.get('total_price'),
+                        'currency': order.get('currency'),
+                        'job_number': _extract_job_number(order),
+                        'shipping_cost': shipping_costs_map.get(cust_ord_id, 0)
+                    },
+                    'discrepancy_items': over_invoiced_items,
+                    'total_discrepancy_items': len(over_invoiced_items),
+                    'not_invoiced_items': 0,
+                    'under_invoiced_items': 0,
+                    'over_invoiced_items': len(over_invoiced_items)
+                })
+
         # Categorize all orders by discrepancy type
         not_invoiced_orders = []
         under_invoiced_orders = []
