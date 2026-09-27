@@ -867,7 +867,9 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
                 "unit_price": unit_price,
                 "line_total": line_total,
                 "shipment_number": ", ".join(line_shipment_codes) if line_shipment_codes else "N/A",
-                "delivery_date": display_date
+                "delivery_date": display_date,
+                "already_invoiced_quantity": item.get("invoiced_quantity", 0),
+                "invoice_codes": item.get("invoice_codes", [])
             })
 
         shipping = _to_number(order.get("shipping_cost", 0), 0)
@@ -1823,6 +1825,26 @@ def get_unsubmitted_invoices():
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch unsubmitted invoices: {exc}")
+
+
+@router.get("/by-code/{invoice_code}")
+def get_invoice_by_code(invoice_code: str):
+    """Look up a single sales invoice by its code (e.g. 'Inv-9601619'), with
+    full line items -- used by the "click an invoice code to see what was
+    billed" links across the Not/Under/Over-Invoiced, Ignored Items, and
+    Generate Invoices tabs."""
+    try:
+        matches = mrpeasy_client.get_invoices({"code": invoice_code}) or []
+        match = next((inv for inv in matches if inv.get("code") == invoice_code), None)
+        if not match:
+            raise HTTPException(status_code=404, detail=f"Invoice {invoice_code} not found")
+        invoice_id = match.get("invoice_id")
+        full_invoice = mrpeasy_client.get_invoice(invoice_id) if invoice_id else match
+        return full_invoice or match
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch invoice {invoice_code}: {exc}")
 
 
 @router.get("/{invoice_id}")
