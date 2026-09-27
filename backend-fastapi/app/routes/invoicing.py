@@ -4,8 +4,13 @@ from io import BytesIO
 from uuid import uuid4
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from app.dependencies import require_module
+from sqlalchemy.orm import Session
+import json
+from app.dependencies import require_module, require_role
 from app.services.mrpeasy_client import mrpeasy_client
+from app.config.database import get_db
+from app.config.settings import settings
+from app.models import User, PendingInvoiceSubmission, PendingInvoiceSubmissionLine
 
 try:
     import pandas as pd
@@ -61,6 +66,38 @@ class InvoiceGenerationRequest(BaseModel):
     shipping_overrides: List[InvoiceGenerationShippingOverride] = Field(default_factory=list)
     selection_applied: bool = False
     generation_mode: Optional[str] = "order"
+
+
+class InvoiceMRPSubmissionRequest(BaseModel):
+    order_code: str
+    shipment_numbers: List[str] = Field(default_factory=list)
+    due_date: Optional[str] = None
+    free_text: Optional[str] = "Generated via AT portal"
+
+
+class RejectInvoiceSubmissionRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class InvoiceSubmissionLineEdit(BaseModel):
+    article_id: Optional[int] = None
+    product_id: Optional[int] = None
+    group_id: Optional[int] = None
+    description: Optional[str] = None
+    quantity: float
+    item_price: float
+    delivery_date: Optional[str] = None  # 'YYYY-MM-DD'
+    cust_ord_id: Optional[int] = None
+    customer_order_code: Optional[str] = None
+    co_line_id: Optional[int] = None
+    shipment_code: Optional[str] = None  # None for a manually added/edited line with no shipment origin
+    item_code: Optional[str] = None
+
+
+class UpdatePendingInvoiceSubmissionRequest(BaseModel):
+    lines: List[InvoiceSubmissionLineEdit]
+    free_text: Optional[str] = None
+    due_date: Optional[str] = None
 
 
 def _ensure_bulk_dependencies():
@@ -779,9 +816,19 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
             return []
 
         discrepancy_items = order_data.get("discrepancy_items", [])
+        # Include "under_invoiced" lines too, not just "not_invoiced" ones --
+        # a line that's already been partially invoiced (whether legitimately
+        # split across invoices, or a stray manual invoice covering part of
+        # it) still has a real remaining balance that must be billed. The
+        # quantity below already uses `discrepancy` (the outstanding amount),
+        # which is correct for both types; only the filter was wrong,
+        # silently dropping the remaining balance on any partially-invoiced
+        # line instead of surfacing it. Verified against real data: a manual
+        # 50-unit invoice against a 100-unit line caused this function to
+        # completely omit that line's remaining 50 units.
         not_invoiced_items = [
             item for item in discrepancy_items
-            if item.get("discrepancy_type") == "not_invoiced"
+            if item.get("discrepancy_type") in ("not_invoiced", "under_invoiced")
         ]
         if not not_invoiced_items:
             continue
@@ -820,7 +867,9 @@ def _build_not_invoiced_candidates(selected_order_codes: Optional[List[str]] = N
                 "unit_price": unit_price,
                 "line_total": line_total,
                 "shipment_number": ", ".join(line_shipment_codes) if line_shipment_codes else "N/A",
-                "delivery_date": display_date
+                "delivery_date": display_date,
+                "already_invoiced_quantity": item.get("invoiced_quantity", 0),
+                "invoice_codes": item.get("invoice_codes", [])
             })
 
         shipping = _to_number(order.get("shipping_cost", 0), 0)
@@ -1135,6 +1184,551 @@ def create_generated_invoice_drafts(payload: InvoiceGenerationRequest):
         raise HTTPException(status_code=500, detail=f"Failed to create invoice drafts: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Send Invoices to MRP: build a real MRPeasy invoice from one (or more, when
+# combining) shipment's worth of not-yet-invoiced lines, staged locally for
+# admin/super_admin confirmation before the actual POST to MRPeasy.
+# ---------------------------------------------------------------------------
+
+INVOICE_TYPE_INVOICE = 30
+INVOICE_STATUS_DUMMY = 10
+
+# Fixed shipping-charge line appended to every invoice sent to MRP. The item's
+# own selling_price in MRPeasy is 0 -- this is a flat fee, not derived pricing.
+SHIPPING_ARTICLE_ID = 251
+SHIPPING_PRODUCT_ID = 251
+SHIPPING_GROUP_ID = 19
+SHIPPING_ITEM_TITLE = "Shipping shipping charge"  # matches MRPeasy's own item so it auto-links
+SHIPPING_PRICE = 295.0
+
+
+def _resolve_order_line_lookup(cust_ord_id: int):
+    """
+    (article_id, ord) -> {group_id, product_id, co_line_id} for one live
+    MRPeasy order.
+
+    Keyed by (article_id, ord) rather than article_id alone: the same item
+    can appear on multiple order lines of one order (confirmed in real data --
+    e.g. a partial-shipment split), and keying by article_id alone would
+    collapse them, misattributing every candidate line for that item to
+    whichever order line was processed last. `ord` (the order line's 1-based
+    position) is the same precise field the discrepancy engine already uses
+    to keep these lines distinct (see `_build_discrepancy_line_key`), not a
+    heuristic.
+
+    Also resolves group_id/product_id, which the discrepancy engine's
+    candidate lines don't carry (MRPeasy's create-invoice endpoint
+    undocumentedly requires both alongside article_id -- see Step 0
+    verification).
+    """
+    orders = mrpeasy_client.get_customer_orders({"cust_ord_id": cust_ord_id}) or []
+    order = next((o for o in orders if o.get("cust_ord_id") == cust_ord_id), None)
+    lookup = {}
+    if order:
+        for line in order.get("products", []) or []:
+            article_id = line.get("article_id")
+            if article_id is not None:
+                ord_value = str(line.get("ord") or "1")
+                lookup[(str(article_id), ord_value)] = {
+                    "group_id": line.get("group_id"),
+                    "product_id": line.get("product_id") or article_id,
+                    "co_line_id": line.get("line_id"),
+                }
+    return lookup, order
+
+
+def _iso_date_to_epoch(value: Optional[str]) -> Optional[int]:
+    """'YYYY-MM-DD' -> Unix timestamp (midnight UTC), or None if unparseable/absent."""
+    if not value or value == "N/A":
+        return None
+    try:
+        return int(datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp())
+    except Exception:
+        return None
+
+
+def _build_mrp_invoice_payload(order_code: str, shipment_numbers: List[str], due_date: Optional[str], free_text: Optional[str]):
+    """
+    Build the exact InvoiceInput payload for every not-yet-invoiced line
+    belonging to the given shipment(s) of one order, plus the fixed shipping
+    line. Every item that shipped together must be billed together, so this
+    always includes ALL matching lines -- there is no partial line selection.
+    """
+    shipment_set = {code.strip() for code in shipment_numbers if code and code.strip()}
+    if not shipment_set:
+        raise HTTPException(status_code=400, detail="At least one shipment number is required")
+
+    candidates = _build_not_invoiced_candidates([order_code])
+    candidate = next((c for c in candidates if c.get("order", {}).get("code") == order_code), None)
+    if not candidate:
+        raise HTTPException(status_code=404, detail=f"No invoiceable items found for order {order_code}")
+
+    order = candidate["order"]
+    matching_lines = [
+        line for line in candidate["invoice"]["lines"]
+        if line.get("shipment_number") in shipment_set
+    ]
+    if not matching_lines:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No invoiceable items found for shipment(s) {', '.join(sorted(shipment_set))} on order {order_code}"
+        )
+
+    cust_ord_id = order.get("cust_ord_id")
+    line_lookup, order_detail = _resolve_order_line_lookup(cust_ord_id)
+    if not order_detail:
+        raise HTTPException(status_code=404, detail=f"Customer order {order_code} not found in MRPeasy")
+
+    customer_id = order_detail.get("customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail=f"Customer order {order_code} has no linked customer")
+    pricelist_id = order_detail.get("pricelist_id")
+
+    product_lines = []
+    submission_lines = []
+    shared_delivery_epoch = None
+    for line in matching_lines:
+        article_id = line.get("article_id")
+        order_line_ord = str(line.get("order_line") or "1")
+        lookup_entry = line_lookup.get((str(article_id), order_line_ord), {}) if article_id is not None else {}
+        quantity = _to_number(line.get("quantity"), 0)
+        unit_price = _to_number(line.get("unit_price"), 0)
+        total = round(quantity * unit_price, 2)
+
+        # candidate's delivery_date already prefers the shipment's own
+        # created date over the order line's originally-planned date (see
+        # _build_not_invoiced_candidates' display_date) -- exactly what
+        # should appear on the invoice line.
+        line_delivery_epoch = _iso_date_to_epoch(line.get("delivery_date"))
+        if shared_delivery_epoch is None:
+            shared_delivery_epoch = line_delivery_epoch
+
+        product_lines.append({
+            "ord": len(product_lines) + 1,
+            "article_id": article_id,
+            "product_id": lookup_entry.get("product_id") or article_id,
+            "group_id": lookup_entry.get("group_id"),
+            "description": line.get("item_title") or line.get("item_code") or "",
+            "quantity": quantity,
+            "item_price": unit_price,
+            "item_price_cur": unit_price,
+            "total_price": total,
+            "total_price_cur": total,
+            "delivery_date": line_delivery_epoch,
+            "cust_ord_id": cust_ord_id,
+            "customer_order_code": order_code,
+            "co_line_id": lookup_entry.get("co_line_id"),
+        })
+        submission_lines.append({
+            "shipment_code": line.get("shipment_number"),
+            "co_line_id": lookup_entry.get("co_line_id"),
+            "article_id": article_id,
+            "item_code": line.get("item_code"),
+            "quantity": quantity,
+            "unit_price": unit_price,
+        })
+
+    shipping_total = round(SHIPPING_PRICE * 1, 2)
+    product_lines.append({
+        "ord": len(product_lines) + 1,
+        "article_id": SHIPPING_ARTICLE_ID,
+        "product_id": SHIPPING_PRODUCT_ID,
+        "group_id": SHIPPING_GROUP_ID,
+        "description": SHIPPING_ITEM_TITLE,
+        "quantity": 1,
+        "item_price": SHIPPING_PRICE,
+        "item_price_cur": SHIPPING_PRICE,
+        "total_price": shipping_total,
+        "total_price_cur": shipping_total,
+        "delivery_date": shared_delivery_epoch,
+        "cust_ord_id": cust_ord_id,
+        "customer_order_code": order_code,
+    })
+
+    payload = {
+        "type": INVOICE_TYPE_INVOICE,
+        "status": INVOICE_STATUS_DUMMY,
+        "customer_id": customer_id,
+        "customer_orders": [{"cust_ord_id": cust_ord_id}],
+        "products": product_lines,
+    }
+    if pricelist_id:
+        payload["pricelist_id"] = pricelist_id
+    if free_text:
+        payload["free_text"] = free_text
+    if due_date:
+        try:
+            payload["due_date"] = int(datetime.fromisoformat(due_date).replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            pass
+
+    return payload, submission_lines, order, customer_id, pricelist_id
+
+
+def _serialize_pending_invoice_submission(submission: PendingInvoiceSubmission, lines: List[PendingInvoiceSubmissionLine]):
+    try:
+        payload = json.loads(submission.payload_json)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    return {
+        "id": submission.id,
+        "order_code": submission.order_code,
+        "cust_ord_id": submission.cust_ord_id,
+        "customer_id": submission.customer_id,
+        "invoice_status": submission.invoice_status,
+        "status": submission.status,
+        "payload": payload,
+        "lines": [
+            {
+                "shipment_code": line.shipment_code,
+                "co_line_id": line.co_line_id,
+                "article_id": line.article_id,
+                "item_code": line.item_code,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+            }
+            for line in lines
+        ],
+        "submitted_by": submission.submitted_by,
+        "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else None,
+        "reviewed_by": submission.reviewed_by,
+        "reviewed_at": submission.reviewed_at.isoformat() if submission.reviewed_at else None,
+        "rejection_reason": submission.rejection_reason,
+        "error_message": submission.error_message,
+        "mrp_invoice_id": submission.mrp_invoice_id,
+        "mrp_invoice_code": submission.mrp_invoice_code,
+    }
+
+
+@router.post("/mrp-submission/preview")
+def preview_mrp_invoice_submission(
+    request: InvoiceMRPSubmissionRequest,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """Build and stage a real MRPeasy invoice payload for one order's shipment(s), pending confirmation."""
+    requested_shipment_set = {s.strip() for s in request.shipment_numbers if s and s.strip()}
+
+    # Reuse an already-staged pending submission covering the exact same
+    # shipment(s) instead of creating a duplicate (e.g. a double-click).
+    for candidate in db.query(PendingInvoiceSubmission).filter(
+        PendingInvoiceSubmission.order_code == request.order_code,
+        PendingInvoiceSubmission.status == "pending",
+    ).all():
+        candidate_lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == candidate.id
+        ).all()
+        if {line.shipment_code for line in candidate_lines if line.shipment_code} == requested_shipment_set:
+            return {
+                "success": True,
+                "reused_existing": True,
+                "submission": _serialize_pending_invoice_submission(candidate, candidate_lines),
+            }
+
+    payload, submission_lines, order, customer_id, pricelist_id = _build_mrp_invoice_payload(
+        request.order_code, request.shipment_numbers, request.due_date, request.free_text
+    )
+
+    submission = PendingInvoiceSubmission(
+        cust_ord_id=order.get("cust_ord_id"),
+        order_code=request.order_code,
+        customer_id=customer_id,
+        pricelist_id=pricelist_id,
+        invoice_type=INVOICE_TYPE_INVOICE,
+        invoice_status=INVOICE_STATUS_DUMMY,
+        free_text=request.free_text,
+        due_date=request.due_date,
+        payload_json=json.dumps(payload),
+        status="pending",
+        submitted_by=current_user.username,
+        submitted_at=datetime.utcnow(),
+    )
+    db.add(submission)
+    db.flush()
+
+    for line in submission_lines:
+        db.add(PendingInvoiceSubmissionLine(submission_id=submission.id, **line))
+
+    db.commit()
+    db.refresh(submission)
+
+    lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+
+    return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+
+
+@router.put("/mrp-submission/{submission_id}")
+def update_pending_mrp_invoice_submission(
+    submission_id: int,
+    request: UpdatePendingInvoiceSubmissionRequest,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """
+    Edit a staged invoice before confirming: adjust/remove/add line items
+    (including the shipping line), quantities, prices, and free text. Only
+    allowed while the submission is still 'pending' -- once confirmed, the
+    real MRPeasy invoice must be edited in MRPeasy itself.
+    """
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}', not pending")
+    if not request.lines:
+        raise HTTPException(status_code=400, detail="An invoice needs at least one line item")
+
+    product_lines = []
+    for line in request.lines:
+        if line.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Every line's quantity must be greater than 0")
+        if line.item_price < 0:
+            raise HTTPException(status_code=400, detail="A line's price cannot be negative")
+        total = round(line.quantity * line.item_price, 2)
+        product_lines.append({
+            "ord": len(product_lines) + 1,
+            "article_id": line.article_id,
+            "product_id": line.product_id or line.article_id,
+            "group_id": line.group_id,
+            "description": line.description or "",
+            "quantity": line.quantity,
+            "item_price": line.item_price,
+            "item_price_cur": line.item_price,
+            "total_price": total,
+            "total_price_cur": total,
+            "delivery_date": _iso_date_to_epoch(line.delivery_date),
+            "cust_ord_id": line.cust_ord_id or submission.cust_ord_id,
+            "customer_order_code": line.customer_order_code or submission.order_code,
+            "co_line_id": line.co_line_id,
+        })
+
+    payload = json.loads(submission.payload_json)
+    payload["products"] = product_lines
+    free_text = request.free_text if request.free_text is not None else submission.free_text
+    if free_text:
+        payload["free_text"] = free_text
+    if request.due_date:
+        try:
+            payload["due_date"] = int(datetime.fromisoformat(request.due_date).replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            pass
+
+    submission.payload_json = json.dumps(payload)
+    submission.free_text = free_text
+    if request.due_date is not None:
+        submission.due_date = request.due_date
+
+    db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).delete()
+    for line in request.lines:
+        db.add(PendingInvoiceSubmissionLine(
+            submission_id=submission.id,
+            shipment_code=line.shipment_code,
+            co_line_id=line.co_line_id,
+            article_id=line.article_id,
+            item_code=line.item_code,
+            quantity=line.quantity,
+            unit_price=line.item_price,
+        ))
+
+    db.commit()
+    db.refresh(submission)
+
+    lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+    return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+
+
+@router.get("/mrp-submission/pending", dependencies=[Depends(require_module("invoice_mrp_submission"))])
+def list_pending_mrp_invoice_submissions(db: Session = Depends(get_db)):
+    submissions = (
+        db.query(PendingInvoiceSubmission)
+        .filter(PendingInvoiceSubmission.status.in_(["pending", "failed"]))
+        .order_by(PendingInvoiceSubmission.submitted_at.desc())
+        .all()
+    )
+    result = []
+    for submission in submissions:
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        result.append(_serialize_pending_invoice_submission(submission, lines))
+    return {"success": True, "pending": result}
+
+
+@router.get("/mrp-submission/history", dependencies=[Depends(require_module("invoice_mrp_submission"))])
+def list_mrp_invoice_submission_history(db: Session = Depends(get_db), limit: int = 100):
+    submissions = (
+        db.query(PendingInvoiceSubmission)
+        .filter(PendingInvoiceSubmission.status.in_(["approved", "rejected"]))
+        .order_by(PendingInvoiceSubmission.reviewed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for submission in submissions:
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        result.append(_serialize_pending_invoice_submission(submission, lines))
+    return {"success": True, "history": result}
+
+
+def _check_submission_not_already_invoiced(submission: PendingInvoiceSubmission, lines: List[PendingInvoiceSubmissionLine]):
+    """
+    Re-check, right before the real POST, that none of this submission's
+    order lines have since been covered by another invoice -- created
+    directly in MRPeasy, or by a different pending submission confirmed
+    first while this one sat staged. Raises 409 if adding this submission's
+    quantity on top of what's already invoiced would exceed what shipped.
+
+    Matches by co_line_id, which MRPeasy's own invoice UI (confirmed by
+    inspecting a real captured request) and this feature both set on every
+    line they create -- so this catches duplicates created either way.
+    Older/legacy invoices that predate co_line_id being populated won't be
+    caught by this specific check; the existing Over-Invoiced tab remains
+    the broader (item-level, not line-precise) safety net for those.
+    """
+    line_ids = {line.co_line_id for line in lines if line.co_line_id is not None}
+    if not line_ids:
+        return
+
+    cust_ord_id = submission.cust_ord_id
+    orders = mrpeasy_client.get_customer_orders({"cust_ord_id": cust_ord_id}) or []
+    order = next((o for o in orders if o.get("cust_ord_id") == cust_ord_id), None)
+    if not order:
+        raise HTTPException(status_code=409, detail=f"Customer order {submission.order_code} no longer found in MRPeasy")
+
+    shipped_by_line = {}
+    for product in order.get("products", []) or []:
+        line_id = product.get("line_id")
+        if line_id is not None:
+            shipped_by_line[line_id] = _to_number(product.get("shipped"), 0)
+
+    invoices = mrpeasy_client.get_invoices({"cust_ord_id": cust_ord_id}) or []
+    invoiced_by_line = {}
+    for invoice in invoices:
+        if str(invoice.get("status")) == "50":  # cancelled -- excluded, matching the Over-Invoiced tab's own rule
+            continue
+        for product in invoice.get("products", []) or []:
+            co_line_id = product.get("co_line_id")
+            if co_line_id is None:
+                continue
+            invoiced_by_line[co_line_id] = invoiced_by_line.get(co_line_id, 0) + _to_number(product.get("quantity"), 0)
+
+    our_qty_by_line = {}
+    for line in lines:
+        if line.co_line_id is None:
+            continue
+        our_qty_by_line[line.co_line_id] = our_qty_by_line.get(line.co_line_id, 0) + line.quantity
+
+    conflicts = []
+    for co_line_id, our_qty in our_qty_by_line.items():
+        shipped = shipped_by_line.get(co_line_id, 0)
+        already_invoiced = invoiced_by_line.get(co_line_id, 0)
+        if already_invoiced + our_qty > shipped + 0.001:
+            conflicts.append(
+                f"order line {co_line_id}: shipped {shipped}, already invoiced {already_invoiced} elsewhere, "
+                f"this submission adds {our_qty} (would total {already_invoiced + our_qty})"
+            )
+
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This shipment appears to already be (partially) invoiced elsewhere since it was staged "
+                "-- refusing to create a duplicate. " + "; ".join(conflicts)
+            )
+        )
+
+
+@router.post("/mrp-submission/{submission_id}/confirm")
+def confirm_mrp_invoice_submission(
+    submission_id: int,
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    """Actually POST the staged invoice payload to MRPeasy. Trusts the stored
+    payload frozen at preview time -- never re-derives it from fresh input --
+    but does re-validate against live MRP data first (see
+    _check_submission_not_already_invoiced) since a submission may have sat
+    staged for a while before being confirmed."""
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}', not pending")
+
+    if not settings.allow_mrp_invoice_creation:
+        raise HTTPException(
+            status_code=403,
+            detail="Sending invoices to MRPeasy is currently disabled (allow_mrp_invoice_creation is off)"
+        )
+
+    submission_lines = db.query(PendingInvoiceSubmissionLine).filter(
+        PendingInvoiceSubmissionLine.submission_id == submission.id
+    ).all()
+    _check_submission_not_already_invoiced(submission, submission_lines)
+
+    payload = json.loads(submission.payload_json)
+
+    try:
+        result = mrpeasy_client.create_invoice(payload)
+        invoice_id = result if isinstance(result, int) else (result or {}).get("invoice_id") or (result or {}).get("id")
+        if invoice_id is None:
+            raise ValueError(f"Unexpected create_invoice response shape: {result!r}")
+
+        submission.mrp_invoice_id = int(invoice_id)
+        try:
+            created_invoice = mrpeasy_client.get_invoice(int(invoice_id))
+            submission.mrp_invoice_code = created_invoice.get("code")
+        except Exception:
+            pass
+
+        submission.status = "approved"
+        submission.reviewed_by = current_user.username
+        submission.reviewed_at = datetime.utcnow()
+        submission.error_message = None
+        db.commit()
+        db.refresh(submission)
+
+        lines = db.query(PendingInvoiceSubmissionLine).filter(
+            PendingInvoiceSubmissionLine.submission_id == submission.id
+        ).all()
+        return {"success": True, "submission": _serialize_pending_invoice_submission(submission, lines)}
+    except Exception as exc:
+        submission.status = "failed"
+        submission.error_message = str(exc)
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"Failed to create invoice in MRPeasy: {exc}")
+
+
+@router.post("/mrp-submission/{submission_id}/reject")
+def reject_mrp_invoice_submission(
+    submission_id: int,
+    payload: RejectInvoiceSubmissionRequest = Body(default=RejectInvoiceSubmissionRequest()),
+    current_user: User = Depends(require_module("invoice_mrp_submission")),
+    db: Session = Depends(get_db)
+):
+    submission = db.query(PendingInvoiceSubmission).filter(PendingInvoiceSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Pending invoice submission not found")
+    if submission.status not in ("pending", "failed"):
+        raise HTTPException(status_code=409, detail=f"Submission is already '{submission.status}'")
+
+    submission.status = "rejected"
+    submission.reviewed_by = current_user.username
+    submission.reviewed_at = datetime.utcnow()
+    submission.rejection_reason = (payload.reason or "").strip() or None
+    db.commit()
+
+    return {"success": True, "submission_id": submission_id, "status": "rejected"}
+
+
 @router.get("/generator/drafts")
 def list_generated_invoice_drafts():
     return {
@@ -1231,6 +1825,26 @@ def get_unsubmitted_invoices():
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to fetch unsubmitted invoices: {exc}")
+
+
+@router.get("/by-code/{invoice_code}")
+def get_invoice_by_code(invoice_code: str):
+    """Look up a single sales invoice by its code (e.g. 'Inv-9601619'), with
+    full line items -- used by the "click an invoice code to see what was
+    billed" links across the Not/Under/Over-Invoiced, Ignored Items, and
+    Generate Invoices tabs."""
+    try:
+        matches = mrpeasy_client.get_invoices({"code": invoice_code}) or []
+        match = next((inv for inv in matches if inv.get("code") == invoice_code), None)
+        if not match:
+            raise HTTPException(status_code=404, detail=f"Invoice {invoice_code} not found")
+        invoice_id = match.get("invoice_id")
+        full_invoice = mrpeasy_client.get_invoice(invoice_id) if invoice_id else match
+        return full_invoice or match
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch invoice {invoice_code}: {exc}")
 
 
 @router.get("/{invoice_id}")
@@ -1432,11 +2046,18 @@ def get_shipped_uninvoiced_items():
         ignored_items_orders = []  # IMPROVEMENT 2: Track $0 items separately
         total_discrepancy_items = 0
         
-        # Process orders with invoice_status '10' or '20'
+        # Process not invoiced ('10') and partially invoiced ('20') orders
+        # with the full per-line, date-matched allocation below. Fully
+        # invoiced ('30') orders are handled separately further down with a
+        # simpler, more robust per-item total check -- opening this loop to
+        # status 30 was tried and reverted: the per-line date-proximity
+        # allocation heuristic misattributes quantities across lines when an
+        # item spans multiple order lines, producing false "not_invoiced"/
+        # "under_invoiced" noise on orders MRPeasy itself already confirms
+        # are fully invoiced (verified against real data: 38 false positives).
         for order in all_orders:
             invoice_status = order.get('invoice_status')
-            
-            # Only process not invoiced ('10') or partially invoiced ('20') orders
+
             # Note: invoice_status comes as string from API
             if str(invoice_status) not in ['10', '20']:
                 continue
@@ -1637,7 +2258,7 @@ def get_shipped_uninvoiced_items():
                         'customer_name': order.get('customer_name'),
                         'status': order.get('status_txt'),
                         'invoice_status': invoice_status,
-                        'invoice_status_text': 'Not Invoiced' if invoice_status == '10' else 'Partially Invoiced',
+                        'invoice_status_text': {'10': 'Not Invoiced', '20': 'Partially Invoiced'}.get(str(invoice_status), 'Fully Invoiced'),
                         'total_price': order.get('total_price'),
                         'currency': order.get('currency'),
                         'job_number': _extract_job_number(order),
@@ -1660,7 +2281,7 @@ def get_shipped_uninvoiced_items():
                         'customer_name': order.get('customer_name'),
                         'status': order.get('status_txt'),
                         'invoice_status': invoice_status,
-                        'invoice_status_text': 'Not Invoiced' if invoice_status == '10' else 'Partially Invoiced',
+                        'invoice_status_text': {'10': 'Not Invoiced', '20': 'Partially Invoiced'}.get(str(invoice_status), 'Fully Invoiced'),
                         'total_price': order.get('total_price'),
                         'currency': order.get('currency'),
                         'job_number': _extract_job_number(order),
@@ -1669,7 +2290,100 @@ def get_shipped_uninvoiced_items():
                     'ignored_items': ignored_items,
                     'total_ignored_items': len(ignored_items)
                 })
-        
+
+        # Fully invoiced ('30') orders: MRPeasy itself already confirms
+        # nothing is missing, so "not_invoiced"/"under_invoiced" don't apply --
+        # the only meaningful risk left is over-billing (e.g. a duplicate
+        # invoice created directly in MRPeasy after the order was already
+        # fully invoiced). Checked with a simple per-item TOTAL comparison
+        # (all shipped qty for an item across the whole order vs. all
+        # invoiced qty for it), not the per-line/date-matching allocation
+        # above -- that heuristic can misattribute quantities across
+        # multiple lines sharing an item and would otherwise raise false
+        # alarms on orders that are actually fine.
+        for order in all_orders:
+            invoice_status = order.get('invoice_status')
+            if str(invoice_status) != '30':
+                continue
+
+            cust_ord_id = order.get('cust_ord_id')
+            shipped_by_match_key = {}
+            item_by_match_key = {}
+            for product in order.get('products', []) or []:
+                shipped_qty = _to_number(product.get('shipped', 0), 0)
+                if shipped_qty <= 0:
+                    continue
+                match_key = _build_invoice_match_key(product)
+                if not match_key:
+                    continue
+                shipped_by_match_key[match_key] = shipped_by_match_key.get(match_key, 0) + shipped_qty
+                item_by_match_key.setdefault(match_key, product)
+
+            if not shipped_by_match_key:
+                continue
+
+            order_invoice_data = invoice_items_map.get(cust_ord_id, {})
+            over_invoiced_items = []
+            for match_key, shipped_total in shipped_by_match_key.items():
+                invoice_entry = order_invoice_data.get(match_key, {})
+                invoiced_total = invoice_entry.get('total_qty', 0)
+                discrepancy = shipped_total - invoiced_total
+                if discrepancy >= 0:
+                    continue  # invoiced <= shipped -- fine, matches MRPeasy's own "fully invoiced" status
+
+                product = item_by_match_key[match_key]
+                item_price = _to_number(product.get('item_price', 0), 0)
+                total_price = _to_number(product.get('total_price', 0), 0)
+                if _has_zero_selling_price(item_price, total_price, shipped_total):
+                    continue  # matches the existing "ignore $0 items" rule
+
+                over_invoiced_items.append({
+                    'line_key': f"{order.get('code')}|{match_key}|fully-invoiced-check",
+                    'line_index': 0,
+                    'order_line': str(product.get('ord') or product.get('order_line') or '1'),
+                    'delivery_date': _format_epoch_to_iso(product.get('delivery_date')) or 'N/A',
+                    'article_id': product.get('article_id'),
+                    'item_code': product.get('item_code'),
+                    'item_title': product.get('item_title'),
+                    'order_quantity': _to_number(product.get('quantity', 0), 0),
+                    'shipped_quantity': shipped_total,
+                    'invoiced_quantity': invoiced_total,
+                    'discrepancy': discrepancy,
+                    'discrepancy_type': 'over_invoiced',
+                    'alert': (
+                        f"Order is marked fully invoiced but total invoiced quantity ({invoiced_total}) "
+                        f"exceeds total shipped quantity ({shipped_total}) by {abs(discrepancy)} units -- "
+                        f"possible duplicate invoice"
+                    ),
+                    'fulfillment_status': 'complete',
+                    'invoice_codes': invoice_entry.get('invoice_codes', []),
+                    'item_price': item_price,
+                    'total_price': total_price
+                })
+                total_discrepancy_items += 1
+
+            if over_invoiced_items:
+                shipped_uninvoiced_orders.append({
+                    'order': {
+                        'cust_ord_id': cust_ord_id,
+                        'code': order.get('code'),
+                        'reference': order.get('reference'),
+                        'customer_name': order.get('customer_name'),
+                        'status': order.get('status_txt'),
+                        'invoice_status': invoice_status,
+                        'invoice_status_text': 'Fully Invoiced',
+                        'total_price': order.get('total_price'),
+                        'currency': order.get('currency'),
+                        'job_number': _extract_job_number(order),
+                        'shipping_cost': shipping_costs_map.get(cust_ord_id, 0)
+                    },
+                    'discrepancy_items': over_invoiced_items,
+                    'total_discrepancy_items': len(over_invoiced_items),
+                    'not_invoiced_items': 0,
+                    'under_invoiced_items': 0,
+                    'over_invoiced_items': len(over_invoiced_items)
+                })
+
         # Categorize all orders by discrepancy type
         not_invoiced_orders = []
         under_invoiced_orders = []

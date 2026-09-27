@@ -186,6 +186,46 @@ class PendingShipmentFinalization(Base):
     rejection_reason = Column(String, nullable=True)
 
 
+class PendingInvoiceSubmission(Base):
+    """A staged 'send this shipment's invoice to MRP' request awaiting confirmation."""
+    __tablename__ = "pending_invoice_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cust_ord_id = Column(Integer, nullable=False)
+    order_code = Column(String, nullable=True)
+    customer_id = Column(Integer, nullable=True)
+    pricelist_id = Column(Integer, nullable=True)
+    invoice_type = Column(Integer, nullable=False, default=30)
+    invoice_status = Column(Integer, nullable=False, default=10)  # stored per-submission, not hardcoded
+    free_text = Column(Text, nullable=True)
+    due_date = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=False)  # the exact frozen InvoiceInput body
+    status = Column(String, nullable=False, default="pending", index=True)  # pending, approved, rejected, failed
+    submitted_by = Column(String, nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+    reviewed_by = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    mrp_invoice_id = Column(Integer, nullable=True)
+    mrp_invoice_code = Column(String, nullable=True)
+
+
+class PendingInvoiceSubmissionLine(Base):
+    """One shipment/order-line's quantity included in a PendingInvoiceSubmission."""
+    __tablename__ = "pending_invoice_submission_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, nullable=False, index=True)
+    shipment_code = Column(String, nullable=True, index=True)
+    co_line_id = Column(Integer, nullable=True)
+    article_id = Column(Integer, nullable=True)
+    item_code = Column(String, nullable=True)
+    quantity = Column(Float, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PalletWeight(Base):
     """Weight entered per pallet number within a finalized shipment."""
     __tablename__ = "pallet_weights"

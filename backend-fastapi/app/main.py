@@ -3,12 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.config.settings import settings
-from app.config.database import engine, Base, SessionLocal
-from app.models import CustomerOrder, StockItem, ManufacturingOrder, Vendor, Inventory, SyncLog, User, Role
+from app.config.database import engine, SessionLocal
+from app.models import Base, CustomerOrder, StockItem, ManufacturingOrder, Vendor, Inventory, SyncLog, User, Role
 from app.services.auth import initialize_auth_roles
 from app.routes import customer_orders, stock_items, manufacturing_orders, vendors, sync, auth, labels, invoicing, reports
 
-# Create tables
+# Create tables. Note: Base here is app.models's declarative base (where every
+# model actually lives) -- app.config.database also defines its own, separate
+# declarative_base() that no model inherits from, so create_all() against
+# that one is a silent no-op. Use app.models.Base so new tables actually get
+# created on startup instead of requiring a manual migrate_db.py run.
 Base.metadata.create_all(bind=engine)
 
 

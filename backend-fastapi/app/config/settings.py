@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours
 
+    # Deliberate opt-in switch for creating real invoices in MRPeasy.
+    # Independent of RBAC -- lets the whole feature be built/tested before the
+    # real POST path is switched on for a controlled go-live.
+    allow_mrp_invoice_creation: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = False
