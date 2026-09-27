@@ -715,7 +715,7 @@
                 </div>
                 <div class="filter-group">
                     <label>Search Order:</label>
-                    <input type="text" id="not-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('not-invoiced')">
+                    <input type="text" id="not-invoiced-search" placeholder="Order code, customer, or item #..." onkeyup="filterTable('not-invoiced')">
                 </div>
                 <div class="filter-group">
                     <label>Job #:</label>
@@ -783,7 +783,7 @@
                 </div>
                 <div class="filter-group">
                     <label>Search Order:</label>
-                    <input type="text" id="under-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('under-invoiced')">
+                    <input type="text" id="under-invoiced-search" placeholder="Order code, customer, or item #..." onkeyup="filterTable('under-invoiced')">
                 </div>
                 <div class="filter-group">
                     <label>Job #:</label>
@@ -814,7 +814,7 @@
                 </div>
                 <div class="filter-group">
                     <label>Search Order:</label>
-                    <input type="text" id="over-invoiced-search" placeholder="Order code or customer..." onkeyup="filterTable('over-invoiced')">
+                    <input type="text" id="over-invoiced-search" placeholder="Order code, customer, or item #..." onkeyup="filterTable('over-invoiced')">
                 </div>
                 <div class="filter-group">
                     <label>Job #:</label>
@@ -845,7 +845,7 @@
                 </div>
                 <div class="filter-group">
                     <label>Search Order:</label>
-                    <input type="text" id="ignored-items-search" placeholder="Order code or customer..." onkeyup="filterTable('ignored-items')">
+                    <input type="text" id="ignored-items-search" placeholder="Order code, customer, or item #..." onkeyup="filterTable('ignored-items')">
                 </div>
                 <div class="filter-group">
                     <label>Job #:</label>
@@ -873,7 +873,7 @@
             <div id="draft-invoices-summary" class="summary"></div>
             <div class="filters">
                 <div class="filter-group">
-                    <input type="text" id="draft-invoices-search" placeholder="Search by Invoice, Customer, Order, or PO #..." onkeyup="filterDraftInvoices()">
+                    <input type="text" id="draft-invoices-search" placeholder="Search by Invoice, Customer, Order, PO #, or Item #..." onkeyup="filterDraftInvoices()">
                 </div>
                 <div class="filter-group">
                     <input type="text" id="draft-invoices-job-filter" placeholder="Filter by Job #..." onkeyup="filterDraftInvoices()">
@@ -890,7 +890,7 @@
             <div class="filters">
                 <div class="filter-group">
                     <label for="all-invoices-search">Search</label>
-                    <input type="text" id="all-invoices-search" placeholder="Search by Invoice, Customer, Order, or PO #..." onkeyup="filterAllInvoices()">
+                    <input type="text" id="all-invoices-search" placeholder="Search by Invoice, Customer, Order, PO #, or Item #..." onkeyup="filterAllInvoices()">
                 </div>
                 <div class="filter-group">
                     <label for="all-invoices-group-by">Group By</label>
@@ -2806,8 +2806,14 @@
                 const order = (invoice.customer_order_code || '').toLowerCase();
                 const reference = (invoice.reference || '').toLowerCase();
                 const jobNumber = (invoice.custom_531 || '').toLowerCase();
+                const products = Array.isArray(invoice.products) ? invoice.products : [];
+                const matchesItem = products.some(product => {
+                    const itemCode = (product.item_code || '').toLowerCase();
+                    const itemTitle = (product.item_title || '').toLowerCase();
+                    return itemCode.includes(searchInput) || itemTitle.includes(searchInput);
+                });
 
-                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput);
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput) || matchesItem;
                 const matchesJob = !jobFilterInput || jobNumber.includes(jobFilterInput);
 
                 return matchesSearch && matchesJob;
@@ -2880,8 +2886,14 @@
                 const order = (invoice.customer_order_code || '').toLowerCase();
                 const reference = (invoice.reference || '').toLowerCase();
                 const status = String(invoice.status || '');
+                const products = Array.isArray(invoice.products) ? invoice.products : [];
+                const matchesItem = products.some(product => {
+                    const itemCode = (product.item_code || '').toLowerCase();
+                    const itemTitle = (product.item_title || '').toLowerCase();
+                    return itemCode.includes(searchInput) || itemTitle.includes(searchInput);
+                });
 
-                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput);
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || order.includes(searchInput) || reference.includes(searchInput) || matchesItem;
                 const matchesStatus = selectedStatuses.length === 0 || selectedStatuses.includes(status);
 
                 return matchesSearch && matchesStatus;
@@ -3051,7 +3063,15 @@
                 const customer = orderData.order.customer_name.toLowerCase();
                 const jobNumber = (orderData.order.job_number || '').toLowerCase();
 
-                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput);
+                // discrepancy_items for Not/Under/Over-Invoiced, ignored_items for Ignored Items -- this function serves both.
+                const lineItems = orderData.discrepancy_items || orderData.ignored_items || [];
+                const matchesItem = lineItems.some(item => {
+                    const itemCode = (item.item_code || '').toLowerCase();
+                    const itemTitle = (item.item_title || '').toLowerCase();
+                    return itemCode.includes(searchInput) || itemTitle.includes(searchInput);
+                });
+
+                const matchesSearch = !searchInput || code.includes(searchInput) || customer.includes(searchInput) || matchesItem;
                 const matchesJob = !jobFilterInput || jobNumber.includes(jobFilterInput);
 
                 return matchesSearch && matchesJob;

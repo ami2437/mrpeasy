@@ -216,7 +216,7 @@
                 <div class="table-toolbar">
                     <div class="search-wrap">
                         <label class="search-label" for="shipment-search">Search</label>
-                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, order, customer, or PO" aria-label="Search shipments" />
+                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, order, customer, PO, or item #" aria-label="Search shipments" />
                     </div>
                 </div>
                 <div class="shipments-table-container">
@@ -1228,13 +1228,16 @@
 
             return sortShipments(source.filter(shipment => {
                 if (!searchValue) return true;
+                const products = Array.isArray(shipment.details?.products) ? shipment.details.products : [];
                 const haystack = [
                     shipment.code,
                     shipment.customer_order_code,
                     shipment.po_number,
                     shipment.status_txt,
                     shipment.details?.customer_name,
-                    shipment.details?.reference
+                    shipment.details?.reference,
+                    ...products.map(p => p.item_code),
+                    ...products.map(p => p.item_title)
                 ].join(' ').toLowerCase();
                 return haystack.includes(searchValue);
             }));

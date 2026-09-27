@@ -191,7 +191,7 @@
                 <div class="table-toolbar">
                     <div class="search-wrap">
                         <label class="search-label" for="shipment-search">Search</label>
-                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, customer, or PO" aria-label="Search shipments" />
+                        <input id="shipment-search" class="search-input" type="search" placeholder="Shipment, customer, PO, or item #" aria-label="Search shipments" />
                     </div>
                 </div>
                 <div class="shipments-table-container">
@@ -429,6 +429,7 @@
                 const status = getShipmentStatus(shipment.code);
                 if (activeStatusFilter !== 'all' && status !== activeStatusFilter) return false;
                 if (!searchValue) return true;
+                const items = shipment.packingSlip && Array.isArray(shipment.packingSlip.items) ? shipment.packingSlip.items : [];
                 const haystack = [
                     shipment.code,
                     shipment.po_number,
@@ -436,7 +437,8 @@
                     status,
                     shipment.finalized_at,
                     shipment.total_boxes,
-                    shipment.packingSlip && shipment.packingSlip.items ? shipment.packingSlip.items.length : 0
+                    ...items.map(item => item.item_code),
+                    ...items.map(item => item.item_title)
                 ].join(' ').toLowerCase();
                 return haystack.includes(searchValue);
             }));
