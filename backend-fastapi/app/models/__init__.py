@@ -170,6 +170,22 @@ class ShipmentBox(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PendingShipmentFinalization(Base):
+    """Employee-submitted finalize request awaiting admin/super_admin approval."""
+    __tablename__ = "pending_shipment_finalizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_code = Column(String, nullable=False, index=True)
+    pallet_number = Column(String, nullable=True)
+    product_configs = Column(Text, nullable=False)  # JSON: same payload finalize accepts
+    status = Column(String, nullable=False, default="pending", index=True)  # pending, approved, rejected
+    submitted_by = Column(String, nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+    reviewed_by = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(String, nullable=True)
+
+
 class PalletWeight(Base):
     """Weight entered per pallet number within a finalized shipment."""
     __tablename__ = "pallet_weights"
