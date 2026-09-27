@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # real POST path is switched on for a controlled go-live.
     allow_mrp_invoice_creation: bool = False
 
+    # Claude API key for the beta Purchase Orders PDF parser. Optional --
+    # unlike secret_key, an empty value doesn't block app startup; the
+    # parse-pdf endpoint just returns a clear "not configured" error.
+    anthropic_api_key: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = False

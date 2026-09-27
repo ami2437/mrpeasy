@@ -143,6 +143,16 @@ class MRPeasyAPIClient:
         """Get all vendors"""
         return self._request("GET", "/vendors", params=filters or {})
 
+    def get_purchase_orders(self, filters: Optional[Dict] = None) -> list:
+        """Get all purchase orders with automatic pagination. Read-only in
+        MRPeasy's API (v1 and v2 both) -- there is no create/update endpoint
+        for purchase orders or vendors."""
+        return self._paginated_request("GET", "/purchase-orders", params=filters or {})
+
+    def get_purchase_order(self, pur_ord_id: int) -> Dict:
+        """Get a specific purchase order"""
+        return self._request("GET", f"/purchase-orders/{pur_ord_id}")
+
     def get_inventory(self, filters: Optional[Dict] = None) -> list:
         """Get inventory data"""
         return self._request("GET", "/stock/inventory", params=filters or {})

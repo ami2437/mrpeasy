@@ -226,6 +226,50 @@ class PendingInvoiceSubmissionLine(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PurchaseOrderPayment(Base):
+    """A payment recorded locally against an MRPeasy purchase order.
+
+    MRPeasy's own PurchaseOrder has a `bills` array, but it's just three
+    free-text-ish fields (invoice_number/invoice_date/due_date), not real
+    payment tracking, and purchase orders aren't writable via the API
+    anyway -- this table is the actual source of truth for payments.
+    """
+    __tablename__ = "purchase_order_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pur_ord_id = Column(Integer, nullable=False, index=True)  # MRPeasy's numeric PO id
+    po_code = Column(String, nullable=True)  # display convenience, e.g. "PO00036"
+    amount = Column(Float, nullable=False)
+    currency = Column(String, nullable=True)
+    paid_date = Column(String, nullable=True)  # 'YYYY-MM-DD'
+    method = Column(String, nullable=True)  # e.g. wire, check, card
+    reference = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    recorded_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PurchaseOrderNote(Base):
+    """A general or delivery note recorded locally against a purchase order.
+
+    Both are just timestamped text entries -- note_type distinguishes them,
+    and only delivery notes populate the extra structured fields below.
+    """
+    __tablename__ = "purchase_order_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pur_ord_id = Column(Integer, nullable=False, index=True)
+    po_code = Column(String, nullable=True)
+    note_type = Column(String, nullable=False, default="general")  # 'general' | 'delivery'
+    note_text = Column(Text, nullable=True)
+    received_quantity = Column(Float, nullable=True)  # delivery notes only
+    carrier = Column(String, nullable=True)  # delivery notes only
+    tracking_number = Column(String, nullable=True)  # delivery notes only
+    delivery_date = Column(String, nullable=True)  # delivery notes only, 'YYYY-MM-DD'
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PalletWeight(Base):
     """Weight entered per pallet number within a finalized shipment."""
     __tablename__ = "pallet_weights"

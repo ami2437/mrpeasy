@@ -6,7 +6,7 @@ from app.config.settings import settings
 from app.config.database import engine, SessionLocal
 from app.models import Base, CustomerOrder, StockItem, ManufacturingOrder, Vendor, Inventory, SyncLog, User, Role
 from app.services.auth import initialize_auth_roles
-from app.routes import customer_orders, stock_items, manufacturing_orders, vendors, sync, auth, labels, invoicing, reports
+from app.routes import customer_orders, stock_items, manufacturing_orders, vendors, sync, auth, labels, invoicing, reports, purchase_orders
 
 # Create tables. Note: Base here is app.models's declarative base (where every
 # model actually lives) -- app.config.database also defines its own, separate
@@ -66,6 +66,7 @@ app.include_router(stock_items.router)
 app.include_router(manufacturing_orders.router)
 app.include_router(vendors.router)
 app.include_router(sync.router)
+app.include_router(purchase_orders.router)
 
 
 @app.get("/api")

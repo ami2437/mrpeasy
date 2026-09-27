@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>American Traders LLC</title>
+    <script src="./auth-guard.js"></script>
+    <link rel="stylesheet" href="./styles/theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        .header { display: flex; justify-content: space-between; align-items: center; color: white; margin-bottom: 40px; }
+        .header h1 { font-size: 32px; font-weight: 700; }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+        .back-btn:hover { background: rgba(255, 255, 255, 0.3); }
+
+        .panel { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); }
+
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 24px; }
+        .summary-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 12px; text-align: center; }
+        .summary-card h3 { font-size: 14px; font-weight: 500; opacity: 0.9; }
+        .summary-card .number { font-size: 32px; font-weight: 700; margin-top: 10px; }
+
+        .filters { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+        .filter-group { display: flex; gap: 8px; align-items: center; }
+        .filter-group label { font-weight: 600; color: #2d3748; font-size: 14px; }
+        .filter-group select, .filter-group input { padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px; }
+        .filter-group input { min-width: 260px; }
+        .filter-group button { padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .filter-group button:hover { background: #5a67d8; }
+
+        .table { width: 100%; border-collapse: collapse; }
+        .table thead { background: #f7fafc; border-bottom: 2px solid #e2e8f0; }
+        .table th { padding: 15px; text-align: left; font-weight: 600; color: #2d3748; }
+        .table td { padding: 15px; border-bottom: 1px solid #e2e8f0; }
+
+        .badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-secondary { background: #e2e8f0; color: #475569; }
+
+        .order-row { cursor: pointer; background: #f8fafc; font-weight: 600; }
+        .order-row:hover { background: #e2e8f0; }
+        .order-row td { padding: 18px 15px !important; }
+
+        .items-row { display: none; background: #fefefe; }
+        .items-row.expanded { display: table-row; }
+
+        .items-table { width: 100%; margin: 10px 0; border-collapse: collapse; }
+        .items-table th { background: #f1f5f9; padding: 10px; text-align: left; font-size: 13px; font-weight: 600; color: #475569; }
+        .items-table td { padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+
+        .arrow { display: inline-block; margin-right: 8px; transition: transform 0.3s ease; font-size: 12px; }
+        .arrow.expanded { transform: rotate(90deg); }
+
+        .loading { text-align: center; padding: 40px; color: #718096; }
+        .error { background: #fee2e2; color: #991b1b; padding: 15px; border-radius: 8px; margin-top: 20px; }
+
+        .btn-generate { padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .btn-primary { background: #4f46e5; color: white; }
+        .btn-secondary { background: #e2e8f0; color: #1f2937; }
+
+        .po-tracking-panel { margin-top: 16px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+        .po-tracking-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 12px; }
+        .po-tracking-columns h4 { margin-bottom: 8px; color: #1e293b; }
+        .po-add-form { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 8px; }
+        .po-add-form input, .po-add-form select, .po-add-form textarea { padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 13px; }
+        .po-delivery-fields { display: none; flex-direction: column; gap: 6px; }
+        .po-note-item { border-bottom: 1px solid #e2e8f0; padding: 8px 0; font-size: 13px; }
+
+        .beta-section { margin-top: 24px; background: white; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+        .beta-header { padding: 16px 20px; cursor: pointer; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 10px; background: #f8fafc; }
+        .beta-badge { background: #fef3c7; color: #92400e; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700; }
+        .beta-content { padding: 20px; }
+        .beta-content p { color: #64748b; font-size: 13px; margin-bottom: 12px; max-width: 700px; }
+        .beta-extracted-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 12px; font-size: 13px; }
+
+        .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; backdrop-filter: blur(5px); }
+        .loading-overlay.hidden { display: none; }
+        .spinner { width: 60px; height: 60px; border: 6px solid rgba(255, 255, 255, 0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { color: white; font-size: 18px; font-weight: 600; margin-top: 20px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loading-text">Loading...</div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>🧾 Purchase Orders</h1>
+            <a href="./dashboard.html" class="back-btn">← Back to Dashboard</a>
+        </div>
+
+        <div class="panel">
+            <p style="color:#64748b; font-size:13px; margin-bottom:16px;">
+                Read live from MRPeasy (MRPeasy's API has no create/update endpoint for purchase orders, so this is view-only for MRP data).
+                Payments and notes below are tracked here, since MRPeasy has no real equivalent for either.
+            </p>
+            <div id="po-summary" class="summary"></div>
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="po-search">Search:</label>
+                    <input type="text" id="po-search" placeholder="PO code, vendor, or item #..." onkeyup="renderPurchaseOrders()">
+                </div>
+                <div class="filter-group">
+                    <label for="po-status-filter">Status:</label>
+                    <select id="po-status-filter" onchange="renderPurchaseOrders()">
+                        <option value="">All Statuses</option>
+                        <option value="5">RFQ</option>
+                        <option value="10">New</option>
+                        <option value="20">Ordered</option>
+                        <option value="30">Shipped</option>
+                        <option value="40">Received</option>
+                        <option value="110">Archived</option>
+                        <option value="120">Cancelled</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <button onclick="loadPurchaseOrders(true)">🔄 Refresh</button>
+                </div>
+            </div>
+            <div id="po-error"></div>
+            <div id="po-table-container"><div class="loading">Loading purchase orders...</div></div>
+        </div>
+
+        <div class="beta-section">
+            <div class="beta-header" onclick="toggleBetaSection()">
+                <span class="arrow" id="beta-arrow">▶</span>
+                🧪 Beta: AI PDF Parser <span class="beta-badge">EXPERIMENTAL</span>
+            </div>
+            <div class="beta-content" id="beta-content" style="display:none;">
+                <p>Upload a vendor PDF (quote, order confirmation, packing slip, or invoice) to extract structured data with Claude, for manually reconciling against a purchase order above. This is extraction only -- it does not create or modify anything in MRPeasy or here.</p>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <input type="file" id="beta-pdf-file" accept=".pdf">
+                    <button class="btn-generate btn-primary" onclick="parseBetaPdf()">Parse PDF</button>
+                </div>
+                <div id="beta-status" style="margin-top:8px; font-size:13px; color:#475569;"></div>
+                <div id="beta-result" style="margin-top:12px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let allPurchaseOrders = [];
+
+        const STATUS_MAP = {
+            5: { text: 'RFQ', badge: 'secondary' },
+            10: { text: 'New', badge: 'info' },
+            20: { text: 'Ordered', badge: 'warning' },
+            30: { text: 'Shipped', badge: 'info' },
+            40: { text: 'Received', badge: 'success' },
+            110: { text: 'Archived', badge: 'secondary' },
+            120: { text: 'Cancelled', badge: 'danger' }
+        };
+
+        function showLoading(text) {
+            document.getElementById('loading-text').textContent = text || 'Loading...';
+            document.getElementById('loading-overlay').classList.remove('hidden');
+        }
+        function hideLoading() {
+            document.getElementById('loading-overlay').classList.add('hidden');
+        }
+        function showError(message) {
+            document.getElementById('po-error').innerHTML = message ? `<div class="error">${escapeHtml(message)}</div>` : '';
+        }
+
+        function toSafeNumber(value) {
+            const n = Number(value);
+            return isNaN(n) ? 0 : n;
+        }
+        function formatCurrency(currency, value) {
+            return `${currency || '$'}${toSafeNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        function formatEpochDate(epochSeconds) {
+            if (!epochSeconds) return 'N/A';
+            try {
+                return new Date(Number(epochSeconds) * 1000).toLocaleDateString();
+            } catch (error) {
+                return 'N/A';
+            }
+        }
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        async function loadPurchaseOrders(showOverlay = false) {
+            if (showOverlay) showLoading('Loading purchase orders from MRPeasy...');
+            showError('');
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to load purchase orders (HTTP ${response.status})`);
+                }
+                allPurchaseOrders = data.purchase_orders || [];
+                renderSummary();
+                renderPurchaseOrders();
+            } catch (error) {
+                document.getElementById('po-table-container').innerHTML = '';
+                showError(`Error loading purchase orders: ${error.message}`);
+            } finally {
+                if (showOverlay) hideLoading();
+            }
+        }
+
+        function renderSummary() {
+            const total = allPurchaseOrders.length;
+            const openCount = allPurchaseOrders.filter(po => ![110, 120].includes(Number(po.status))).length;
+            const totalValue = allPurchaseOrders.reduce((sum, po) => sum + toSafeNumber(po.total_price_cur ?? po.total_price), 0);
+            const currency = allPurchaseOrders[0]?.currency || '$';
+            document.getElementById('po-summary').innerHTML = `
+                <div class="summary-card"><h3>Total Purchase Orders</h3><div class="number">${total}</div></div>
+                <div class="summary-card"><h3>Open</h3><div class="number">${openCount}</div></div>
+                <div class="summary-card"><h3>Total Value</h3><div class="number">${formatCurrency(currency, totalValue)}</div></div>
+            `;
+        }
+
+        function getFilteredPurchaseOrders() {
+            const search = (document.getElementById('po-search')?.value || '').trim().toLowerCase();
+            const statusFilter = document.getElementById('po-status-filter')?.value || '';
+            return allPurchaseOrders.filter(po => {
+                if (statusFilter && String(po.status) !== statusFilter) return false;
+                if (!search) return true;
+                const products = Array.isArray(po.products) ? po.products : [];
+                const haystack = [
+                    po.code,
+                    po.vendor_title,
+                    po.vendor_code,
+                    ...products.map(p => p.item_code),
+                    ...products.map(p => p.item_title)
+                ].join(' ').toLowerCase();
+                return haystack.includes(search);
+            });
+        }
+
+        function renderPurchaseOrders() {
+            const container = document.getElementById('po-table-container');
+            const filtered = getFilteredPurchaseOrders();
+            if (!filtered.length) {
+                container.innerHTML = '<p style="padding:20px;text-align:center;color:#718096;">No purchase orders found.</p>';
+                return;
+            }
+
+            let html = '<table class="table"><thead><tr>';
+            html += '<th>PO Code</th><th>Vendor</th><th>Status</th><th>Expected Date</th><th>Arrival Date</th><th>Total</th></tr></thead><tbody>';
+
+            filtered.forEach((po, index) => {
+                const rowId = `po-row-${index}`;
+                const status = STATUS_MAP[Number(po.status)] || { text: 'Unknown', badge: 'secondary' };
+
+                html += `<tr class="order-row" onclick="toggleOrderRow('${rowId}')">`;
+                html += `<td><span class="arrow" id="${rowId}-arrow">▶</span><strong>${escapeHtml(po.code || 'N/A')}</strong></td>`;
+                html += `<td>${escapeHtml(po.vendor_title || 'N/A')}</td>`;
+                html += `<td><span class="badge badge-${status.badge}">${status.text}</span></td>`;
+                html += `<td>${formatEpochDate(po.expected_date)}</td>`;
+                html += `<td>${formatEpochDate(po.arrival_date)}</td>`;
+                html += `<td>${formatCurrency(po.currency || '$', po.total_price_cur ?? po.total_price)}</td>`;
+                html += '</tr>';
+
+                html += `<tr class="items-row" id="${rowId}"><td colspan="6" style="padding:0 15px 15px 30px;">${renderPoDetailPanel(po)}</td></tr>`;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function toggleOrderRow(rowId) {
+            const row = document.getElementById(rowId);
+            const arrow = document.getElementById(`${rowId}-arrow`);
+            row.classList.toggle('expanded');
+            arrow.classList.toggle('expanded');
+        }
+
+        function renderPoDetailPanel(po) {
+            const products = Array.isArray(po.products) ? po.products : [];
+            const lineRows = products.map(p => `
+                <tr>
+                    <td>${escapeHtml(p.item_code || 'N/A')}</td>
+                    <td>${escapeHtml(p.item_title || '')}</td>
+                    <td>${toSafeNumber(p.quantity)}</td>
+                    <td>${formatCurrency(po.currency || '$', p.item_price_cur ?? p.item_price)}</td>
+                    <td>${formatCurrency(po.currency || '$', p.total_price_cur ?? p.total_price)}</td>
+                    <td>${formatEpochDate(p.expected_date)}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;">No line items</td></tr>';
+
+            return `
+                <table class="items-table">
+                    <thead><tr><th>Item Code</th><th>Item Name</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Expected</th></tr></thead>
+                    <tbody>${lineRows}</tbody>
+                </table>
+                <div class="po-tracking-panel">
+                    <button class="btn-generate btn-secondary" onclick="loadPoTracking(${po.pur_ord_id}, this)">📋 Show Payments / Notes</button>
+                    <div class="po-tracking-body" style="display:none;"></div>
+                </div>
+            `;
+        }
+
+        async function loadPoTracking(purOrdId, buttonEl) {
+            const panel = buttonEl.closest('.po-tracking-panel');
+            const body = panel.querySelector('.po-tracking-body');
+            const isVisible = body.style.display !== 'none';
+            if (isVisible) {
+                body.style.display = 'none';
+                return;
+            }
+
+            body.style.display = 'block';
+            body.innerHTML = 'Loading...';
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/${purOrdId}/tracking`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to load tracking data (HTTP ${response.status})`);
+                }
+                renderPoTracking(panel, purOrdId, data);
+            } catch (error) {
+                body.innerHTML = `<p style="color:#b91c1c;">Error: ${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function refreshPoTracking(purOrdId, panel) {
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/${purOrdId}/tracking`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to reload tracking data (HTTP ${response.status})`);
+                }
+                renderPoTracking(panel, purOrdId, data);
+            } catch (error) {
+                panel.querySelector('.po-tracking-body').innerHTML = `<p style="color:#b91c1c;">Error: ${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        function renderPoTracking(panel, purOrdId, data) {
+            const body = panel.querySelector('.po-tracking-body');
+
+            const paymentsRows = (data.payments || []).map(p => `
+                <tr>
+                    <td>${escapeHtml(p.paid_date || 'N/A')}</td>
+                    <td>${formatCurrency(p.currency || '$', p.amount)}</td>
+                    <td>${escapeHtml(p.method || '')}</td>
+                    <td>${escapeHtml(p.reference || '')}</td>
+                    <td>${escapeHtml(p.note || '')}</td>
+                    <td>${escapeHtml(p.recorded_by || '')}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;">No payments recorded</td></tr>';
+
+            const notesRows = (data.notes || []).map(n => {
+                const deliveryInfo = n.note_type === 'delivery'
+                    ? ` <span style="color:#64748b;font-size:12px;">(qty ${n.received_quantity ?? 'N/A'}${n.carrier ? ', via ' + escapeHtml(n.carrier) : ''}${n.tracking_number ? ', tracking ' + escapeHtml(n.tracking_number) : ''}${n.delivery_date ? ', ' + escapeHtml(n.delivery_date) : ''})</span>`
+                    : '';
+                const createdAt = n.created_at ? new Date(n.created_at).toLocaleString() : '';
+                return `
+                    <div class="po-note-item">
+                        <span class="badge badge-${n.note_type === 'delivery' ? 'info' : 'secondary'}">${escapeHtml(n.note_type)}</span>
+                        ${escapeHtml(n.note_text || '')}${deliveryInfo}
+                        <div style="font-size:11px;color:#94a3b8;">${escapeHtml(n.created_by || '')} · ${createdAt}</div>
+                    </div>
+                `;
+            }).join('') || '<p style="color:#94a3b8;font-size:13px;">No notes yet</p>';
+
+            body.innerHTML = `
+                <div class="po-tracking-columns">
+                    <div>
+                        <h4>Payments (Total: ${formatCurrency('$', data.total_paid)})</h4>
+                        <table class="items-table"><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Note</th><th>By</th></tr></thead><tbody>${paymentsRows}</tbody></table>
+                        <div class="po-add-form">
+                            <input type="date" class="po-payment-date">
+                            <input type="number" class="po-payment-amount" placeholder="Amount" step="0.01" min="0.01">
+                            <input type="text" class="po-payment-method" placeholder="Method (wire, check...)">
+                            <input type="text" class="po-payment-reference" placeholder="Reference #">
+                            <input type="text" class="po-payment-note" placeholder="Note">
+                            <button class="btn-generate btn-primary" onclick="addPoPayment(${purOrdId}, this)">+ Add Payment</button>
+                        </div>
+                    </div>
+                    <div>
+                        <h4>Notes &amp; Deliveries</h4>
+                        <div class="po-notes-list">${notesRows}</div>
+                        <div class="po-add-form">
+                            <select class="po-note-type" onchange="this.closest('.po-add-form').querySelector('.po-delivery-fields').style.display = this.value === 'delivery' ? 'flex' : 'none';">
+                                <option value="general">General Note</option>
+                                <option value="delivery">Delivery Note</option>
+                            </select>
+                            <textarea class="po-note-text" placeholder="Note text" rows="2"></textarea>
+                            <div class="po-delivery-fields">
+                                <input type="number" class="po-note-qty" placeholder="Qty received" step="0.01">
+                                <input type="text" class="po-note-carrier" placeholder="Carrier">
+                                <input type="text" class="po-note-tracking" placeholder="Tracking #">
+                                <input type="date" class="po-note-date">
+                            </div>
+                            <button class="btn-generate btn-primary" onclick="addPoNote(${purOrdId}, this)">+ Add Note</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function addPoPayment(purOrdId, buttonEl) {
+            const form = buttonEl.closest('.po-add-form');
+            const amount = toSafeNumber(form.querySelector('.po-payment-amount').value);
+            if (amount <= 0) {
+                alert('Enter a valid payment amount.');
+                return;
+            }
+            const payload = {
+                amount,
+                paid_date: form.querySelector('.po-payment-date').value || null,
+                method: form.querySelector('.po-payment-method').value || null,
+                reference: form.querySelector('.po-payment-reference').value || null,
+                note: form.querySelector('.po-payment-note').value || null
+            };
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/${purOrdId}/payments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to record payment (HTTP ${response.status})`);
+                }
+                await refreshPoTracking(purOrdId, buttonEl.closest('.po-tracking-panel'));
+            } catch (error) {
+                alert(`Error recording payment: ${error.message}`);
+            }
+        }
+
+        async function addPoNote(purOrdId, buttonEl) {
+            const form = buttonEl.closest('.po-add-form');
+            const noteType = form.querySelector('.po-note-type').value;
+            const noteText = form.querySelector('.po-note-text').value.trim();
+            if (!noteText) {
+                alert('Enter note text.');
+                return;
+            }
+            const isDelivery = noteType === 'delivery';
+            const payload = {
+                note_type: noteType,
+                note_text: noteText,
+                received_quantity: isDelivery ? (toSafeNumber(form.querySelector('.po-note-qty').value) || null) : null,
+                carrier: isDelivery ? (form.querySelector('.po-note-carrier').value || null) : null,
+                tracking_number: isDelivery ? (form.querySelector('.po-note-tracking').value || null) : null,
+                delivery_date: isDelivery ? (form.querySelector('.po-note-date').value || null) : null
+            };
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/${purOrdId}/notes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to add note (HTTP ${response.status})`);
+                }
+                await refreshPoTracking(purOrdId, buttonEl.closest('.po-tracking-panel'));
+            } catch (error) {
+                alert(`Error adding note: ${error.message}`);
+            }
+        }
+
+        function toggleBetaSection() {
+            const content = document.getElementById('beta-content');
+            const arrow = document.getElementById('beta-arrow');
+            const isHidden = content.style.display === 'none';
+            content.style.display = isHidden ? 'block' : 'none';
+            arrow.classList.toggle('expanded', isHidden);
+        }
+
+        async function parseBetaPdf() {
+            const fileInput = document.getElementById('beta-pdf-file');
+            const statusEl = document.getElementById('beta-status');
+            const resultEl = document.getElementById('beta-result');
+            if (!fileInput.files || !fileInput.files.length) {
+                statusEl.textContent = 'Choose a PDF file first.';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            statusEl.textContent = 'Parsing with Claude... this can take a few seconds.';
+            resultEl.innerHTML = '';
+            try {
+                const response = await fetch(`${API_BASE}/api/purchase-orders/beta/parse-pdf`, { method: 'POST', body: formData });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.success) {
+                    throw new Error(data.detail || `Failed to parse PDF (HTTP ${response.status})`);
+                }
+                statusEl.textContent = `✓ Parsed ${data.filename}`;
+                renderBetaResult(data.extracted || {});
+            } catch (error) {
+                statusEl.textContent = `❌ ${error.message}`;
+            }
+        }
+
+        function renderBetaResult(extracted) {
+            const resultEl = document.getElementById('beta-result');
+            const currency = extracted.currency || '$';
+            const lineRows = (extracted.line_items || []).map(item => `
+                <tr>
+                    <td>${escapeHtml(item.item_code || 'N/A')}</td>
+                    <td>${escapeHtml(item.description || '')}</td>
+                    <td>${item.quantity ?? 'N/A'}</td>
+                    <td>${item.unit_price != null ? formatCurrency(currency, item.unit_price) : 'N/A'}</td>
+                    <td>${item.total_price != null ? formatCurrency(currency, item.total_price) : 'N/A'}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="5" style="text-align:center;color:#94a3b8;">No line items extracted</td></tr>';
+
+            resultEl.innerHTML = `
+                <div class="beta-extracted-summary">
+                    <div><strong>Vendor:</strong> ${escapeHtml(extracted.vendor_name || 'N/A')}</div>
+                    <div><strong>Document Type:</strong> ${escapeHtml(extracted.document_type || 'N/A')}</div>
+                    <div><strong>Document #:</strong> ${escapeHtml(extracted.document_number || 'N/A')}</div>
+                    <div><strong>Date:</strong> ${escapeHtml(extracted.document_date || 'N/A')}</div>
+                    <div><strong>Total:</strong> ${extracted.total_amount != null ? formatCurrency(currency, extracted.total_amount) : 'N/A'}</div>
+                </div>
+                <table class="items-table"><thead><tr><th>Item Code</th><th>Description</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead><tbody>${lineRows}</tbody></table>
+            `;
+        }
+
+        AuthGuard.requireRoles(['admin', 'super_admin']).then(user => {
+            if (user) loadPurchaseOrders();
+        });
+    </script>
+</body>
+</html>
