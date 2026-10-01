@@ -146,19 +146,36 @@
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const canReceive = !["received", "cancelled"].includes(order.status);
+      const editable = order.status !== "cancelled";
+      const canCancel = order.status !== "cancelled" && order.lines.every(l => l.received_quantity === 0);
+
       card.innerHTML = `
         <h3>${order.code} <span class="tag ${order.status}">${order.status.replace('_',' ')}</span></h3>
-        <p class="muted">${vendorName(order.vendor_id)} — ordered ${fmtDate(order.order_date)}, expected ${fmtDate(order.expected_date)}</p>
-        ${order.notes ? `<p class="muted">${order.notes}</p>` : ""}
-        <table>
-          <thead><tr><th>Item</th><th>Qty</th><th>Received</th><th>Unit cost</th>${canReceive ? "<th>Receive now</th><th>Lot code</th>" : ""}</tr></thead>
+
+        <h4>Order details</h4>
+        <div class="row">
+          <div><label>Vendor</label><select id="e-vendor" ${editable ? "" : "disabled"}>
+            ${vendors.map(v => `<option value="${v.id}" ${v.id === order.vendor_id ? "selected" : ""}>${v.name}</option>`).join("")}
+          </select></div>
+          <div><label>Expected date</label><input type="date" id="e-expected" value="${order.expected_date ? order.expected_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
+        </div>
+        <label>Notes</label><textarea id="e-notes" rows="2" ${editable ? "" : "disabled"}>${order.notes || ''}</textarea>
+        ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;">Save Order Details</button>` : ""}
+
+        <h4 style="margin-top:20px;">Lines</h4>
+        <table class="lines-table">
+          <thead><tr><th>Item</th><th>Qty</th><th>Received</th><th>Unit cost</th>${editable ? "<th></th>" : ""}${canReceive ? "<th>Receive now</th><th>Lot code</th>" : ""}</tr></thead>
           <tbody>
             ${order.lines.map(l => `
-              <tr>
+              <tr data-line="${l.id}">
                 <td>${itemLabel(l.item_id)}</td>
-                <td>${l.quantity}</td>
+                <td>${editable && l.received_quantity === 0 ? `<input type="number" step="0.01" class="e-line-qty" value="${l.quantity}" style="width:80px;">` : l.quantity}</td>
                 <td>${l.received_quantity}</td>
-                <td>${l.unit_cost.toFixed(2)}</td>
+                <td>${editable ? `<input type="number" step="0.01" class="e-line-cost" value="${l.unit_cost}" style="width:80px;">` : l.unit_cost.toFixed(2)}</td>
+                ${editable ? `<td>
+                  <a class="link" onclick="saveLine(${order.id}, ${l.id})">Save</a>
+                  ${l.received_quantity === 0 ? ` &nbsp; <a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
+                </td>` : ""}
                 ${canReceive ? `
                   <td><input type="number" step="0.01" class="recv-qty" data-line="${l.id}" value="${(l.quantity - l.received_quantity).toFixed(2)}" style="width:90px;"></td>
                   <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="auto" style="width:110px;"></td>
@@ -167,16 +184,112 @@
             `).join("")}
           </tbody>
         </table>
+        ${editable ? `
+          <div class="row" style="margin-top:8px; max-width:600px;">
+            <div><label>Add item</label><select id="new-line-item">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></div>
+            <div><label>Qty</label><input type="number" step="0.01" id="new-line-qty" value="1"></div>
+            <div><label>Unit cost</label><input type="number" step="0.01" id="new-line-cost" value="0"></div>
+            <div style="flex:0;"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
+          </div>
+        ` : ""}
+        <div id="lines-error" class="error"></div>
+
         ${canReceive ? `
-          <div class="row" style="margin-top:12px; max-width:400px;">
+          <h4 style="margin-top:20px;">Receive</h4>
+          <div class="row" style="max-width:400px;">
             <div><label>Freight cost (this receipt)</label><input type="number" step="0.01" id="recv-freight" value="${order.freight_cost || 0}"></div>
             <div><label>Tariff cost (this receipt)</label><input type="number" step="0.01" id="recv-tariff" value="${order.tariff_cost || 0}"></div>
           </div>
           <button onclick="receiveOrder(${order.id})" style="margin-top:12px;">Receive entered quantities</button>
         ` : ""}
-        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
         <div id="detail-error" class="error"></div>
+
+        <div style="margin-top:16px;">
+          ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
+          <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
+        </div>
       `;
+    }
+
+    async function saveOrderHeader(poId) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            vendor_id: parseInt(document.getElementById("e-vendor").value),
+            expected_date: document.getElementById("e-expected").value || null,
+            notes: document.getElementById("e-notes").value,
+          }),
+        });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function saveLine(poId, lineId) {
+      const errorEl = document.getElementById("lines-error");
+      errorEl.textContent = "";
+      const row = document.querySelector(`tr[data-line="${lineId}"]`);
+      const qtyInput = row.querySelector(".e-line-qty");
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/lines/${lineId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            quantity: qtyInput ? parseFloat(qtyInput.value) || 0 : undefined,
+            unit_cost: parseFloat(row.querySelector(".e-line-cost").value) || 0,
+          }),
+        });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function removeLine(poId, lineId) {
+      const errorEl = document.getElementById("lines-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/lines/${lineId}`, { method: "DELETE" });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function addLineToOrder(poId) {
+      const errorEl = document.getElementById("lines-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/lines`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_id: parseInt(document.getElementById("new-line-item").value),
+            quantity: parseFloat(document.getElementById("new-line-qty").value) || 0,
+            unit_cost: parseFloat(document.getElementById("new-line-cost").value) || 0,
+          }),
+        });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function cancelOrder(poId) {
+      if (!confirm("Cancel this purchase order? This cannot be undone.")) return;
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/cancel`, { method: "POST" });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        alert(err.message);
+      }
     }
 
     async function receiveOrder(poId) {

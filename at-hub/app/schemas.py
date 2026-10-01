@@ -162,6 +162,28 @@ class CustomerOrderResponse(BaseModel):
         from_attributes = True
 
 
+class CustomerOrderUpdate(BaseModel):
+    """Header fields -- always editable regardless of shipping progress (except once cancelled)."""
+    customer_id: Optional[int] = None
+    delivery_date: Optional[datetime] = None
+    po_number: Optional[str] = None
+    job_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CustomerOrderLineAdd(BaseModel):
+    item_id: int
+    quantity: float
+    unit_price: float = 0
+    delivery_date: Optional[datetime] = None
+
+
+class CustomerOrderLineUpdate(BaseModel):
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    delivery_date: Optional[datetime] = None
+
+
 class ShipLineRequest(BaseModel):
     line_id: int
     quantity: float
@@ -308,6 +330,23 @@ class PurchaseOrderResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PurchaseOrderUpdate(BaseModel):
+    vendor_id: Optional[int] = None
+    expected_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class PurchaseOrderLineAdd(BaseModel):
+    item_id: int
+    quantity: float
+    unit_cost: float = 0
+
+
+class PurchaseOrderLineUpdate(BaseModel):
+    quantity: Optional[float] = None
+    unit_cost: Optional[float] = None
 
 
 class ReceiveLineRequest(BaseModel):

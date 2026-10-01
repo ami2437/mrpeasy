@@ -194,6 +194,111 @@ class CustomerOrderService:
         return order
 
     @staticmethod
+    def update(db: Session, order_id: int, data) -> CustomerOrder:
+        """Header fields -- always editable unless the order is cancelled."""
+        order = CustomerOrderService.get(db, order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
+        updates = data.dict(exclude_unset=True)
+        if "customer_id" in updates and updates["customer_id"] is not None:
+            if not db.query(Customer).filter(Customer.id == updates["customer_id"]).first():
+                raise HTTPException(status_code=400, detail="Customer not found")
+        for key, value in updates.items():
+            setattr(order, key, value)
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
+    def _recompute_status(order: CustomerOrder) -> None:
+        """Re-derive shipped/confirmed from line data. Never called for draft orders
+        (editing lines on a draft shouldn't auto-confirm it) or cancelled ones."""
+        if order.status == "cancelled":
+            return
+        fully_shipped = all(l.shipped_quantity >= l.quantity - 1e-9 for l in order.lines)
+        order.status = "shipped" if fully_shipped else "confirmed"
+
+    @staticmethod
+    def add_line(db: Session, order_id: int, data) -> CustomerOrder:
+        order = CustomerOrderService.get(db, order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
+        if not db.query(StockItem).filter(StockItem.id == data.item_id).first():
+            raise HTTPException(status_code=400, detail=f"Stock item {data.item_id} not found")
+        db.add(CustomerOrderLine(
+            order_id=order.id,
+            item_id=data.item_id,
+            quantity=data.quantity,
+            unit_price=data.unit_price,
+            delivery_date=data.delivery_date or order.delivery_date,
+        ))
+        db.flush()
+        if order.status != "draft":
+            CustomerOrderService._recompute_status(order)
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
+    def update_line(db: Session, order_id: int, line_id: int, data) -> CustomerOrder:
+        order = CustomerOrderService.get(db, order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
+        line = db.query(CustomerOrderLine).filter(
+            CustomerOrderLine.id == line_id, CustomerOrderLine.order_id == order.id
+        ).first()
+        if not line:
+            raise HTTPException(status_code=404, detail="Order line not found")
+
+        updates = data.dict(exclude_unset=True)
+        if "quantity" in updates and updates["quantity"] is not None:
+            if updates["quantity"] < line.shipped_quantity - 1e-9:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reduce quantity below {line.shipped_quantity}, which has already shipped"
+                )
+        for key, value in updates.items():
+            setattr(line, key, value)
+        db.flush()
+        if order.status != "draft":
+            CustomerOrderService._recompute_status(order)
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
+    def remove_line(db: Session, order_id: int, line_id: int) -> CustomerOrder:
+        order = CustomerOrderService.get(db, order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
+        line = db.query(CustomerOrderLine).filter(
+            CustomerOrderLine.id == line_id, CustomerOrderLine.order_id == order.id
+        ).first()
+        if not line:
+            raise HTTPException(status_code=404, detail="Order line not found")
+        if line.shipped_quantity > 0:
+            raise HTTPException(status_code=400, detail="Cannot remove a line that has already shipped")
+        if len(order.lines) <= 1:
+            raise HTTPException(status_code=400, detail="Order must have at least one line")
+        db.delete(line)
+        db.flush()
+        if order.status != "draft":
+            CustomerOrderService._recompute_status(order)
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
+    def cancel(db: Session, order_id: int) -> CustomerOrder:
+        order = CustomerOrderService.get(db, order_id)
+        if any(l.shipped_quantity > 0 for l in order.lines):
+            raise HTTPException(status_code=400, detail="Cannot cancel an order that has already shipped")
+        order.status = "cancelled"
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
     def ship(db: Session, order_id: int, data, created_by: str) -> Shipment:
         order = CustomerOrderService.get(db, order_id)
         if order.status in ("shipped", "invoiced", "cancelled"):
@@ -270,8 +375,7 @@ class CustomerOrderService:
             line.shipped_quantity += ship_line.quantity
 
         db.flush()
-        fully_shipped = all(l.shipped_quantity >= l.quantity - 1e-9 for l in order.lines)
-        order.status = "shipped" if fully_shipped else "confirmed"
+        CustomerOrderService._recompute_status(order)
         db.commit()
         db.refresh(shipment)
         return shipment
@@ -484,6 +588,89 @@ class PurchaseOrderService:
         if po.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
         po.status = "ordered"
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def update(db: Session, po_id: int, data) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
+        updates = data.dict(exclude_unset=True)
+        if "vendor_id" in updates and updates["vendor_id"] is not None:
+            if not db.query(Vendor).filter(Vendor.id == updates["vendor_id"]).first():
+                raise HTTPException(status_code=400, detail="Vendor not found")
+        for key, value in updates.items():
+            setattr(po, key, value)
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def add_line(db: Session, po_id: int, data) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status in ("received", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if not db.query(StockItem).filter(StockItem.id == data.item_id).first():
+            raise HTTPException(status_code=400, detail=f"Stock item {data.item_id} not found")
+        db.add(PurchaseOrderLine(po_id=po.id, item_id=data.item_id, quantity=data.quantity, unit_cost=data.unit_cost))
+        db.flush()
+        if po.status != "draft":
+            po.status = "partially_received" if any(l.received_quantity > 0 for l in po.lines) else "ordered"
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def update_line(db: Session, po_id: int, line_id: int, data) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status in ("received", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        line = db.query(PurchaseOrderLine).filter(
+            PurchaseOrderLine.id == line_id, PurchaseOrderLine.po_id == po.id
+        ).first()
+        if not line:
+            raise HTTPException(status_code=404, detail="PO line not found")
+
+        updates = data.dict(exclude_unset=True)
+        if "quantity" in updates and updates["quantity"] is not None:
+            if updates["quantity"] < line.received_quantity - 1e-9:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reduce quantity below {line.received_quantity}, which has already been received"
+                )
+        for key, value in updates.items():
+            setattr(line, key, value)
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def remove_line(db: Session, po_id: int, line_id: int) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status in ("received", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        line = db.query(PurchaseOrderLine).filter(
+            PurchaseOrderLine.id == line_id, PurchaseOrderLine.po_id == po.id
+        ).first()
+        if not line:
+            raise HTTPException(status_code=404, detail="PO line not found")
+        if line.received_quantity > 0:
+            raise HTTPException(status_code=400, detail="Cannot remove a line that has already been received")
+        if len(po.lines) <= 1:
+            raise HTTPException(status_code=400, detail="Order must have at least one line")
+        db.delete(line)
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def cancel(db: Session, po_id: int) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if any(l.received_quantity > 0 for l in po.lines):
+            raise HTTPException(status_code=400, detail="Cannot cancel an order that has already received stock")
+        po.status = "cancelled"
         db.commit()
         db.refresh(po)
         return po
