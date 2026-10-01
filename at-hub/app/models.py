@@ -27,11 +27,17 @@ class StockItem(Base):
     cost_price = Column(Float, nullable=True, default=0)
     selling_price = Column(Float, nullable=True, default=0)
     on_hand = Column(Float, nullable=False, default=0)
+    booked = Column(Float, nullable=False, default=0)  # soft-reserved by confirmed, unshipped order lines
     reorder_point = Column(Float, nullable=True, default=0)
     default_pack_size = Column(Integer, nullable=True)  # units per box default; editable per-shipment at packing time
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def available(self) -> float:
+        """on_hand not already promised to a confirmed order -- what's actually free to book next."""
+        return self.on_hand - self.booked
 
 
 class Lot(Base):

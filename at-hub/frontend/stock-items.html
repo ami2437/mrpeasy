@@ -48,8 +48,8 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Title</th><th>Unit</th><th>On hand</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
-        <tbody id="items-body"><tr><td colspan="9">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Title</th><th>Unit</th><th>On hand</th><th>Booked</th><th>Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
+        <tbody id="items-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
   </main>
@@ -132,7 +132,7 @@
     function renderItems() {
       const tbody = document.getElementById("items-body");
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="9" class="muted">No stock items yet.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">No stock items yet.</td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(item => `
@@ -140,7 +140,9 @@
           <td>${item.code}</td>
           <td>${item.title}</td>
           <td>${item.unit || ""}</td>
-          <td style="${item.reorder_point && item.on_hand <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${item.on_hand}</td>
+          <td>${item.on_hand}</td>
+          <td class="muted">${item.booked}</td>
+          <td style="${item.reorder_point && item.available <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${item.available}</td>
           <td>${(item.cost_price ?? 0).toFixed(2)}</td>
           <td>${(item.selling_price ?? 0).toFixed(2)}</td>
           <td>${item.reorder_point ?? 0}</td>
@@ -160,7 +162,7 @@
         items = await apiFetch(`/api/stock-items/?${params.toString()}`);
         renderItems();
       } catch (err) {
-        document.getElementById("items-body").innerHTML = `<tr><td colspan="9" class="error">${err.message}</td></tr>`;
+        document.getElementById("items-body").innerHTML = `<tr><td colspan="11" class="error">${err.message}</td></tr>`;
       }
     }
 

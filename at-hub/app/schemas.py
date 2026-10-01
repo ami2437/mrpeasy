@@ -56,6 +56,8 @@ class StockItemResponse(BaseModel):
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
     on_hand: float
+    booked: float
+    available: float
     reorder_point: Optional[float] = None
     default_pack_size: Optional[int] = None
     is_active: bool

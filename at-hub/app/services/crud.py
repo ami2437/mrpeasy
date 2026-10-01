@@ -25,7 +25,9 @@ class StockItemService:
         if q:
             query = query.filter((StockItem.code.ilike(f"%{q}%")) | (StockItem.title.ilike(f"%{q}%")))
         if low_stock_only:
-            query = query.filter(StockItem.on_hand <= StockItem.reorder_point)
+            # Compare against available (on_hand - booked), not raw on_hand -- stock already
+            # promised to a confirmed order isn't free for a reorder decision to ignore.
+            query = query.filter((StockItem.on_hand - StockItem.booked) <= StockItem.reorder_point)
         return query.order_by(StockItem.code).all()
 
     @staticmethod
@@ -53,15 +55,46 @@ class StockItemService:
         new_on_hand = updates.pop("on_hand", None)
         if new_on_hand is not None and abs(new_on_hand - item.on_hand) > 1e-9:
             delta = new_on_hand - item.on_hand
-            db.add(InventoryTransaction(
-                item_id=item.id,
-                lot_id=None,
-                quantity_delta=delta,
-                type="adjustment",
-                reference=None,
-                note="Manual on-hand correction via Stock Items edit",
-                created_by=created_by,
-            ))
+            if delta > 0:
+                # A correction that only bumped item.on_hand without creating a lot would be
+                # invisible to shipping, which only ever pulls from Lots -- so a manual
+                # increase has to create a real, shippable lot, not just move the counter.
+                lot = Lot(
+                    item_id=item.id,
+                    lot_code=f"ADJ-{item.code}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+                    quantity=delta,
+                    status="available",
+                    source="adjustment",
+                )
+                db.add(lot)
+                db.flush()
+                db.add(InventoryTransaction(
+                    item_id=item.id, lot_id=lot.id, quantity_delta=delta, type="adjustment",
+                    note="Manual on-hand correction via Stock Items edit", created_by=created_by,
+                ))
+            else:
+                # Decrease: consume from available lots oldest-first, same as shipping, so the
+                # lot totals stay truthful. If lots can't cover it (e.g. correcting a miscount
+                # with no real lot history), just zero out whatever lots remain -- a manual
+                # correction represents ground truth and must succeed.
+                remaining = -delta
+                for lot in db.query(Lot).filter(
+                    Lot.item_id == item.id, Lot.status == "available", Lot.quantity > 0
+                ).order_by(Lot.received_date).all():
+                    if remaining <= 0:
+                        break
+                    take = min(lot.quantity, remaining)
+                    lot.quantity -= take
+                    remaining -= take
+                    db.add(InventoryTransaction(
+                        item_id=item.id, lot_id=lot.id, quantity_delta=-take, type="adjustment",
+                        note="Manual on-hand correction via Stock Items edit", created_by=created_by,
+                    ))
+                if remaining > 0:
+                    db.add(InventoryTransaction(
+                        item_id=item.id, lot_id=None, quantity_delta=-remaining, type="adjustment",
+                        note="Manual on-hand correction exceeded available lot quantity", created_by=created_by,
+                    ))
             item.on_hand = new_on_hand
 
         for key, value in updates.items():
@@ -184,10 +217,32 @@ class CustomerOrderService:
         return order
 
     @staticmethod
+    def _book(item: StockItem, qty: float) -> None:
+        """Reserve qty against available (on_hand - booked) stock. Raises if not enough is free."""
+        if qty <= 0:
+            return
+        if item.available + 1e-9 < qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Not enough available stock for {item.code} to book: need {qty}, "
+                       f"only {item.available} available ({item.on_hand} on hand, {item.booked} already booked)"
+            )
+        item.booked += qty
+
+    @staticmethod
+    def _release_booking(item: StockItem, qty: float) -> None:
+        if qty <= 0:
+            return
+        item.booked = max(0, item.booked - qty)
+
+    @staticmethod
     def confirm(db: Session, order_id: int) -> CustomerOrder:
         order = CustomerOrderService.get(db, order_id)
         if order.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
+        for line in order.lines:
+            item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
+            CustomerOrderService._book(item, line.quantity)
         order.status = "confirmed"
         db.commit()
         db.refresh(order)
@@ -223,8 +278,11 @@ class CustomerOrderService:
         order = CustomerOrderService.get(db, order_id)
         if order.status == "cancelled":
             raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
-        if not db.query(StockItem).filter(StockItem.id == data.item_id).first():
+        item = db.query(StockItem).filter(StockItem.id == data.item_id).first()
+        if not item:
             raise HTTPException(status_code=400, detail=f"Stock item {data.item_id} not found")
+        if order.status != "draft":
+            CustomerOrderService._book(item, data.quantity)
         db.add(CustomerOrderLine(
             order_id=order.id,
             item_id=data.item_id,
@@ -257,6 +315,13 @@ class CustomerOrderService:
                     status_code=400,
                     detail=f"Cannot reduce quantity below {line.shipped_quantity}, which has already shipped"
                 )
+            if order.status != "draft":
+                item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
+                delta = updates["quantity"] - line.quantity
+                if delta > 0:
+                    CustomerOrderService._book(item, delta)
+                else:
+                    CustomerOrderService._release_booking(item, -delta)
         for key, value in updates.items():
             setattr(line, key, value)
         db.flush()
@@ -280,6 +345,9 @@ class CustomerOrderService:
             raise HTTPException(status_code=400, detail="Cannot remove a line that has already shipped")
         if len(order.lines) <= 1:
             raise HTTPException(status_code=400, detail="Order must have at least one line")
+        if order.status != "draft":
+            item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
+            CustomerOrderService._release_booking(item, line.quantity)
         db.delete(line)
         db.flush()
         if order.status != "draft":
@@ -293,6 +361,10 @@ class CustomerOrderService:
         order = CustomerOrderService.get(db, order_id)
         if any(l.shipped_quantity > 0 for l in order.lines):
             raise HTTPException(status_code=400, detail="Cannot cancel an order that has already shipped")
+        if order.status != "draft":
+            for line in order.lines:
+                item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
+                CustomerOrderService._release_booking(item, line.quantity)
         order.status = "cancelled"
         db.commit()
         db.refresh(order)
@@ -373,6 +445,11 @@ class CustomerOrderService:
 
             item.on_hand -= ship_line.quantity
             line.shipped_quantity += ship_line.quantity
+            if order.status != "draft":
+                # Only confirmed orders book stock in the first place (see confirm()) --
+                # once a booked portion actually ships, release that reservation since the
+                # stock itself is now physically gone rather than merely promised.
+                CustomerOrderService._release_booking(item, ship_line.quantity)
 
         db.flush()
         CustomerOrderService._recompute_status(order)
