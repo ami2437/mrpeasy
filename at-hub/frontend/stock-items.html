@@ -30,6 +30,7 @@
         <div><label>Cost price</label><input type="number" step="0.01" id="f-cost"></div>
         <div><label>Selling price</label><input type="number" step="0.01" id="f-sell"></div>
         <div><label>Reorder point</label><input type="number" step="0.01" id="f-reorder"></div>
+        <div><label>Default pack size</label><input type="number" step="1" id="f-pack-size" placeholder="units per box"></div>
       </div>
       <div class="row" id="on-hand-row" style="display:none;">
         <div>
@@ -47,8 +48,8 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Title</th><th>Unit</th><th>On hand</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th></th></tr></thead>
-        <tbody id="items-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Title</th><th>Unit</th><th>On hand</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
+        <tbody id="items-body"><tr><td colspan="9">Loading...</td></tr></tbody>
       </table>
     </div>
   </main>
@@ -66,7 +67,7 @@
         document.getElementById("form-title").textContent = "New Stock Item";
         document.getElementById("on-hand-row").style.display = "none";
         document.getElementById("f-code").disabled = false;
-        ["code", "title", "unit", "cost", "sell", "reorder", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
+        ["code", "title", "unit", "cost", "sell", "reorder", "pack-size", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
       }
     }
 
@@ -83,6 +84,7 @@
       document.getElementById("f-cost").value = item.cost_price ?? "";
       document.getElementById("f-sell").value = item.selling_price ?? "";
       document.getElementById("f-reorder").value = item.reorder_point ?? "";
+      document.getElementById("f-pack-size").value = item.default_pack_size ?? "";
       document.getElementById("on-hand-row").style.display = "flex";
       document.getElementById("f-on-hand").value = item.on_hand ?? 0;
     }
@@ -101,6 +103,7 @@
               cost_price: parseFloat(document.getElementById("f-cost").value) || 0,
               selling_price: parseFloat(document.getElementById("f-sell").value) || 0,
               reorder_point: parseFloat(document.getElementById("f-reorder").value) || 0,
+              default_pack_size: document.getElementById("f-pack-size").value ? parseInt(document.getElementById("f-pack-size").value) : null,
               on_hand: parseFloat(document.getElementById("f-on-hand").value),
             }),
           });
@@ -114,6 +117,7 @@
               cost_price: parseFloat(document.getElementById("f-cost").value) || 0,
               selling_price: parseFloat(document.getElementById("f-sell").value) || 0,
               reorder_point: parseFloat(document.getElementById("f-reorder").value) || 0,
+              default_pack_size: document.getElementById("f-pack-size").value ? parseInt(document.getElementById("f-pack-size").value) : null,
             }),
           });
         }
@@ -128,7 +132,7 @@
     function renderItems() {
       const tbody = document.getElementById("items-body");
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="8" class="muted">No stock items yet.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="muted">No stock items yet.</td></tr>`;
         return;
       }
       tbody.innerHTML = items.map(item => `
@@ -140,6 +144,7 @@
           <td>${(item.cost_price ?? 0).toFixed(2)}</td>
           <td>${(item.selling_price ?? 0).toFixed(2)}</td>
           <td>${item.reorder_point ?? 0}</td>
+          <td>${item.default_pack_size ?? ""}</td>
           <td><a class="link" onclick="editItem(${item.id})">Edit</a></td>
         </tr>
       `).join("");
@@ -155,7 +160,7 @@
         items = await apiFetch(`/api/stock-items/?${params.toString()}`);
         renderItems();
       } catch (err) {
-        document.getElementById("items-body").innerHTML = `<tr><td colspan="8" class="error">${err.message}</td></tr>`;
+        document.getElementById("items-body").innerHTML = `<tr><td colspan="9" class="error">${err.message}</td></tr>`;
       }
     }
 

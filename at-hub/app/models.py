@@ -28,6 +28,7 @@ class StockItem(Base):
     selling_price = Column(Float, nullable=True, default=0)
     on_hand = Column(Float, nullable=False, default=0)
     reorder_point = Column(Float, nullable=True, default=0)
+    default_pack_size = Column(Integer, nullable=True)  # units per box default; editable per-shipment at packing time
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -97,6 +98,8 @@ class CustomerOrder(Base):
     order_date = Column(DateTime, default=datetime.utcnow)
     delivery_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | confirmed | shipped | invoiced | cancelled
+    po_number = Column(String, nullable=True)  # customer's PO reference -- printed on shipment labels
+    job_number = Column(String, nullable=True)  # optional job reference -- printed on shipment labels
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -192,6 +195,7 @@ class ShipmentBox(Base):
     box_number = Column(Integer, nullable=False)
     quantity_in_box = Column(Float, nullable=False)
     lot_code = Column(String, nullable=True)
+    pallet_number = Column(String, nullable=True)  # grouping for the packing list / freight -- not printed on the label itself
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

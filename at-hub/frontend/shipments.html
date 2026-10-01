@@ -27,11 +27,18 @@
     let shipments = [];
     let orders = [];
     let items = [];
+    let customers = [];
+    let lots = [];
+    let shipmentsById = {};
+    let currentShipmentId = null;
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
+    function order(id) { return orders.find(o => o.id === id); }
     function itemLabel(id) { const i = items.find(i => i.id === id); return i ? `${i.code} — ${i.title}` : id; }
     function itemCode(id) { const i = items.find(i => i.id === id); return i ? i.code : id; }
+    function itemObj(id) { return items.find(i => i.id === id); }
+    function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
 
     function renderShipments() {
       const tbody = document.getElementById("shipments-body");
@@ -62,29 +69,88 @@
         // default: one box per item holding the full shipped quantity
         const totals = shippedByItem(shipment);
         return Object.entries(totals).map(([itemId, qty], idx) => ({
-          item_id: parseInt(itemId), box_number: idx + 1, quantity_in_box: qty, lot_code: "",
+          item_id: parseInt(itemId), box_number: idx + 1, quantity_in_box: qty, lot_code: "", pallet_number: "",
         }));
       })();
-      return boxes.map((b, idx) => `
-        <tr data-row="${idx}">
+      return boxRowHtmlList(boxes);
+    }
+
+    function boxRowHtmlList(boxes) {
+      return boxes.map(b => `
+        <tr>
           <td>
             <select class="box-item">
               ${items.map(i => `<option value="${i.id}" ${i.id === b.item_id ? "selected" : ""}>${i.code} — ${i.title}</option>`).join("")}
             </select>
           </td>
-          <td><input type="number" class="box-number" value="${b.box_number}" style="width:70px;"></td>
-          <td><input type="number" step="0.01" class="box-qty" value="${b.quantity_in_box}" style="width:90px;"></td>
-          <td><input type="text" class="box-lot" value="${b.lot_code || ""}" style="width:120px;"></td>
+          <td><input type="number" class="box-number" value="${b.box_number}" style="width:60px;"></td>
+          <td><input type="number" step="0.01" class="box-qty" value="${b.quantity_in_box}" style="width:80px;"></td>
+          <td><input type="text" class="box-lot" value="${b.lot_code || ""}" style="width:110px;"></td>
+          <td><input type="text" class="box-pallet" value="${b.pallet_number || ""}" style="width:90px;"></td>
           <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
         </tr>
       `).join("");
     }
 
+    // Mirrors the existing portal's calculate_boxes(): full boxes of pack_size, then one remainder box.
+    function calculateBoxes(quantity, packSize) {
+      if (!packSize || packSize <= 0) packSize = quantity || 1;
+      const fullBoxes = Math.floor(quantity / packSize);
+      const remaining = Math.round((quantity - fullBoxes * packSize) * 100) / 100;
+      const boxes = [];
+      for (let i = 0; i < fullBoxes; i++) boxes.push({ box_number: i + 1, quantity_in_box: packSize });
+      if (remaining > 0) boxes.push({ box_number: fullBoxes + 1, quantity_in_box: remaining });
+      return boxes;
+    }
+
+    function packSizeRowsHtml(shipment) {
+      const totals = shippedByItem(shipment);
+      return Object.entries(totals).map(([itemId, qty]) => {
+        const item = itemObj(parseInt(itemId));
+        const defaultPack = item && item.default_pack_size ? item.default_pack_size : qty;
+        return `
+          <tr>
+            <td>${itemLabel(parseInt(itemId))}</td>
+            <td>${qty}</td>
+            <td><input type="number" step="1" class="pack-size-input" data-item="${itemId}" data-qty="${qty}" value="${defaultPack}" style="width:90px;"></td>
+            <td><a class="link" onclick="splitByPackSize(${itemId})">Split into boxes</a></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function splitByPackSize(itemId) {
+      const input = document.querySelector(`.pack-size-input[data-item="${itemId}"]`);
+      const qty = parseFloat(input.dataset.qty);
+      const packSize = parseInt(input.value) || qty;
+      const pallet = document.getElementById("default-pallet").value || "";
+      const lotCode = lotCodeForLine(itemId);
+      const newBoxes = calculateBoxes(qty, packSize).map(b => ({ ...b, item_id: itemId, lot_code: lotCode, pallet_number: pallet }));
+
+      // Replace any existing rows for this item with the freshly-split set.
+      const tbody = document.getElementById("box-rows");
+      Array.from(tbody.querySelectorAll("tr")).forEach(tr => {
+        if (parseInt(tr.querySelector(".box-item").value) === itemId) tr.remove();
+      });
+      tbody.insertAdjacentHTML("beforeend", boxRowHtmlList(newBoxes));
+    }
+
+    // Pools all lot codes used across this item's shipment lines, joined -- same pattern as the existing portal.
+    function lotCodeForLine(itemId) {
+      const shipment = shipmentsById[currentShipmentId];
+      const lotIds = [...new Set(shipment.lines.filter(l => l.item_id === itemId).map(l => l.lot_id).filter(Boolean))];
+      const codes = lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean);
+      return codes.join(", ");
+    }
+
     async function showDetail(id) {
       const shipment = await apiFetch(`/api/shipments/${id}`);
+      shipmentsById[shipment.id] = shipment;
+      currentShipmentId = shipment.id;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const totals = shippedByItem(shipment);
+      const ord = order(shipment.order_id);
 
       card.innerHTML = `
         <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
@@ -102,16 +168,27 @@
           </tbody>
         </table>
 
-        <h4>Packing list / box labels</h4>
+        <h4>Pack sizes</h4>
+        <p class="muted">Pre-filled from each item's default pack size (or the full shipped quantity if none is set) — edit per shipment as needed, same as on the main portal.</p>
+        <div class="row" style="max-width:300px;">
+          <div><label>Default pallet # for new boxes</label><input type="text" id="default-pallet" placeholder="optional"></div>
+        </div>
+        <table>
+          <thead><tr><th>Item</th><th>Shipped qty</th><th>Pack size</th><th></th></tr></thead>
+          <tbody>${packSizeRowsHtml(shipment)}</tbody>
+        </table>
+
+        <h4 style="margin-top:16px;">Packing list / box labels</h4>
         <p class="muted">Boxed quantity per item must add up to the shipped quantity above before you can print labels.</p>
         <table class="lines-table">
-          <thead><tr><th>Item</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th></th></tr></thead>
+          <thead><tr><th>Item</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th>Pallet #</th><th></th></tr></thead>
           <tbody id="box-rows">${boxRowsHtml(shipment)}</tbody>
         </table>
         <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
         <div style="margin-top:10px;">
           <button onclick="savePacking(${shipment.id})">Save Packing</button>
           <button class="secondary" onclick="printLabels(${shipment.id})">Print Labels</button>
+          <button class="secondary" onclick="printPackingList(${shipment.id})">Print Packing List</button>
         </div>
         <div id="packing-error" class="error"></div>
 
@@ -138,9 +215,10 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><select class="box-item">${items.map(i => `<option value="${i.id}">${i.code} — ${i.title}</option>`).join("")}</select></td>
-        <td><input type="number" class="box-number" value="${idx + 1}" style="width:70px;"></td>
-        <td><input type="number" step="0.01" class="box-qty" value="0" style="width:90px;"></td>
-        <td><input type="text" class="box-lot" style="width:120px;"></td>
+        <td><input type="number" class="box-number" value="${idx + 1}" style="width:60px;"></td>
+        <td><input type="number" step="0.01" class="box-qty" value="0" style="width:80px;"></td>
+        <td><input type="text" class="box-lot" style="width:110px;"></td>
+        <td><input type="text" class="box-pallet" style="width:90px;"></td>
         <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
       `;
       tbody.appendChild(tr);
@@ -152,6 +230,7 @@
         box_number: parseInt(tr.querySelector(".box-number").value) || 1,
         quantity_in_box: parseFloat(tr.querySelector(".box-qty").value) || 0,
         lot_code: tr.querySelector(".box-lot").value || null,
+        pallet_number: tr.querySelector(".box-pallet").value || null,
       }));
     }
 
@@ -169,35 +248,133 @@
       }
     }
 
+    // Same layout/fields as the main portal's 4x6 box labels: customer name, a
+    // Shipment/Order#/PO#/Job# row, item code + title, a large Qty-in-Box, and
+    // a fixed footer. Box number and lot code are intentionally NOT printed on
+    // the card (same as the existing portal) -- they're tracked in the box
+    // table above but not meant to be read off a label in the warehouse.
     function printLabels(shipmentId) {
       apiFetch(`/api/shipments/${shipmentId}`).then(shipment => {
         if (!shipment.boxes.length) {
           alert("Save a packing list first — there are no boxes to print labels for.");
           return;
         }
+        const ord = order(shipment.order_id);
         const win = window.open("", "_blank");
         const labelsHtml = shipment.boxes.map(b => `
-          <div class="label">
-            <div class="label-title">${itemCode(b.item_id)}</div>
-            <div class="label-sub">${itemLabel(b.item_id)}</div>
-            <div class="label-row"><span>Qty:</span><strong>${b.quantity_in_box}</strong></div>
-            <div class="label-row"><span>Lot:</span><strong>${b.lot_code || "—"}</strong></div>
-            <div class="label-row"><span>Box:</span><strong>${b.box_number}</strong></div>
-            <div class="label-footer">${shipment.code} — Order ${orderCode(shipment.order_id)}</div>
+          <div class="label-card">
+            <div class="label-customer">${customerName(ord ? ord.customer_id : null)}</div>
+            <div class="label-meta-row">
+              <div><span>Shipment</span><strong>${shipment.code}</strong></div>
+              <div><span>Order #</span><strong>${ord ? ord.code : ""}</strong></div>
+              <div><span>PO #</span><strong>${ord && ord.po_number ? ord.po_number : "—"}</strong></div>
+              <div><span>Job #</span><strong>${ord && ord.job_number ? ord.job_number : "—"}</strong></div>
+            </div>
+            <div class="label-item">
+              <div class="label-item-code">ITEM # ${itemCode(b.item_id)}</div>
+              <div class="label-item-title">${(itemObj(b.item_id) || {}).title || ""}</div>
+            </div>
+            <div class="label-qty">${b.quantity_in_box}</div>
+            <div class="label-footer">Questions? Contact your AT-HUB administrator.</div>
           </div>
         `).join("");
         win.document.write(`
           <html><head><title>Labels — ${shipment.code}</title>
           <style>
+            * { box-sizing: border-box; }
             body { font-family: Arial, sans-serif; margin: 0; }
-            .label { width: 4in; height: 2.5in; border: 1px solid #000; padding: 14px; margin: 10px; page-break-inside: avoid; box-sizing: border-box; }
-            .label-title { font-size: 22px; font-weight: 700; }
-            .label-sub { font-size: 13px; color: #333; margin-bottom: 10px; }
-            .label-row { font-size: 14px; display: flex; justify-content: space-between; margin-bottom: 4px; }
-            .label-footer { font-size: 11px; color: #666; margin-top: 10px; border-top: 1px solid #ccc; padding-top: 6px; }
-            @media print { .label { margin: 0; } }
+            .label-card {
+              width: 6in; height: 4in; padding: 0.3in;
+              display: flex; flex-direction: column;
+              page-break-after: always;
+            }
+            .label-customer { font-size: 26px; font-weight: 700; margin-bottom: 10px; }
+            .label-meta-row { display: flex; justify-content: space-between; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 8px 0; margin-bottom: 14px; }
+            .label-meta-row div { font-size: 13px; }
+            .label-meta-row span { display: block; color: #555; font-size: 11px; text-transform: uppercase; }
+            .label-item-code { font-size: 20px; font-weight: 700; }
+            .label-item-title { font-size: 14px; color: #333; margin-bottom: 14px; }
+            .label-qty { font-size: 54px; font-weight: 800; text-align: center; flex: 1; display: flex; align-items: center; justify-content: center; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; }
+            .label-footer { font-size: 11px; color: #666; text-align: center; margin-top: 10px; }
+            @media print { @page { size: 6in 4in; margin: 0; } .label-card { page-break-after: always; } }
           </style>
           </head><body>${labelsHtml}</body></html>
+        `);
+        win.document.close();
+        win.focus();
+        win.print();
+      });
+    }
+
+    // Groups boxes by quantity (e.g. "2 box of 40, 1 box of 10") like the existing portal's packing list.
+    function boxBreakdownString(boxes, itemId) {
+      const byQty = {};
+      boxes.filter(b => b.item_id === itemId).forEach(b => {
+        byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1;
+      });
+      return Object.entries(byQty)
+        .sort((a, b) => b[0] - a[0])
+        .map(([qty, count]) => `${count} box of ${qty}`)
+        .join(", ") || "—";
+    }
+
+    function printPackingList(shipmentId) {
+      apiFetch(`/api/shipments/${shipmentId}`).then(async shipment => {
+        const ord = order(shipment.order_id);
+        const fullOrder = await apiFetch(`/api/customer-orders/${shipment.order_id}`);
+        const totals = shippedByItem(shipment);
+
+        const pallets = {};
+        shipment.boxes.forEach(b => {
+          const key = b.pallet_number || "(unassigned)";
+          pallets[key] = pallets[key] || new Set();
+          pallets[key].add(itemCode(b.item_id));
+        });
+
+        const rows = Object.entries(totals).map(([itemId, shippedQty]) => {
+          const id = parseInt(itemId);
+          const orderLine = fullOrder.lines.find(l => l.item_id === id);
+          const ordered = orderLine ? orderLine.quantity : shippedQty;
+          const backordered = orderLine ? Math.max(0, orderLine.quantity - orderLine.shipped_quantity) : 0;
+          return `
+            <tr>
+              <td>${itemCode(id)}</td>
+              <td>${(itemObj(id) || {}).title || ""}</td>
+              <td>${ordered}</td>
+              <td>${shippedQty}</td>
+              <td>${backordered}</td>
+              <td>${boxBreakdownString(shipment.boxes, id)}</td>
+            </tr>
+          `;
+        }).join("");
+
+        const palletRows = Object.entries(pallets).map(([pallet, codes]) => `
+          <tr><td>${pallet}</td><td>${[...codes].join(", ")}</td></tr>
+        `).join("");
+
+        const win = window.open("", "_blank");
+        win.document.write(`
+          <html><head><title>Packing List — ${shipment.code}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 40px; color: #111; }
+            h1 { font-size: 22px; margin-bottom: 4px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+            th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ccc; font-size: 13px; }
+          </style>
+          </head><body>
+            <h1>Packing List — ${shipment.code}</h1>
+            <p>${customerName(ord ? ord.customer_id : null)} — Order ${ord ? ord.code : ""}
+              ${ord && ord.po_number ? ` — PO ${ord.po_number}` : ""}${ord && ord.job_number ? ` — Job ${ord.job_number}` : ""}</p>
+            <table>
+              <thead><tr><th>Part #</th><th>Description</th><th>Qty ordered</th><th>Qty shipped</th><th>Backordered</th><th>Box breakdown</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+            <h3 style="margin-top:24px;">Pallet Information</h3>
+            <table>
+              <thead><tr><th>Pallet #</th><th>Items</th></tr></thead>
+              <tbody>${palletRows}</tbody>
+            </table>
+          </body></html>
         `);
         win.document.close();
         win.focus();
@@ -224,10 +401,12 @@
     }
 
     async function init() {
-      [shipments, orders, items] = await Promise.all([
+      [shipments, orders, items, customers, lots] = await Promise.all([
         apiFetch("/api/shipments/"),
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/stock-items/"),
+        apiFetch("/api/customers/"),
+        apiFetch("/api/lots/"),
       ]);
       renderShipments();
       const params = new URLSearchParams(window.location.search);

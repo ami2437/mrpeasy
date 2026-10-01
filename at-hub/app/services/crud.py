@@ -159,6 +159,8 @@ class CustomerOrderService:
             code=generate_code(db, CustomerOrder, "CO"),
             customer_id=data.customer_id,
             delivery_date=data.delivery_date,
+            po_number=data.po_number,
+            job_number=data.job_number,
             notes=data.notes,
             status="draft",
             created_by=created_by,
@@ -319,6 +321,7 @@ class ShipmentService:
                 box_number=box.box_number,
                 quantity_in_box=box.quantity_in_box,
                 lot_code=box.lot_code,
+                pallet_number=box.pallet_number,
             ))
         db.commit()
         db.refresh(shipment)

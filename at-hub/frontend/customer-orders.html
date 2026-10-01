@@ -23,6 +23,10 @@
         <div><label>Customer</label><select id="f-customer"></select></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
       </div>
+      <div class="row">
+        <div><label>PO number</label><input type="text" id="f-po-number" placeholder="customer's PO #"></div>
+        <div><label>Job number</label><input type="text" id="f-job-number"></div>
+      </div>
       <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
       <h4>Lines</h4>
       <table class="lines-table">
@@ -98,6 +102,8 @@
           body: JSON.stringify({
             customer_id: parseInt(document.getElementById("f-customer").value),
             delivery_date: document.getElementById("f-delivery").value || null,
+            po_number: document.getElementById("f-po-number").value || null,
+            job_number: document.getElementById("f-job-number").value || null,
             notes: document.getElementById("f-notes").value,
             lines,
           }),
@@ -151,7 +157,8 @@
       const canShip = !["shipped", "invoiced", "cancelled"].includes(order.status);
       card.innerHTML = `
         <h3>${order.code} <span class="tag ${order.status}">${order.status}</span></h3>
-        <p class="muted">${customerName(order.customer_id)} — ordered ${fmtDate(order.order_date)}, delivery ${fmtDate(order.delivery_date)}</p>
+        <p class="muted">${customerName(order.customer_id)} — ordered ${fmtDate(order.order_date)}, delivery ${fmtDate(order.delivery_date)}
+          ${order.po_number ? ` — PO ${order.po_number}` : ""}${order.job_number ? ` — Job ${order.job_number}` : ""}</p>
         ${order.notes ? `<p class="muted">${order.notes}</p>` : ""}
         <table>
           <thead><tr><th>Item</th><th>Qty</th><th>Shipped</th><th>Unit price</th><th>Delivery</th>${canShip ? "<th>Ship now</th>" : ""}</tr></thead>

@@ -34,6 +34,7 @@ class StockItemCreate(BaseModel):
     cost_price: Optional[float] = 0
     selling_price: Optional[float] = 0
     reorder_point: Optional[float] = 0
+    default_pack_size: Optional[int] = None
 
 
 class StockItemUpdate(BaseModel):
@@ -43,6 +44,7 @@ class StockItemUpdate(BaseModel):
     selling_price: Optional[float] = None
     reorder_point: Optional[float] = None
     is_active: Optional[bool] = None
+    default_pack_size: Optional[int] = None
     on_hand: Optional[float] = None  # manual correction; logged as an 'adjustment' transaction, not silently overwritten
 
 
@@ -55,6 +57,7 @@ class StockItemResponse(BaseModel):
     selling_price: Optional[float] = None
     on_hand: float
     reorder_point: Optional[float] = None
+    default_pack_size: Optional[int] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -125,6 +128,8 @@ class CustomerOrderLineCreate(BaseModel):
 class CustomerOrderCreate(BaseModel):
     customer_id: int
     delivery_date: Optional[datetime] = None
+    po_number: Optional[str] = None
+    job_number: Optional[str] = None
     notes: Optional[str] = None
     lines: List[CustomerOrderLineCreate]
 
@@ -148,6 +153,8 @@ class CustomerOrderResponse(BaseModel):
     order_date: datetime
     delivery_date: Optional[datetime] = None
     status: str
+    po_number: Optional[str] = None
+    job_number: Optional[str] = None
     notes: Optional[str] = None
     lines: List[CustomerOrderLineResponse] = []
 
@@ -185,6 +192,7 @@ class ShipmentBoxInput(BaseModel):
     box_number: int
     quantity_in_box: float
     lot_code: Optional[str] = None
+    pallet_number: Optional[str] = None
 
 
 class ShipmentBoxResponse(ShipmentBoxInput):
