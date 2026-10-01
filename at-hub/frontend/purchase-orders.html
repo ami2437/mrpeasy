@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Purchase Orders</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div id="header"></div>
+  <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <div></div>
+        <button onclick="toggleForm()">+ New Purchase Order</button>
+      </div>
+    </div>
+
+    <div class="card" id="form-card" style="display:none;">
+      <h3>New Purchase Order</h3>
+      <div class="row">
+        <div><label>Vendor</label><select id="f-vendor"></select></div>
+        <div><label>Expected date</label><input type="date" id="f-expected"></div>
+      </div>
+      <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
+      <h4>Lines</h4>
+      <table class="lines-table">
+        <thead><tr><th>Item</th><th>Qty</th><th>Unit cost</th><th></th></tr></thead>
+        <tbody id="lines-body"></tbody>
+      </table>
+      <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
+      <div style="margin-top:14px;">
+        <button onclick="saveOrder()">Create PO</button>
+        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
+      </div>
+      <div id="form-error" class="error"></div>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead><tr><th>Code</th><th>Vendor</th><th>Order date</th><th>Expected</th><th>Status</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="detail-card" style="display:none;"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("header").innerHTML = renderHeader("purchase-orders.html");
+
+    let vendors = [];
+    let items = [];
+    let orders = [];
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+
+    function toggleForm(show = true) {
+      document.getElementById("form-card").style.display = show ? "block" : "none";
+      if (show) {
+        document.getElementById("lines-body").innerHTML = "";
+        addLine();
+      }
+    }
+
+    function addLine() {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><select class="l-item">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></td>
+        <td><input type="number" step="0.01" class="l-qty" value="1"></td>
+        <td><input type="number" step="0.01" class="l-cost" value="0"></td>
+        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+      `;
+      tr.querySelector(".l-item").addEventListener("change", (e) => {
+        tr.querySelector(".l-cost").value = e.target.selectedOptions[0].dataset.cost;
+      });
+      const firstOption = tr.querySelector(".l-item").selectedOptions[0];
+      if (firstOption) tr.querySelector(".l-cost").value = firstOption.dataset.cost;
+      document.getElementById("lines-body").appendChild(tr);
+    }
+
+    async function saveOrder() {
+      const errorEl = document.getElementById("form-error");
+      errorEl.textContent = "";
+      const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
+        item_id: parseInt(tr.querySelector(".l-item").value),
+        quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
+        unit_cost: parseFloat(tr.querySelector(".l-cost").value) || 0,
+      }));
+      try {
+        await apiFetch("/api/purchase-orders/", {
+          method: "POST",
+          body: JSON.stringify({
+            vendor_id: parseInt(document.getElementById("f-vendor").value),
+            expected_date: document.getElementById("f-expected").value || null,
+            notes: document.getElementById("f-notes").value,
+            lines,
+          }),
+        });
+        toggleForm(false);
+        loadOrders();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function vendorName(id) {
+      const v = vendors.find(v => v.id === id);
+      return v ? v.name : id;
+    }
+
+    function itemLabel(id) {
+      const i = items.find(i => i.id === id);
+      return i ? `${i.code} — ${i.title}` : id;
+    }
+
+    function renderOrders() {
+      const tbody = document.getElementById("orders-body");
+      if (!orders.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">No purchase orders yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = orders.map(o => `
+        <tr>
+          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
+          <td>${vendorName(o.vendor_id)}</td>
+          <td>${fmtDate(o.order_date)}</td>
+          <td>${fmtDate(o.expected_date)}</td>
+          <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
+          <td>${o.status === "draft" ? `<a class="link" onclick="markOrdered(${o.id})">Mark ordered</a>` : ""}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function markOrdered(id) {
+      try {
+        await apiFetch(`/api/purchase-orders/${id}/mark-ordered`, { method: "POST" });
+        loadOrders();
+      } catch (err) { alert(err.message); }
+    }
+
+    async function showDetail(id) {
+      const order = await apiFetch(`/api/purchase-orders/${id}`);
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      const canReceive = !["received", "cancelled"].includes(order.status);
+      card.innerHTML = `
+        <h3>${order.code} <span class="tag ${order.status}">${order.status.replace('_',' ')}</span></h3>
+        <p class="muted">${vendorName(order.vendor_id)} — ordered ${fmtDate(order.order_date)}, expected ${fmtDate(order.expected_date)}</p>
+        ${order.notes ? `<p class="muted">${order.notes}</p>` : ""}
+        <table>
+          <thead><tr><th>Item</th><th>Qty</th><th>Received</th><th>Unit cost</th>${canReceive ? "<th>Receive now</th><th>Lot code</th>" : ""}</tr></thead>
+          <tbody>
+            ${order.lines.map(l => `
+              <tr>
+                <td>${itemLabel(l.item_id)}</td>
+                <td>${l.quantity}</td>
+                <td>${l.received_quantity}</td>
+                <td>${l.unit_cost.toFixed(2)}</td>
+                ${canReceive ? `
+                  <td><input type="number" step="0.01" class="recv-qty" data-line="${l.id}" value="${(l.quantity - l.received_quantity).toFixed(2)}" style="width:90px;"></td>
+                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="auto" style="width:110px;"></td>
+                ` : ""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${canReceive ? `
+          <div class="row" style="margin-top:12px; max-width:400px;">
+            <div><label>Freight cost (this receipt)</label><input type="number" step="0.01" id="recv-freight" value="${order.freight_cost || 0}"></div>
+            <div><label>Tariff cost (this receipt)</label><input type="number" step="0.01" id="recv-tariff" value="${order.tariff_cost || 0}"></div>
+          </div>
+          <button onclick="receiveOrder(${order.id})" style="margin-top:12px;">Receive entered quantities</button>
+        ` : ""}
+        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
+        <div id="detail-error" class="error"></div>
+      `;
+    }
+
+    async function receiveOrder(poId) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
+      const lines = Array.from(document.querySelectorAll(".recv-qty"))
+        .map(el => {
+          const lineId = el.dataset.line;
+          const lotInput = document.querySelector(`.recv-lot[data-line="${lineId}"]`);
+          return {
+            line_id: parseInt(lineId),
+            quantity: parseFloat(el.value) || 0,
+            lot_code: lotInput && lotInput.value ? lotInput.value : null,
+          };
+        })
+        .filter(l => l.quantity > 0);
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/receive`, {
+          method: "POST",
+          body: JSON.stringify({
+            lines,
+            freight_cost: parseFloat(document.getElementById("recv-freight").value) || 0,
+            tariff_cost: parseFloat(document.getElementById("recv-tariff").value) || 0,
+          }),
+        });
+        loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function loadOrders() {
+      orders = await apiFetch("/api/purchase-orders/");
+      renderOrders();
+    }
+
+    async function init() {
+      [vendors, items] = await Promise.all([
+        apiFetch("/api/vendors/"),
+        apiFetch("/api/stock-items/"),
+      ]);
+      document.getElementById("f-vendor").innerHTML = vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join("");
+      await loadOrders();
+    }
+    init();
+  </script>
+</body>
+</html>

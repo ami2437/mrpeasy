@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Lots</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div id="header"></div>
+  <main>
+    <div class="card">
+      <table>
+        <thead><tr><th>Lot code</th><th>Item</th><th>Qty remaining</th><th>Received</th><th>Expiry</th><th>Source</th><th>Status</th><th></th></tr></thead>
+        <tbody id="lots-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("header").innerHTML = renderHeader("lots.html");
+
+    function fmtDate(d) {
+      return d ? new Date(d).toLocaleDateString() : "";
+    }
+
+    async function setStatus(lotId, status) {
+      try {
+        await apiFetch(`/api/lots/${lotId}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+        load();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function load() {
+      try {
+        const [lots, items] = await Promise.all([
+          apiFetch("/api/lots/"),
+          apiFetch("/api/stock-items/"),
+        ]);
+        const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
+        const tbody = document.getElementById("lots-body");
+        if (!lots.length) {
+          tbody.innerHTML = `<tr><td colspan="8" class="muted">No lots yet — receive a purchase order to create one.</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = lots.map(lot => {
+          const item = itemsById[lot.item_id];
+          const options = ["available", "on_hold", "rejected"]
+            .filter(s => s !== lot.status)
+            .map(s => `<a class="link" style="margin-right:8px;" onclick="setStatus(${lot.id}, '${s}')">${s.replace('_',' ')}</a>`)
+            .join("");
+          return `
+            <tr>
+              <td>${lot.lot_code}</td>
+              <td>${item ? `${item.code} — ${item.title}` : lot.item_id}</td>
+              <td>${lot.quantity}</td>
+              <td>${fmtDate(lot.received_date)}</td>
+              <td>${fmtDate(lot.expiry_date)}</td>
+              <td>${lot.source_reference || lot.source || ""}</td>
+              <td><span class="tag ${lot.status}">${lot.status.replace('_',' ')}</span></td>
+              <td class="muted">${options}</td>
+            </tr>
+          `;
+        }).join("");
+      } catch (err) {
+        document.getElementById("lots-body").innerHTML = `<tr><td colspan="8" class="error">${err.message}</td></tr>`;
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Customer Orders</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div id="header"></div>
+  <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <div></div>
+        <button onclick="toggleForm()">+ New Order</button>
+      </div>
+    </div>
+
+    <div class="card" id="form-card" style="display:none;">
+      <h3>New Customer Order</h3>
+      <div class="row">
+        <div><label>Customer</label><select id="f-customer"></select></div>
+        <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
+      </div>
+      <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
+      <h4>Lines</h4>
+      <table class="lines-table">
+        <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Delivery date</th><th></th></tr></thead>
+        <tbody id="lines-body"></tbody>
+      </table>
+      <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
+      <div style="margin-top:14px;">
+        <button onclick="saveOrder()">Create Order</button>
+        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
+      </div>
+      <div id="form-error" class="error"></div>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead><tr><th>Code</th><th>Customer</th><th>Order date</th><th>Delivery</th><th>Status</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="detail-card" style="display:none;"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("header").innerHTML = renderHeader("customer-orders.html");
+
+    let customers = [];
+    let items = [];
+    let orders = [];
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+
+    function toggleForm(show = true) {
+      document.getElementById("form-card").style.display = show ? "block" : "none";
+      if (show) {
+        document.getElementById("lines-body").innerHTML = "";
+        addLine();
+      }
+    }
+
+    function addLine() {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><select class="l-item">${items.map(i => `<option value="${i.id}" data-price="${i.selling_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></td>
+        <td><input type="number" step="0.01" class="l-qty" value="1"></td>
+        <td><input type="number" step="0.01" class="l-price" value="0"></td>
+        <td><input type="date" class="l-delivery"></td>
+        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+      `;
+      tr.querySelector(".l-item").addEventListener("change", (e) => {
+        const price = e.target.selectedOptions[0].dataset.price;
+        tr.querySelector(".l-price").value = price;
+      });
+      const firstOption = tr.querySelector(".l-item").selectedOptions[0];
+      if (firstOption) tr.querySelector(".l-price").value = firstOption.dataset.price;
+      document.getElementById("lines-body").appendChild(tr);
+    }
+
+    async function saveOrder() {
+      const errorEl = document.getElementById("form-error");
+      errorEl.textContent = "";
+      const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
+        item_id: parseInt(tr.querySelector(".l-item").value),
+        quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
+        unit_price: parseFloat(tr.querySelector(".l-price").value) || 0,
+        delivery_date: tr.querySelector(".l-delivery").value || null,
+      }));
+      try {
+        await apiFetch("/api/customer-orders/", {
+          method: "POST",
+          body: JSON.stringify({
+            customer_id: parseInt(document.getElementById("f-customer").value),
+            delivery_date: document.getElementById("f-delivery").value || null,
+            notes: document.getElementById("f-notes").value,
+            lines,
+          }),
+        });
+        toggleForm(false);
+        loadOrders();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function customerName(id) {
+      const c = customers.find(c => c.id === id);
+      return c ? c.name : id;
+    }
+
+    function renderOrders() {
+      const tbody = document.getElementById("orders-body");
+      if (!orders.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">No orders yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = orders.map(o => `
+        <tr>
+          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
+          <td>${customerName(o.customer_id)}</td>
+          <td>${fmtDate(o.order_date)}</td>
+          <td>${fmtDate(o.delivery_date)}</td>
+          <td><span class="tag ${o.status}">${o.status}</span></td>
+          <td>${o.status === "draft" ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a>` : ""}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function confirmOrder(id) {
+      try {
+        await apiFetch(`/api/customer-orders/${id}/confirm`, { method: "POST" });
+        loadOrders();
+      } catch (err) { alert(err.message); }
+    }
+
+    function itemLabel(id) {
+      const i = items.find(i => i.id === id);
+      return i ? `${i.code} — ${i.title}` : id;
+    }
+
+    async function showDetail(id) {
+      const order = await apiFetch(`/api/customer-orders/${id}`);
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      const canShip = !["shipped", "invoiced", "cancelled"].includes(order.status);
+      card.innerHTML = `
+        <h3>${order.code} <span class="tag ${order.status}">${order.status}</span></h3>
+        <p class="muted">${customerName(order.customer_id)} — ordered ${fmtDate(order.order_date)}, delivery ${fmtDate(order.delivery_date)}</p>
+        ${order.notes ? `<p class="muted">${order.notes}</p>` : ""}
+        <table>
+          <thead><tr><th>Item</th><th>Qty</th><th>Shipped</th><th>Unit price</th><th>Delivery</th>${canShip ? "<th>Ship now</th>" : ""}</tr></thead>
+          <tbody>
+            ${order.lines.map(l => `
+              <tr>
+                <td>${itemLabel(l.item_id)}</td>
+                <td>${l.quantity}</td>
+                <td>${l.shipped_quantity}</td>
+                <td>${l.unit_price.toFixed(2)}</td>
+                <td>${fmtDate(l.delivery_date)}</td>
+                ${canShip ? `<td><input type="number" step="0.01" class="ship-qty" data-line="${l.id}" value="${(l.quantity - l.shipped_quantity).toFixed(2)}" style="width:90px;"></td>` : ""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${canShip ? `<button onclick="shipOrder(${order.id})" style="margin-top:12px;">Ship entered quantities</button>` : ""}
+        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
+        <div id="detail-error" class="error"></div>
+      `;
+    }
+
+    async function shipOrder(orderId) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
+      const lines = Array.from(document.querySelectorAll(".ship-qty"))
+        .map(el => ({ line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
+        .filter(l => l.quantity > 0);
+      try {
+        await apiFetch(`/api/customer-orders/${orderId}/ship`, { method: "POST", body: JSON.stringify({ lines }) });
+        loadOrders();
+        showDetail(orderId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function loadOrders() {
+      orders = await apiFetch("/api/customer-orders/");
+      renderOrders();
+    }
+
+    async function init() {
+      [customers, items] = await Promise.all([
+        apiFetch("/api/customers/"),
+        apiFetch("/api/stock-items/"),
+      ]);
+      document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+      await loadOrders();
+    }
+    init();
+  </script>
+</body>
+</html>

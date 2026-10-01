@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Login</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <main style="max-width: 360px; margin-top: 80px;">
+    <div class="card">
+      <h2 style="margin-top:0;">AT-HUB</h2>
+      <form id="login-form">
+        <label>Username</label>
+        <input type="text" id="username" required autofocus>
+        <label>Password</label>
+        <input type="password" id="password" required>
+        <div style="margin-top:16px;">
+          <button type="submit">Log in</button>
+        </div>
+        <div id="error" class="error"></div>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    if (AuthGuard.getToken()) {
+      window.location.href = "dashboard.html";
+    }
+
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const errorEl = document.getElementById("error");
+      errorEl.textContent = "";
+      try {
+        const response = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Login failed");
+        AuthGuard.setSession(data.access_token, data.user);
+        window.location.href = "dashboard.html";
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,1 +1,9 @@
 rollback_backups/
+
+# AT-HUB (at-hub/) — fully isolated app, its own ignores
+at-hub/.env
+at-hub/*.db
+at-hub/*.log
+at-hub/venv/
+at-hub/__pycache__/
+at-hub/**/__pycache__/

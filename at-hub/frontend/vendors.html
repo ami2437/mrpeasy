@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Vendors</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div id="header"></div>
+  <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <div></div>
+        <button onclick="toggleForm()">+ New Vendor</button>
+      </div>
+    </div>
+
+    <div class="card" id="form-card" style="display:none;">
+      <h3>New Vendor</h3>
+      <div class="row">
+        <div><label>Name</label><input type="text" id="f-name"></div>
+        <div><label>Contact name</label><input type="text" id="f-contact"></div>
+      </div>
+      <div class="row">
+        <div><label>Email</label><input type="text" id="f-email"></div>
+        <div><label>Phone</label><input type="text" id="f-phone"></div>
+      </div>
+      <label>Address</label><textarea id="f-address" rows="2"></textarea>
+      <div style="margin-top:14px;">
+        <button onclick="save()">Save</button>
+        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
+      </div>
+      <div id="form-error" class="error"></div>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th></tr></thead>
+        <tbody id="body"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("header").innerHTML = renderHeader("vendors.html");
+    const ENDPOINT = "/api/vendors/";
+
+    function toggleForm(show = true) {
+      document.getElementById("form-card").style.display = show ? "block" : "none";
+      if (!show) ["name", "contact", "email", "phone", "address"].forEach(f => document.getElementById(`f-${f}`).value = "");
+    }
+
+    async function save() {
+      const errorEl = document.getElementById("form-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(ENDPOINT, {
+          method: "POST",
+          body: JSON.stringify({
+            name: document.getElementById("f-name").value,
+            contact_name: document.getElementById("f-contact").value,
+            email: document.getElementById("f-email").value,
+            phone: document.getElementById("f-phone").value,
+            address: document.getElementById("f-address").value,
+          }),
+        });
+        toggleForm(false);
+        load();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function load() {
+      try {
+        const rows = await apiFetch(ENDPOINT);
+        const tbody = document.getElementById("body");
+        if (!rows.length) {
+          tbody.innerHTML = `<tr><td colspan="4" class="muted">None yet.</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = rows.map(r => `
+          <tr><td>${r.name}</td><td>${r.contact_name || ""}</td><td>${r.email || ""}</td><td>${r.phone || ""}</td></tr>
+        `).join("");
+      } catch (err) {
+        document.getElementById("body").innerHTML = `<tr><td colspan="4" class="error">${err.message}</td></tr>`;
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
