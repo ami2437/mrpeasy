@@ -7,6 +7,7 @@ from sqlalchemy import func
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
     CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine,
+    Shipment, ShipmentLine, ShipmentBox, Invoice, InvoiceLine,
 )
 
 
@@ -45,9 +46,25 @@ class StockItemService:
         return item
 
     @staticmethod
-    def update(db: Session, item_id: int, data) -> StockItem:
+    def update(db: Session, item_id: int, data, created_by: str = None) -> StockItem:
         item = StockItemService.get(db, item_id)
-        for key, value in data.dict(exclude_unset=True).items():
+        updates = data.dict(exclude_unset=True)
+
+        new_on_hand = updates.pop("on_hand", None)
+        if new_on_hand is not None and abs(new_on_hand - item.on_hand) > 1e-9:
+            delta = new_on_hand - item.on_hand
+            db.add(InventoryTransaction(
+                item_id=item.id,
+                lot_id=None,
+                quantity_delta=delta,
+                type="adjustment",
+                reference=None,
+                note="Manual on-hand correction via Stock Items edit",
+                created_by=created_by,
+            ))
+            item.on_hand = new_on_hand
+
+        for key, value in updates.items():
             setattr(item, key, value)
         db.commit()
         db.refresh(item)
@@ -175,10 +192,21 @@ class CustomerOrderService:
         return order
 
     @staticmethod
-    def ship(db: Session, order_id: int, data, created_by: str) -> CustomerOrder:
+    def ship(db: Session, order_id: int, data, created_by: str) -> Shipment:
         order = CustomerOrderService.get(db, order_id)
         if order.status in ("shipped", "invoiced", "cancelled"):
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
+
+        shipment = Shipment(
+            code=generate_code(db, Shipment, "SH"),
+            order_id=order.id,
+            carrier=getattr(data, "carrier", None),
+            tracking_number=getattr(data, "tracking_number", None),
+            notes=getattr(data, "notes", None),
+            created_by=created_by,
+        )
+        db.add(shipment)
+        db.flush()
 
         for ship_line in data.lines:
             line = db.query(CustomerOrderLine).filter(
@@ -224,8 +252,16 @@ class CustomerOrderService:
                     lot_id=lot.id,
                     quantity_delta=-take,
                     type="shipment",
-                    reference=order.code,
+                    reference=shipment.code,
                     created_by=created_by,
+                ))
+                db.add(ShipmentLine(
+                    shipment_id=shipment.id,
+                    order_line_id=line.id,
+                    item_id=item.id,
+                    lot_id=lot.id,
+                    quantity=take,
+                    unit_price=line.unit_price,
                 ))
 
             item.on_hand -= ship_line.quantity
@@ -235,8 +271,160 @@ class CustomerOrderService:
         fully_shipped = all(l.shipped_quantity >= l.quantity - 1e-9 for l in order.lines)
         order.status = "shipped" if fully_shipped else "confirmed"
         db.commit()
-        db.refresh(order)
-        return order
+        db.refresh(shipment)
+        return shipment
+
+
+# ---- Shipments (packing list / labels) ----
+class ShipmentService:
+    @staticmethod
+    def list(db: Session) -> List[Shipment]:
+        return db.query(Shipment).order_by(Shipment.id.desc()).all()
+
+    @staticmethod
+    def get(db: Session, shipment_id: int) -> Shipment:
+        shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+        if not shipment:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        return shipment
+
+    @staticmethod
+    def set_boxes(db: Session, shipment_id: int, data) -> Shipment:
+        """Replace the packing-list/box breakdown for this shipment (used for label printing)."""
+        shipment = ShipmentService.get(db, shipment_id)
+
+        shipped_by_item = {}
+        for line in shipment.lines:
+            shipped_by_item[line.item_id] = shipped_by_item.get(line.item_id, 0) + line.quantity
+
+        boxed_by_item = {}
+        for box in data.boxes:
+            boxed_by_item[box.item_id] = boxed_by_item.get(box.item_id, 0) + box.quantity_in_box
+
+        for item_id, shipped_qty in shipped_by_item.items():
+            boxed_qty = boxed_by_item.get(item_id, 0)
+            if abs(boxed_qty - shipped_qty) > 1e-9:
+                item = db.query(StockItem).filter(StockItem.id == item_id).first()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Boxed quantity for {item.code if item else item_id} ({boxed_qty}) "
+                           f"must equal shipped quantity ({shipped_qty})"
+                )
+
+        db.query(ShipmentBox).filter(ShipmentBox.shipment_id == shipment.id).delete()
+        for box in data.boxes:
+            db.add(ShipmentBox(
+                shipment_id=shipment.id,
+                item_id=box.item_id,
+                box_number=box.box_number,
+                quantity_in_box=box.quantity_in_box,
+                lot_code=box.lot_code,
+            ))
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+
+# ---- Invoices ----
+class InvoiceService:
+    @staticmethod
+    def list(db: Session) -> List[Invoice]:
+        return db.query(Invoice).order_by(Invoice.id.desc()).all()
+
+    @staticmethod
+    def get(db: Session, invoice_id: int) -> Invoice:
+        invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        return invoice
+
+    @staticmethod
+    def create_from_shipment(db: Session, shipment_id: int, data, created_by: str) -> Invoice:
+        shipment = ShipmentService.get(db, shipment_id)
+        if db.query(Invoice).filter(Invoice.shipment_id == shipment.id).first():
+            raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} has already been invoiced")
+
+        order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
+
+        invoice = Invoice(
+            code=generate_code(db, Invoice, "INV"),
+            customer_id=order.customer_id,
+            order_id=order.id,
+            shipment_id=shipment.id,
+            due_date=data.due_date,
+            free_text=data.free_text or "Generated via AT-HUB",
+            status="draft",
+            created_by=created_by,
+        )
+        db.add(invoice)
+        db.flush()
+
+        # Aggregate shipment lines by item so multi-lot shipments collapse to one invoice line per item.
+        totals_by_item = {}
+        for line in shipment.lines:
+            totals_by_item[line.item_id] = totals_by_item.get(line.item_id, {"quantity": 0, "unit_price": line.unit_price})
+            totals_by_item[line.item_id]["quantity"] += line.quantity
+
+        for item_id, agg in totals_by_item.items():
+            item = db.query(StockItem).filter(StockItem.id == item_id).first()
+            db.add(InvoiceLine(
+                invoice_id=invoice.id,
+                item_id=item_id,
+                description=f"{item.code} — {item.title}" if item else f"Item {item_id}",
+                quantity=agg["quantity"],
+                unit_price=agg["unit_price"],
+            ))
+
+        if data.shipping_charge and data.shipping_charge > 0:
+            db.add(InvoiceLine(
+                invoice_id=invoice.id,
+                item_id=None,
+                description="Shipping",
+                quantity=1,
+                unit_price=data.shipping_charge,
+            ))
+
+        shipment.status = "invoiced"
+        db.commit()
+        db.refresh(invoice)
+        return invoice
+
+    @staticmethod
+    def update(db: Session, invoice_id: int, data) -> Invoice:
+        """Edit line items / free text / due date while still in draft."""
+        invoice = InvoiceService.get(db, invoice_id)
+        if invoice.status != "draft":
+            raise HTTPException(status_code=400, detail=f"Invoice is already {invoice.status}, cannot edit")
+
+        if data.due_date is not None:
+            invoice.due_date = data.due_date
+        if data.free_text is not None:
+            invoice.free_text = data.free_text
+
+        if data.lines is not None:
+            db.query(InvoiceLine).filter(InvoiceLine.invoice_id == invoice.id).delete()
+            for line in data.lines:
+                db.add(InvoiceLine(
+                    invoice_id=invoice.id,
+                    item_id=line.item_id,
+                    description=line.description,
+                    quantity=line.quantity,
+                    unit_price=line.unit_price,
+                ))
+
+        db.commit()
+        db.refresh(invoice)
+        return invoice
+
+    @staticmethod
+    def set_status(db: Session, invoice_id: int, status: str) -> Invoice:
+        if status not in ("sent", "paid", "void"):
+            raise HTTPException(status_code=400, detail="status must be sent, paid, or void")
+        invoice = InvoiceService.get(db, invoice_id)
+        invoice.status = status
+        db.commit()
+        db.refresh(invoice)
+        return invoice
 
 
 # ---- Purchase Orders ----

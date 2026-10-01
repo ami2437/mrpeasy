@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Invoices</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <table>
+        <thead><tr><th>Code</th><th>Customer</th><th>Date</th><th>Due</th><th>Total</th><th>Status</th></tr></thead>
+        <tbody id="invoices-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="detail-card" style="display:none;"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("invoices.html");
+
+    let invoices = [];
+    let customers = [];
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+    function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
+    function lineTotal(l) { return (l.quantity * l.unit_price); }
+    function invoiceTotal(inv) { return inv.lines.reduce((sum, l) => sum + lineTotal(l), 0); }
+
+    function renderInvoices() {
+      const tbody = document.getElementById("invoices-body");
+      if (!invoices.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">No invoices yet — create one from a shipment.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = invoices.map(inv => `
+        <tr>
+          <td><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
+          <td>${customerName(inv.customer_id)}</td>
+          <td>${fmtDate(inv.invoice_date)}</td>
+          <td>${fmtDate(inv.due_date)}</td>
+          <td>$${invoiceTotal(inv).toFixed(2)}</td>
+          <td><span class="tag ${inv.status === 'paid' ? 'shipped' : inv.status === 'void' ? 'cancelled' : inv.status === 'sent' ? 'confirmed' : 'draft'}">${inv.status}</span></td>
+        </tr>
+      `).join("");
+    }
+
+    function lineRowsHtml(invoice, editable) {
+      return invoice.lines.map((l, idx) => editable ? `
+        <tr data-idx="${idx}">
+          <td><input type="text" class="line-desc" value="${l.description}" style="width:220px;"></td>
+          <td><input type="number" step="0.01" class="line-qty" value="${l.quantity}" style="width:80px;"></td>
+          <td><input type="number" step="0.01" class="line-price" value="${l.unit_price}" style="width:90px;"></td>
+          <td>$${lineTotal(l).toFixed(2)}</td>
+          <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        </tr>
+      ` : `
+        <tr>
+          <td>${l.description}</td>
+          <td>${l.quantity}</td>
+          <td>$${l.unit_price.toFixed(2)}</td>
+          <td>$${lineTotal(l).toFixed(2)}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function showDetail(id) {
+      const invoice = await apiFetch(`/api/invoices/${id}`);
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      const editable = invoice.status === "draft";
+
+      card.innerHTML = `
+        <h3>${invoice.code} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
+        <p class="muted">${customerName(invoice.customer_id)} — dated ${fmtDate(invoice.invoice_date)}</p>
+
+        <div class="row" style="max-width:400px;">
+          <div><label>Due date</label><input type="date" id="f-due-date" value="${invoice.due_date ? invoice.due_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
+        </div>
+        <label>Free text</label><textarea id="f-free-text" rows="2" ${editable ? "" : "disabled"}>${invoice.free_text || ""}</textarea>
+
+        <table style="margin-top:14px;">
+          <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Total</th>${editable ? "<th></th>" : ""}</tr></thead>
+          <tbody id="line-rows">${lineRowsHtml(invoice, editable)}</tbody>
+        </table>
+        ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>` : ""}
+
+        <p style="margin-top:10px; font-size:16px;"><strong>Total: $${invoiceTotal(invoice).toFixed(2)}</strong></p>
+
+        <div style="margin-top:14px;">
+          ${editable ? `<button onclick="saveInvoice(${invoice.id})">Save Changes</button>` : ""}
+          ${invoice.status === "draft" ? `<button onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
+          ${invoice.status === "sent" ? `<button onclick="setStatus(${invoice.id}, 'paid')">Mark Paid</button>` : ""}
+          ${invoice.status !== "paid" && invoice.status !== "void" ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
+          <button onclick="printInvoice(${invoice.id})">Print</button>
+          <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
+        </div>
+        <div id="detail-error" class="error"></div>
+      `;
+    }
+
+    function addLine() {
+      const tbody = document.getElementById("line-rows");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input type="text" class="line-desc" style="width:220px;"></td>
+        <td><input type="number" step="0.01" class="line-qty" value="1" style="width:80px;"></td>
+        <td><input type="number" step="0.01" class="line-price" value="0" style="width:90px;"></td>
+        <td>$0.00</td>
+        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    async function saveInvoice(id) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
+      const lines = Array.from(document.querySelectorAll("#line-rows tr")).map(tr => ({
+        description: tr.querySelector(".line-desc").value,
+        quantity: parseFloat(tr.querySelector(".line-qty").value) || 0,
+        unit_price: parseFloat(tr.querySelector(".line-price").value) || 0,
+        item_id: null,
+      }));
+      try {
+        await apiFetch(`/api/invoices/${id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            due_date: document.getElementById("f-due-date").value || null,
+            free_text: document.getElementById("f-free-text").value,
+            lines,
+          }),
+        });
+        loadInvoices();
+        showDetail(id);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function setStatus(id, status) {
+      try {
+        await apiFetch(`/api/invoices/${id}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+        loadInvoices();
+        showDetail(id);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function printInvoice(id) {
+      const invoice = await apiFetch(`/api/invoices/${id}`);
+      const win = window.open("", "_blank");
+      win.document.write(`
+        <html><head><title>${invoice.code}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; color: #111; }
+          h1 { font-size: 22px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ccc; }
+          .total { text-align: right; font-size: 16px; margin-top: 14px; }
+        </style>
+        </head><body>
+          <h1>Invoice ${invoice.code}</h1>
+          <p>${customerName(invoice.customer_id)}</p>
+          <p>Date: ${fmtDate(invoice.invoice_date)} &nbsp; Due: ${fmtDate(invoice.due_date)}</p>
+          <table>
+            <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead>
+            <tbody>${invoice.lines.map(l => `<tr><td>${l.description}</td><td>${l.quantity}</td><td>$${l.unit_price.toFixed(2)}</td><td>$${lineTotal(l).toFixed(2)}</td></tr>`).join("")}</tbody>
+          </table>
+          <div class="total">Total: $${invoiceTotal(invoice).toFixed(2)}</div>
+          ${invoice.free_text ? `<p style="margin-top:20px; color:#555;">${invoice.free_text}</p>` : ""}
+        </body></html>
+      `);
+      win.document.close();
+      win.focus();
+      win.print();
+    }
+
+    async function loadInvoices() {
+      invoices = await apiFetch("/api/invoices/");
+      renderInvoices();
+    }
+
+    async function init() {
+      customers = await apiFetch("/api/customers/");
+      await loadInvoices();
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get("id");
+      if (id) showDetail(parseInt(id));
+    }
+    init();
+  </script>
+  </div>
+</body>
+</html>

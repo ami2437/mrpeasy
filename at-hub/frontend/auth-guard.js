@@ -58,7 +58,12 @@ async function apiFetch(path, options = {}) {
 // flat list of pages.
 const NAV_GROUPS = [
   { label: null, links: [["dashboard.html", "Dashboard"]] },
-  { label: "CRM", links: [["customers.html", "Customers"], ["customer-orders.html", "Customer Orders"]] },
+  { label: "CRM", links: [
+    ["customers.html", "Customers"],
+    ["customer-orders.html", "Customer Orders"],
+    ["shipments.html", "Shipments"],
+    ["invoices.html", "Invoices"],
+  ] },
   { label: "Procurement", links: [["vendors.html", "Vendors"], ["purchase-orders.html", "Purchase Orders"]] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"]] },
 ];

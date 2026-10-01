@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Shipments</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <table>
+        <thead><tr><th>Code</th><th>Order</th><th>Ship date</th><th>Carrier</th><th>Tracking</th><th>Status</th></tr></thead>
+        <tbody id="shipments-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="detail-card" style="display:none;"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("shipments.html");
+
+    let shipments = [];
+    let orders = [];
+    let items = [];
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+    function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
+    function itemLabel(id) { const i = items.find(i => i.id === id); return i ? `${i.code} — ${i.title}` : id; }
+    function itemCode(id) { const i = items.find(i => i.id === id); return i ? i.code : id; }
+
+    function renderShipments() {
+      const tbody = document.getElementById("shipments-body");
+      if (!shipments.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">No shipments yet — ship a customer order to create one.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = shipments.map(s => `
+        <tr>
+          <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
+          <td>${orderCode(s.order_id)}</td>
+          <td>${fmtDate(s.ship_date)}</td>
+          <td>${s.carrier || ""}</td>
+          <td>${s.tracking_number || ""}</td>
+          <td><span class="tag ${s.status}">${s.status}</span></td>
+        </tr>
+      `).join("");
+    }
+
+    function shippedByItem(shipment) {
+      const totals = {};
+      shipment.lines.forEach(l => { totals[l.item_id] = (totals[l.item_id] || 0) + l.quantity; });
+      return totals;
+    }
+
+    function boxRowsHtml(shipment) {
+      const boxes = shipment.boxes.length ? shipment.boxes : (() => {
+        // default: one box per item holding the full shipped quantity
+        const totals = shippedByItem(shipment);
+        return Object.entries(totals).map(([itemId, qty], idx) => ({
+          item_id: parseInt(itemId), box_number: idx + 1, quantity_in_box: qty, lot_code: "",
+        }));
+      })();
+      return boxes.map((b, idx) => `
+        <tr data-row="${idx}">
+          <td>
+            <select class="box-item">
+              ${items.map(i => `<option value="${i.id}" ${i.id === b.item_id ? "selected" : ""}>${i.code} — ${i.title}</option>`).join("")}
+            </select>
+          </td>
+          <td><input type="number" class="box-number" value="${b.box_number}" style="width:70px;"></td>
+          <td><input type="number" step="0.01" class="box-qty" value="${b.quantity_in_box}" style="width:90px;"></td>
+          <td><input type="text" class="box-lot" value="${b.lot_code || ""}" style="width:120px;"></td>
+          <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        </tr>
+      `).join("");
+    }
+
+    async function showDetail(id) {
+      const shipment = await apiFetch(`/api/shipments/${id}`);
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      const totals = shippedByItem(shipment);
+
+      card.innerHTML = `
+        <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
+        <p class="muted">Order ${orderCode(shipment.order_id)} — shipped ${fmtDate(shipment.ship_date)}
+          ${shipment.carrier ? ` via ${shipment.carrier}` : ""}${shipment.tracking_number ? ` (${shipment.tracking_number})` : ""}</p>
+
+        <h4>What shipped</h4>
+        <table>
+          <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th></tr></thead>
+          <tbody>
+            ${Object.entries(totals).map(([itemId, qty]) => `
+              <tr><td>${itemLabel(parseInt(itemId))}</td><td>${qty}</td>
+                  <td>${(shipment.lines.find(l => l.item_id === parseInt(itemId))?.unit_price || 0).toFixed(2)}</td></tr>
+            `).join("")}
+          </tbody>
+        </table>
+
+        <h4>Packing list / box labels</h4>
+        <p class="muted">Boxed quantity per item must add up to the shipped quantity above before you can print labels.</p>
+        <table class="lines-table">
+          <thead><tr><th>Item</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th></th></tr></thead>
+          <tbody id="box-rows">${boxRowsHtml(shipment)}</tbody>
+        </table>
+        <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
+        <div style="margin-top:10px;">
+          <button onclick="savePacking(${shipment.id})">Save Packing</button>
+          <button class="secondary" onclick="printLabels(${shipment.id})">Print Labels</button>
+        </div>
+        <div id="packing-error" class="error"></div>
+
+        <h4 style="margin-top:20px;">Invoicing</h4>
+        ${shipment.status === "invoiced" ? `
+          <p class="muted">Already invoiced. See <a class="link" href="invoices.html">Invoices</a>.</p>
+        ` : `
+          <div class="row" style="max-width:500px;">
+            <div><label>Due date</label><input type="date" id="inv-due-date"></div>
+            <div><label>Shipping charge</label><input type="number" step="0.01" id="inv-shipping" value="0"></div>
+          </div>
+          <label>Free text</label><textarea id="inv-free-text" rows="2">Generated via AT-HUB</textarea>
+          <button onclick="createInvoice(${shipment.id})" style="margin-top:8px;">Create Invoice from this Shipment</button>
+        `}
+        <div id="invoice-error" class="error"></div>
+
+        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:16px;">Close</button>
+      `;
+    }
+
+    function addBoxRow() {
+      const tbody = document.getElementById("box-rows");
+      const idx = tbody.children.length;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><select class="box-item">${items.map(i => `<option value="${i.id}">${i.code} — ${i.title}</option>`).join("")}</select></td>
+        <td><input type="number" class="box-number" value="${idx + 1}" style="width:70px;"></td>
+        <td><input type="number" step="0.01" class="box-qty" value="0" style="width:90px;"></td>
+        <td><input type="text" class="box-lot" style="width:120px;"></td>
+        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    function collectBoxes() {
+      return Array.from(document.querySelectorAll("#box-rows tr")).map(tr => ({
+        item_id: parseInt(tr.querySelector(".box-item").value),
+        box_number: parseInt(tr.querySelector(".box-number").value) || 1,
+        quantity_in_box: parseFloat(tr.querySelector(".box-qty").value) || 0,
+        lot_code: tr.querySelector(".box-lot").value || null,
+      }));
+    }
+
+    async function savePacking(shipmentId) {
+      const errorEl = document.getElementById("packing-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
+          method: "PUT",
+          body: JSON.stringify({ boxes: collectBoxes() }),
+        });
+        showDetail(shipmentId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function printLabels(shipmentId) {
+      apiFetch(`/api/shipments/${shipmentId}`).then(shipment => {
+        if (!shipment.boxes.length) {
+          alert("Save a packing list first — there are no boxes to print labels for.");
+          return;
+        }
+        const win = window.open("", "_blank");
+        const labelsHtml = shipment.boxes.map(b => `
+          <div class="label">
+            <div class="label-title">${itemCode(b.item_id)}</div>
+            <div class="label-sub">${itemLabel(b.item_id)}</div>
+            <div class="label-row"><span>Qty:</span><strong>${b.quantity_in_box}</strong></div>
+            <div class="label-row"><span>Lot:</span><strong>${b.lot_code || "—"}</strong></div>
+            <div class="label-row"><span>Box:</span><strong>${b.box_number}</strong></div>
+            <div class="label-footer">${shipment.code} — Order ${orderCode(shipment.order_id)}</div>
+          </div>
+        `).join("");
+        win.document.write(`
+          <html><head><title>Labels — ${shipment.code}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; }
+            .label { width: 4in; height: 2.5in; border: 1px solid #000; padding: 14px; margin: 10px; page-break-inside: avoid; box-sizing: border-box; }
+            .label-title { font-size: 22px; font-weight: 700; }
+            .label-sub { font-size: 13px; color: #333; margin-bottom: 10px; }
+            .label-row { font-size: 14px; display: flex; justify-content: space-between; margin-bottom: 4px; }
+            .label-footer { font-size: 11px; color: #666; margin-top: 10px; border-top: 1px solid #ccc; padding-top: 6px; }
+            @media print { .label { margin: 0; } }
+          </style>
+          </head><body>${labelsHtml}</body></html>
+        `);
+        win.document.close();
+        win.focus();
+        win.print();
+      });
+    }
+
+    async function createInvoice(shipmentId) {
+      const errorEl = document.getElementById("invoice-error");
+      errorEl.textContent = "";
+      try {
+        const invoice = await apiFetch(`/api/invoices/from-shipment/${shipmentId}`, {
+          method: "POST",
+          body: JSON.stringify({
+            due_date: document.getElementById("inv-due-date").value || null,
+            free_text: document.getElementById("inv-free-text").value,
+            shipping_charge: parseFloat(document.getElementById("inv-shipping").value) || 0,
+          }),
+        });
+        window.location.href = `invoices.html?id=${invoice.id}`;
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function init() {
+      [shipments, orders, items] = await Promise.all([
+        apiFetch("/api/shipments/"),
+        apiFetch("/api/customer-orders/"),
+        apiFetch("/api/stock-items/"),
+      ]);
+      renderShipments();
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get("id");
+      if (id) showDetail(parseInt(id));
+    }
+    init();
+  </script>
+  </div>
+</body>
+</html>

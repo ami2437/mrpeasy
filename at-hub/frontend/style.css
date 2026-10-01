@@ -30,12 +30,12 @@ body {
 }
 .sidebar .nav-group { margin-bottom: 4px; }
 .sidebar .nav-group-label {
-  font-size: 11px;
+  font-size: 14px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #7a8699;
-  padding: 14px 20px 4px;
-  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #9fb0c7;
+  padding: 16px 20px 6px;
+  font-weight: 800;
 }
 .sidebar a {
   display: block;

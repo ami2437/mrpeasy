@@ -6,7 +6,7 @@ from app.config.settings import settings
 from app.config.database import engine, SessionLocal
 from app.models import Base
 from app.services.auth import seed_admin_user
-from app.routes import auth, stock_items, customers, vendors, customer_orders, purchase_orders, lots
+from app.routes import auth, stock_items, customers, vendors, customer_orders, purchase_orders, lots, shipments, invoicing
 
 Base.metadata.create_all(bind=engine)
 
@@ -39,6 +39,8 @@ app.include_router(vendors.router)
 app.include_router(customer_orders.router)
 app.include_router(purchase_orders.router)
 app.include_router(lots.router)
+app.include_router(shipments.router)
+app.include_router(invoicing.router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():

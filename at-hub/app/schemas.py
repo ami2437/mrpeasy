@@ -43,6 +43,7 @@ class StockItemUpdate(BaseModel):
     selling_price: Optional[float] = None
     reorder_point: Optional[float] = None
     is_active: Optional[bool] = None
+    on_hand: Optional[float] = None  # manual correction; logged as an 'adjustment' transaction, not silently overwritten
 
 
 class StockItemResponse(BaseModel):
@@ -161,6 +162,103 @@ class ShipLineRequest(BaseModel):
 
 class ShipOrderRequest(BaseModel):
     lines: List[ShipLineRequest]
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# ---- Shipments / Packing / Labels ----
+class ShipmentLineResponse(BaseModel):
+    id: int
+    order_line_id: int
+    item_id: int
+    lot_id: Optional[int] = None
+    quantity: float
+    unit_price: float
+
+    class Config:
+        from_attributes = True
+
+
+class ShipmentBoxInput(BaseModel):
+    item_id: int
+    box_number: int
+    quantity_in_box: float
+    lot_code: Optional[str] = None
+
+
+class ShipmentBoxResponse(ShipmentBoxInput):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class SetBoxesRequest(BaseModel):
+    boxes: List[ShipmentBoxInput]
+
+
+class ShipmentResponse(BaseModel):
+    id: int
+    code: str
+    order_id: int
+    ship_date: datetime
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    status: str
+    notes: Optional[str] = None
+    lines: List[ShipmentLineResponse] = []
+    boxes: List[ShipmentBoxResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ---- Invoices ----
+class CreateInvoiceRequest(BaseModel):
+    due_date: Optional[datetime] = None
+    free_text: Optional[str] = None
+    shipping_charge: Optional[float] = 0
+
+
+class InvoiceLineInput(BaseModel):
+    item_id: Optional[int] = None
+    description: str
+    quantity: float
+    unit_price: float
+
+
+class InvoiceLineResponse(InvoiceLineInput):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class InvoiceUpdateRequest(BaseModel):
+    due_date: Optional[datetime] = None
+    free_text: Optional[str] = None
+    lines: Optional[List[InvoiceLineInput]] = None
+
+
+class InvoiceStatusUpdate(BaseModel):
+    status: str  # sent | paid | void
+
+
+class InvoiceResponse(BaseModel):
+    id: int
+    code: str
+    customer_id: int
+    order_id: Optional[int] = None
+    shipment_id: Optional[int] = None
+    invoice_date: datetime
+    due_date: Optional[datetime] = None
+    status: str
+    free_text: Optional[str] = None
+    lines: List[InvoiceLineResponse] = []
+
+    class Config:
+        from_attributes = True
 
 
 # ---- Purchase Orders ----

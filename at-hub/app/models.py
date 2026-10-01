@@ -145,3 +145,83 @@ class PurchaseOrderLine(Base):
     quantity = Column(Float, nullable=False)
     unit_cost = Column(Float, nullable=False, default=0)
     received_quantity = Column(Float, nullable=False, default=0)
+
+
+class Shipment(Base):
+    """One shipping event against a customer order. Created by the 'Ship' action
+    on a CustomerOrder -- may cover all or part of the order's lines."""
+    __tablename__ = "shipments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)  # SH-0001
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=False, index=True)
+    ship_date = Column(DateTime, default=datetime.utcnow)
+    carrier = Column(String, nullable=True)
+    tracking_number = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="shipped")  # shipped | invoiced
+    notes = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lines = relationship("ShipmentLine", backref="shipment", cascade="all, delete-orphan")
+    boxes = relationship("ShipmentBox", backref="shipment", cascade="all, delete-orphan")
+
+
+class ShipmentLine(Base):
+    """What was actually shipped, tied back to the order line and the lot it came from."""
+    __tablename__ = "shipment_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False, index=True)
+    order_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=False)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
+    lot_id = Column(Integer, ForeignKey("lots.id"), nullable=True)
+    quantity = Column(Float, nullable=False)
+    unit_price = Column(Float, nullable=False, default=0)
+
+
+class ShipmentBox(Base):
+    """Packing-list / label record: how a shipment's items are split into physical
+    boxes for printing box labels. Independent of ShipmentLine so one item's
+    shipped quantity can be split across several boxes."""
+    __tablename__ = "shipment_boxes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
+    box_number = Column(Integer, nullable=False)
+    quantity_in_box = Column(Float, nullable=False)
+    lot_code = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Invoice(Base):
+    """Native invoice generated from a shipment. No MRP involvement -- this app
+    owns invoicing end to end."""
+    __tablename__ = "invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)  # INV-0001
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=True)
+    invoice_date = Column(DateTime, default=datetime.utcnow)
+    due_date = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="draft")  # draft | sent | paid | void
+    free_text = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    lines = relationship("InvoiceLine", backref="invoice", cascade="all, delete-orphan")
+
+
+class InvoiceLine(Base):
+    __tablename__ = "invoice_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True)  # null for e.g. a Shipping charge line
+    description = Column(String, nullable=False)
+    quantity = Column(Float, nullable=False, default=1)
+    unit_price = Column(Float, nullable=False, default=0)

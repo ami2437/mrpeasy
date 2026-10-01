@@ -168,7 +168,13 @@
             `).join("")}
           </tbody>
         </table>
-        ${canShip ? `<button onclick="shipOrder(${order.id})" style="margin-top:12px;">Ship entered quantities</button>` : ""}
+        ${canShip ? `
+          <div class="row" style="margin-top:12px; max-width:400px;">
+            <div><label>Carrier</label><input type="text" id="ship-carrier"></div>
+            <div><label>Tracking number</label><input type="text" id="ship-tracking"></div>
+          </div>
+          <button onclick="shipOrder(${order.id})" style="margin-top:8px;">Ship entered quantities</button>
+        ` : `<p class="muted">See the <a class="link" href="shipments.html">Shipments</a> page for packing and invoicing.</p>`}
         <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
         <div id="detail-error" class="error"></div>
       `;
@@ -181,9 +187,17 @@
         .map(el => ({ line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
         .filter(l => l.quantity > 0);
       try {
-        await apiFetch(`/api/customer-orders/${orderId}/ship`, { method: "POST", body: JSON.stringify({ lines }) });
+        const shipment = await apiFetch(`/api/customer-orders/${orderId}/ship`, {
+          method: "POST",
+          body: JSON.stringify({
+            lines,
+            carrier: document.getElementById("ship-carrier").value || null,
+            tracking_number: document.getElementById("ship-tracking").value || null,
+          }),
+        });
         loadOrders();
         showDetail(orderId);
+        window.location.href = `shipments.html?id=${shipment.id}`;
       } catch (err) {
         errorEl.textContent = err.message;
       }

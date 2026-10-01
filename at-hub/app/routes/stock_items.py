@@ -4,6 +4,7 @@ from app.config.database import get_db
 from app.schemas import StockItemCreate, StockItemUpdate, StockItemResponse
 from app.services.crud import StockItemService
 from app.dependencies import get_current_active_user
+from app.models import User
 
 router = APIRouter(prefix="/api/stock-items", tags=["stock-items"], dependencies=[Depends(get_current_active_user)])
 
@@ -24,5 +25,5 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{item_id}", response_model=StockItemResponse)
-def update_item(item_id: int, data: StockItemUpdate, db: Session = Depends(get_db)):
-    return StockItemService.update(db, item_id, data)
+def update_item(item_id: int, data: StockItemUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    return StockItemService.update(db, item_id, data, created_by=current_user.username)
