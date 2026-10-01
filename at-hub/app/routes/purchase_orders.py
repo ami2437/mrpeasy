@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
     PurchaseOrderCreate, PurchaseOrderResponse, ReceiveOrderRequest,
-    PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate,
+    PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
 )
-from app.services.crud import PurchaseOrderService
+from app.services.crud import PurchaseOrderService, PurchaseOrderPaymentService
 from app.dependencies import get_current_active_user
 from app.models import User
 
@@ -60,3 +60,8 @@ def cancel_order(po_id: int, db: Session = Depends(get_db)):
 @router.post("/{po_id}/receive", response_model=PurchaseOrderResponse)
 def receive_order(po_id: int, data: ReceiveOrderRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return PurchaseOrderService.receive(db, po_id, data, created_by=current_user.username)
+
+
+@router.post("/{po_id}/payments", response_model=PurchaseOrderResponse)
+def record_payment(po_id: int, data: PurchaseOrderPaymentInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    return PurchaseOrderPaymentService.record(db, po_id, data, created_by=current_user.username)

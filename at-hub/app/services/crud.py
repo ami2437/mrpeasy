@@ -6,7 +6,7 @@ from sqlalchemy import func
 
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
-    CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine,
+    CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment,
     Shipment, ShipmentLine, ShipmentBox, PalletWeight, Invoice, InvoiceLine,
 )
 
@@ -414,6 +414,7 @@ class CustomerOrderService:
             order_id=order.id,
             carrier=getattr(data, "carrier", None),
             tracking_number=getattr(data, "tracking_number", None),
+            shipping_cost=getattr(data, "shipping_cost", None),
             notes=getattr(data, "notes", None),
             created_by=created_by,
         )
@@ -827,30 +828,51 @@ class PurchaseOrderService:
             po.freight_cost = data.freight_cost
         if data.tariff_cost is not None:
             po.tariff_cost = data.tariff_cost
+        freight_pool = data.freight_cost or 0
+        tariff_pool = data.tariff_cost or 0
 
+        # Validate every line up front and resolve its PurchaseOrderLine, so the freight/tariff
+        # proration below (which needs totals across the whole receipt) sees a consistent set.
+        resolved = []
         for recv_line in data.lines:
+            if recv_line.quantity <= 0:
+                continue
             line = db.query(PurchaseOrderLine).filter(
                 PurchaseOrderLine.id == recv_line.line_id,
                 PurchaseOrderLine.po_id == po.id,
             ).first()
             if not line:
                 raise HTTPException(status_code=400, detail=f"PO line {recv_line.line_id} not found on this order")
-            if recv_line.quantity <= 0:
-                continue
             if line.received_quantity + recv_line.quantity > line.quantity + 1e-9:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot receive {recv_line.quantity} on line {line.id}: only "
                            f"{line.quantity - line.received_quantity} remains unreceived"
                 )
+            resolved.append((recv_line, line))
 
+        # Landed cost: spread this receipt's freight/tariff across the lines in it, proportional
+        # to each line's purchase value (falls back to proportional-by-quantity if everything in
+        # the receipt is zero-cost, e.g. free samples, so the pool still lands somewhere sane).
+        total_value = sum(recv_line.quantity * line.unit_cost for recv_line, line in resolved)
+        total_qty = sum(recv_line.quantity for recv_line, _ in resolved)
+
+        for recv_line, line in resolved:
             item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
             lot_code = recv_line.lot_code or f"{po.code}-{item.code}"
+
+            if total_value > 0:
+                share = (recv_line.quantity * line.unit_cost) / total_value
+            else:
+                share = recv_line.quantity / total_qty if total_qty else 0
+            landed_extra_per_unit = (share * (freight_pool + tariff_pool)) / recv_line.quantity if recv_line.quantity else 0
+            landed_unit_cost = line.unit_cost + landed_extra_per_unit
 
             lot = Lot(
                 item_id=item.id,
                 lot_code=lot_code,
                 quantity=recv_line.quantity,
+                unit_cost=landed_unit_cost,
                 received_date=datetime.utcnow(),
                 expiry_date=recv_line.expiry_date,
                 status="available",
@@ -866,8 +888,18 @@ class PurchaseOrderService:
                 quantity_delta=recv_line.quantity,
                 type="receipt",
                 reference=po.code,
+                note=f"Landed unit cost: {landed_unit_cost:.4f} (PO unit cost {line.unit_cost} + {landed_extra_per_unit:.4f} freight/tariff)" if landed_extra_per_unit else None,
                 created_by=created_by,
             ))
+
+            # Moving-average cost: blend this receipt's landed cost into the item's cost_price,
+            # weighted by current on-hand vs. incoming quantity, so cost_price (used for
+            # inventory valuation in Reports) reflects actual purchase + landed cost over time
+            # rather than staying at whatever was typed in once when the item was created.
+            prior_qty = item.on_hand
+            prior_cost = item.cost_price or 0
+            new_qty = prior_qty + recv_line.quantity
+            item.cost_price = ((prior_qty * prior_cost) + (recv_line.quantity * landed_unit_cost)) / new_qty if new_qty > 0 else landed_unit_cost
 
             item.on_hand += recv_line.quantity
             line.received_quantity += recv_line.quantity
@@ -875,6 +907,27 @@ class PurchaseOrderService:
         db.flush()
         fully_received = all(l.received_quantity >= l.quantity - 1e-9 for l in po.lines)
         po.status = "received" if fully_received else "partially_received"
+        db.commit()
+        db.refresh(po)
+        return po
+
+
+class PurchaseOrderPaymentService:
+    @staticmethod
+    def record(db: Session, po_id: int, data, created_by: str) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if data.amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+        db.add(PurchaseOrderPayment(
+            po_id=po.id,
+            amount=data.amount,
+            currency=data.currency,
+            paid_date=data.paid_date,
+            method=data.method,
+            reference=data.reference,
+            note=data.note,
+            created_by=created_by,
+        ))
         db.commit()
         db.refresh(po)
         return po

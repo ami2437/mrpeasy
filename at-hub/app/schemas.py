@@ -80,6 +80,7 @@ class LotResponse(BaseModel):
     item_id: int
     lot_code: str
     quantity: float
+    unit_cost: Optional[float] = None
     received_date: datetime
     expiry_date: Optional[datetime] = None
     status: str
@@ -216,6 +217,7 @@ class ShipOrderRequest(BaseModel):
     lines: List[ShipLineRequest]
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
+    shipping_cost: Optional[float] = None  # what we pay the carrier -- distinct from the customer-facing shipping charge on an invoice
     notes: Optional[str] = None
 
 
@@ -290,6 +292,7 @@ class ShipmentResponse(BaseModel):
     ship_date: datetime
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
+    shipping_cost: Optional[float] = None
     status: str
     notes: Optional[str] = None
     lines: List[ShipmentLineResponse] = []
@@ -372,6 +375,25 @@ class PurchaseOrderLineResponse(BaseModel):
         from_attributes = True
 
 
+class PurchaseOrderPaymentInput(BaseModel):
+    amount: float
+    currency: Optional[str] = None
+    paid_date: Optional[datetime] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    note: Optional[str] = None
+
+
+class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
+    id: int
+    po_id: int
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class PurchaseOrderResponse(BaseModel):
     id: int
     code: str
@@ -383,6 +405,7 @@ class PurchaseOrderResponse(BaseModel):
     tariff_cost: Optional[float] = None
     notes: Optional[str] = None
     lines: List[PurchaseOrderLineResponse] = []
+    payments: List[PurchaseOrderPaymentResponse] = []
 
     class Config:
         from_attributes = True

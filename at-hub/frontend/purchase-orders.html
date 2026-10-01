@@ -213,15 +213,67 @@
             <div><label>Freight cost (this receipt)</label><input type="number" step="0.01" id="recv-freight" value="${order.freight_cost || 0}"></div>
             <div><label>Tariff cost (this receipt)</label><input type="number" step="0.01" id="recv-tariff" value="${order.tariff_cost || 0}"></div>
           </div>
-          <button onclick="receiveOrder(${order.id})" style="margin-top:12px;">Receive entered quantities</button>
+          <p class="muted">Freight/tariff are prorated across the lines received in this batch and rolled into each item's landed cost (moving average) — not just stored as a flat PO total.</p>
+          <button onclick="receiveOrder(${order.id})" style="margin-top:4px;">Receive entered quantities</button>
         ` : ""}
         <div id="detail-error" class="error"></div>
+
+        <h4 style="margin-top:20px;">Payments to vendor</h4>
+        ${renderPayments(order)}
 
         <div style="margin-top:16px;">
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
+    }
+
+    function renderPayments(order) {
+      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0) + (order.freight_cost || 0) + (order.tariff_cost || 0);
+      const paid = order.payments.reduce((s, p) => s + p.amount, 0);
+      return `
+        <p class="muted">PO total (lines + freight + tariff): $${total.toFixed(2)} — Paid: $${paid.toFixed(2)} — Balance: $${(total - paid).toFixed(2)}</p>
+        ${order.payments.length ? `
+          <table>
+            <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Note</th></tr></thead>
+            <tbody>${order.payments.map(p => `
+              <tr><td>${p.paid_date ? new Date(p.paid_date).toLocaleDateString() : ""}</td><td>$${p.amount.toFixed(2)}</td><td>${p.method || ""}</td><td>${p.reference || ""}</td><td>${p.note || ""}</td></tr>
+            `).join("")}</tbody>
+          </table>
+        ` : `<p class="muted">No payments recorded yet.</p>`}
+        <div class="row" style="max-width:600px; margin-top:8px;">
+          <div><label>Amount</label><input type="number" step="0.01" id="pay-amount"></div>
+          <div><label>Paid date</label><input type="date" id="pay-date"></div>
+          <div><label>Method</label><input type="text" id="pay-method" placeholder="wire, check, ..."></div>
+          <div><label>Reference</label><input type="text" id="pay-reference"></div>
+        </div>
+        <button class="secondary" onclick="recordPayment(${order.id})" style="margin-top:8px;">Record Payment</button>
+        <div id="payment-error" class="error"></div>
+      `;
+    }
+
+    async function recordPayment(poId) {
+      const errorEl = document.getElementById("payment-error");
+      errorEl.textContent = "";
+      const amount = parseFloat(document.getElementById("pay-amount").value);
+      if (!amount || amount <= 0) {
+        errorEl.textContent = "Enter a payment amount greater than 0.";
+        return;
+      }
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/payments`, {
+          method: "POST",
+          body: JSON.stringify({
+            amount,
+            paid_date: document.getElementById("pay-date").value || null,
+            method: document.getElementById("pay-method").value || null,
+            reference: document.getElementById("pay-reference").value || null,
+          }),
+        });
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
     }
 
     async function saveOrderHeader(poId) {

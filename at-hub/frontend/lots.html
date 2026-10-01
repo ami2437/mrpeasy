@@ -12,8 +12,8 @@
   <main>
     <div class="card">
       <table>
-        <thead><tr><th>Lot code</th><th>Item</th><th>Qty remaining</th><th>Received</th><th>Expiry</th><th>Source</th><th>Status</th><th></th></tr></thead>
-        <tbody id="lots-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+        <thead><tr><th>Lot code</th><th>Item</th><th>Qty remaining</th><th>Landed unit cost</th><th>Received</th><th>Expiry</th><th>Source</th><th>Status</th><th></th></tr></thead>
+        <tbody id="lots-body"><tr><td colspan="9">Loading...</td></tr></tbody>
       </table>
     </div>
   </main>
@@ -44,7 +44,7 @@
         const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
         const tbody = document.getElementById("lots-body");
         if (!lots.length) {
-          tbody.innerHTML = `<tr><td colspan="8" class="muted">No lots yet — receive a purchase order to create one.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="9" class="muted">No lots yet — receive a purchase order to create one.</td></tr>`;
           return;
         }
         tbody.innerHTML = lots.map(lot => {
@@ -58,6 +58,7 @@
               <td>${lot.lot_code}</td>
               <td>${item ? `${item.code} — ${item.title}` : lot.item_id}</td>
               <td>${lot.quantity}</td>
+              <td>${lot.unit_cost != null ? '$' + lot.unit_cost.toFixed(4) : ''}</td>
               <td>${fmtDate(lot.received_date)}</td>
               <td>${fmtDate(lot.expiry_date)}</td>
               <td>${lot.source_reference || lot.source || ""}</td>
@@ -67,7 +68,7 @@
           `;
         }).join("");
       } catch (err) {
-        document.getElementById("lots-body").innerHTML = `<tr><td colspan="8" class="error">${err.message}</td></tr>`;
+        document.getElementById("lots-body").innerHTML = `<tr><td colspan="9" class="error">${err.message}</td></tr>`;
       }
     }
     load();

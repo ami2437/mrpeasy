@@ -49,6 +49,7 @@ class Lot(Base):
     item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
     lot_code = Column(String, nullable=False, index=True)
     quantity = Column(Float, nullable=False, default=0)  # remaining quantity in this lot
+    unit_cost = Column(Float, nullable=True)  # landed cost per unit: PO unit_cost + prorated freight/tariff
     received_date = Column(DateTime, nullable=False, default=datetime.utcnow)
     expiry_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="available")  # available | on_hold | rejected
@@ -145,6 +146,23 @@ class PurchaseOrder(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     lines = relationship("PurchaseOrderLine", backref="po", cascade="all, delete-orphan")
+    payments = relationship("PurchaseOrderPayment", backref="po", cascade="all, delete-orphan")
+
+
+class PurchaseOrderPayment(Base):
+    """A payment made to the vendor against this purchase order."""
+    __tablename__ = "purchase_order_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, nullable=True)
+    paid_date = Column(DateTime, nullable=True)
+    method = Column(String, nullable=True)  # wire, check, card, ach, ...
+    reference = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PurchaseOrderLine(Base):
@@ -169,6 +187,7 @@ class Shipment(Base):
     ship_date = Column(DateTime, default=datetime.utcnow)
     carrier = Column(String, nullable=True)
     tracking_number = Column(String, nullable=True)
+    shipping_cost = Column(Float, nullable=True)  # what WE pay the carrier -- separate from what we invoice the customer
     status = Column(String, nullable=False, default="shipped")  # shipped | invoiced
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)

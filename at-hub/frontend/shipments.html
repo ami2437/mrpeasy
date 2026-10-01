@@ -214,7 +214,8 @@
       card.innerHTML = `
         <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
         <p class="muted">Order ${orderCode(shipment.order_id)} — shipped ${fmtDate(shipment.ship_date)}
-          ${shipment.carrier ? ` via ${shipment.carrier}` : ""}${shipment.tracking_number ? ` (${shipment.tracking_number})` : ""}</p>
+          ${shipment.carrier ? ` via ${shipment.carrier}` : ""}${shipment.tracking_number ? ` (${shipment.tracking_number})` : ""}
+          ${shipment.shipping_cost != null ? ` — cost to ship: $${shipment.shipping_cost.toFixed(2)}` : ""}</p>
 
         <h4>What shipped</h4>
         <table>
