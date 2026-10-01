@@ -15,11 +15,21 @@
       <p class="muted">Stock items, lot tracking, customer orders, and purchase orders — standalone, no MRP dependency.</p>
     </div>
     <div class="card" id="summary">Loading summary...</div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Recent Activity</h3>
+      <table>
+        <thead><tr><th>When</th><th>Item</th><th>Type</th><th>Qty</th><th>Reference</th><th>By</th></tr></thead>
+        <tbody id="activity-body"><tr><td colspan="6" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </div>
   </main>
 
   <script>
     AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("dashboard.html");
+
+    function fmtDateTime(d) { return d ? new Date(d).toLocaleString() : ""; }
 
     async function loadSummary() {
       try {
@@ -39,6 +49,19 @@
             <div><div style="font-size:28px;font-weight:700;">${openPO}</div><div class="muted">Open purchase orders</div></div>
           </div>
         `;
+
+        const activity = await apiFetch("/api/stock-items/activity/recent?limit=15");
+        const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
+        document.getElementById("activity-body").innerHTML = activity.length ? activity.map(t => `
+          <tr>
+            <td>${fmtDateTime(t.created_at)}</td>
+            <td>${itemsById[t.item_id] ? itemsById[t.item_id].code : t.item_id}</td>
+            <td>${t.type}</td>
+            <td style="color:${t.quantity_delta < 0 ? '#dc2626' : '#166534'};font-weight:600;">${t.quantity_delta > 0 ? '+' : ''}${t.quantity_delta}</td>
+            <td>${t.reference || ''}</td>
+            <td class="muted">${t.created_by || ''}</td>
+          </tr>
+        `).join("") : `<tr><td colspan="6" class="muted">No activity yet.</td></tr>`;
       } catch (err) {
         document.getElementById("summary").innerHTML = `<div class="error">${err.message}</div>`;
       }

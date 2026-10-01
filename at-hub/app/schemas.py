@@ -84,6 +84,21 @@ class LotResponse(BaseModel):
         from_attributes = True
 
 
+class InventoryTransactionResponse(BaseModel):
+    id: int
+    item_id: int
+    lot_id: Optional[int] = None
+    quantity_delta: float
+    type: str
+    reference: Optional[str] = None
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class LotStatusUpdate(BaseModel):
     status: str  # available | on_hold | rejected
 

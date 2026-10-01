@@ -51,6 +51,22 @@
         <tbody id="purchasing-body"></tbody>
       </table>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Overdue Invoices</h3>
+      <table>
+        <thead><tr><th>Code</th><th>Customer</th><th>Due date</th><th>Days overdue</th><th>Total</th></tr></thead>
+        <tbody id="overdue-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Expiring / Expired Lots (next 30 days)</h3>
+      <table>
+        <thead><tr><th>Lot code</th><th>Item</th><th>Qty</th><th>Expiry date</th></tr></thead>
+        <tbody id="expiring-body"></tbody>
+      </table>
+    </div>
   </main>
 
   <script>
@@ -61,12 +77,14 @@
     function money(n) { return `$${n.toFixed(2)}`; }
 
     async function load() {
-      const [items, customerOrders, purchaseOrders, customers, vendors] = await Promise.all([
+      const [items, customerOrders, purchaseOrders, customers, vendors, invoices, expiringLots] = await Promise.all([
         apiFetch("/api/stock-items/"),
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/purchase-orders/"),
         apiFetch("/api/customers/"),
         apiFetch("/api/vendors/"),
+        apiFetch("/api/invoices/"),
+        apiFetch("/api/lots/expiring?within_days=30"),
       ]);
 
       const customerName = id => { const c = customers.find(c => c.id === id); return c ? c.name : id; };
@@ -156,6 +174,42 @@
           <tr><td><a class="link" href="vendors.html">${vendorName(parseInt(id))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
         `).join("")
         : `<tr><td colspan="3" class="muted">No purchase orders yet.</td></tr>`;
+
+      // ---- Overdue invoices ----
+      const today = new Date();
+      const overdue = invoices.filter(inv => inv.status === "sent" && inv.due_date && new Date(inv.due_date) < today);
+      document.getElementById("overdue-body").innerHTML = overdue.length
+        ? overdue.map(inv => {
+            const daysOverdue = Math.floor((today - new Date(inv.due_date)) / (1000 * 60 * 60 * 24));
+            const total = inv.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+            return `
+              <tr>
+                <td><a class="link" href="invoices.html?id=${inv.id}">${inv.code}</a></td>
+                <td>${customerName(inv.customer_id)}</td>
+                <td>${fmtDate(inv.due_date)}</td>
+                <td style="color:#dc2626;font-weight:600;">${daysOverdue}</td>
+                <td>${money(total)}</td>
+              </tr>
+            `;
+          }).join("")
+        : `<tr><td colspan="5" class="muted">No overdue invoices.</td></tr>`;
+
+      // ---- Expiring lots ----
+      const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
+      document.getElementById("expiring-body").innerHTML = expiringLots.length
+        ? expiringLots.map(lot => {
+            const item = itemsById[lot.item_id];
+            const expired = new Date(lot.expiry_date) < today;
+            return `
+              <tr>
+                <td>${lot.lot_code}</td>
+                <td>${item ? `${item.code} — ${item.title}` : lot.item_id}</td>
+                <td>${lot.quantity}</td>
+                <td style="${expired ? 'color:#dc2626;font-weight:600;' : ''}">${fmtDate(lot.expiry_date)}${expired ? " (expired)" : ""}</td>
+              </tr>
+            `;
+          }).join("")
+        : `<tr><td colspan="4" class="muted">Nothing expiring in the next 30 days.</td></tr>`;
     }
     load();
   </script>

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.schemas import StockItemCreate, StockItemUpdate, StockItemResponse
-from app.services.crud import StockItemService
+from app.schemas import StockItemCreate, StockItemUpdate, StockItemResponse, InventoryTransactionResponse
+from app.services.crud import StockItemService, InventoryTransactionService
 from app.dependencies import get_current_active_user
 from app.models import User
 
@@ -17,6 +17,11 @@ def list_items(q: str | None = Query(None), low_stock_only: bool = Query(False),
 @router.post("/", response_model=StockItemResponse)
 def create_item(data: StockItemCreate, db: Session = Depends(get_db)):
     return StockItemService.create(db, data)
+
+
+@router.get("/activity/recent", response_model=list[InventoryTransactionResponse])
+def recent_activity(limit: int = Query(25), db: Session = Depends(get_db)):
+    return InventoryTransactionService.recent(db, limit=limit)
 
 
 @router.get("/{item_id}", response_model=StockItemResponse)

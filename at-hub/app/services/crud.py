@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -163,6 +163,21 @@ class LotService:
         db.commit()
         db.refresh(lot)
         return lot
+
+    @staticmethod
+    def expiring(db: Session, within_days: int = 30) -> List[Lot]:
+        """Available lots with an expiry date within the next N days (or already past)."""
+        cutoff = datetime.utcnow() + timedelta(days=within_days)
+        return db.query(Lot).filter(
+            Lot.status == "available", Lot.quantity > 0,
+            Lot.expiry_date.isnot(None), Lot.expiry_date <= cutoff,
+        ).order_by(Lot.expiry_date).all()
+
+
+class InventoryTransactionService:
+    @staticmethod
+    def recent(db: Session, limit: int = 25) -> List[InventoryTransaction]:
+        return db.query(InventoryTransaction).order_by(InventoryTransaction.created_at.desc()).limit(limit).all()
 
 
 # ---- Customer Orders ----
