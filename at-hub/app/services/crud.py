@@ -7,7 +7,7 @@ from sqlalchemy import func
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
     CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine,
-    Shipment, ShipmentLine, ShipmentBox, Invoice, InvoiceLine,
+    Shipment, ShipmentLine, ShipmentBox, PalletWeight, Invoice, InvoiceLine,
 )
 
 
@@ -105,6 +105,21 @@ class StockItemService:
         db.commit()
         db.refresh(item)
         return item
+
+    @staticmethod
+    def bulk_set_pack_sizes(db: Session, entries) -> dict:
+        """Paste-a-list bulk update of default_pack_size by item code, same idea as the
+        existing portal's Pack Size Processor -- update the catalog for many items at once."""
+        applied, not_found = [], []
+        for entry in entries:
+            item = db.query(StockItem).filter(StockItem.code == entry.code).first()
+            if not item:
+                not_found.append(entry.code)
+                continue
+            item.default_pack_size = entry.pack_size
+            applied.append(entry.code)
+        db.commit()
+        return {"applied": applied, "not_found": not_found}
 
 
 # ---- Customers / Vendors ----
@@ -525,6 +540,38 @@ class ShipmentService:
         db.commit()
         db.refresh(shipment)
         return shipment
+
+    @staticmethod
+    def set_pallet_weights(db: Session, shipment_id: int, data) -> Shipment:
+        """Replace the weight/dimensions entries for this shipment's pallets."""
+        shipment = ShipmentService.get(db, shipment_id)
+        db.query(PalletWeight).filter(PalletWeight.shipment_id == shipment.id).delete()
+        for p in data.pallets:
+            db.add(PalletWeight(
+                shipment_id=shipment.id,
+                pallet_number=p.pallet_number,
+                weight=p.weight,
+                dimensions=p.dimensions,
+            ))
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
+    def unpacked(db: Session) -> List[Shipment]:
+        """Shipments whose boxed quantity doesn't yet match what actually shipped --
+        i.e. still need a packing list / labels. Used by the batch packing screen."""
+        result = []
+        for shipment in db.query(Shipment).filter(Shipment.status != "invoiced").order_by(Shipment.id.desc()).all():
+            shipped_by_item = {}
+            for line in shipment.lines:
+                shipped_by_item[line.item_id] = shipped_by_item.get(line.item_id, 0) + line.quantity
+            boxed_by_item = {}
+            for box in shipment.boxes:
+                boxed_by_item[box.item_id] = boxed_by_item.get(box.item_id, 0) + box.quantity_in_box
+            if any(abs(boxed_by_item.get(item_id, 0) - qty) > 1e-9 for item_id, qty in shipped_by_item.items()):
+                result.append(shipment)
+        return result
 
 
 # ---- Invoices ----

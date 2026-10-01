@@ -176,6 +176,7 @@ class Shipment(Base):
 
     lines = relationship("ShipmentLine", backref="shipment", cascade="all, delete-orphan")
     boxes = relationship("ShipmentBox", backref="shipment", cascade="all, delete-orphan")
+    pallets = relationship("PalletWeight", backref="shipment", cascade="all, delete-orphan")
 
 
 class ShipmentLine(Base):
@@ -205,6 +206,19 @@ class ShipmentBox(Base):
     lot_code = Column(String, nullable=True)
     pallet_number = Column(String, nullable=True)  # grouping for the packing list / freight -- not printed on the label itself
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PalletWeight(Base):
+    """Weight/dimensions entered per pallet number within one shipment's packing list."""
+    __tablename__ = "pallet_weights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False, index=True)
+    pallet_number = Column(String, nullable=False)
+    weight = Column(Float, nullable=True)
+    dimensions = Column(String, nullable=True)  # free text, e.g. "48x40x36 in"
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Invoice(Base):

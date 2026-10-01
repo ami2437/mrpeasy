@@ -149,6 +149,51 @@
       tbody.insertAdjacentHTML("beforeend", boxRowHtmlList(newBoxes));
     }
 
+    function palletWeightRowsHtml(shipment) {
+      const palletNumbers = [...new Set(shipment.boxes.map(b => b.pallet_number).filter(Boolean))];
+      if (!palletNumbers.length) {
+        return `<p class="muted" style="margin-top:16px;">No pallet numbers assigned yet — add one in the box table above to enter weight/dimensions.</p>`;
+      }
+      const rows = palletNumbers.map(pn => {
+        const existing = shipment.pallets.find(p => p.pallet_number === pn) || {};
+        return `
+          <tr data-pallet="${pn}">
+            <td>${pn}</td>
+            <td><input type="number" step="0.01" class="pallet-weight" value="${existing.weight ?? ''}" placeholder="lbs"></td>
+            <td><input type="text" class="pallet-dimensions" value="${existing.dimensions ?? ''}" placeholder="L x W x H"></td>
+          </tr>
+        `;
+      }).join("");
+      return `
+        <h4 style="margin-top:20px;">Pallet weights &amp; dimensions</h4>
+        <table>
+          <thead><tr><th>Pallet #</th><th>Weight</th><th>Dimensions</th></tr></thead>
+          <tbody id="pallet-weight-rows">${rows}</tbody>
+        </table>
+        <button class="secondary" onclick="savePalletWeights(${shipment.id})" style="margin-top:8px;">Save Pallet Info</button>
+        <div id="pallet-weight-error" class="error"></div>
+      `;
+    }
+
+    async function savePalletWeights(shipmentId) {
+      const errorEl = document.getElementById("pallet-weight-error");
+      errorEl.textContent = "";
+      const pallets = Array.from(document.querySelectorAll("#pallet-weight-rows tr")).map(tr => ({
+        pallet_number: tr.dataset.pallet,
+        weight: tr.querySelector(".pallet-weight").value ? parseFloat(tr.querySelector(".pallet-weight").value) : null,
+        dimensions: tr.querySelector(".pallet-dimensions").value || null,
+      }));
+      try {
+        await apiFetch(`/api/shipments/${shipmentId}/pallet-weights`, {
+          method: "PUT",
+          body: JSON.stringify({ pallets }),
+        });
+        showDetail(shipmentId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
     // Pools all lot codes used across this item's shipment lines, joined -- same pattern as the existing portal.
     function lotCodeForLine(itemId) {
       const shipment = shipmentsById[currentShipmentId];
@@ -205,6 +250,8 @@
           <button class="secondary" onclick="printPackingList(${shipment.id})">Print Packing List</button>
         </div>
         <div id="packing-error" class="error"></div>
+
+        ${palletWeightRowsHtml(shipment)}
 
         <h4 style="margin-top:20px;">Invoicing</h4>
         ${shipment.status === "invoiced" ? `
@@ -362,9 +409,10 @@
           `;
         }).join("");
 
-        const palletRows = Object.entries(pallets).map(([pallet, codes]) => `
-          <tr><td>${pallet}</td><td>${[...codes].join(", ")}</td></tr>
-        `).join("");
+        const palletRows = Object.entries(pallets).map(([pallet, codes]) => {
+          const info = shipment.pallets.find(p => p.pallet_number === pallet) || {};
+          return `<tr><td>${pallet}</td><td>${[...codes].join(", ")}</td><td>${info.weight ?? ""}</td><td>${info.dimensions ?? ""}</td></tr>`;
+        }).join("");
 
         const win = window.open("", "_blank");
         win.document.write(`
@@ -385,7 +433,7 @@
             </table>
             <h3 style="margin-top:24px;">Pallet Information</h3>
             <table>
-              <thead><tr><th>Pallet #</th><th>Items</th></tr></thead>
+              <thead><tr><th>Pallet #</th><th>Items</th><th>Weight</th><th>Dimensions</th></tr></thead>
               <tbody>${palletRows}</tbody>
             </table>
           </body></html>

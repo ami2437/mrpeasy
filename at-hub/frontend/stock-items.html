@@ -15,8 +15,20 @@
         <input type="text" id="search" placeholder="Search code, title, barcode, or category...">
         <select id="category-filter" style="max-width:200px;"><option value="">All categories</option></select>
         <label style="margin:0;"><input type="checkbox" id="low-stock-only" style="width:auto;display:inline-block;"> Low stock only</label>
+        <button class="secondary" onclick="toggleBulkPackSize()">Bulk Pack Sizes</button>
         <button onclick="toggleForm()">+ New Item</button>
       </div>
+    </div>
+
+    <div class="card" id="bulk-pack-size-card" style="display:none;">
+      <h3 style="margin-top:0;">Bulk Pack Size Entry</h3>
+      <p class="muted">Paste one item per line as <code>CODE, PACK_SIZE</code> or <code>CODE&lt;tab&gt;PACK_SIZE</code> (e.g. pasted straight from a spreadsheet). This updates each item's default pack size, same as editing it one at a time.</p>
+      <textarea id="bulk-pack-size-text" rows="8" placeholder="WIDGET-1, 50&#10;WIDGET-2, 100"></textarea>
+      <div style="margin-top:8px;">
+        <button onclick="applyBulkPackSizes()">Apply</button>
+        <button class="secondary" onclick="toggleBulkPackSize(false)">Close</button>
+      </div>
+      <div id="bulk-pack-size-result"></div>
     </div>
 
     <div class="card" id="item-form-card" style="display:none;">
@@ -73,6 +85,43 @@
         document.getElementById("on-hand-row").style.display = "none";
         document.getElementById("f-code").disabled = false;
         ["code", "title", "unit", "category", "barcode", "cost", "sell", "reorder", "pack-size", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
+      }
+    }
+
+    function toggleBulkPackSize(show = true) {
+      document.getElementById("bulk-pack-size-card").style.display = show ? "block" : "none";
+      if (!show) {
+        document.getElementById("bulk-pack-size-text").value = "";
+        document.getElementById("bulk-pack-size-result").innerHTML = "";
+      }
+    }
+
+    async function applyBulkPackSizes() {
+      const resultEl = document.getElementById("bulk-pack-size-result");
+      resultEl.innerHTML = "";
+      const text = document.getElementById("bulk-pack-size-text").value.trim();
+      if (!text) return;
+      const entries = text.split("\n").map(line => line.trim()).filter(Boolean).map(line => {
+        const parts = line.split(/[,\t]+/).map(p => p.trim());
+        return { code: parts[0], pack_size: parseInt(parts[1]) };
+      }).filter(e => e.code && !isNaN(e.pack_size));
+
+      if (!entries.length) {
+        resultEl.innerHTML = `<div class="error">No valid rows found. Use "CODE, PACK_SIZE" per line.</div>`;
+        return;
+      }
+      try {
+        const result = await apiFetch("/api/stock-items/pack-sizes/bulk", {
+          method: "POST",
+          body: JSON.stringify({ entries }),
+        });
+        resultEl.innerHTML = `
+          <div class="muted" style="margin-top:8px;">Applied to ${result.applied.length} item(s)${result.applied.length ? ": " + result.applied.join(", ") : ""}.</div>
+          ${result.not_found.length ? `<div class="error">Not found: ${result.not_found.join(", ")}</div>` : ""}
+        `;
+        loadItems();
+      } catch (err) {
+        resultEl.innerHTML = `<div class="error">${err.message}</div>`;
       }
     }
 

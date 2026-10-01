@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.schemas import StockItemCreate, StockItemUpdate, StockItemResponse, InventoryTransactionResponse
+from app.schemas import (
+    StockItemCreate, StockItemUpdate, StockItemResponse, InventoryTransactionResponse,
+    BulkPackSizeRequest, BulkPackSizeResult,
+)
 from app.services.crud import StockItemService, InventoryTransactionService
 from app.dependencies import get_current_active_user
 from app.models import User
@@ -22,6 +25,12 @@ def create_item(data: StockItemCreate, db: Session = Depends(get_db)):
 @router.get("/activity/recent", response_model=list[InventoryTransactionResponse])
 def recent_activity(limit: int = Query(25), db: Session = Depends(get_db)):
     return InventoryTransactionService.recent(db, limit=limit)
+
+
+@router.post("/pack-sizes/bulk", response_model=BulkPackSizeResult)
+def bulk_pack_sizes(data: BulkPackSizeRequest, db: Session = Depends(get_db)):
+    """Paste-a-list bulk update of default_pack_size by item code."""
+    return StockItemService.bulk_set_pack_sizes(db, data.entries)
 
 
 @router.get("/{item_id}", response_model=StockItemResponse)

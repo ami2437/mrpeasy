@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Batch Pack Shipments</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <p class="muted" style="margin:0;">Shipments below still need a packing list. Pack them one at a time, or hit "Pack All" to auto-split every item by its default pack size in one go.</p>
+        <button onclick="packAll()">Pack All Unpacked Shipments</button>
+        <button class="secondary" onclick="printAllLabels()">Print Labels for Packed Shipments</button>
+      </div>
+      <div id="bulk-error" class="error"></div>
+      <div id="bulk-result" class="muted"></div>
+    </div>
+
+    <div id="shipments-container"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("pack-shipments.html");
+
+    let unpacked = [];
+    let orders = [];
+    let items = [];
+    let customers = [];
+    let lots = [];
+    let justPackedIds = [];
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+    function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
+    function order(id) { return orders.find(o => o.id === id); }
+    function itemObj(id) { return items.find(i => i.id === id); }
+    function itemLabel(id) { const i = itemObj(id); return i ? `${i.code} — ${i.title}` : id; }
+    function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
+
+    function shippedByItem(shipment) {
+      const totals = {};
+      shipment.lines.forEach(l => { totals[l.item_id] = (totals[l.item_id] || 0) + l.quantity; });
+      return totals;
+    }
+
+    // Mirrors the existing portal's calculate_boxes(): full boxes of pack_size, then one remainder box.
+    function calculateBoxes(quantity, packSize) {
+      if (!packSize || packSize <= 0) packSize = quantity || 1;
+      const fullBoxes = Math.floor(quantity / packSize);
+      const remaining = Math.round((quantity - fullBoxes * packSize) * 100) / 100;
+      const boxes = [];
+      for (let i = 0; i < fullBoxes; i++) boxes.push({ box_number: i + 1, quantity_in_box: packSize });
+      if (remaining > 0) boxes.push({ box_number: fullBoxes + 1, quantity_in_box: remaining });
+      return boxes;
+    }
+
+    function lotCodeForItem(shipment, itemId) {
+      const lotIds = [...new Set(shipment.lines.filter(l => l.item_id === itemId).map(l => l.lot_id).filter(Boolean))];
+      const codes = lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean);
+      return codes.join(", ");
+    }
+
+    function renderShipments() {
+      const container = document.getElementById("shipments-container");
+      if (!unpacked.length) {
+        container.innerHTML = `<div class="card muted">Nothing needs packing right now.</div>`;
+        return;
+      }
+      container.innerHTML = unpacked.map(shipment => {
+        const totals = shippedByItem(shipment);
+        const ord = order(shipment.order_id);
+        return `
+          <div class="card" data-shipment="${shipment.id}">
+            <h3 style="margin-top:0;">${shipment.code} <span class="muted">— Order ${ord ? ord.code : ""} (${customerName(ord ? ord.customer_id : null)})</span></h3>
+            <div class="row" style="max-width:300px;">
+              <div><label>Pallet # (applies to all boxes below)</label><input type="text" class="shipment-pallet"></div>
+            </div>
+            <table class="lines-table">
+              <thead><tr><th>Item</th><th>Shipped qty</th><th>Pack size</th></tr></thead>
+              <tbody>
+                ${Object.entries(totals).map(([itemId, qty]) => {
+                  const item = itemObj(parseInt(itemId));
+                  const defaultPack = item && item.default_pack_size ? item.default_pack_size : qty;
+                  return `
+                    <tr data-item="${itemId}" data-qty="${qty}">
+                      <td>${itemLabel(parseInt(itemId))}</td>
+                      <td>${qty}</td>
+                      <td><input type="number" step="1" class="pack-size-input" value="${defaultPack}"></td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+            <button onclick="packShipment(${shipment.id})" style="margin-top:8px;">Pack This Shipment</button>
+            <div class="error" id="error-${shipment.id}"></div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function buildBoxesForShipment(shipmentEl, shipment) {
+      const pallet = shipmentEl.querySelector(".shipment-pallet").value || null;
+      const boxes = [];
+      shipmentEl.querySelectorAll("tbody tr[data-item]").forEach(tr => {
+        const itemId = parseInt(tr.dataset.item);
+        const qty = parseFloat(tr.dataset.qty);
+        const packSize = parseInt(tr.querySelector(".pack-size-input").value) || qty;
+        const lotCode = lotCodeForItem(shipment, itemId);
+        calculateBoxes(qty, packSize).forEach(b => boxes.push({ ...b, item_id: itemId, lot_code: lotCode, pallet_number: pallet }));
+      });
+      return boxes;
+    }
+
+    async function packShipment(shipmentId) {
+      const shipmentEl = document.querySelector(`[data-shipment="${shipmentId}"]`);
+      const errorEl = document.getElementById(`error-${shipmentId}`);
+      errorEl.textContent = "";
+      const shipment = unpacked.find(s => s.id === shipmentId);
+      try {
+        await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
+          method: "PUT",
+          body: JSON.stringify({ boxes: buildBoxesForShipment(shipmentEl, shipment) }),
+        });
+        justPackedIds.push(shipmentId);
+        await load();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function packAll() {
+      const errorEl = document.getElementById("bulk-error");
+      const resultEl = document.getElementById("bulk-result");
+      errorEl.textContent = "";
+      resultEl.textContent = "";
+      let packed = 0, failed = [];
+      for (const shipment of [...unpacked]) {
+        const shipmentEl = document.querySelector(`[data-shipment="${shipment.id}"]`);
+        if (!shipmentEl) continue;
+        try {
+          await apiFetch(`/api/shipments/${shipment.id}/boxes`, {
+            method: "PUT",
+            body: JSON.stringify({ boxes: buildBoxesForShipment(shipmentEl, shipment) }),
+          });
+          justPackedIds.push(shipment.id);
+          packed += 1;
+        } catch (err) {
+          failed.push(`${shipment.code}: ${err.message}`);
+        }
+      }
+      resultEl.textContent = `Packed ${packed} shipment(s).`;
+      if (failed.length) errorEl.innerHTML = failed.join("<br>");
+      await load();
+    }
+
+    function printAllLabels() {
+      if (!justPackedIds.length) {
+        alert("Pack at least one shipment in this session first, then print.");
+        return;
+      }
+      Promise.all(justPackedIds.map(id => apiFetch(`/api/shipments/${id}`))).then(shipments => {
+        const win = window.open("", "_blank");
+        const labelsHtml = shipments.map(shipment => {
+          const ord = order(shipment.order_id);
+          return shipment.boxes.map(b => `
+            <div class="label-card">
+              <div class="label-customer">${customerName(ord ? ord.customer_id : null)}</div>
+              <div class="label-meta-row">
+                <div><span>Shipment</span><strong>${shipment.code}</strong></div>
+                <div><span>Order #</span><strong>${ord ? ord.code : ""}</strong></div>
+                <div><span>PO #</span><strong>${ord && ord.po_number ? ord.po_number : "—"}</strong></div>
+                <div><span>Job #</span><strong>${ord && ord.job_number ? ord.job_number : "—"}</strong></div>
+              </div>
+              <div class="label-item">
+                <div class="label-item-code">ITEM # ${itemObj(b.item_id) ? itemObj(b.item_id).code : b.item_id}</div>
+                <div class="label-item-title">${(itemObj(b.item_id) || {}).title || ""}</div>
+              </div>
+              <div class="label-qty">${b.quantity_in_box}</div>
+              <div class="label-footer">American Traders LLC - ATind Supplies<br>Questions? Email sales@atindsupplies.com</div>
+            </div>
+          `).join("");
+        }).join("");
+        win.document.write(`
+          <html><head><title>Batch Labels</title>
+          <style>
+            * { box-sizing: border-box; }
+            body { font-family: Arial, sans-serif; margin: 0; }
+            .label-card { width: 6in; height: 4in; padding: 0.3in; display: flex; flex-direction: column; page-break-after: always; }
+            .label-customer { font-size: 26px; font-weight: 700; margin-bottom: 10px; }
+            .label-meta-row { display: flex; justify-content: space-between; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 8px 0; margin-bottom: 14px; }
+            .label-meta-row div { font-size: 13px; }
+            .label-meta-row span { display: block; color: #555; font-size: 11px; text-transform: uppercase; }
+            .label-item-code { font-size: 20px; font-weight: 700; }
+            .label-item-title { font-size: 14px; color: #333; margin-bottom: 14px; }
+            .label-qty { font-size: 54px; font-weight: 800; text-align: center; flex: 1; display: flex; align-items: center; justify-content: center; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; }
+            .label-footer { font-size: 11px; color: #666; text-align: center; margin-top: 10px; }
+            @media print { @page { size: 6in 4in; margin: 0; } .label-card { page-break-after: always; } }
+          </style>
+          </head><body>${labelsHtml}</body></html>
+        `);
+        win.document.close();
+        win.focus();
+        win.print();
+      });
+    }
+
+    async function load() {
+      [unpacked, orders, items, customers, lots] = await Promise.all([
+        apiFetch("/api/shipments/unpacked/list"),
+        apiFetch("/api/customer-orders/"),
+        apiFetch("/api/stock-items/"),
+        apiFetch("/api/customers/"),
+        apiFetch("/api/lots/"),
+      ]);
+      renderShipments();
+    }
+    load();
+  </script>
+  </div>
+</body>
+</html>

@@ -251,6 +251,38 @@ class SetBoxesRequest(BaseModel):
     boxes: List[ShipmentBoxInput]
 
 
+class PalletWeightInput(BaseModel):
+    pallet_number: str
+    weight: Optional[float] = None
+    dimensions: Optional[str] = None
+
+
+class PalletWeightResponse(PalletWeightInput):
+    id: int
+    shipment_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class SetPalletWeightsRequest(BaseModel):
+    pallets: List[PalletWeightInput]
+
+
+class BulkPackSizeEntry(BaseModel):
+    code: str
+    pack_size: int
+
+
+class BulkPackSizeRequest(BaseModel):
+    entries: List[BulkPackSizeEntry]
+
+
+class BulkPackSizeResult(BaseModel):
+    applied: List[str]
+    not_found: List[str]
+
+
 class ShipmentResponse(BaseModel):
     id: int
     code: str
@@ -262,6 +294,7 @@ class ShipmentResponse(BaseModel):
     notes: Optional[str] = None
     lines: List[ShipmentLineResponse] = []
     boxes: List[ShipmentBoxResponse] = []
+    pallets: List[PalletWeightResponse] = []
 
     class Config:
         from_attributes = True

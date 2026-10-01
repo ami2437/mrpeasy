@@ -62,6 +62,7 @@ const NAV_GROUPS = [
     ["customers.html", "Customers"],
     ["customer-orders.html", "Customer Orders"],
     ["shipments.html", "Shipments"],
+    ["pack-shipments.html", "Batch Pack Shipments"],
     ["invoices.html", "Invoices"],
   ] },
   { label: "Procurement", links: [["vendors.html", "Vendors"], ["purchase-orders.html", "Purchase Orders"]] },
