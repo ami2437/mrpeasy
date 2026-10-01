@@ -12,7 +12,7 @@
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <div></div>
+        <input type="text" id="search" placeholder="Search vendors...">
         <button onclick="toggleForm()">+ New Vendor</button>
       </div>
     </div>
@@ -37,16 +37,21 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th></tr></thead>
-        <tbody id="body"><tr><td colspan="4">Loading...</td></tr></tbody>
+        <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
+        <tbody id="body"><tr><td colspan="5">Loading...</td></tr></tbody>
       </table>
     </div>
+
+    <div class="card" id="detail-card" style="display:none;"></div>
   </main>
 
   <script>
     AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("vendors.html");
     const ENDPOINT = "/api/vendors/";
+
+    let rows = [];
+    let orders = [];
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
@@ -74,21 +79,102 @@
       }
     }
 
-    async function load() {
+    function render() {
+      const tbody = document.getElementById("body");
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const filtered = rows.filter(r => !q || r.name.toLowerCase().includes(q) || (r.contact_name || "").toLowerCase().includes(q));
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">${rows.length ? "No vendors match your search." : "None yet."}</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = filtered.map(r => {
+        const orderCount = orders.filter(o => o.vendor_id === r.id).length;
+        return `
+        <tr>
+          <td><a class="link" onclick="showDetail(${r.id})">${r.name}</a></td>
+          <td>${r.contact_name || ""}</td>
+          <td>${r.email || ""}</td>
+          <td>${r.phone || ""}</td>
+          <td class="muted">${orderCount}</td>
+        </tr>
+      `;
+      }).join("");
+    }
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+
+    async function showDetail(id) {
+      const vendor = rows.find(r => r.id === id);
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      const vendorOrders = orders.filter(o => o.vendor_id === id);
+      const totalSpend = vendorOrders.reduce((sum, o) => sum + o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0), 0);
+
+      card.innerHTML = `
+        <h3>${vendor.name}</h3>
+        <div class="row">
+          <div><label>Name</label><input type="text" id="e-name" value="${vendor.name}"></div>
+          <div><label>Contact name</label><input type="text" id="e-contact" value="${vendor.contact_name || ''}"></div>
+        </div>
+        <div class="row">
+          <div><label>Email</label><input type="text" id="e-email" value="${vendor.email || ''}"></div>
+          <div><label>Phone</label><input type="text" id="e-phone" value="${vendor.phone || ''}"></div>
+        </div>
+        <label>Address</label><textarea id="e-address" rows="2">${vendor.address || ''}</textarea>
+        <button onclick="saveDetail(${vendor.id})" style="margin-top:8px;">Save Changes</button>
+        <div id="detail-error" class="error"></div>
+
+        <h4 style="margin-top:20px;">Purchase history (${vendorOrders.length} orders, $${totalSpend.toFixed(2)} total)</h4>
+        ${vendorOrders.length ? `
+          <table>
+            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th>Total</th></tr></thead>
+            <tbody>${vendorOrders.map(o => `
+              <tr>
+                <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
+                <td>${fmtDate(o.order_date)}</td>
+                <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
+                <td>$${o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0).toFixed(2)}</td>
+              </tr>
+            `).join("")}</tbody>
+          </table>
+        ` : `<p class="muted">No purchase orders yet.</p>`}
+        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
+      `;
+    }
+
+    async function saveDetail(id) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
       try {
-        const rows = await apiFetch(ENDPOINT);
-        const tbody = document.getElementById("body");
-        if (!rows.length) {
-          tbody.innerHTML = `<tr><td colspan="4" class="muted">None yet.</td></tr>`;
-          return;
-        }
-        tbody.innerHTML = rows.map(r => `
-          <tr><td>${r.name}</td><td>${r.contact_name || ""}</td><td>${r.email || ""}</td><td>${r.phone || ""}</td></tr>
-        `).join("");
+        await apiFetch(`${ENDPOINT}${id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            name: document.getElementById("e-name").value,
+            contact_name: document.getElementById("e-contact").value,
+            email: document.getElementById("e-email").value,
+            phone: document.getElementById("e-phone").value,
+            address: document.getElementById("e-address").value,
+          }),
+        });
+        await load();
+        showDetail(id);
       } catch (err) {
-        document.getElementById("body").innerHTML = `<tr><td colspan="4" class="error">${err.message}</td></tr>`;
+        errorEl.textContent = err.message;
       }
     }
+
+    async function load() {
+      try {
+        [rows, orders] = await Promise.all([
+          apiFetch(ENDPOINT),
+          apiFetch("/api/purchase-orders/"),
+        ]);
+        render();
+      } catch (err) {
+        document.getElementById("body").innerHTML = `<tr><td colspan="5" class="error">${err.message}</td></tr>`;
+      }
+    }
+    document.getElementById("search").addEventListener("input", render);
     load();
   </script>
   </div>

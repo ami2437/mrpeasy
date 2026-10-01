@@ -12,7 +12,7 @@
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <div></div>
+        <input type="text" id="search" placeholder="Search PO code, vendor, or item code...">
         <button onclick="toggleForm()">+ New Purchase Order</button>
       </div>
     </div>
@@ -116,13 +116,26 @@
       return i ? `${i.code} — ${i.title}` : id;
     }
 
+    function matchesSearch(o, q) {
+      if (!q) return true;
+      q = q.toLowerCase();
+      if (o.code.toLowerCase().includes(q)) return true;
+      if (vendorName(o.vendor_id).toLowerCase().includes(q)) return true;
+      return o.lines.some(l => {
+        const item = items.find(i => i.id === l.item_id);
+        return item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q));
+      });
+    }
+
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
-      if (!orders.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">No purchase orders yet.</td></tr>`;
+      const q = document.getElementById("search").value.trim();
+      const filtered = orders.filter(o => matchesSearch(o, q));
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = orders.map(o => `
+      tbody.innerHTML = filtered.map(o => `
         <tr>
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${vendorName(o.vendor_id)}</td>
@@ -333,7 +346,16 @@
         apiFetch("/api/stock-items/"),
       ]);
       document.getElementById("f-vendor").innerHTML = vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join("");
+      document.getElementById("search").addEventListener("input", renderOrders);
       await loadOrders();
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get("id");
+      const vendorId = params.get("vendor_id");
+      if (id) showDetail(parseInt(id));
+      if (vendorId) {
+        document.getElementById("search").value = vendorName(parseInt(vendorId));
+        renderOrders();
+      }
     }
     init();
   </script>

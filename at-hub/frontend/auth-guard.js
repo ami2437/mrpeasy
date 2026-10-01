@@ -66,6 +66,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Procurement", links: [["vendors.html", "Vendors"], ["purchase-orders.html", "Purchase Orders"]] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"]] },
+  { label: null, links: [["reports.html", "Reports"]] },
 ];
 
 function renderSidebar(activePage) {

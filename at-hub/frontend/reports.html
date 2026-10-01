@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Reports</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card" id="summary-card">Loading...</div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Low Stock</h3>
+      <table>
+        <thead><tr><th>Code</th><th>Title</th><th>On hand</th><th>Booked</th><th>Available</th><th>Reorder pt</th></tr></thead>
+        <tbody id="low-stock-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Open Customer Orders</h3>
+      <table>
+        <thead><tr><th>Code</th><th>Customer</th><th>Status</th><th>Order date</th><th>Open value</th></tr></thead>
+        <tbody id="open-co-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Open Purchase Orders</h3>
+      <table>
+        <thead><tr><th>Code</th><th>Vendor</th><th>Status</th><th>Order date</th><th>Open value</th></tr></thead>
+        <tbody id="open-po-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Sales by Customer</h3>
+      <table>
+        <thead><tr><th>Customer</th><th>Orders</th><th>Total sales</th></tr></thead>
+        <tbody id="sales-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Purchasing by Vendor</h3>
+      <table>
+        <thead><tr><th>Vendor</th><th>Orders</th><th>Total spend</th></tr></thead>
+        <tbody id="purchasing-body"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("reports.html");
+
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+    function money(n) { return `$${n.toFixed(2)}`; }
+
+    async function load() {
+      const [items, customerOrders, purchaseOrders, customers, vendors] = await Promise.all([
+        apiFetch("/api/stock-items/"),
+        apiFetch("/api/customer-orders/"),
+        apiFetch("/api/purchase-orders/"),
+        apiFetch("/api/customers/"),
+        apiFetch("/api/vendors/"),
+      ]);
+
+      const customerName = id => { const c = customers.find(c => c.id === id); return c ? c.name : id; };
+      const vendorName = id => { const v = vendors.find(v => v.id === id); return v ? v.name : id; };
+
+      // ---- Summary ----
+      const inventoryValue = items.reduce((sum, i) => sum + i.on_hand * (i.cost_price || 0), 0);
+      const bookedValue = items.reduce((sum, i) => sum + i.booked * (i.cost_price || 0), 0);
+      const openCO = customerOrders.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status));
+      const openPO = purchaseOrders.filter(o => !["received", "cancelled"].includes(o.status));
+      document.getElementById("summary-card").innerHTML = `
+        <div class="row">
+          <div><div style="font-size:26px;font-weight:700;">${money(inventoryValue)}</div><div class="muted">Inventory value (on hand × cost)</div></div>
+          <div><div style="font-size:26px;font-weight:700;">${money(bookedValue)}</div><div class="muted">Booked value</div></div>
+          <div><div style="font-size:26px;font-weight:700;">${openCO.length}</div><div class="muted">Open customer orders</div></div>
+          <div><div style="font-size:26px;font-weight:700;">${openPO.length}</div><div class="muted">Open purchase orders</div></div>
+        </div>
+      `;
+
+      // ---- Low stock ----
+      const lowStock = items.filter(i => i.reorder_point && i.available <= i.reorder_point);
+      document.getElementById("low-stock-body").innerHTML = lowStock.length
+        ? lowStock.map(i => `
+          <tr><td>${i.code}</td><td>${i.title}</td><td>${i.on_hand}</td><td>${i.booked}</td>
+              <td style="color:#dc2626;font-weight:600;">${i.available}</td><td>${i.reorder_point}</td></tr>
+        `).join("")
+        : `<tr><td colspan="6" class="muted">Nothing below reorder point.</td></tr>`;
+
+      // ---- Open customer orders ----
+      document.getElementById("open-co-body").innerHTML = openCO.length
+        ? openCO.map(o => {
+            const openValue = o.lines.reduce((s, l) => s + (l.quantity - l.shipped_quantity) * l.unit_price, 0);
+            return `
+              <tr>
+                <td><a class="link" href="customer-orders.html?id=${o.id}">${o.code}</a></td>
+                <td>${customerName(o.customer_id)}</td>
+                <td><span class="tag ${o.status}">${o.status}</span></td>
+                <td>${fmtDate(o.order_date)}</td>
+                <td>${money(openValue)}</td>
+              </tr>
+            `;
+          }).join("")
+        : `<tr><td colspan="5" class="muted">No open orders.</td></tr>`;
+
+      // ---- Open purchase orders ----
+      document.getElementById("open-po-body").innerHTML = openPO.length
+        ? openPO.map(o => {
+            const openValue = o.lines.reduce((s, l) => s + (l.quantity - l.received_quantity) * l.unit_cost, 0);
+            return `
+              <tr>
+                <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
+                <td>${vendorName(o.vendor_id)}</td>
+                <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
+                <td>${fmtDate(o.order_date)}</td>
+                <td>${money(openValue)}</td>
+              </tr>
+            `;
+          }).join("")
+        : `<tr><td colspan="5" class="muted">No open purchase orders.</td></tr>`;
+
+      // ---- Sales by customer ----
+      const byCustomer = {};
+      customerOrders.forEach(o => {
+        const total = o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+        byCustomer[o.customer_id] = byCustomer[o.customer_id] || { count: 0, total: 0 };
+        byCustomer[o.customer_id].count += 1;
+        byCustomer[o.customer_id].total += total;
+      });
+      const salesRows = Object.entries(byCustomer).sort((a, b) => b[1].total - a[1].total);
+      document.getElementById("sales-body").innerHTML = salesRows.length
+        ? salesRows.map(([id, agg]) => `
+          <tr><td><a class="link" href="customers.html">${customerName(parseInt(id))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
+        `).join("")
+        : `<tr><td colspan="3" class="muted">No orders yet.</td></tr>`;
+
+      // ---- Purchasing by vendor ----
+      const byVendor = {};
+      purchaseOrders.forEach(o => {
+        const total = o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0);
+        byVendor[o.vendor_id] = byVendor[o.vendor_id] || { count: 0, total: 0 };
+        byVendor[o.vendor_id].count += 1;
+        byVendor[o.vendor_id].total += total;
+      });
+      const purchasingRows = Object.entries(byVendor).sort((a, b) => b[1].total - a[1].total);
+      document.getElementById("purchasing-body").innerHTML = purchasingRows.length
+        ? purchasingRows.map(([id, agg]) => `
+          <tr><td><a class="link" href="vendors.html">${vendorName(parseInt(id))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
+        `).join("")
+        : `<tr><td colspan="3" class="muted">No purchase orders yet.</td></tr>`;
+    }
+    load();
+  </script>
+  </div>
+</body>
+</html>

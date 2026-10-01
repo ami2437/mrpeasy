@@ -11,6 +11,9 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
+      <input type="text" id="search" placeholder="Search invoice code, customer, or item code...">
+    </div>
+    <div class="card">
       <table>
         <thead><tr><th>Code</th><th>Customer</th><th>Date</th><th>Due</th><th>Total</th><th>Status</th></tr></thead>
         <tbody id="invoices-body"><tr><td colspan="6">Loading...</td></tr></tbody>
@@ -32,13 +35,23 @@
     function lineTotal(l) { return (l.quantity * l.unit_price); }
     function invoiceTotal(inv) { return inv.lines.reduce((sum, l) => sum + lineTotal(l), 0); }
 
+    function matchesSearch(inv, q) {
+      if (!q) return true;
+      q = q.toLowerCase();
+      if (inv.code.toLowerCase().includes(q)) return true;
+      if (customerName(inv.customer_id).toLowerCase().includes(q)) return true;
+      return inv.lines.some(l => l.description.toLowerCase().includes(q));
+    }
+
     function renderInvoices() {
       const tbody = document.getElementById("invoices-body");
-      if (!invoices.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">No invoices yet — create one from a shipment.</td></tr>`;
+      const q = document.getElementById("search").value.trim();
+      const filtered = invoices.filter(inv => matchesSearch(inv, q));
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = invoices.map(inv => `
+      tbody.innerHTML = filtered.map(inv => `
         <tr>
           <td><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
           <td>${customerName(inv.customer_id)}</td>
@@ -188,6 +201,7 @@
 
     async function init() {
       customers = await apiFetch("/api/customers/");
+      document.getElementById("search").addEventListener("input", renderInvoices);
       await loadInvoices();
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");

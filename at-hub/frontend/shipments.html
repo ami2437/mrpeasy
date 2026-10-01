@@ -11,6 +11,9 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
+      <input type="text" id="search" placeholder="Search shipment code, order code, carrier, or tracking #...">
+    </div>
+    <div class="card">
       <table>
         <thead><tr><th>Code</th><th>Order</th><th>Ship date</th><th>Carrier</th><th>Tracking</th><th>Status</th></tr></thead>
         <tbody id="shipments-body"><tr><td colspan="6">Loading...</td></tr></tbody>
@@ -40,13 +43,24 @@
     function itemObj(id) { return items.find(i => i.id === id); }
     function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
 
+    function matchesSearch(s, q) {
+      if (!q) return true;
+      q = q.toLowerCase();
+      return s.code.toLowerCase().includes(q)
+        || orderCode(s.order_id).toLowerCase().includes(q)
+        || (s.carrier || "").toLowerCase().includes(q)
+        || (s.tracking_number || "").toLowerCase().includes(q);
+    }
+
     function renderShipments() {
       const tbody = document.getElementById("shipments-body");
-      if (!shipments.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">No shipments yet — ship a customer order to create one.</td></tr>`;
+      const q = document.getElementById("search").value.trim();
+      const filtered = shipments.filter(s => matchesSearch(s, q));
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${shipments.length ? "No shipments match your search." : "No shipments yet — ship a customer order to create one."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = shipments.map(s => `
+      tbody.innerHTML = filtered.map(s => `
         <tr>
           <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
           <td>${orderCode(s.order_id)}</td>
@@ -408,6 +422,7 @@
         apiFetch("/api/customers/"),
         apiFetch("/api/lots/"),
       ]);
+      document.getElementById("search").addEventListener("input", renderShipments);
       renderShipments();
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");
