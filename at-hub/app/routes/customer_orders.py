@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
-    CustomerOrderCreate, CustomerOrderResponse, ShipOrderRequest, ShipmentResponse,
-    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate,
+    CustomerOrderCreate, CustomerOrderResponse, CreateShipmentRequest, ShipmentResponse,
+    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse,
 )
-from app.services.crud import CustomerOrderService
+from app.services.crud import CustomerOrderService, OrderProfitService
 from app.dependencies import get_current_active_user
 from app.models import User
 
@@ -25,6 +25,12 @@ def create_order(data: CustomerOrderCreate, db: Session = Depends(get_db), curre
 @router.get("/{order_id}", response_model=CustomerOrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.get(db, order_id)
+
+
+@router.get("/{order_id}/profit", response_model=OrderProfitResponse)
+def order_profit(order_id: int, db: Session = Depends(get_db)):
+    """Revenue vs. lot cost (incl. landed costs) for shipped, booked, and not-yet-booked quantity."""
+    return OrderProfitService.calculate(db, order_id)
 
 
 @router.put("/{order_id}", response_model=CustomerOrderResponse)
@@ -57,6 +63,7 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.cancel(db, order_id)
 
 
-@router.post("/{order_id}/ship", response_model=ShipmentResponse)
-def ship_order(order_id: int, data: ShipOrderRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    return CustomerOrderService.ship(db, order_id, data, created_by=current_user.username)
+@router.post("/{order_id}/shipments", response_model=ShipmentResponse)
+def create_shipment(order_id: int, data: CreateShipmentRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Create a shipment and book stock into it. Stock leaves on-hand only once the shipment is fully picked."""
+    return CustomerOrderService.create_shipment(db, order_id, data, created_by=current_user.username)

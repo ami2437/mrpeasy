@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Company Settings</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card" style="max-width:720px;">
+      <h3 style="margin-top:0;">Company Settings</h3>
+      <p class="muted">Printed in the header and footer of every invoice and packing list, and on box labels.</p>
+      <label>Logo <span class="muted small">(PNG or JPEG, up to 1 MB — printed on invoices, packing lists and labels)</span></label>
+      <div class="row" style="align-items:center; max-width:620px;">
+        <div class="logo-preview" id="logo-preview"><span class="muted small">No logo</span></div>
+        <input type="file" id="logo-file" accept="image/png,image/jpeg" style="flex:1;">
+        <button class="secondary" style="flex:0;white-space:nowrap;" onclick="uploadLogo()">Upload</button>
+        <button class="secondary" style="flex:0;white-space:nowrap;" id="logo-remove" onclick="removeLogo()">Remove</button>
+      </div>
+      <div id="logo-error" class="error"></div>
+      <label>Company name</label><input type="text" id="c-name">
+      <label>Address</label><textarea id="c-address" rows="3" placeholder="Street&#10;City, State ZIP&#10;Country"></textarea>
+      <div class="row">
+        <div><label>Phone</label><input type="text" id="c-phone"></div>
+        <div><label>Email</label><input type="text" id="c-email"></div>
+      </div>
+      <div class="row">
+        <div><label>Website</label><input type="text" id="c-website"></div>
+        <div><label>Tax ID / EIN</label><input type="text" id="c-tax-id"></div>
+      </div>
+      <label>Invoice notes (payment instructions, terms — printed at the bottom of every invoice)</label>
+      <textarea id="c-invoice-notes" rows="4" placeholder="e.g. Payment terms: Net 30. Remit by ACH to ..."></textarea>
+      <button onclick="save()" style="margin-top:12px;">Save</button>
+      <span id="saved" class="muted" style="margin-left:10px;"></span>
+      <div id="error" class="error"></div>
+    </div>
+
+    <div class="card" style="max-width:720px;">
+      <h3 style="margin-top:0;">Invoice email</h3>
+      <div id="email-status" class="muted">Checking…</div>
+    </div>
+
+    <div class="card" style="max-width:720px;">
+      <h3 style="margin-top:0;">Test data</h3>
+      <p class="muted">Keeps four <strong>TEST-*</strong> products (with costed lots and a landed freight cost), a TEST customer and vendor,
+        and one untouched test order ready to book, ship, invoice and profit-check. Once you use the test order, this makes a fresh one
+        and tops stock back up. With <code>TEST_DATA_ENABLED=true</code> in <code>.env</code> it also runs at every server start.</p>
+      <button onclick="prepareTestData()" id="test-btn">Prepare Test Order</button>
+      <div id="test-result" style="margin-top:10px;"></div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("company.html");
+
+    const FIELDS = { name: "c-name", address: "c-address", phone: "c-phone", email: "c-email", website: "c-website", tax_id: "c-tax-id", invoice_notes: "c-invoice-notes" };
+
+    async function load() {
+      const company = await apiFetch("/api/company/");
+      Object.entries(FIELDS).forEach(([key, id]) => { document.getElementById(id).value = company[key] || ""; });
+      showLogo(company.has_logo);
+      if (!AuthGuard.hasRole("admin")) {
+        document.querySelectorAll("main input, main textarea, main button").forEach(el => { el.disabled = true; });
+        document.getElementById("saved").textContent = "Only admins can change company settings.";
+      }
+    }
+
+    function showLogo(hasLogo) {
+      document.getElementById("logo-preview").innerHTML = hasLogo
+        ? `<img src="/api/company/logo?t=${Date.now()}" alt="Company logo">` : `<span class="muted small">No logo</span>`;
+      document.getElementById("logo-remove").style.display = hasLogo ? "" : "none";
+    }
+
+    async function uploadLogo() {
+      const errorEl = document.getElementById("logo-error");
+      errorEl.textContent = "";
+      const file = document.getElementById("logo-file").files[0];
+      if (!file) { errorEl.textContent = "Choose an image file first."; return; }
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        // Not apiFetch: the browser must set the multipart Content-Type itself.
+        const response = await fetch("/api/company/logo", {
+          method: "POST", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Upload failed");
+        document.getElementById("logo-file").value = "";
+        showLogo(true);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function removeLogo() {
+      if (!confirm("Remove the logo from invoices, packing lists and labels?")) return;
+      try {
+        await apiFetch("/api/company/logo", { method: "DELETE" });
+        showLogo(false);
+      } catch (err) {
+        document.getElementById("logo-error").textContent = err.message;
+      }
+    }
+
+    async function save() {
+      document.getElementById("error").textContent = "";
+      document.getElementById("saved").textContent = "";
+      const body = Object.fromEntries(Object.entries(FIELDS).map(([key, id]) => [key, document.getElementById(id).value.trim() || null]));
+      if (!body.name) {
+        document.getElementById("error").textContent = "Company name is required.";
+        return;
+      }
+      try {
+        await apiFetch("/api/company/", { method: "PUT", body: JSON.stringify(body) });
+        document.getElementById("saved").textContent = "Saved.";
+      } catch (err) {
+        document.getElementById("error").textContent = err.message;
+      }
+    }
+    async function loadEmailStatus() {
+      const cfg = await apiFetch("/api/invoices/email/config");
+      document.getElementById("email-status").innerHTML = cfg.configured
+        ? `<span class="tag shipped">ready</span> Invoices are sent from <strong>${escapeHtml(cfg.from_address)}</strong> via ${escapeHtml(cfg.host)}.
+           Customer replies go to the company email above.`
+        : `<span class="tag draft">not set up</span> To send invoices by email, add these to the AT-HUB <code>.env</code> file and restart the server:
+           <pre style="background:#f4f6f9; padding:10px; border-radius:6px; margin:8px 0 0;">SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@yourdomain.com
+SMTP_PASSWORD=your-app-password
+SMTP_FROM=billing@yourdomain.com
+SMTP_SECURITY=starttls</pre>
+           <div style="margin-top:6px;">For Gmail / Google Workspace, create an App Password (Google Account → Security → App passwords) and use it as SMTP_PASSWORD.</div>`;
+    }
+
+    async function prepareTestData() {
+      const btn = document.getElementById("test-btn");
+      const out = document.getElementById("test-result");
+      btn.disabled = true;
+      out.innerHTML = `<span class="muted">Working…</span>`;
+      try {
+        const r = await apiFetch("/api/test-data/ensure", { method: "POST" });
+        out.innerHTML = `<div class="notice info">
+          ${r.order_created ? "Created test order" : "Test order ready:"} <a class="link" href="customer-orders.html?id=${r.order_id}">${escapeHtml(r.order_code)}</a>
+          ${r.topped_up.length ? ` · topped up stock for ${r.topped_up.map(escapeHtml).join(", ")}` : ""}
+          <div class="muted small" style="margin-top:4px;">Products: ${r.items.map(escapeHtml).join(", ")}</div></div>`;
+      } catch (err) {
+        out.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    load();
+    loadEmailStatus();
+  </script>
+  </div>
+</body>
+</html>

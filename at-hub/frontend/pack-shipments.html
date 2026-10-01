@@ -11,121 +11,189 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
+      <p class="muted" style="margin-top:0;">Pack shipments one at a time or all at once. Each order line is split into boxes by its pack size
+        (pre-filled from the item's default). Packed shipments stay listed so you can re-pack or print their labels.</p>
       <div class="row" style="align-items:center;">
-        <p class="muted" style="margin:0;">Shipments below still need a packing list. Pack them one at a time, or hit "Pack All" to auto-split every item by its default pack size in one go.</p>
-        <button onclick="packAll()">Pack All Unpacked Shipments</button>
-        <button class="secondary" onclick="printAllLabels()">Print Labels for Packed Shipments</button>
+        <select id="view-filter" style="max-width:240px;">
+          <option value="unpacked">Needs packing</option>
+          <option value="all">All open &amp; shipped (not invoiced)</option>
+        </select>
+        <label style="white-space:nowrap;"><input type="checkbox" id="select-all"> Select all shown</label>
+        <button onclick="packAll()">Pack All Unpacked</button>
+        <button class="secondary" onclick="printSelectedLabels()">Print Labels for Selected</button>
       </div>
       <div id="bulk-error" class="error"></div>
       <div id="bulk-result" class="muted"></div>
     </div>
 
-    <div id="shipments-container"></div>
+    <div id="shipments-container"><div class="card">Loading...</div></div>
   </main>
 
   <script>
     AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("pack-shipments.html");
 
-    let unpacked = [];
+    let shipments = [];
     let orders = [];
     let items = [];
     let customers = [];
     let lots = [];
-    let justPackedIds = [];
+    const selected = new Set();
 
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
-    function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
     function order(id) { return orders.find(o => o.id === id); }
     function itemObj(id) { return items.find(i => i.id === id); }
     function itemLabel(id) { const i = itemObj(id); return i ? `${i.code} — ${i.title}` : id; }
     function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
 
-    function shippedByItem(shipment) {
+    // Everything is per order line: the same item on two lines is packed as two lines.
+    function qtyByLine(shipment) {
+      const byLine = {};
+      shipment.lines.forEach(l => {
+        byLine[l.order_line_id] = byLine[l.order_line_id] || { order_line_id: l.order_line_id, line_no: l.line_no, item_id: l.item_id, qty: 0 };
+        byLine[l.order_line_id].qty += l.quantity;
+      });
+      return Object.values(byLine).sort((a, b) => (a.line_no || 0) - (b.line_no || 0));
+    }
+
+    function boxedByLine(shipment) {
       const totals = {};
-      shipment.lines.forEach(l => { totals[l.item_id] = (totals[l.item_id] || 0) + l.quantity; });
+      shipment.boxes.forEach(b => { totals[b.order_line_id] = (totals[b.order_line_id] || 0) + b.quantity_in_box; });
       return totals;
+    }
+
+    function isPacked(shipment) {
+      const boxed = boxedByLine(shipment);
+      return qtyByLine(shipment).every(e => Math.abs((boxed[e.order_line_id] || 0) - e.qty) < 1e-6);
     }
 
     // Mirrors the existing portal's calculate_boxes(): full boxes of pack_size, then one remainder box.
     function calculateBoxes(quantity, packSize) {
       if (!packSize || packSize <= 0) packSize = quantity || 1;
       const fullBoxes = Math.floor(quantity / packSize);
-      const remaining = Math.round((quantity - fullBoxes * packSize) * 100) / 100;
+      const remaining = Math.round(quantity - fullBoxes * packSize);
       const boxes = [];
-      for (let i = 0; i < fullBoxes; i++) boxes.push({ box_number: i + 1, quantity_in_box: packSize });
-      if (remaining > 0) boxes.push({ box_number: fullBoxes + 1, quantity_in_box: remaining });
+      for (let i = 0; i < fullBoxes; i++) boxes.push({ quantity_in_box: packSize });
+      if (remaining > 0) boxes.push({ quantity_in_box: remaining });
       return boxes;
     }
 
-    function lotCodeForItem(shipment, itemId) {
-      const lotIds = [...new Set(shipment.lines.filter(l => l.item_id === itemId).map(l => l.lot_id).filter(Boolean))];
-      const codes = lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean);
-      return codes.join(", ");
+    function lotCodeForLine(shipment, orderLineId) {
+      const lotIds = [...new Set(shipment.lines.filter(l => l.order_line_id === orderLineId).map(l => l.lot_id).filter(Boolean))];
+      return lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean).join(", ");
+    }
+
+    function boxBreakdown(shipment, orderLineId) {
+      const byQty = {};
+      shipment.boxes.filter(b => b.order_line_id === orderLineId).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
+      return formatBoxCounts(byQty);
+    }
+
+    // Pack size shown for an already-packed line = its largest box; otherwise the item default.
+    function packSizeFor(shipment, entry) {
+      const boxes = shipment.boxes.filter(b => b.order_line_id === entry.order_line_id);
+      if (boxes.length) return Math.max(...boxes.map(b => b.quantity_in_box));
+      const item = itemObj(entry.item_id);
+      return item && item.default_pack_size ? item.default_pack_size : entry.qty;
+    }
+
+    function visibleShipments() {
+      const view = document.getElementById("view-filter").value;
+      return shipments.filter(s => view === "all" || !isPacked(s));
     }
 
     function renderShipments() {
       const container = document.getElementById("shipments-container");
-      if (!unpacked.length) {
-        container.innerHTML = `<div class="card muted">Nothing needs packing right now.</div>`;
+      const shown = visibleShipments();
+      if (!shown.length) {
+        container.innerHTML = `<div class="card muted">${shipments.length
+          ? "Every open shipment is packed. Switch the view to \"All\" to re-pack or print labels."
+          : "No open or shipped (un-invoiced) shipments. Create a shipment from a customer order first."}</div>`;
         return;
       }
-      container.innerHTML = unpacked.map(shipment => {
-        const totals = shippedByItem(shipment);
+      container.innerHTML = shown.map(shipment => {
         const ord = order(shipment.order_id);
+        const packed = isPacked(shipment);
+        const pallet = (shipment.boxes.find(b => b.pallet_number) || {}).pallet_number || "";
         return `
           <div class="card" data-shipment="${shipment.id}">
-            <h3 style="margin-top:0;">${shipment.code} <span class="muted">— Order ${ord ? ord.code : ""} (${customerName(ord ? ord.customer_id : null)})</span></h3>
-            <div class="row" style="max-width:300px;">
-              <div><label>Pallet # (applies to all boxes below)</label><input type="text" class="shipment-pallet"></div>
+            <div class="row" style="align-items:center;">
+              <h3 style="margin:0;">
+                <input type="checkbox" class="ship-select" data-id="${shipment.id}" ${selected.has(shipment.id) ? "checked" : ""}>
+                <a class="link" href="shipments.html?id=${shipment.id}">${shipment.code}</a>
+                <span class="tag ${shipment.status}">${shipment.status}</span>
+                <span class="muted" style="font-weight:normal;">— Order ${ord ? ord.code : ""} (${customerName(ord ? ord.customer_id : null)})</span>
+              </h3>
+              <span class="tag ${packed ? "shipped" : "draft"}">${packed ? `packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}` : "not packed"}</span>
             </div>
-            <table class="lines-table">
-              <thead><tr><th>Item</th><th>Shipped qty</th><th>Pack size</th></tr></thead>
+            <div class="row" style="max-width:300px; margin-top:8px;">
+              <div><label>Pallet # (applies to all boxes below)</label><input type="text" class="shipment-pallet" value="${pallet}"></div>
+            </div>
+            <table class="lines-table fit-table">
+              <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th></tr></thead>
               <tbody>
-                ${Object.entries(totals).map(([itemId, qty]) => {
-                  const item = itemObj(parseInt(itemId));
-                  const defaultPack = item && item.default_pack_size ? item.default_pack_size : qty;
-                  return `
-                    <tr data-item="${itemId}" data-qty="${qty}">
-                      <td>${itemLabel(parseInt(itemId))}</td>
-                      <td>${qty}</td>
-                      <td><input type="number" step="1" class="pack-size-input" value="${defaultPack}"></td>
+                ${qtyByLine(shipment).map(e => `
+                    <tr data-line="${e.order_line_id}" data-item="${e.item_id}" data-qty="${e.qty}">
+                      <td class="line-no">#${e.line_no ?? ""}</td>
+                      <td class="grow">${itemLabel(e.item_id)}</td>
+                      <td class="num">${fmtQty(e.qty)}</td>
+                      <td><input type="number" step="1" min="1" class="pack-size-input qty-input" value="${packSizeFor(shipment, e)}"></td>
+                      <td class="box-preview">${boxBreakdown(shipment, e.order_line_id) || '<span class="muted">—</span>'}</td>
                     </tr>
-                  `;
-                }).join("")}
+                `).join("")}
               </tbody>
             </table>
-            <button onclick="packShipment(${shipment.id})" style="margin-top:8px;">Pack This Shipment</button>
+            <button onclick="packShipment(${shipment.id})" style="margin-top:8px;">${packed ? "Re-pack" : "Pack"} This Shipment</button>
             <div class="error" id="error-${shipment.id}"></div>
           </div>
         `;
       }).join("");
+
+      container.querySelectorAll(".ship-select").forEach(cb => cb.addEventListener("change", () => {
+        const id = parseInt(cb.dataset.id);
+        cb.checked ? selected.add(id) : selected.delete(id);
+      }));
+      // Live preview of the split as the pack size is edited.
+      container.querySelectorAll(".pack-size-input").forEach(input => input.addEventListener("input", () => {
+        const tr = input.closest("tr");
+        const qty = parseFloat(tr.dataset.qty);
+        const byQty = {};
+        calculateBoxes(qty, parseFloat(input.value) || qty).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
+        tr.querySelector(".box-preview").innerHTML = formatBoxCounts(byQty);
+      }));
     }
 
-    function buildBoxesForShipment(shipmentEl, shipment) {
+    function buildBoxes(shipmentEl, shipment) {
       const pallet = shipmentEl.querySelector(".shipment-pallet").value || null;
       const boxes = [];
-      shipmentEl.querySelectorAll("tbody tr[data-item]").forEach(tr => {
+      let boxNumber = 1;
+      shipmentEl.querySelectorAll("tbody tr[data-line]").forEach(tr => {
+        const lineId = parseInt(tr.dataset.line);
         const itemId = parseInt(tr.dataset.item);
         const qty = parseFloat(tr.dataset.qty);
         const packSize = parseInt(tr.querySelector(".pack-size-input").value) || qty;
-        const lotCode = lotCodeForItem(shipment, itemId);
-        calculateBoxes(qty, packSize).forEach(b => boxes.push({ ...b, item_id: itemId, lot_code: lotCode, pallet_number: pallet }));
+        const lotCode = lotCodeForLine(shipment, lineId) || null;
+        calculateBoxes(qty, packSize).forEach(b => boxes.push({
+          order_line_id: lineId, item_id: itemId, box_number: boxNumber++, quantity_in_box: b.quantity_in_box, lot_code: lotCode, pallet_number: pallet,
+        }));
       });
       return boxes;
     }
 
+    async function saveBoxes(shipment) {
+      const shipmentEl = document.querySelector(`[data-shipment="${shipment.id}"]`);
+      await apiFetch(`/api/shipments/${shipment.id}/boxes`, {
+        method: "PUT",
+        body: JSON.stringify({ boxes: buildBoxes(shipmentEl, shipment) }),
+      });
+      selected.add(shipment.id);  // just packed -> ready to print
+    }
+
     async function packShipment(shipmentId) {
-      const shipmentEl = document.querySelector(`[data-shipment="${shipmentId}"]`);
       const errorEl = document.getElementById(`error-${shipmentId}`);
       errorEl.textContent = "";
-      const shipment = unpacked.find(s => s.id === shipmentId);
       try {
-        await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
-          method: "PUT",
-          body: JSON.stringify({ boxes: buildBoxesForShipment(shipmentEl, shipment) }),
-        });
-        justPackedIds.push(shipmentId);
+        await saveBoxes(shipments.find(s => s.id === shipmentId));
+        document.getElementById("bulk-result").textContent = "Packed and selected for printing.";
         await load();
       } catch (err) {
         errorEl.textContent = err.message;
@@ -137,87 +205,72 @@
       const resultEl = document.getElementById("bulk-result");
       errorEl.textContent = "";
       resultEl.textContent = "";
-      let packed = 0, failed = [];
-      for (const shipment of [...unpacked]) {
-        const shipmentEl = document.querySelector(`[data-shipment="${shipment.id}"]`);
-        if (!shipmentEl) continue;
+      const targets = shipments.filter(s => !isPacked(s) && document.querySelector(`[data-shipment="${s.id}"]`));
+      if (!targets.length) {
+        resultEl.textContent = "Nothing unpacked is shown.";
+        return;
+      }
+      let packed = 0;
+      const failed = [];
+      for (const shipment of targets) {
         try {
-          await apiFetch(`/api/shipments/${shipment.id}/boxes`, {
-            method: "PUT",
-            body: JSON.stringify({ boxes: buildBoxesForShipment(shipmentEl, shipment) }),
-          });
-          justPackedIds.push(shipment.id);
+          await saveBoxes(shipment);
           packed += 1;
         } catch (err) {
           failed.push(`${shipment.code}: ${err.message}`);
         }
       }
-      resultEl.textContent = `Packed ${packed} shipment(s).`;
+      resultEl.textContent = `Packed ${packed} shipment(s) — they're selected, hit "Print Labels for Selected" to print them together.`;
       if (failed.length) errorEl.innerHTML = failed.join("<br>");
       await load();
     }
 
-    function printAllLabels() {
-      if (!justPackedIds.length) {
-        alert("Pack at least one shipment in this session first, then print.");
+    async function printSelectedLabels() {
+      const errorEl = document.getElementById("bulk-error");
+      errorEl.textContent = "";
+      const ids = [...selected];
+      if (!ids.length) {
+        errorEl.textContent = "Select at least one shipment (tick its checkbox) to print labels.";
         return;
       }
-      Promise.all(justPackedIds.map(id => apiFetch(`/api/shipments/${id}`))).then(shipments => {
-        const win = window.open("", "_blank");
-        const labelsHtml = shipments.map(shipment => {
-          const ord = order(shipment.order_id);
-          return shipment.boxes.map(b => `
-            <div class="label-card">
-              <div class="label-customer">${customerName(ord ? ord.customer_id : null)}</div>
-              <div class="label-meta-row">
-                <div><span>Shipment</span><strong>${shipment.code}</strong></div>
-                <div><span>Order #</span><strong>${ord ? ord.code : ""}</strong></div>
-                <div><span>PO #</span><strong>${ord && ord.po_number ? ord.po_number : "—"}</strong></div>
-                <div><span>Job #</span><strong>${ord && ord.job_number ? ord.job_number : "—"}</strong></div>
-              </div>
-              <div class="label-item">
-                <div class="label-item-code">ITEM # ${itemObj(b.item_id) ? itemObj(b.item_id).code : b.item_id}</div>
-                <div class="label-item-title">${(itemObj(b.item_id) || {}).title || ""}</div>
-              </div>
-              <div class="label-qty">${b.quantity_in_box}</div>
-              <div class="label-footer">American Traders LLC - ATind Supplies<br>Questions? Email sales@atindsupplies.com</div>
-            </div>
-          `).join("");
-        }).join("");
-        win.document.write(`
-          <html><head><title>Batch Labels</title>
-          <style>
-            * { box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; margin: 0; }
-            .label-card { width: 6in; height: 4in; padding: 0.3in; display: flex; flex-direction: column; page-break-after: always; }
-            .label-customer { font-size: 26px; font-weight: 700; margin-bottom: 10px; }
-            .label-meta-row { display: flex; justify-content: space-between; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 8px 0; margin-bottom: 14px; }
-            .label-meta-row div { font-size: 13px; }
-            .label-meta-row span { display: block; color: #555; font-size: 11px; text-transform: uppercase; }
-            .label-item-code { font-size: 20px; font-weight: 700; }
-            .label-item-title { font-size: 14px; color: #333; margin-bottom: 14px; }
-            .label-qty { font-size: 54px; font-weight: 800; text-align: center; flex: 1; display: flex; align-items: center; justify-content: center; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; }
-            .label-footer { font-size: 11px; color: #666; text-align: center; margin-top: 10px; }
-            @media print { @page { size: 6in 4in; margin: 0; } .label-card { page-break-after: always; } }
-          </style>
-          </head><body>${labelsHtml}</body></html>
-        `);
-        win.document.close();
-        win.focus();
-        win.print();
+      const chosen = await Promise.all(ids.map(id => apiFetch(`/api/shipments/${id}`)));
+      const unpacked = chosen.filter(s => !s.boxes.length);
+      if (unpacked.length) {
+        errorEl.textContent = `Not packed yet, so no labels: ${unpacked.map(s => s.code).join(", ")}. Pack them first.`;
+        return;
+      }
+      const labels = chosen.flatMap(shipment => {
+        const ord = order(shipment.order_id);
+        return shipment.boxes.map(b => {
+          const item = itemObj(b.item_id) || {};
+          return {
+            customer: customerName(ord ? ord.customer_id : null), shipment: shipment.code,
+            order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
+            item_code: item.code || b.item_id, item_title: item.title || "", qty: b.quantity_in_box,
+          };
+        });
       });
+      printBoxLabels(labels, "Batch Labels");
     }
 
     async function load() {
-      [unpacked, orders, items, customers, lots] = await Promise.all([
-        apiFetch("/api/shipments/unpacked/list"),
+      let all;
+      [all, orders, items, customers, lots] = await Promise.all([
+        apiFetch("/api/shipments/"),
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/customers/"),
         apiFetch("/api/lots/"),
       ]);
+      shipments = all.filter(s => !["cancelled", "invoiced"].includes(s.status) && s.lines.length);
       renderShipments();
     }
+
+    document.getElementById("view-filter").addEventListener("change", renderShipments);
+    document.getElementById("select-all").addEventListener("change", e => {
+      visibleShipments().forEach(s => e.target.checked ? selected.add(s.id) : selected.delete(s.id));
+      renderShipments();
+    });
     load();
   </script>
   </div>

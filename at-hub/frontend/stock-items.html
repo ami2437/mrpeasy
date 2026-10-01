@@ -12,12 +12,28 @@
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <input type="text" id="search" placeholder="Search code, title, barcode, or category...">
-        <select id="category-filter" style="max-width:200px;"><option value="">All categories</option></select>
+        <input type="text" id="search" placeholder="Search code, title, barcode, or product group...">
+        <select id="category-filter" style="max-width:200px;"><option value="">All product groups</option></select>
         <label style="margin:0;"><input type="checkbox" id="low-stock-only" style="width:auto;display:inline-block;"> Low stock only</label>
+        <button class="secondary" onclick="toggleGroups()">Product Groups</button>
         <button class="secondary" onclick="toggleBulkPackSize()">Bulk Pack Sizes</button>
         <button onclick="toggleForm()">+ New Item</button>
       </div>
+    </div>
+
+    <div class="card" id="groups-card" style="display:none; max-width:620px;">
+      <h3 style="margin-top:0;">Product Groups</h3>
+      <p class="muted">Every item belongs to one group (like MRPeasy's product groups). The group shows next to the item on customer and purchase orders.</p>
+      <div class="row" style="max-width:420px;">
+        <input type="text" id="new-group" placeholder="e.g. HEX BOLT" onkeydown="if (event.key === 'Enter') addGroup()">
+        <button style="flex:0;white-space:nowrap;" onclick="addGroup()">+ Add Group</button>
+      </div>
+      <div id="group-error" class="error"></div>
+      <table class="compact-table no-table-tools" style="margin-top:10px;">
+        <thead><tr><th>Group</th><th class="num">Items</th><th></th></tr></thead>
+        <tbody id="groups-body"></tbody>
+      </table>
+      <button class="secondary" onclick="toggleGroups(false)" style="margin-top:10px;">Close</button>
     </div>
 
     <div class="card" id="bulk-pack-size-card" style="display:none;">
@@ -40,21 +56,33 @@
         <div><label>Unit</label><input type="text" id="f-unit" placeholder="ea, kg, ..."></div>
       </div>
       <div class="row">
-        <div><label>Category</label><input type="text" id="f-category" placeholder="e.g. Fasteners"></div>
+        <div><label>Product group <span class="neg">*</span></label><select id="f-category"></select></div>
         <div><label>Barcode</label><input type="text" id="f-barcode"></div>
       </div>
       <div class="row">
-        <div><label>Cost price</label><input type="number" step="0.01" id="f-cost"></div>
-        <div><label>Selling price</label><input type="number" step="0.01" id="f-sell"></div>
-        <div><label>Reorder point</label><input type="number" step="0.01" id="f-reorder"></div>
+        <div><label>Cost price <span class="muted">(avg. of lots on hand)</span></label><input type="number" step="0.00001" id="f-cost"></div>
+        <div><label>Selling price</label><input type="number" step="0.00001" id="f-sell"></div>
+        <div><label>Reorder point</label><input type="number" step="1" min="0" id="f-reorder"></div>
         <div><label>Default pack size</label><input type="number" step="1" id="f-pack-size" placeholder="units per box"></div>
       </div>
       <div class="row" id="on-hand-row" style="display:none;">
         <div>
           <label>On hand (manual correction)</label>
-          <input type="number" step="0.01" id="f-on-hand">
+          <input type="number" step="1" id="f-on-hand" oninput="refreshAdjustment()">
           <div class="muted">Changing this logs an "adjustment" entry in the item's inventory ledger — it doesn't silently overwrite the number.</div>
         </div>
+      </div>
+      <div class="panel" id="adjust-up" style="display:none;">
+        <strong>Adding <span id="adjust-qty"></span> to stock.</strong>
+        <span class="muted">This creates a new lot so the stock can be booked and its cost tracked for profit.</span>
+        <div class="row">
+          <div><label>Unit cost it was acquired at <span class="neg">*</span></label><input type="number" step="0.00001" min="0" id="f-adj-cost" placeholder="required"></div>
+          <div><label>Lot # <span class="muted">(optional)</span></label><input type="text" id="f-adj-lot" placeholder="auto LOT-#####"></div>
+          <div style="flex:2;"><label>Reason</label><input type="text" id="f-adj-note" placeholder="e.g. found in cycle count"></div>
+        </div>
+      </div>
+      <div class="notice info" id="adjust-down" style="display:none;">
+        Removing <span id="adjust-down-qty"></span>: taken from unbooked lots first (oldest first), so open shipments keep their bookings.
       </div>
       <div style="margin-top:14px;">
         <button onclick="saveItem()">Save</button>
@@ -65,7 +93,7 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Title</th><th>Category</th><th>Unit</th><th>On hand</th><th>Booked</th><th>Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Title</th><th>Group</th><th>Unit</th><th class="sum">On hand</th><th class="sum">Booked</th><th class="sum">Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
         <tbody id="items-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -76,6 +104,50 @@
     document.getElementById("sidebar").innerHTML = renderSidebar("stock-items.html");
 
     let items = [];
+    let groups = [];
+
+    async function loadGroups() {
+      groups = await apiFetch("/api/stock-items/groups/list");
+      const select = document.getElementById("f-category");
+      const current = select.value;
+      select.innerHTML = `<option value="">— pick a group —</option>` + groups.map(g => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.name)}</option>`).join("");
+      select.value = current;
+      const filter = document.getElementById("category-filter");
+      const f = filter.value;
+      filter.innerHTML = `<option value="">All product groups</option>` + groups.map(g => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.name)} (${g.item_count})</option>`).join("");
+      filter.value = f;
+      const canManage = AuthGuard.hasRole("manager");
+      document.getElementById("groups-body").innerHTML = groups.map(g => `
+        <tr><td>${groupTag({ category: g.name })}</td><td class="num">${g.item_count}</td>
+          <td>${canManage && !g.item_count ? `<a class="link" onclick="deleteGroup(${g.id})">Delete</a>` : ""}</td></tr>`).join("");
+    }
+
+    function toggleGroups(show = true) {
+      document.getElementById("groups-card").style.display = show ? "block" : "none";
+    }
+
+    async function addGroup() {
+      const errorEl = document.getElementById("group-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch("/api/stock-items/groups/list", { method: "POST", body: JSON.stringify({ name: document.getElementById("new-group").value }) });
+        document.getElementById("new-group").value = "";
+        await loadGroups();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function deleteGroup(id) {
+      const errorEl = document.getElementById("group-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/stock-items/groups/${id}`, { method: "DELETE" });
+        await loadGroups();
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
 
     function toggleForm(show = true) {
       document.getElementById("item-form-card").style.display = show ? "block" : "none";
@@ -84,7 +156,8 @@
         document.getElementById("form-title").textContent = "New Stock Item";
         document.getElementById("on-hand-row").style.display = "none";
         document.getElementById("f-code").disabled = false;
-        ["code", "title", "unit", "category", "barcode", "cost", "sell", "reorder", "pack-size", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
+        ["code", "title", "unit", "category", "barcode", "cost", "sell", "reorder", "pack-size", "on-hand", "adj-cost", "adj-lot", "adj-note"].forEach(f => document.getElementById(`f-${f}`).value = "");
+        refreshAdjustment();
       }
     }
 
@@ -143,12 +216,34 @@
       document.getElementById("f-pack-size").value = item.default_pack_size ?? "";
       document.getElementById("on-hand-row").style.display = "flex";
       document.getElementById("f-on-hand").value = item.on_hand ?? 0;
+      refreshAdjustment();
+    }
+
+    // Show the cost prompt when on-hand goes up, and an explanation when it goes down.
+    function refreshAdjustment() {
+      const id = document.getElementById("edit-id").value;
+      const item = id ? items.find(i => i.id === parseInt(id)) : null;
+      const value = parseFloat(document.getElementById("f-on-hand").value);
+      const delta = item && !isNaN(value) ? value - item.on_hand : 0;
+      document.getElementById("adjust-up").style.display = delta > 1e-9 ? "block" : "none";
+      document.getElementById("adjust-down").style.display = delta < -1e-9 ? "block" : "none";
+      document.getElementById("adjust-qty").textContent = `${fmtQty(delta)} ${item ? item.unit || "" : ""}`;
+      document.getElementById("adjust-down-qty").textContent = `${fmtQty(-delta)} ${item ? item.unit || "" : ""}`;
+      if (item) document.getElementById("f-adj-cost").placeholder = `required — current avg. ${fmtPrice(item.cost_price || 0)}`;
     }
 
     async function saveItem() {
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
       const id = document.getElementById("edit-id").value;
+      const original = id ? items.find(i => i.id === parseInt(id)) : null;
+      const newOnHand = parseFloat(document.getElementById("f-on-hand").value);
+      const adjCost = document.getElementById("f-adj-cost").value;
+      if (original && newOnHand > original.on_hand + 1e-9 && (adjCost === "" || parseFloat(adjCost) < 0)) {
+        errorEl.textContent = "Enter the unit cost the added stock was acquired at.";
+        document.getElementById("f-adj-cost").focus();
+        return;
+      }
       try {
         if (id) {
           await apiFetch(`/api/stock-items/${id}`, {
@@ -162,7 +257,10 @@
               selling_price: parseFloat(document.getElementById("f-sell").value) || 0,
               reorder_point: parseFloat(document.getElementById("f-reorder").value) || 0,
               default_pack_size: document.getElementById("f-pack-size").value ? parseInt(document.getElementById("f-pack-size").value) : null,
-              on_hand: parseFloat(document.getElementById("f-on-hand").value),
+              on_hand: newOnHand,
+              adjustment_unit_cost: adjCost === "" ? null : parseFloat(adjCost),
+              adjustment_lot_code: document.getElementById("f-adj-lot").value.trim() || null,
+              adjustment_note: document.getElementById("f-adj-note").value.trim() || null,
             }),
           });
         } else {
@@ -183,6 +281,7 @@
         }
         document.getElementById("f-code").disabled = false;
         toggleForm(false);
+        await loadGroups();
         loadItems();
       } catch (err) {
         errorEl.textContent = err.message;
@@ -207,15 +306,15 @@
       }
       tbody.innerHTML = filtered.map(item => `
         <tr>
-          <td>${item.code}</td>
-          <td>${item.title}</td>
-          <td>${item.category || ""}</td>
+          <td><strong>${escapeHtml(item.code)}</strong></td>
+          <td>${escapeHtml(item.title)} <a class="link small" onclick="showPriceHistory(${item.id})">prices</a></td>
+          <td>${groupTag(item)}</td>
           <td>${item.unit || ""}</td>
-          <td>${item.on_hand}</td>
-          <td class="muted">${item.booked}</td>
-          <td style="${item.reorder_point && item.available <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${item.available}</td>
-          <td>${(item.cost_price ?? 0).toFixed(2)}</td>
-          <td>${(item.selling_price ?? 0).toFixed(2)}</td>
+          <td class="num">${fmtQty(item.on_hand)}</td>
+          <td class="num muted">${fmtQty(item.booked)}</td>
+          <td style="${item.reorder_point && item.available <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${fmtQty(item.available)}</td>
+          <td class="num">${fmtPrice(item.cost_price)}</td>
+          <td class="num">${fmtPrice(item.selling_price)}</td>
           <td>${item.reorder_point ?? 0}</td>
           <td>${item.default_pack_size ?? ""}</td>
           <td><a class="link" onclick="editItem(${item.id})">Edit</a></td>
@@ -231,7 +330,6 @@
         if (q) params.set("q", q);
         if (lowOnly) params.set("low_stock_only", "true");
         items = await apiFetch(`/api/stock-items/?${params.toString()}`);
-        populateCategoryFilter();
         renderItems();
       } catch (err) {
         document.getElementById("items-body").innerHTML = `<tr><td colspan="12" class="error">${err.message}</td></tr>`;
@@ -241,7 +339,7 @@
     document.getElementById("search").addEventListener("input", () => loadItems());
     document.getElementById("low-stock-only").addEventListener("change", () => loadItems());
     document.getElementById("category-filter").addEventListener("change", renderItems);
-    loadItems();
+    loadGroups().then(loadItems);
   </script>
   </div>
 </body>

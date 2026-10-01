@@ -1,6 +1,32 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Optional, List
+
+PRICE_DECIMALS = 5
+
+
+def _round_price(v):
+    """Prices/costs are kept to 5 decimal places (e.g. 0.01275 per washer)."""
+    return round(v, PRICE_DECIMALS) if v is not None else v
+
+
+class InputModel(BaseModel):
+    """Shared input rules: prices/costs are rounded to PRICE_DECIMALS, and quantities
+    must be whole numbers (stock is counted in whole units everywhere)."""
+    @field_validator("unit_price", "unit_cost", "cost_price", "selling_price", "adjustment_unit_cost",
+                     mode="after", check_fields=False)
+    @classmethod
+    def _round(cls, v):
+        return _round_price(v)
+
+    @field_validator("quantity", "quantity_in_box", "on_hand", "reorder_point", mode="after", check_fields=False)
+    @classmethod
+    def _whole_qty(cls, v):
+        if v is None:
+            return v
+        if abs(v - round(v)) > 1e-9:
+            raise ValueError("Quantity must be a whole number")
+        return float(round(v))
 
 
 # ---- Auth ----
@@ -9,15 +35,71 @@ class LoginRequest(BaseModel):
     password: str
 
 
+ROLES = ("super_admin", "admin", "manager", "employee")
+
+
 class UserResponse(BaseModel):
     id: int
     username: str
     full_name: Optional[str] = None
+    email: Optional[str] = None
     role: str
     is_active: bool
+    must_change_password: bool = False
+    last_login: Optional[datetime] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class UserCreate(BaseModel):
+    username: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: str = "employee"
+    password: str  # temporary -- the user must change it at first login
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PasswordReset(BaseModel):
+    password: str
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ProductGroupCreate(BaseModel):
+    name: str
+
+
+class ProductGroupResponse(BaseModel):
+    id: int
+    name: str
+    item_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class PriceHistoryEntry(BaseModel):
+    kind: str  # sale | purchase
+    date: Optional[datetime] = None
+    doc_id: int
+    doc_code: str
+    party: str
+    status: str
+    quantity: float
+    unit_price: float
 
 
 class Token(BaseModel):
@@ -27,7 +109,7 @@ class Token(BaseModel):
 
 
 # ---- Stock Items ----
-class StockItemCreate(BaseModel):
+class StockItemCreate(InputModel):
     code: str
     title: str
     unit: Optional[str] = None
@@ -39,7 +121,7 @@ class StockItemCreate(BaseModel):
     default_pack_size: Optional[int] = None
 
 
-class StockItemUpdate(BaseModel):
+class StockItemUpdate(InputModel):
     title: Optional[str] = None
     unit: Optional[str] = None
     category: Optional[str] = None
@@ -50,6 +132,9 @@ class StockItemUpdate(BaseModel):
     is_active: Optional[bool] = None
     default_pack_size: Optional[int] = None
     on_hand: Optional[float] = None  # manual correction; logged as an 'adjustment' transaction, not silently overwritten
+    adjustment_unit_cost: Optional[float] = None  # required when on_hand goes up: what the added stock was acquired at
+    adjustment_lot_code: Optional[str] = None  # optional; a LOT-##### number is generated otherwise
+    adjustment_note: Optional[str] = None
 
 
 class StockItemResponse(BaseModel):
@@ -80,7 +165,11 @@ class LotResponse(BaseModel):
     item_id: int
     lot_code: str
     quantity: float
+    initial_quantity: Optional[float] = None
+    base_unit_cost: Optional[float] = None
+    landed_cost_per_unit: float = 0
     unit_cost: Optional[float] = None
+    po_line_id: Optional[int] = None
     received_date: datetime
     expiry_date: Optional[datetime] = None
     status: str
@@ -110,6 +199,17 @@ class LotStatusUpdate(BaseModel):
     status: str  # available | on_hold | rejected
 
 
+class LotCostUpdate(BaseModel):
+    unit_cost: float  # acquisition cost per unit; landed costs on the lot's PO line are added on top
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _check(cls, v):
+        if v < 0:
+            raise ValueError("Unit cost cannot be negative")
+        return _round_price(v)
+
+
 # ---- Customers / Vendors ----
 class PartyCreate(BaseModel):
     name: str
@@ -117,6 +217,7 @@ class PartyCreate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    shipping_address: Optional[str] = None
 
 
 class PartyUpdate(BaseModel):
@@ -125,6 +226,7 @@ class PartyUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    shipping_address: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -135,6 +237,7 @@ class PartyResponse(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    shipping_address: Optional[str] = None
     is_active: bool
 
     class Config:
@@ -142,7 +245,7 @@ class PartyResponse(BaseModel):
 
 
 # ---- Customer Orders ----
-class CustomerOrderLineCreate(BaseModel):
+class CustomerOrderLineCreate(InputModel):
     item_id: int
     quantity: float
     unit_price: float = 0
@@ -154,17 +257,40 @@ class CustomerOrderCreate(BaseModel):
     delivery_date: Optional[datetime] = None
     po_number: Optional[str] = None
     job_number: Optional[str] = None
+    ship_to_address: Optional[str] = None
     notes: Optional[str] = None
     lines: List[CustomerOrderLineCreate]
 
 
+class LineShipmentAllocation(BaseModel):
+    shipment_id: int
+    code: str
+    status: str
+    quantity: float
+    picked_quantity: float
+    boxes: int
+
+
+class LineBookingSource(BaseModel):
+    lot_id: Optional[int] = None
+    lot_code: Optional[str] = None
+    source: str
+    reference: Optional[str] = None
+    quantity: float
+
+
 class CustomerOrderLineResponse(BaseModel):
     id: int
+    line_no: Optional[int] = None
     item_id: int
     quantity: float
     unit_price: float
     delivery_date: Optional[datetime] = None
     shipped_quantity: float
+    booked_quantity: float = 0
+    line_status: str = "not_booked"  # not_booked | partially_booked | booked | partially_shipped | shipped
+    shipments: List[LineShipmentAllocation] = []
+    booking_sources: List[LineBookingSource] = []
 
     class Config:
         from_attributes = True
@@ -179,6 +305,7 @@ class CustomerOrderResponse(BaseModel):
     status: str
     po_number: Optional[str] = None
     job_number: Optional[str] = None
+    ship_to_address: Optional[str] = None
     notes: Optional[str] = None
     lines: List[CustomerOrderLineResponse] = []
 
@@ -192,50 +319,94 @@ class CustomerOrderUpdate(BaseModel):
     delivery_date: Optional[datetime] = None
     po_number: Optional[str] = None
     job_number: Optional[str] = None
+    ship_to_address: Optional[str] = None
     notes: Optional[str] = None
 
 
-class CustomerOrderLineAdd(BaseModel):
+class CustomerOrderLineAdd(InputModel):
     item_id: int
     quantity: float
     unit_price: float = 0
     delivery_date: Optional[datetime] = None
 
 
-class CustomerOrderLineUpdate(BaseModel):
+class CustomerOrderLineUpdate(InputModel):
     quantity: Optional[float] = None
     unit_price: Optional[float] = None
     delivery_date: Optional[datetime] = None
 
 
-class ShipLineRequest(BaseModel):
+class BookLineRequest(BaseModel):
     line_id: int
     quantity: float
 
+    @field_validator("quantity")
+    @classmethod
+    def _whole(cls, v):
+        if abs(v - round(v)) > 1e-9:
+            raise ValueError("Booked quantity must be a whole number")
+        return float(round(v))
 
-class ShipOrderRequest(BaseModel):
-    lines: List[ShipLineRequest]
+
+class CreateShipmentRequest(BaseModel):
+    """Books the given order-line quantities into a new shipment."""
+    lines: List[BookLineRequest]
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
     shipping_cost: Optional[float] = None  # what we pay the carrier -- distinct from the customer-facing shipping charge on an invoice
     notes: Optional[str] = None
 
 
+class UnbookRequest(BaseModel):
+    """Release booked (not yet picked) quantity from an open shipment back to stock.
+    Give shipment_line_id to unbook from one specific lot, or order_line_id to unbook
+    across that order line's lots in this shipment (newest lot first)."""
+    quantity: float
+    shipment_line_id: Optional[int] = None
+    order_line_id: Optional[int] = None
+
+    @field_validator("quantity")
+    @classmethod
+    def _whole(cls, v):
+        if v <= 0 or abs(v - round(v)) > 1e-9:
+            raise ValueError("Unbook quantity must be a whole number greater than 0")
+        return float(round(v))
+
+
+class ShipmentUpdate(BaseModel):
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    shipping_cost: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class PickLineRequest(InputModel):
+    shipment_line_id: int
+    quantity: float  # picked now, added to what's already picked
+
+
+class PickRequest(BaseModel):
+    lines: List[PickLineRequest] = []
+    pick_all: bool = False  # pick everything still outstanding
+
+
 # ---- Shipments / Packing / Labels ----
 class ShipmentLineResponse(BaseModel):
     id: int
     order_line_id: int
+    line_no: Optional[int] = None
     item_id: int
     lot_id: Optional[int] = None
     quantity: float
-    unit_price: float
+    picked_quantity: float = 0
 
     class Config:
         from_attributes = True
 
 
-class ShipmentBoxInput(BaseModel):
+class ShipmentBoxInput(InputModel):
     item_id: int
+    order_line_id: Optional[int] = None  # which order line the box belongs to; required when an item is on several lines
     box_number: int
     quantity_in_box: float
     lot_code: Optional[str] = None
@@ -289,7 +460,10 @@ class ShipmentResponse(BaseModel):
     id: int
     code: str
     order_id: int
-    ship_date: datetime
+    ship_date: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    delivered_by: Optional[str] = None
+    created_at: Optional[datetime] = None
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
     shipping_cost: Optional[float] = None
@@ -310,8 +484,9 @@ class CreateInvoiceRequest(BaseModel):
     shipping_charge: Optional[float] = 0
 
 
-class InvoiceLineInput(BaseModel):
+class InvoiceLineInput(InputModel):
     item_id: Optional[int] = None
+    order_line_id: Optional[int] = None
     description: str
     quantity: float
     unit_price: float
@@ -334,6 +509,24 @@ class InvoiceStatusUpdate(BaseModel):
     status: str  # sent | paid | void
 
 
+class InvoicePaymentInput(BaseModel):
+    amount: float
+    paid_date: Optional[datetime] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    note: Optional[str] = None
+
+
+class InvoicePaymentResponse(InvoicePaymentInput):
+    id: int
+    invoice_id: int
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class InvoiceResponse(BaseModel):
     id: int
     code: str
@@ -345,16 +538,49 @@ class InvoiceResponse(BaseModel):
     status: str
     free_text: Optional[str] = None
     lines: List[InvoiceLineResponse] = []
+    payments: List[InvoicePaymentResponse] = []
+    emails: List["InvoiceEmailResponse"] = []
+    total: float = 0
+    amount_paid: float = 0
+    balance: float = 0
 
     class Config:
         from_attributes = True
 
 
+class InvoiceEmailRequest(BaseModel):
+    to: str  # one or more addresses, comma/semicolon separated
+    cc: Optional[str] = None
+    subject: str
+    body: str
+    attach_pdf: bool = True
+
+
+class InvoiceEmailResponse(BaseModel):
+    id: int
+    to_address: str
+    cc_address: Optional[str] = None
+    subject: str
+    sent_by: Optional[str] = None
+    sent_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class EmailConfigResponse(BaseModel):
+    configured: bool
+    from_address: Optional[str] = None
+    host: Optional[str] = None
+
+
 # ---- Purchase Orders ----
-class PurchaseOrderLineCreate(BaseModel):
-    item_id: int
+class PurchaseOrderLineCreate(InputModel):
+    item_id: Optional[int] = None  # may be left out when vendor_item_code matches a known cross-reference
     quantity: float
     unit_cost: float = 0
+    vendor_item_code: Optional[str] = None
+    vendor_description: Optional[str] = None
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -370,6 +596,9 @@ class PurchaseOrderLineResponse(BaseModel):
     quantity: float
     unit_cost: float
     received_quantity: float
+    landed_cost_per_unit: float = 0
+    vendor_item_code: Optional[str] = None
+    vendor_description: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -382,6 +611,32 @@ class PurchaseOrderPaymentInput(BaseModel):
     method: Optional[str] = None
     reference: Optional[str] = None
     note: Optional[str] = None
+    vendor_bill_id: Optional[int] = None
+
+
+class VendorBillInput(BaseModel):
+    bill_number: str
+    bill_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    amount: float
+    note: Optional[str] = None
+    attachment_id: Optional[int] = None
+
+
+class VendorBillResponse(VendorBillInput):
+    id: int
+    po_id: int
+    amount_paid: float = 0
+    balance: float = 0
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MarkDeliveredRequest(BaseModel):
+    delivered_at: Optional[datetime] = None  # default: now
 
 
 class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
@@ -403,9 +658,12 @@ class PurchaseOrderResponse(BaseModel):
     status: str
     freight_cost: Optional[float] = None
     tariff_cost: Optional[float] = None
+    landed_cost_total: float = 0
     notes: Optional[str] = None
     lines: List[PurchaseOrderLineResponse] = []
     payments: List[PurchaseOrderPaymentResponse] = []
+    emails: List["PurchaseOrderEmailLog"] = []
+    bills: List[VendorBillResponse] = []
 
     class Config:
         from_attributes = True
@@ -417,18 +675,76 @@ class PurchaseOrderUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-class PurchaseOrderLineAdd(BaseModel):
-    item_id: int
+class PurchaseOrderLineAdd(InputModel):
+    item_id: Optional[int] = None
     quantity: float
     unit_cost: float = 0
+    vendor_item_code: Optional[str] = None
+    vendor_description: Optional[str] = None
 
 
-class PurchaseOrderLineUpdate(BaseModel):
+class PurchaseOrderLineUpdate(InputModel):
     quantity: Optional[float] = None
     unit_cost: Optional[float] = None
+    vendor_item_code: Optional[str] = None
+    vendor_description: Optional[str] = None
 
 
-class ReceiveLineRequest(BaseModel):
+class PurchaseOrderEmailLog(BaseModel):
+    to_address: str
+    cc_address: Optional[str] = None
+    subject: str
+    sent_by: Optional[str] = None
+    sent_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VendorItemInput(BaseModel):
+    item_id: int
+    vendor_item_code: str
+    vendor_description: Optional[str] = None
+
+
+class VendorItemResponse(BaseModel):
+    id: int
+    vendor_id: int
+    item_id: int
+    vendor_item_code: str
+    vendor_description: Optional[str] = None
+    last_unit_cost: Optional[float] = None
+    last_ordered_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PurchaseOrderEmailRequest(BaseModel):
+    to: str
+    cc: Optional[str] = None
+    subject: str
+    body: str
+    attach_pdf: bool = True
+
+
+class AttachmentResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: int
+    category: str
+    filename: str
+    content_type: Optional[str] = None
+    size: int
+    note: Optional[str] = None
+    uploaded_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ReceiveLineRequest(InputModel):
     line_id: int
     quantity: float
     lot_code: Optional[str] = None
@@ -437,5 +753,148 @@ class ReceiveLineRequest(BaseModel):
 
 class ReceiveOrderRequest(BaseModel):
     lines: List[ReceiveLineRequest]
+    # Deprecated: use Landed Costs. If sent, each becomes a landed cost applied to this PO by quantity.
     freight_cost: Optional[float] = None
     tariff_cost: Optional[float] = None
+
+
+# ---- Landed costs ----
+class LandedCostInput(BaseModel):
+    description: str
+    cost_type: str = "freight"
+    amount: float
+    paid_to: Optional[str] = None
+    reference: Optional[str] = None
+    cost_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    po_ids: List[int]  # purchase orders to spread the amount over, by line quantity
+
+
+class LandedCostPreviewRequest(BaseModel):
+    amount: float
+    po_ids: List[int]
+
+
+class LandedCostAllocationResponse(BaseModel):
+    po_id: int
+    po_line_id: int
+    item_id: int
+    quantity: float
+    amount: float
+    per_unit: float
+
+    class Config:
+        from_attributes = True
+
+
+class LandedCostResponse(BaseModel):
+    id: int
+    code: str
+    description: str
+    cost_type: str
+    amount: float
+    paid_to: Optional[str] = None
+    reference: Optional[str] = None
+    cost_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    allocations: List[LandedCostAllocationResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ---- Order profit ----
+class ProfitComponent(BaseModel):
+    kind: str  # shipped | booked | unbooked
+    quantity: float
+    unit_cost: Optional[float] = None
+    cost: float
+    revenue: float
+    shipment_id: Optional[int] = None
+    shipment_code: Optional[str] = None
+    lot_id: Optional[int] = None
+    lot_code: Optional[str] = None
+    lot_source: Optional[str] = None  # PO code or "adjustment"
+    estimated: bool = False
+
+
+class ProfitLine(BaseModel):
+    line_id: int
+    line_no: Optional[int] = None
+    item_id: int
+    item_code: str
+    item_title: str
+    quantity: float
+    unit_price: float
+    revenue: float
+    cost: float
+    profit: float
+    margin_pct: Optional[float] = None
+    components: List[ProfitComponent]
+
+
+class ProfitBucket(BaseModel):
+    quantity: float = 0
+    revenue: float = 0
+    cost: float = 0
+    profit: float = 0
+
+
+class MissingLotCost(BaseModel):
+    lot_id: int
+    lot_code: str
+    item_code: str
+    quantity: float
+    source: Optional[str] = None
+
+
+class OrderProfitResponse(BaseModel):
+    order_id: int
+    order_code: str
+    lines: List[ProfitLine]
+    shipped: ProfitBucket
+    booked: ProfitBucket
+    unbooked: ProfitBucket
+    revenue: float
+    cogs: float
+    gross_profit: float
+    other_charges: float  # non-item invoice lines (e.g. shipping charged to the customer)
+    shipping_cost: float  # what we paid carriers on this order's shipments
+    net_profit: float
+    margin_pct: Optional[float] = None
+    missing_costs: List[MissingLotCost]
+    warnings: List[str]
+
+
+# ---- Test data ----
+class TestDataResult(BaseModel):
+    order_id: int
+    order_code: str
+    order_created: bool
+    items: List[str]
+    topped_up: List[str]
+
+
+# ---- Company profile ----
+class CompanyProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    tax_id: Optional[str] = None
+    invoice_notes: Optional[str] = None
+
+
+class CompanyProfileResponse(CompanyProfileUpdate):
+    name: str
+    has_logo: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+InvoiceResponse.model_rebuild()
+PurchaseOrderResponse.model_rebuild()

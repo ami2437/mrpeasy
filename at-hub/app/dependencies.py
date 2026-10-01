@@ -8,6 +8,9 @@ from app.models import User
 
 security = HTTPBearer()
 
+# Higher number = more access. Each role can do everything the roles below it can.
+ROLE_RANK = {"employee": 1, "manager": 2, "admin": 3, "super_admin": 4}
+
 
 async def get_current_active_user(
     db: Session = Depends(get_db),
@@ -20,3 +23,13 @@ async def get_current_active_user(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
+
+
+def require_role(minimum: str):
+    """Dependency: the current user must hold `minimum` or a higher role."""
+    async def checker(user: User = Depends(get_current_active_user)) -> User:
+        if ROLE_RANK.get(user.role, 0) < ROLE_RANK[minimum]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"This needs the {minimum.replace('_', ' ')} role or higher")
+        return user
+    return checker

@@ -27,7 +27,10 @@
         <div><label>Email</label><input type="text" id="f-email"></div>
         <div><label>Phone</label><input type="text" id="f-phone"></div>
       </div>
-      <label>Address</label><textarea id="f-address" rows="2"></textarea>
+      <div class="row">
+        <div><label>Billing address</label><textarea id="f-address" rows="3"></textarea></div>
+        <div><label>Shipping address <span class="muted small">(blank = same as billing)</span></label><textarea id="f-shipping-address" rows="3"></textarea></div>
+      </div>
       <div style="margin-top:14px;">
         <button onclick="save()">Save</button>
         <button class="secondary" onclick="toggleForm(false)">Cancel</button>
@@ -55,7 +58,7 @@
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
-      if (!show) ["name", "contact", "email", "phone", "address"].forEach(f => document.getElementById(`f-${f}`).value = "");
+      if (!show) ["name", "contact", "email", "phone", "address", "shipping-address"].forEach(f => document.getElementById(`f-${f}`).value = "");
     }
 
     async function save() {
@@ -70,6 +73,7 @@
             email: document.getElementById("f-email").value,
             phone: document.getElementById("f-phone").value,
             address: document.getElementById("f-address").value,
+            shipping_address: document.getElementById("f-shipping-address").value || null,
           }),
         });
         toggleForm(false);
@@ -120,14 +124,17 @@
           <div><label>Email</label><input type="text" id="e-email" value="${customer.email || ''}"></div>
           <div><label>Phone</label><input type="text" id="e-phone" value="${customer.phone || ''}"></div>
         </div>
-        <label>Address</label><textarea id="e-address" rows="2">${customer.address || ''}</textarea>
+        <div class="row">
+          <div><label>Billing address</label><textarea id="e-address" rows="3">${customer.address || ''}</textarea></div>
+          <div><label>Shipping address <span class="muted small">(blank = same as billing)</span></label><textarea id="e-shipping-address" rows="3">${customer.shipping_address || ''}</textarea></div>
+        </div>
         <button onclick="saveDetail(${customer.id})" style="margin-top:8px;">Save Changes</button>
         <div id="detail-error" class="error"></div>
 
         <h4 style="margin-top:20px;">Order history (${customerOrders.length} orders, $${totalSales.toFixed(2)} total)</h4>
         ${customerOrders.length ? `
           <table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th>Total</th></tr></thead>
+            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="sum">Total</th></tr></thead>
             <tbody>${customerOrders.map(o => `
               <tr>
                 <td><a class="link" href="customer-orders.html?id=${o.id}">${o.code}</a></td>
@@ -154,6 +161,7 @@
             email: document.getElementById("e-email").value,
             phone: document.getElementById("e-phone").value,
             address: document.getElementById("e-address").value,
+            shipping_address: document.getElementById("e-shipping-address").value || null,
           }),
         });
         await load();

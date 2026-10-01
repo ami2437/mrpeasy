@@ -19,14 +19,14 @@
 
     <div class="card" id="form-card" style="display:none;">
       <h3>New Purchase Order</h3>
-      <div class="row">
-        <div><label>Vendor</label><select id="f-vendor"></select></div>
+      <div class="field-grid">
+        <div class="wide"><label>Vendor</label><select id="f-vendor"></select></div>
         <div><label>Expected date</label><input type="date" id="f-expected"></div>
+        <div class="wide"><label>Notes</label><textarea id="f-notes" rows="2"></textarea></div>
       </div>
-      <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
       <h4>Lines</h4>
       <table class="lines-table">
-        <thead><tr><th>Item</th><th>Qty</th><th>Unit cost</th><th></th></tr></thead>
+        <thead><tr><th>Vendor item #</th><th>Item</th><th>Qty</th><th>Unit cost</th><th></th></tr></thead>
         <tbody id="lines-body"></tbody>
       </table>
       <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
@@ -39,8 +39,8 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Vendor</th><th>Order date</th><th>Expected</th><th>Status</th><th></th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Vendor</th><th>Order date</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -68,17 +68,61 @@
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><select class="l-item">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></td>
-        <td><input type="number" step="0.01" class="l-qty" value="1"></td>
-        <td><input type="number" step="0.01" class="l-cost" value="0"></td>
+        <td><input type="text" class="l-vcode" style="width:120px;" placeholder="their part #"><div class="vcode-hint small"></div></td>
+        <td><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></td>
+        <td><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
+        <td>${priceInput("l-cost", 0)}<div data-price-delta data-kind="purchase" data-price-input=".l-cost"></div></td>
         <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
       `;
+      const delta = tr.querySelector("[data-price-delta]");
+      const vendorId = () => parseInt(document.getElementById("f-vendor").value);
+      tr.querySelector(".l-vcode").addEventListener("change", e => matchVendorCode(e.target, tr.querySelector(".l-item"), vendorId()));
       tr.querySelector(".l-item").addEventListener("change", (e) => {
+        fillVendorCode(e.target, tr.querySelector(".l-vcode"), vendorId());
         tr.querySelector(".l-cost").value = e.target.selectedOptions[0].dataset.cost;
+        delta.dataset.item = e.target.value;
+        refreshPriceDeltas(tr);
       });
+      tr.querySelector(".l-cost").addEventListener("input", () => refreshPriceDeltas(tr));
       const firstOption = tr.querySelector(".l-item").selectedOptions[0];
-      if (firstOption) tr.querySelector(".l-cost").value = firstOption.dataset.cost;
+      if (firstOption) {
+        tr.querySelector(".l-cost").value = firstOption.dataset.cost;
+        delta.dataset.item = firstOption.value;
+      }
       document.getElementById("lines-body").appendChild(tr);
+      refreshPriceDeltas(tr);
+    }
+
+    // Vendor part # cross-reference, cached per vendor: [{vendor_item_code, item_id, vendor_description, ...}]
+    let vendorItemCache = {};
+    async function vendorItems(vendorId) {
+      if (!vendorId) return [];
+      if (!vendorItemCache[vendorId]) vendorItemCache[vendorId] = apiFetch(`/api/vendors/${vendorId}/items`);
+      return vendorItemCache[vendorId];
+    }
+
+    // Typing a vendor item # picks our item when the vendor's # is already known.
+    async function matchVendorCode(codeInput, select, vendorId) {
+      const hint = codeInput.parentElement.querySelector(".vcode-hint");
+      const code = codeInput.value.trim();
+      hint.textContent = "";
+      if (!code) return;
+      const mapping = (await vendorItems(vendorId)).find(m => m.vendor_item_code.toLowerCase() === code.toLowerCase());
+      if (mapping) {
+        select.value = mapping.item_id;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        const item = items.find(i => i.id === mapping.item_id);
+        hint.innerHTML = `<span class="pos">✓ ${escapeHtml(item ? item.code : "")}</span>`;
+      } else {
+        hint.innerHTML = `<span class="muted">new # — pick our item, it'll be remembered</span>`;
+      }
+    }
+
+    // Picking our item fills in the vendor's # for it when we know one (and the box is empty).
+    async function fillVendorCode(select, codeInput, vendorId) {
+      if (codeInput.value.trim()) return;
+      const mapping = (await vendorItems(vendorId)).find(m => m.item_id === parseInt(select.value));
+      if (mapping) codeInput.value = mapping.vendor_item_code;
     }
 
     async function saveOrder() {
@@ -88,6 +132,7 @@
         item_id: parseInt(tr.querySelector(".l-item").value),
         quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
         unit_cost: parseFloat(tr.querySelector(".l-cost").value) || 0,
+        vendor_item_code: tr.querySelector(".l-vcode").value.trim() || null,
       }));
       try {
         await apiFetch("/api/purchase-orders/", {
@@ -99,6 +144,7 @@
             lines,
           }),
         });
+        vendorItemCache = {};
         toggleForm(false);
         loadOrders();
       } catch (err) {
@@ -132,19 +178,33 @@
       const q = document.getElementById("search").value.trim();
       const filtered = orders.filter(o => matchesSearch(o, q));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">${orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">${orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = filtered.map(o => `
+      tbody.innerHTML = filtered.map(o => {
+        const total = o.lines.reduce((sum, l) => sum + l.quantity * l.unit_cost, 0);
+        const paid = (o.payments || []).reduce((sum, p) => sum + p.amount, 0);
+        const qty = o.lines.reduce((sum, l) => sum + l.quantity, 0);
+        const received = o.lines.reduce((sum, l) => sum + Math.min(l.received_quantity, l.quantity), 0);
+        return `
         <tr>
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${vendorName(o.vendor_id)}</td>
           <td>${fmtDate(o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
+          <td class="num">${fmtMoney(total)}</td>
+          <td class="num">${fmtMoney(paid)}</td>
+          <td class="num">${fmtMoney(total - paid)}</td>
+          <td>
+            ${progressBar("Received", qty ? received / qty * 100 : 0, "recv", `${fmtQty(received)} of ${fmtQty(qty)} units received`)}
+            ${progressBar("Paid", total ? paid / total * 100 : 0, "paid", `${fmtMoney(paid)} of ${fmtMoney(total)} paid`)}
+          </td>
           <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
+          <td class="muted" title="${escapeHtml(o.notes || "")}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(o.notes || "")}</td>
           <td>${o.status === "draft" ? `<a class="link" onclick="markOrdered(${o.id})">Mark ordered</a>` : ""}</td>
         </tr>
-      `).join("");
+      `;
+      }).join("");
     }
 
     async function markOrdered(id) {
@@ -155,7 +215,13 @@
     }
 
     async function showDetail(id) {
-      const order = await apiFetch(`/api/purchase-orders/${id}`);
+      const [order, landedCosts] = await Promise.all([
+        apiFetch(`/api/purchase-orders/${id}`),
+        apiFetch("/api/landed-costs/"),
+      ]);
+      const poLandedCosts = landedCosts
+        .map(lc => ({ ...lc, share: lc.allocations.filter(a => a.po_id === order.id).reduce((s, a) => s + a.amount, 0) }))
+        .filter(lc => lc.allocations.some(a => a.po_id === order.id));
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const canReceive = !["received", "cancelled"].includes(order.status);
@@ -166,42 +232,57 @@
         <h3>${order.code} <span class="tag ${order.status}">${order.status.replace('_',' ')}</span></h3>
 
         <h4>Order details</h4>
-        <div class="row">
-          <div><label>Vendor</label><select id="e-vendor" ${editable ? "" : "disabled"}>
-            ${vendors.map(v => `<option value="${v.id}" ${v.id === order.vendor_id ? "selected" : ""}>${v.name}</option>`).join("")}
+        <div class="field-grid">
+          <div class="wide"><label>Vendor</label><select id="e-vendor" ${editable ? "" : "disabled"}>
+            ${vendors.map(v => `<option value="${v.id}" ${v.id === order.vendor_id ? "selected" : ""}>${escapeHtml(v.name)}</option>`).join("")}
           </select></div>
           <div><label>Expected date</label><input type="date" id="e-expected" value="${order.expected_date ? order.expected_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
+          <div class="wide"><label>Notes</label><textarea id="e-notes" rows="2" ${editable ? "" : "disabled"}>${escapeHtml(order.notes || '')}</textarea></div>
         </div>
-        <label>Notes</label><textarea id="e-notes" rows="2" ${editable ? "" : "disabled"}>${order.notes || ''}</textarea>
         ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;">Save Order Details</button>` : ""}
 
         <h4 style="margin-top:20px;">Lines</h4>
-        <table class="lines-table">
-          <thead><tr><th>Item</th><th>Qty</th><th>Received</th><th>Unit cost</th>${editable ? "<th></th>" : ""}${canReceive ? "<th>Receive now</th><th>Lot code</th>" : ""}</tr></thead>
-          <tbody>
-            ${order.lines.map(l => `
-              <tr data-line="${l.id}">
-                <td>${itemLabel(l.item_id)}</td>
-                <td>${editable && l.received_quantity === 0 ? `<input type="number" step="0.01" class="e-line-qty" value="${l.quantity}" style="width:80px;">` : l.quantity}</td>
-                <td>${l.received_quantity}</td>
-                <td>${editable ? `<input type="number" step="0.01" class="e-line-cost" value="${l.unit_cost}" style="width:80px;">` : l.unit_cost.toFixed(2)}</td>
+        <div class="table-scroll">
+        <table class="lines-table fit-table">
+          <thead><tr><th>#</th><th class="grow">Item</th><th title="What this vendor calls the item — printed on the vendor's copy of the PO instead of our item #">Vendor item #</th><th class="num">Qty</th><th class="num">Received</th><th class="num">Unit cost</th><th class="num">Subtotal</th><th class="num" title="Landed costs spread onto this line, per unit">+ Landed/unit</th><th class="num">Landed unit cost</th>${editable ? "<th></th>" : ""}${canReceive ? "<th>Receive now</th><th>Lot #</th>" : ""}</tr></thead>
+          <tbody id="po-lines-body" oninput="recalcPoLines(); refreshPriceDeltas(this)">
+            ${order.lines.map((l, idx) => `
+              <tr data-line="${l.id}" data-qty="${l.quantity}" data-cost="${l.unit_cost}">
+                <td class="line-no">${idx + 1}</td>
+                <td class="grow">${(() => { const it = items.find(i => i.id === l.item_id) || {}; return `<strong>${escapeHtml(it.code || l.item_id)}</strong> ${groupTag(it)}${it.title ? `<div class="muted small">${escapeHtml(it.title)}</div>` : ""}`; })()}</td>
+                <td>${editable
+                  ? `<input type="text" class="e-line-vcode" style="width:110px;" value="${escapeHtml(l.vendor_item_code || "")}" placeholder="their part #">`
+                  : escapeHtml(l.vendor_item_code || "—")}${l.vendor_description ? `<div class="muted small">${escapeHtml(l.vendor_description)}</div>` : ""}</td>
+                <td class="num">${editable && l.received_quantity === 0 ? `<input type="number" step="1" min="1" class="e-line-qty qty-input" value="${l.quantity}">` : fmtQty(l.quantity)}</td>
+                <td class="num">${fmtQty(l.received_quantity)}</td>
+                <td class="num">${editable ? priceInput("e-line-cost", l.unit_cost) : fmtPrice(l.unit_cost)}
+                  <div data-price-delta data-kind="purchase" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_cost}" ${editable ? `data-price-input=".e-line-cost"` : ""}></div></td>
+                <td class="num subtotal">${fmtMoney(l.quantity * l.unit_cost)}</td>
+                <td class="num muted">${l.landed_cost_per_unit ? fmtPrice(l.landed_cost_per_unit) : "—"}</td>
+                <td class="num"><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong></td>
                 ${editable ? `<td>
                   <a class="link" onclick="saveLine(${order.id}, ${l.id})">Save</a>
                   ${l.received_quantity === 0 ? ` &nbsp; <a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
                 </td>` : ""}
                 ${canReceive ? `
-                  <td><input type="number" step="0.01" class="recv-qty" data-line="${l.id}" value="${(l.quantity - l.received_quantity).toFixed(2)}" style="width:90px;"></td>
-                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="auto" style="width:110px;"></td>
+                  <td><input type="number" step="1" min="0" class="recv-qty qty-input" data-line="${l.id}" value="${Math.max(0, Math.round(l.quantity - l.received_quantity))}"></td>
+                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="auto LOT-#####" style="width:120px;"></td>
                 ` : ""}
               </tr>
             `).join("")}
           </tbody>
+          <tfoot><tr><td></td><td class="grow">PO total</td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
+            <td class="num" id="po-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0))}</td><td colspan="${2 + (editable ? 1 : 0) + (canReceive ? 2 : 0)}"></td></tr></tfoot>
         </table>
+        </div>
         ${editable ? `
-          <div class="row" style="margin-top:8px; max-width:600px;">
-            <div><label>Add item</label><select id="new-line-item">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></div>
-            <div><label>Qty</label><input type="number" step="0.01" id="new-line-qty" value="1"></div>
-            <div><label>Unit cost</label><input type="number" step="0.01" id="new-line-cost" value="0"></div>
+          <div class="row" style="margin-top:8px; max-width:760px;">
+            <div style="flex:0;"><label>Vendor item #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="their part #"
+                onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
+            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}); document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost; this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}</option>`).join("")}</select></div>
+            <div style="flex:0;"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
+            <div style="flex:0;"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="${items.length ? items[0].cost_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
+              <div data-price-delta data-kind="purchase" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-cost"></div></div>
             <div style="flex:0;"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
         ` : ""}
@@ -209,16 +290,41 @@
 
         ${canReceive ? `
           <h4 style="margin-top:20px;">Receive</h4>
-          <div class="row" style="max-width:400px;">
-            <div><label>Freight cost (this receipt)</label><input type="number" step="0.01" id="recv-freight" value="${order.freight_cost || 0}"></div>
-            <div><label>Tariff cost (this receipt)</label><input type="number" step="0.01" id="recv-tariff" value="${order.tariff_cost || 0}"></div>
-          </div>
-          <p class="muted">Freight/tariff are prorated across the lines received in this batch and rolled into each item's landed cost (moving average) — not just stored as a flat PO total.</p>
+          <p class="muted">Each line received becomes its own lot (a LOT-##### number, or the supplier's lot code if you enter one).
+            Bookings draw from these lots, which is how every shipped unit is traced back to this receipt's cost for profit.</p>
           <button onclick="receiveOrder(${order.id})" style="margin-top:4px;">Receive entered quantities</button>
         ` : ""}
         <div id="detail-error" class="error"></div>
 
-        <h4 style="margin-top:20px;">Payments to vendor</h4>
+        <h4 style="margin-top:20px;">Landed costs ${order.landed_cost_total ? `<span class="muted" style="font-weight:normal;">— ${fmtMoney(order.landed_cost_total)} on this order</span>` : ""}</h4>
+        <p class="muted">Freight, tariffs, customs, brokerage… spread over the selected purchase orders by quantity and added to each lot's unit cost — including lots already received or shipped.</p>
+        ${poLandedCosts.length ? `
+          <table class="compact-table">
+            <thead><tr><th>Code</th><th>Description</th><th>Type</th><th class="num">Total</th><th class="num">Share on ${escapeHtml(order.code)}</th></tr></thead>
+            <tbody>${poLandedCosts.map(lc => `
+              <tr><td><a class="link" href="landed-costs.html?id=${lc.id}">${escapeHtml(lc.code)}</a></td><td>${escapeHtml(lc.description)}</td>
+                  <td>${escapeHtml(lc.cost_type)}</td><td class="num">${fmtMoney(lc.amount)}</td><td class="num">${fmtMoney(lc.share)}</td></tr>
+            `).join("")}</tbody>
+          </table>
+        ` : `<p class="muted">None applied yet.</p>`}
+        ${order.status !== "cancelled" ? `<a class="link" href="landed-costs.html?po_id=${order.id}">+ Add a landed cost to this order</a>` : ""}
+
+        <h4 style="margin-top:20px;">PO documents</h4>
+        <div class="btn-row" style="margin-top:0;">
+          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?vendor=true')" title="What the vendor sees: their part #s only">PDF for vendor</button>
+          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf')" title="Internal copy with our item #s">Internal PDF</button>
+          ${order.status !== "cancelled" ? `<button class="secondary" onclick="toggleEmailForm(${order.id})">Email to vendor</button>` : ""}
+        </div>
+        <p class="muted small" style="margin-top:4px;">The vendor copy shows only the vendor's item # and description — our item numbers stay internal.</p>
+        <div id="po-email-form" style="display:none;"></div>
+        ${order.emails.length ? `<div class="muted small" style="margin-top:6px;">${order.emails.map(e =>
+          `Emailed to ${escapeHtml(e.to_address)} by ${escapeHtml(e.sent_by || "")} · ${new Date(e.sent_at + "Z").toLocaleString()}`).join("<br>")}</div>` : ""}
+
+        <h4 style="margin-top:20px;">Attachments</h4>
+        <p class="muted small" style="margin-top:0;">Vendor invoices, material test reports (MTRs), quotes.</p>
+        <div id="po-attachments"></div>
+
+        <h4 style="margin-top:20px;">Vendor invoices &amp; payments</h4>
         ${renderPayments(order)}
 
         <div style="margin-top:16px;">
@@ -226,30 +332,213 @@
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
+      refreshPriceDeltas(card);
+      renderAttachments("po-attachments", "purchase_order", order.id, ["vendor_invoice", "mtr", "vendor_quote", "other"],
+        { notePlaceholder: "Note — e.g. heat #, invoice #" });
+    }
+
+    function toggleEmailForm(poId) {
+      const el = document.getElementById("po-email-form");
+      if (el.style.display !== "none") { el.style.display = "none"; return; }
+      const order = orders.find(o => o.id === poId);
+      const vendor = vendors.find(v => v.id === order.vendor_id) || {};
+      el.style.display = "block";
+      el.innerHTML = `
+        <div class="panel" style="max-width:640px;">
+          <div class="row">
+            <div><label>To</label><input type="text" id="po-email-to" value="${escapeHtml(vendor.email || "")}" placeholder="vendor@example.com"></div>
+            <div><label>CC</label><input type="text" id="po-email-cc"></div>
+          </div>
+          <label>Subject</label><input type="text" id="po-email-subject" value="Purchase Order ${escapeHtml(order.code)}">
+          <label>Message</label><textarea id="po-email-body" rows="5">Hello${vendor.contact_name ? " " + escapeHtml(vendor.contact_name) : ""},
+
+Please find attached purchase order ${escapeHtml(order.code)}. Kindly confirm receipt, pricing and the expected ship date, and include material test reports with the shipment.
+
+Thank you.</textarea>
+          <label class="inline-check" style="margin:8px 0 0;"><input type="checkbox" id="po-email-pdf" checked> Attach the vendor PDF</label>
+          <div style="margin-top:10px;"><button onclick="sendPoEmail(${poId})" id="po-email-send">Send</button>
+            <span class="muted small">${order.status === "draft" ? "Sending marks this PO as ordered." : ""}</span></div>
+          <div id="po-email-error" class="error"></div>
+        </div>`;
+    }
+
+    async function sendPoEmail(poId) {
+      const errorEl = document.getElementById("po-email-error");
+      const btn = document.getElementById("po-email-send");
+      errorEl.textContent = "";
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/email`, {
+          method: "POST",
+          body: JSON.stringify({
+            to: document.getElementById("po-email-to").value,
+            cc: document.getElementById("po-email-cc").value || null,
+            subject: document.getElementById("po-email-subject").value,
+            body: document.getElementById("po-email-body").value,
+            attach_pdf: document.getElementById("po-email-pdf").checked,
+          }),
+        });
+        await loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+        btn.disabled = false;
+        btn.textContent = "Send";
+      }
+    }
+
+    function recalcPoLines() {
+      let total = 0;
+      document.querySelectorAll("#po-lines-body > tr").forEach(tr => {
+        const qtyEl = tr.querySelector(".e-line-qty"), costEl = tr.querySelector(".e-line-cost");
+        const sub = (qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty)) * (costEl ? parseFloat(costEl.value) || 0 : parseFloat(tr.dataset.cost));
+        total += sub;
+        tr.querySelector(".subtotal").textContent = fmtMoney(sub);
+      });
+      document.getElementById("po-total").textContent = fmtMoney(total);
+    }
+
+    // Vendor invoices (bills) and the payments applied to them. A PO can be billed in several
+    // invoices; each shows what's paid and what's left.
+    function billStatus(b) {
+      const overdue = b.balance > 0.005 && b.due_date && new Date(b.due_date) < new Date(new Date().toDateString());
+      return b.balance <= 0.005 ? `<span class="tag shipped">Paid</span>`
+        : overdue ? `<span class="tag overdue">Overdue</span>`
+        : b.amount_paid > 0 ? `<span class="tag confirmed">Partially paid</span>`
+        : `<span class="tag draft">Unpaid</span>`;
     }
 
     function renderPayments(order) {
-      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0) + (order.freight_cost || 0) + (order.tariff_cost || 0);
+      // Landed costs are usually billed by someone else (carrier, broker), so they're not part of what the vendor is owed.
+      // freight_cost/tariff_cost are only set on POs received before Landed Costs existed.
+      const legacy = (order.freight_cost || 0) + (order.tariff_cost || 0);
+      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0) + legacy;
       const paid = order.payments.reduce((s, p) => s + p.amount, 0);
+      const billed = order.bills.reduce((s, b) => s + b.amount, 0);
+      const billById = Object.fromEntries(order.bills.map(b => [b.id, b]));
+      const openBills = order.bills.filter(b => b.balance > 0.005);
+      const today = new Date().toISOString().substring(0, 10);
+      const canDelete = AuthGuard.hasRole("manager");
       return `
-        <p class="muted">PO total (lines + freight + tariff): $${total.toFixed(2)} — Paid: $${paid.toFixed(2)} — Balance: $${(total - paid).toFixed(2)}</p>
+        <div class="stat-row">
+          <div class="stat"><div class="stat-label">PO total</div><div class="stat-value">${fmtMoney(total)}</div>${legacy ? `<div class="stat-sub">incl. freight + tariff</div>` : ""}</div>
+          <div class="stat"><div class="stat-label">Billed by vendor</div><div class="stat-value">${fmtMoney(billed)}</div><div class="stat-sub">${order.bills.length} invoice${order.bills.length === 1 ? "" : "s"}</div></div>
+          <div class="stat"><div class="stat-label">Paid</div><div class="stat-value">${fmtMoney(paid)}</div></div>
+          <div class="stat"><div class="stat-label">Owed on invoices</div><div class="stat-value ${billed - paid > 0.005 ? "neg" : ""}">${fmtMoney(Math.max(0, billed - paid))}</div></div>
+          <div class="stat"><div class="stat-label">Not billed yet</div><div class="stat-value" style="font-size:16px;">${fmtMoney(Math.max(0, total - billed))}</div></div>
+        </div>
+
+        <h4 style="margin-top:14px;">Vendor invoices</h4>
+        <table class="compact-table no-table-tools" style="max-width:920px;">
+          <thead><tr><th>Vendor invoice #</th><th>Date</th><th>Due</th><th class="num">Amount</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th><th>File</th><th></th></tr></thead>
+          <tbody>
+            ${order.bills.map(b => `
+              <tr>
+                <td><strong>${escapeHtml(b.bill_number)}</strong>${b.note ? `<div class="muted small">${escapeHtml(b.note)}</div>` : ""}</td>
+                <td>${fmtDate(b.bill_date)}</td><td>${fmtDate(b.due_date)}</td>
+                <td class="num">${fmtMoney(b.amount)}</td><td class="num">${fmtMoney(b.amount_paid)}</td>
+                <td class="num"><strong>${fmtMoney(b.balance)}</strong></td>
+                <td>${billStatus(b)}</td>
+                <td>${b.attachment_id ? `<a class="link small" onclick="openAttachment(${b.attachment_id})">open</a>` : `<span class="muted small">—</span>`}</td>
+                <td class="nowrap">${b.balance > 0.005 ? `<a class="link small" onclick="payBill(${b.id}, ${b.balance})">Pay</a>` : ""}
+                  ${canDelete && !b.amount_paid ? ` <a class="link small" onclick="deleteBill(${order.id}, ${b.id})">Delete</a>` : ""}</td>
+              </tr>`).join("") || `<tr><td colspan="9" class="muted">No vendor invoices recorded yet.</td></tr>`}
+            <tr class="add-row">
+              <td><input type="text" id="bill-number" placeholder="their invoice #" style="width:130px;"></td>
+              <td><input type="date" id="bill-date" value="${today}" style="width:135px;"></td>
+              <td><input type="date" id="bill-due" style="width:135px;"></td>
+              <td class="num">${priceInput("bill-amount-input", "", 'id="bill-amount"')}</td>
+              <td colspan="3"><input type="file" id="bill-file" accept="application/pdf,image/*" style="width:100%;"></td>
+              <td colspan="2"><button class="secondary small-btn" onclick="addBill(${order.id})">+ Add invoice</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div id="bill-error" class="error"></div>
+
+        <h4 style="margin-top:14px;">Payments</h4>
         ${order.payments.length ? `
-          <table>
-            <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Note</th></tr></thead>
+          <table class="compact-table no-table-tools" style="max-width:920px;">
+            <thead><tr><th>Date</th><th class="num">Amount</th><th>Against vendor invoice</th><th>Method</th><th>Reference</th><th>Note</th></tr></thead>
             <tbody>${order.payments.map(p => `
-              <tr><td>${p.paid_date ? new Date(p.paid_date).toLocaleDateString() : ""}</td><td>$${p.amount.toFixed(2)}</td><td>${p.method || ""}</td><td>${p.reference || ""}</td><td>${p.note || ""}</td></tr>
+              <tr><td>${p.paid_date ? new Date(p.paid_date).toLocaleDateString() : ""}</td><td class="num">${fmtMoney(p.amount)}</td>
+                <td>${p.vendor_bill_id && billById[p.vendor_bill_id] ? escapeHtml(billById[p.vendor_bill_id].bill_number) : `<span class="muted">not tied to an invoice</span>`}</td>
+                <td>${escapeHtml(p.method || "")}</td><td>${escapeHtml(p.reference || "")}</td><td>${escapeHtml(p.note || "")}</td></tr>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">No payments recorded yet.</p>`}
-        <div class="row" style="max-width:600px; margin-top:8px;">
-          <div><label>Amount</label><input type="number" step="0.01" id="pay-amount"></div>
-          <div><label>Paid date</label><input type="date" id="pay-date"></div>
-          <div><label>Method</label><input type="text" id="pay-method" placeholder="wire, check, ..."></div>
-          <div><label>Reference</label><input type="text" id="pay-reference"></div>
+        <div class="field-grid" style="margin-top:8px;" id="payment-form">
+          <div class="wide"><label>Against vendor invoice</label>
+            <select id="pay-bill" onchange="const o = this.selectedOptions[0]; if (o.dataset.balance) document.getElementById('pay-amount').value = o.dataset.balance;">
+              ${openBills.map(b => `<option value="${b.id}" data-balance="${b.balance.toFixed(2)}">${escapeHtml(b.bill_number)} — ${fmtMoney(b.balance)} left</option>`).join("")}
+              <option value="">Not tied to an invoice (deposit / prepayment)</option>
+            </select></div>
+          <div><label>Amount</label><input type="number" step="0.01" id="pay-amount" value="${openBills.length ? openBills[0].balance.toFixed(2) : ""}"></div>
+          <div><label>Paid date</label><input type="date" id="pay-date" value="${today}"></div>
+          <div><label>Method</label><input type="text" id="pay-method" placeholder="wire, check, ACH…"></div>
+          <div><label>Reference</label><input type="text" id="pay-reference" placeholder="check # / confirmation"></div>
         </div>
         <button class="secondary" onclick="recordPayment(${order.id})" style="margin-top:8px;">Record Payment</button>
         <div id="payment-error" class="error"></div>
       `;
+    }
+
+    function payBill(billId, balance) {
+      document.getElementById("pay-bill").value = billId;
+      document.getElementById("pay-amount").value = balance.toFixed(2);
+      document.getElementById("payment-form").scrollIntoView({ behavior: "smooth", block: "center" });
+      document.getElementById("pay-amount").focus();
+    }
+
+    // Uploads the invoice file (if any) as a "Vendor invoice" attachment, then records the bill.
+    async function addBill(poId) {
+      const errorEl = document.getElementById("bill-error");
+      errorEl.textContent = "";
+      const number = document.getElementById("bill-number").value.trim();
+      const amount = parseFloat(document.getElementById("bill-amount").value);
+      if (!number) { errorEl.textContent = "Enter the vendor's invoice #."; return; }
+      if (!amount || amount <= 0) { errorEl.textContent = "Enter the invoice amount."; return; }
+      try {
+        let attachmentId = null;
+        const file = document.getElementById("bill-file").files[0];
+        if (file) {
+          const form = new FormData();
+          form.append("entity_type", "purchase_order");
+          form.append("entity_id", poId);
+          form.append("category", "vendor_invoice");
+          form.append("note", `Invoice # ${number}`);
+          form.append("files", file);
+          const r = await fetch("/api/attachments/", { method: "POST", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form });
+          const data = await r.json();
+          if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Upload failed");
+          attachmentId = data[0].id;
+        }
+        await apiFetch(`/api/purchase-orders/${poId}/bills`, {
+          method: "POST",
+          body: JSON.stringify({
+            bill_number: number,
+            bill_date: document.getElementById("bill-date").value || null,
+            due_date: document.getElementById("bill-due").value || null,
+            amount,
+            attachment_id: attachmentId,
+          }),
+        });
+        await loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function deleteBill(poId, billId) {
+      if (!confirm("Delete this vendor invoice record? (Its uploaded file stays under Attachments.)")) return;
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/bills/${billId}`, { method: "DELETE" });
+        await loadOrders();
+        showDetail(poId);
+      } catch (err) {
+        document.getElementById("bill-error").textContent = err.message;
+      }
     }
 
     async function recordPayment(poId) {
@@ -260,16 +549,19 @@
         errorEl.textContent = "Enter a payment amount greater than 0.";
         return;
       }
+      const billId = document.getElementById("pay-bill").value;
       try {
         await apiFetch(`/api/purchase-orders/${poId}/payments`, {
           method: "POST",
           body: JSON.stringify({
             amount,
+            vendor_bill_id: billId ? parseInt(billId) : null,
             paid_date: document.getElementById("pay-date").value || null,
             method: document.getElementById("pay-method").value || null,
             reference: document.getElementById("pay-reference").value || null,
           }),
         });
+        await loadOrders();
         showDetail(poId);
       } catch (err) {
         errorEl.textContent = err.message;
@@ -306,8 +598,10 @@
           body: JSON.stringify({
             quantity: qtyInput ? parseFloat(qtyInput.value) || 0 : undefined,
             unit_cost: parseFloat(row.querySelector(".e-line-cost").value) || 0,
+            vendor_item_code: row.querySelector(".e-line-vcode") ? row.querySelector(".e-line-vcode").value.trim() : undefined,
           }),
         });
+        vendorItemCache = {};
         loadOrders();
         showDetail(poId);
       } catch (err) {
@@ -337,8 +631,10 @@
             item_id: parseInt(document.getElementById("new-line-item").value),
             quantity: parseFloat(document.getElementById("new-line-qty").value) || 0,
             unit_cost: parseFloat(document.getElementById("new-line-cost").value) || 0,
+            vendor_item_code: document.getElementById("new-line-vcode").value.trim() || null,
           }),
         });
+        vendorItemCache = {};
         loadOrders();
         showDetail(poId);
       } catch (err) {
@@ -374,11 +670,7 @@
       try {
         await apiFetch(`/api/purchase-orders/${poId}/receive`, {
           method: "POST",
-          body: JSON.stringify({
-            lines,
-            freight_cost: parseFloat(document.getElementById("recv-freight").value) || 0,
-            tariff_cost: parseFloat(document.getElementById("recv-tariff").value) || 0,
-          }),
+          body: JSON.stringify({ lines }),
         });
         loadOrders();
         showDetail(poId);

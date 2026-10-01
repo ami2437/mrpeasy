@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Users & Roles</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <div class="row" style="align-items:center;">
+        <input type="text" id="search" placeholder="Search username, name, or email...">
+        <select id="role-filter" style="max-width:180px;"><option value="">All roles</option></select>
+        <label class="inline-check" style="flex:0;white-space:nowrap;"><input type="checkbox" id="show-inactive"> Show deactivated</label>
+        <button onclick="toggleForm(true)" style="flex:0;white-space:nowrap;">+ New User</button>
+      </div>
+    </div>
+
+    <div class="card" id="form-card" style="display:none; max-width:720px;">
+      <h3 style="margin-top:0;">New user</h3>
+      <div class="row">
+        <div><label>Username</label><input type="text" id="f-username" autocomplete="off"></div>
+        <div><label>Full name</label><input type="text" id="f-full-name"></div>
+      </div>
+      <div class="row">
+        <div><label>Email</label><input type="text" id="f-email"></div>
+        <div><label>Role</label><select id="f-role"></select></div>
+      </div>
+      <label>Temporary password <span class="muted small">(at least 8 characters — they'll be asked to change it at first login)</span></label>
+      <div class="row" style="max-width:420px;">
+        <input type="text" id="f-password" autocomplete="off">
+        <button class="secondary" style="flex:0;white-space:nowrap;" onclick="document.getElementById('f-password').value = randomPassword()">Generate</button>
+      </div>
+      <div style="margin-top:12px;">
+        <button onclick="createUser()">Create User</button>
+        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
+      </div>
+      <div id="form-error" class="error"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Roles</h3>
+      <table class="compact-table no-table-tools">
+        <tbody>
+          <tr><td><span class="tag role-super_admin">Super admin</span></td><td>Everything, plus this screen: create accounts, assign roles, reset passwords, deactivate users.</td></tr>
+          <tr><td><span class="tag role-admin">Admin</span></td><td>Everything except user management — including company settings and the logo.</td></tr>
+          <tr><td><span class="tag role-manager">Manager</span></td><td>Day-to-day work plus undo/delete shipments and managing product groups.</td></tr>
+          <tr><td><span class="tag role-employee">Employee</span></td><td>Day-to-day work: orders, shipments, packing, receiving, invoices.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead><tr><th>Username</th><th>Full name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th>Created</th><th></th></tr></thead>
+        <tbody id="users-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="detail-card" style="display:none; max-width:720px;"></div>
+  </main>
+
+  <script>
+    const me = AuthGuard.requireRole("super_admin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("users.html");
+
+    const ROLES = ["super_admin", "admin", "manager", "employee"];
+    let users = [];
+
+    const roleOptions = selected => ROLES.map(r => `<option value="${r}" ${r === selected ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
+    document.getElementById("f-role").innerHTML = roleOptions("employee");
+    document.getElementById("role-filter").innerHTML += ROLES.map(r => `<option value="${r}">${ROLE_LABELS[r]}</option>`).join("");
+
+    function fmtDateTime(d) { return d ? new Date(d + (d.endsWith("Z") ? "" : "Z")).toLocaleString() : ""; }
+    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
+
+    // Readable temporary password: no 0/O/1/l look-alikes.
+    function randomPassword() {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+      const bytes = crypto.getRandomValues(new Uint8Array(12));
+      return Array.from(bytes, b => chars[b % chars.length]).join("");
+    }
+
+    function toggleForm(show) {
+      document.getElementById("form-card").style.display = show ? "block" : "none";
+      document.getElementById("form-error").textContent = "";
+      if (show) {
+        ["f-username", "f-full-name", "f-email"].forEach(id => { document.getElementById(id).value = ""; });
+        document.getElementById("f-role").value = "employee";
+        document.getElementById("f-password").value = randomPassword();
+        document.getElementById("f-username").focus();
+      }
+    }
+
+    function renderUsers() {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const role = document.getElementById("role-filter").value;
+      const showInactive = document.getElementById("show-inactive").checked;
+      const filtered = users.filter(u => (showInactive || u.is_active) && (!role || u.role === role) && (!q ||
+        [u.username, u.full_name, u.email].some(v => (v || "").toLowerCase().includes(q))));
+      const tbody = document.getElementById("users-body");
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="8" class="muted">No users match.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = filtered.map(u => `
+        <tr class="${u.is_active ? "" : "muted"}">
+          <td><a class="link" onclick="showDetail(${u.id})">${escapeHtml(u.username)}</a>${u.id === me.id ? ` <span class="muted small">(you)</span>` : ""}</td>
+          <td>${escapeHtml(u.full_name || "")}</td>
+          <td>${escapeHtml(u.email || "")}</td>
+          <td><span class="tag role-${u.role}">${ROLE_LABELS[u.role] || u.role}</span></td>
+          <td>${u.is_active
+            ? (u.must_change_password ? `<span class="tag draft">must set password</span>` : `<span class="tag shipped">active</span>`)
+            : `<span class="tag cancelled">deactivated</span>`}</td>
+          <td>${fmtDateTime(u.last_login) || `<span class="muted">never</span>`}</td>
+          <td>${fmtDate(u.created_at)}${u.created_by ? ` <span class="muted small">by ${escapeHtml(u.created_by)}</span>` : ""}</td>
+          <td><a class="link" onclick="showDetail(${u.id})">Manage</a></td>
+        </tr>`).join("");
+    }
+
+    async function load() {
+      users = await apiFetch("/api/users/");
+      renderUsers();
+    }
+
+    async function createUser() {
+      const errorEl = document.getElementById("form-error");
+      errorEl.textContent = "";
+      const password = document.getElementById("f-password").value;
+      try {
+        const user = await apiFetch("/api/users/", {
+          method: "POST",
+          body: JSON.stringify({
+            username: document.getElementById("f-username").value.trim(),
+            full_name: document.getElementById("f-full-name").value.trim() || null,
+            email: document.getElementById("f-email").value.trim() || null,
+            role: document.getElementById("f-role").value,
+            password,
+          }),
+        });
+        toggleForm(false);
+        await load();
+        showDetail(user.id, `Created <strong>${escapeHtml(user.username)}</strong>. Give them this temporary password: <code>${escapeHtml(password)}</code> — they'll set their own at first login.`);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function showDetail(id, message) {
+      const u = users.find(x => x.id === id);
+      if (!u) return;
+      const self = u.id === me.id;
+      const card = document.getElementById("detail-card");
+      card.style.display = "block";
+      card.innerHTML = `
+        <h3 style="margin-top:0;">${escapeHtml(u.username)} <span class="tag role-${u.role}">${ROLE_LABELS[u.role]}</span>
+          ${u.is_active ? "" : `<span class="tag cancelled">deactivated</span>`}</h3>
+        ${message ? `<div class="notice info">${message}</div>` : ""}
+        <div class="row">
+          <div><label>Full name</label><input type="text" id="e-full-name" value="${escapeHtml(u.full_name || "")}"></div>
+          <div><label>Email</label><input type="text" id="e-email" value="${escapeHtml(u.email || "")}"></div>
+          <div><label>Role</label><select id="e-role">${roleOptions(u.role)}</select></div>
+        </div>
+        <button onclick="saveUser(${u.id})" style="margin-top:10px;">Save Changes</button>
+
+        <h4 style="margin-top:20px;">Reset password</h4>
+        <p class="muted">Sets a temporary password; they must choose a new one at next login.</p>
+        <div class="row" style="max-width:520px;">
+          <input type="text" id="e-password" value="${randomPassword()}" autocomplete="off">
+          <button class="secondary" style="flex:0;white-space:nowrap;" onclick="document.getElementById('e-password').value = randomPassword()">Generate</button>
+          <button style="flex:0;white-space:nowrap;" onclick="resetPassword(${u.id})">Reset Password</button>
+        </div>
+
+        <h4 style="margin-top:20px;">Access</h4>
+        <div class="btn-row">
+          ${self ? `<span class="muted">You can't deactivate or delete your own account.</span>` : `
+            ${u.is_active
+              ? `<button class="danger" onclick="setActive(${u.id}, false)">Deactivate</button>`
+              : `<button onclick="setActive(${u.id}, true)">Reactivate</button>`}
+            <button class="danger" onclick="deleteUser(${u.id})">Delete Account</button>`}
+          <button class="secondary" onclick="document.getElementById('detail-card').style.display='none'">Close</button>
+        </div>
+        <div id="detail-error" class="error"></div>
+      `;
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    async function userAction(id, path, options, message) {
+      const errorEl = document.getElementById("detail-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(path, options);
+        await load();
+        if (options.method === "DELETE") {
+          document.getElementById("detail-card").style.display = "none";
+        } else {
+          showDetail(id, message);
+        }
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function saveUser(id) {
+      userAction(id, `/api/users/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          full_name: document.getElementById("e-full-name").value.trim(),
+          email: document.getElementById("e-email").value.trim(),
+          role: document.getElementById("e-role").value,
+        }),
+      }, "Saved.");
+    }
+
+    function resetPassword(id) {
+      const password = document.getElementById("e-password").value;
+      userAction(id, `/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ password }) },
+        `Password reset. Give them this temporary password: <code>${escapeHtml(password)}</code>`);
+    }
+
+    function setActive(id, active) {
+      const question = active ? "Reactivate this account?" : "Deactivate this account? They won't be able to sign in until reactivated.";
+      if (!confirm(question)) return;
+      userAction(id, `/api/users/${id}`, { method: "PUT", body: JSON.stringify({ is_active: active }) },
+        active ? "Account reactivated." : "Account deactivated.");
+    }
+
+    function deleteUser(id) {
+      if (!confirm("Delete this account permanently? Deactivating keeps their history visible — prefer that unless the account was a mistake.")) return;
+      userAction(id, `/api/users/${id}`, { method: "DELETE" });
+    }
+
+    document.getElementById("search").addEventListener("input", renderUsers);
+    document.getElementById("role-filter").addEventListener("change", renderUsers);
+    document.getElementById("show-inactive").addEventListener("change", renderUsers);
+    if (me) load();
+  </script>
+  </div>
+</body>
+</html>

@@ -23,7 +23,7 @@
     <div class="card">
       <h3 style="margin-top:0;">Open Customer Orders</h3>
       <table>
-        <thead><tr><th>Code</th><th>Customer</th><th>Status</th><th>Order date</th><th>Open value</th></tr></thead>
+        <thead><tr><th>Code</th><th>Customer</th><th>Status</th><th>Order date</th><th class="sum">Open value</th></tr></thead>
         <tbody id="open-co-body"></tbody>
       </table>
     </div>
@@ -31,7 +31,7 @@
     <div class="card">
       <h3 style="margin-top:0;">Open Purchase Orders</h3>
       <table>
-        <thead><tr><th>Code</th><th>Vendor</th><th>Status</th><th>Order date</th><th>Open value</th></tr></thead>
+        <thead><tr><th>Code</th><th>Vendor</th><th>Status</th><th>Order date</th><th class="sum">Open value</th></tr></thead>
         <tbody id="open-po-body"></tbody>
       </table>
     </div>
@@ -39,7 +39,7 @@
     <div class="card">
       <h3 style="margin-top:0;">Sales by Customer</h3>
       <table>
-        <thead><tr><th>Customer</th><th>Orders</th><th>Total sales</th></tr></thead>
+        <thead><tr><th>Customer</th><th class="sum">Orders</th><th class="sum">Total sales</th></tr></thead>
         <tbody id="sales-body"></tbody>
       </table>
     </div>
@@ -47,15 +47,31 @@
     <div class="card">
       <h3 style="margin-top:0;">Purchasing by Vendor</h3>
       <table>
-        <thead><tr><th>Vendor</th><th>Orders</th><th>Total spend</th></tr></thead>
+        <thead><tr><th>Vendor</th><th class="sum">Orders</th><th class="sum">Total spend</th></tr></thead>
         <tbody id="purchasing-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Receivables Aging (open invoice balances by days past due)</h3>
+      <table>
+        <thead><tr><th>Customer</th><th>Not yet due</th><th>1–30</th><th>31–60</th><th>61–90</th><th>90+</th><th>Total open</th></tr></thead>
+        <tbody id="ar-aging-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Payables (unpaid purchase order balances)</h3>
+      <table>
+        <thead><tr><th>Vendor</th><th class="sum">Open POs</th><th class="sum">PO value</th><th class="sum">Paid</th><th class="sum">Balance</th></tr></thead>
+        <tbody id="ap-body"></tbody>
       </table>
     </div>
 
     <div class="card">
       <h3 style="margin-top:0;">Overdue Invoices</h3>
       <table>
-        <thead><tr><th>Code</th><th>Customer</th><th>Due date</th><th>Days overdue</th><th>Total</th></tr></thead>
+        <thead><tr><th>Code</th><th>Customer</th><th>Due date</th><th>Days overdue</th><th class="sum">Total</th><th class="sum">Balance</th></tr></thead>
         <tbody id="overdue-body"></tbody>
       </table>
     </div>
@@ -63,7 +79,7 @@
     <div class="card">
       <h3 style="margin-top:0;">Expiring / Expired Lots (next 30 days)</h3>
       <table>
-        <thead><tr><th>Lot code</th><th>Item</th><th>Qty</th><th>Expiry date</th></tr></thead>
+        <thead><tr><th>Lot code</th><th>Item</th><th class="sum">Qty</th><th>Expiry date</th></tr></thead>
         <tbody id="expiring-body"></tbody>
       </table>
     </div>
@@ -177,22 +193,67 @@
 
       // ---- Overdue invoices ----
       const today = new Date();
-      const overdue = invoices.filter(inv => inv.status === "sent" && inv.due_date && new Date(inv.due_date) < today);
+      const DAY = 1000 * 60 * 60 * 24;
+      const openInvoices = invoices.filter(inv => inv.status === "sent" && inv.balance > 0.005);
+
+      // ---- Receivables aging ----
+      const buckets = ["current", "d30", "d60", "d90", "d90plus"];
+      const bucketOf = inv => {
+        const days = inv.due_date ? Math.floor((today - new Date(inv.due_date)) / DAY) : 0;
+        return days <= 0 ? "current" : days <= 30 ? "d30" : days <= 60 ? "d60" : days <= 90 ? "d90" : "d90plus";
+      };
+      const aging = {};
+      openInvoices.forEach(inv => {
+        aging[inv.customer_id] = aging[inv.customer_id] || Object.fromEntries(buckets.map(b => [b, 0]));
+        aging[inv.customer_id][bucketOf(inv)] += inv.balance;
+      });
+      const agingRows = Object.entries(aging)
+        .map(([id, b]) => [id, b, buckets.reduce((s, k) => s + b[k], 0)])
+        .sort((a, b) => b[2] - a[2]);
+      const agingTotals = Object.fromEntries(buckets.map(k => [k, agingRows.reduce((s, r) => s + r[1][k], 0)]));
+      const agingCell = (v, late) => `<td${late && v > 0 ? ' style="color:#dc2626;font-weight:600;"' : ''}>${v > 0 ? money(v) : ''}</td>`;
+      document.getElementById("ar-aging-body").innerHTML = agingRows.length
+        ? agingRows.map(([id, b, total]) => `
+          <tr><td>${customerName(parseInt(id))}</td>${buckets.map(k => agingCell(b[k], k !== "current")).join("")}<td><strong>${money(total)}</strong></td></tr>
+        `).join("") + `
+          <tr><td><strong>Total</strong></td>${buckets.map(k => `<td><strong>${agingTotals[k] > 0 ? money(agingTotals[k]) : ''}</strong></td>`).join("")}
+              <td><strong>${money(agingRows.reduce((s, r) => s + r[2], 0))}</strong></td></tr>`
+        : `<tr><td colspan="7" class="muted">No open receivables.</td></tr>`;
+
+      // ---- Payables ----
+      const byVendorAP = {};
+      purchaseOrders.filter(o => o.status !== "cancelled" && o.status !== "draft").forEach(o => {
+        const value = o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0) + (o.freight_cost || 0) + (o.tariff_cost || 0);
+        const paid = o.payments.reduce((s, p) => s + p.amount, 0);
+        if (value - paid <= 0.005) return;
+        byVendorAP[o.vendor_id] = byVendorAP[o.vendor_id] || { count: 0, value: 0, paid: 0 };
+        byVendorAP[o.vendor_id].count += 1;
+        byVendorAP[o.vendor_id].value += value;
+        byVendorAP[o.vendor_id].paid += paid;
+      });
+      const apRows = Object.entries(byVendorAP).sort((a, b) => (b[1].value - b[1].paid) - (a[1].value - a[1].paid));
+      document.getElementById("ap-body").innerHTML = apRows.length
+        ? apRows.map(([id, agg]) => `
+          <tr><td>${vendorName(parseInt(id))}</td><td>${agg.count}</td><td>${money(agg.value)}</td><td>${money(agg.paid)}</td><td><strong>${money(agg.value - agg.paid)}</strong></td></tr>
+        `).join("")
+        : `<tr><td colspan="5" class="muted">No unpaid purchase orders.</td></tr>`;
+
+      const overdue = openInvoices.filter(inv => inv.due_date && new Date(inv.due_date) < today);
       document.getElementById("overdue-body").innerHTML = overdue.length
         ? overdue.map(inv => {
-            const daysOverdue = Math.floor((today - new Date(inv.due_date)) / (1000 * 60 * 60 * 24));
-            const total = inv.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+            const daysOverdue = Math.floor((today - new Date(inv.due_date)) / DAY);
             return `
               <tr>
                 <td><a class="link" href="invoices.html?id=${inv.id}">${inv.code}</a></td>
                 <td>${customerName(inv.customer_id)}</td>
                 <td>${fmtDate(inv.due_date)}</td>
                 <td style="color:#dc2626;font-weight:600;">${daysOverdue}</td>
-                <td>${money(total)}</td>
+                <td>${money(inv.total)}</td>
+                <td>${money(inv.balance)}</td>
               </tr>
             `;
           }).join("")
-        : `<tr><td colspan="5" class="muted">No overdue invoices.</td></tr>`;
+        : `<tr><td colspan="6" class="muted">No overdue invoices.</td></tr>`;
 
       // ---- Expiring lots ----
       const itemsById = Object.fromEntries(items.map(i => [i.id, i]));

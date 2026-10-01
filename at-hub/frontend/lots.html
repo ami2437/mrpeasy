@@ -11,16 +11,31 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
-      <table>
-        <thead><tr><th>Lot code</th><th>Item</th><th>Qty remaining</th><th>Landed unit cost</th><th>Received</th><th>Expiry</th><th>Source</th><th>Status</th><th></th></tr></thead>
-        <tbody id="lots-body"><tr><td colspan="9">Loading...</td></tr></tbody>
+      <div class="row" style="align-items:center;">
+        <input type="text" id="search" placeholder="Search lot #, item code, or PO...">
+        <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="in-stock-only" checked style="width:auto;display:inline-block;"> In stock only</label>
+        <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="missing-only" style="width:auto;display:inline-block;"> Missing cost only</label>
+      </div>
+      <p class="muted" style="margin:8px 0 0;">Every receipt and every stock increase creates a lot. Bookings draw from lots oldest-first, so each shipped unit carries its lot's cost:
+        the purchase (or adjustment) cost plus any landed costs applied to that receipt.</p>
+      <div id="missing-banner"></div>
+    </div>
+    <div class="card">
+      <div class="table-scroll">
+      <table class="compact-table">
+        <thead><tr><th>Lot #</th><th>Item</th><th class="num sum">Remaining</th><th class="num">Base cost</th><th class="num">+ Landed</th><th class="num">Unit cost</th><th>Received</th><th>Expiry</th><th>Source</th><th>Status</th><th></th></tr></thead>
+        <tbody id="lots-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
+      </div>
     </div>
   </main>
 
   <script>
     AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("lots.html");
+
+    let lots = [];
+    let itemsById = {};
 
     function fmtDate(d) {
       return d ? new Date(d).toLocaleDateString() : "";
@@ -35,42 +50,97 @@
       }
     }
 
+    function editCost(lotId) {
+      const lot = lots.find(l => l.id === lotId);
+      const cell = document.getElementById(`cost-${lotId}`);
+      cell.innerHTML = `
+        <input type="number" step="${PRICE_STEP}" min="0" id="cost-input-${lotId}" value="${lot.base_unit_cost ?? ""}" placeholder="unit cost" style="width:100px;">
+        <button class="small-btn" onclick="saveCost(${lotId})">Save</button>
+        <div class="muted small">what it was acquired at${lot.landed_cost_per_unit ? "; landed costs stay on top" : ""}</div>
+        <div class="error" id="cost-error-${lotId}"></div>
+      `;
+      document.getElementById(`cost-input-${lotId}`).focus();
+    }
+
+    async function saveCost(lotId) {
+      const value = document.getElementById(`cost-input-${lotId}`).value;
+      if (value === "" || parseFloat(value) < 0) {
+        document.getElementById(`cost-error-${lotId}`).textContent = "Enter 0 or more.";
+        return;
+      }
+      try {
+        await apiFetch(`/api/lots/${lotId}/cost`, { method: "PUT", body: JSON.stringify({ unit_cost: parseFloat(value) }) });
+        load();
+      } catch (err) {
+        document.getElementById(`cost-error-${lotId}`).textContent = err.message;
+      }
+    }
+
+    function render() {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const inStockOnly = document.getElementById("in-stock-only").checked;
+      const missingOnly = document.getElementById("missing-only").checked;
+      const missingCount = lots.filter(l => l.unit_cost == null && l.quantity > 0).length;
+      document.getElementById("missing-banner").innerHTML = missingCount ? `
+        <div class="notice"><strong>${missingCount} lot${missingCount === 1 ? "" : "s"} in stock ha${missingCount === 1 ? "s" : "ve"} no cost.</strong>
+          Profit on anything booked from ${missingCount === 1 ? "it" : "them"} counts as $0 cost — use <em>Set cost</em> to enter what ${missingCount === 1 ? "it was" : "they were"} acquired at.</div>` : "";
+
+      const filtered = lots.filter(lot => {
+        const item = itemsById[lot.item_id];
+        if (inStockOnly && lot.quantity <= 0) return false;
+        if (missingOnly && lot.unit_cost != null) return false;
+        return !q || lot.lot_code.toLowerCase().includes(q)
+          || (item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q)))
+          || (lot.source_reference || "").toLowerCase().includes(q);
+      });
+      const tbody = document.getElementById("lots-body");
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">${lots.length ? "No lots match these filters." : "No lots yet — receive a purchase order to create one."}</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = filtered.map(lot => {
+        const item = itemsById[lot.item_id];
+        const options = ["available", "on_hold", "rejected"]
+          .filter(s => s !== lot.status)
+          .map(s => `<a class="link" style="margin-right:8px;" onclick="setStatus(${lot.id}, '${s}')">${s.replace('_',' ')}</a>`)
+          .join("");
+        const missing = lot.unit_cost == null;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(lot.lot_code)}</strong></td>
+            <td>${item ? `${escapeHtml(item.code)}<div class="muted small">${escapeHtml(item.title)}</div>` : lot.item_id}</td>
+            <td class="num">${fmtQty(lot.quantity)}${lot.initial_quantity ? `<div class="muted small">of ${fmtQty(lot.initial_quantity)}</div>` : ""}</td>
+            <td class="num">${lot.base_unit_cost != null ? fmtPrice(lot.base_unit_cost) : ""}</td>
+            <td class="num muted">${lot.landed_cost_per_unit ? fmtPrice(lot.landed_cost_per_unit) : "—"}</td>
+            <td class="num" id="cost-${lot.id}">
+              ${missing ? `<span class="neg">no cost</span><br><a class="link" onclick="editCost(${lot.id})">Set cost</a>`
+                        : `<strong>${fmtPrice(lot.unit_cost)}</strong><br><a class="link small" onclick="editCost(${lot.id})">edit</a>`}
+            </td>
+            <td>${fmtDate(lot.received_date)}</td>
+            <td>${fmtDate(lot.expiry_date)}</td>
+            <td>${lot.source === "purchase" && lot.source_reference ? escapeHtml(lot.source_reference) : escapeHtml(lot.source || "")}</td>
+            <td><span class="tag ${lot.status}">${lot.status.replace('_',' ')}</span></td>
+            <td class="muted small">${options}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
     async function load() {
       try {
-        const [lots, items] = await Promise.all([
+        const [lotList, items] = await Promise.all([
           apiFetch("/api/lots/"),
           apiFetch("/api/stock-items/"),
         ]);
-        const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
-        const tbody = document.getElementById("lots-body");
-        if (!lots.length) {
-          tbody.innerHTML = `<tr><td colspan="9" class="muted">No lots yet — receive a purchase order to create one.</td></tr>`;
-          return;
-        }
-        tbody.innerHTML = lots.map(lot => {
-          const item = itemsById[lot.item_id];
-          const options = ["available", "on_hold", "rejected"]
-            .filter(s => s !== lot.status)
-            .map(s => `<a class="link" style="margin-right:8px;" onclick="setStatus(${lot.id}, '${s}')">${s.replace('_',' ')}</a>`)
-            .join("");
-          return `
-            <tr>
-              <td>${lot.lot_code}</td>
-              <td>${item ? `${item.code} — ${item.title}` : lot.item_id}</td>
-              <td>${lot.quantity}</td>
-              <td>${lot.unit_cost != null ? '$' + lot.unit_cost.toFixed(4) : ''}</td>
-              <td>${fmtDate(lot.received_date)}</td>
-              <td>${fmtDate(lot.expiry_date)}</td>
-              <td>${lot.source_reference || lot.source || ""}</td>
-              <td><span class="tag ${lot.status}">${lot.status.replace('_',' ')}</span></td>
-              <td class="muted">${options}</td>
-            </tr>
-          `;
-        }).join("");
+        lots = lotList.slice().reverse();  // newest first
+        itemsById = Object.fromEntries(items.map(i => [i.id, i]));
+        render();
       } catch (err) {
-        document.getElementById("lots-body").innerHTML = `<tr><td colspan="9" class="error">${err.message}</td></tr>`;
+        document.getElementById("lots-body").innerHTML = `<tr><td colspan="11" class="error">${escapeHtml(err.message)}</td></tr>`;
       }
     }
+    ["search", "in-stock-only", "missing-only"].forEach(id =>
+      document.getElementById(id).addEventListener(id === "search" ? "input" : "change", render));
     load();
   </script>
   </div>

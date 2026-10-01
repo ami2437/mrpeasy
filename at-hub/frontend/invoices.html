@@ -11,12 +11,12 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
-      <input type="text" id="search" placeholder="Search invoice code, customer, or item code...">
+      <input type="text" id="search" placeholder="Search invoice code, customer, PO #, job #, or item code...">
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Customer</th><th>Date</th><th>Due</th><th>Total</th><th>Status</th></tr></thead>
-        <tbody id="invoices-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Customer</th><th>Order</th><th>PO #</th><th>Job #</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Payment</th><th>Status</th></tr></thead>
+        <tbody id="invoices-body"><tr><td colspan="13">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -29,6 +29,11 @@
 
     let invoices = [];
     let customers = [];
+    let items = [];
+    let orders = [];
+    let shipments = [];
+    let company = {};
+    let emailConfig = { configured: false };
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
@@ -40,7 +45,35 @@
       q = q.toLowerCase();
       if (inv.code.toLowerCase().includes(q)) return true;
       if (customerName(inv.customer_id).toLowerCase().includes(q)) return true;
+      if (orderField(inv, "po_number").toLowerCase().includes(q) || orderField(inv, "job_number").toLowerCase().includes(q)) return true;
+      if (refLink("order", inv.order_id).toLowerCase().includes(q) || refLink("shipment", inv.shipment_id).toLowerCase().includes(q)) return true;
       return inv.lines.some(l => l.description.toLowerCase().includes(q));
+    }
+
+    function refLink(kind, id) {
+      if (!id) return "";
+      const list = kind === "order" ? orders : shipments;
+      const page = kind === "order" ? "customer-orders.html" : "shipments.html";
+      const rec = list.find(r => r.id === id);
+      return `<a class="link" href="${page}?id=${id}">${rec ? rec.code : "#" + id}</a>`;
+    }
+
+    // Payment state: paid / partially paid / overdue / unpaid (void and draft have none).
+    function orderField(inv, field) {
+      const o = orders.find(o => o.id === inv.order_id);
+      return o ? o[field] || "" : "";
+    }
+
+    function paymentCell(inv) {
+      if (inv.status === "void") return `<span class="muted">—</span>`;
+      const total = inv.total || invoiceTotal(inv);
+      const pct = total ? inv.amount_paid / total * 100 : 0;
+      const overdue = inv.balance > 0.005 && inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString());
+      const state = inv.balance <= 0.005 && total > 0 ? `<span class="tag shipped">Paid</span>`
+        : overdue ? `<span class="tag overdue">Overdue</span>`
+        : inv.amount_paid > 0 ? `<span class="tag confirmed">Partially paid</span>`
+        : `<span class="tag draft">Unpaid</span>`;
+      return `${state}${progressBar("", pct, "paid", `${fmtMoney(inv.amount_paid)} of ${fmtMoney(total)} paid`)}`;
     }
 
     function renderInvoices() {
@@ -48,38 +81,82 @@
       const q = document.getElementById("search").value.trim();
       const filtered = invoices.filter(inv => matchesSearch(inv, q));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="13" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(inv => `
         <tr>
           <td><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
           <td>${customerName(inv.customer_id)}</td>
+          <td>${refLink("order", inv.order_id)}</td>
+          <td>${escapeHtml(orderField(inv, "po_number"))}</td>
+          <td>${escapeHtml(orderField(inv, "job_number"))}</td>
+          <td>${refLink("shipment", inv.shipment_id)}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
           <td>${fmtDate(inv.due_date)}</td>
-          <td>$${invoiceTotal(inv).toFixed(2)}</td>
+          <td class="num">${inv.status === 'void' ? '' : fmtMoney(invoiceTotal(inv))}</td>
+          <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.amount_paid)}</td>
+          <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.balance)}</td>
+          <td>${paymentCell(inv)}</td>
           <td><span class="tag ${inv.status === 'paid' ? 'shipped' : inv.status === 'void' ? 'cancelled' : inv.status === 'sent' ? 'confirmed' : 'draft'}">${inv.status}</span></td>
         </tr>
       `).join("");
     }
 
+    // Item # has its own column; older lines stored "CODE — title" as the description.
+    function itemCodeOf(line) {
+      const item = items.find(i => i.id === line.item_id);
+      return item ? item.code : "";
+    }
+    function lineDescription(line) {
+      const code = itemCodeOf(line);
+      return code && line.description.startsWith(`${code} — `) ? line.description.slice(code.length + 3) : line.description;
+    }
+
     function lineRowsHtml(invoice, editable) {
       return invoice.lines.map((l, idx) => editable ? `
-        <tr data-idx="${idx}">
-          <td><input type="text" class="line-desc" value="${l.description}" style="width:220px;"></td>
-          <td><input type="number" step="0.01" class="line-qty" value="${l.quantity}" style="width:80px;"></td>
-          <td><input type="number" step="0.01" class="line-price" value="${l.unit_price}" style="width:90px;"></td>
-          <td>$${lineTotal(l).toFixed(2)}</td>
-          <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        <tr data-idx="${idx}" data-item-id="${l.item_id ?? ""}" data-order-line-id="${l.order_line_id ?? ""}">
+          <td class="line-no">${idx + 1}</td>
+          <td><strong>${escapeHtml(itemCodeOf(l))}</strong></td>
+          <td class="grow"><input type="text" class="line-desc" value="${escapeHtml(lineDescription(l))}"></td>
+          <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="${l.quantity}"></td>
+          <td class="num">${priceInput("line-price", l.unit_price)}</td>
+          <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
+          <td><a class="link" onclick="this.closest('tr').remove(); recalcInvoice();">Remove</a></td>
         </tr>
       ` : `
         <tr>
-          <td>${l.description}</td>
-          <td>${l.quantity}</td>
-          <td>$${l.unit_price.toFixed(2)}</td>
-          <td>$${lineTotal(l).toFixed(2)}</td>
+          <td class="line-no">${idx + 1}</td>
+          <td><strong>${escapeHtml(itemCodeOf(l))}</strong></td>
+          <td class="grow">${escapeHtml(lineDescription(l))}</td>
+          <td class="num">${fmtQty(l.quantity)}</td>
+          <td class="num">${fmtPrice(l.unit_price)}</td>
+          <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
         </tr>
       `).join("");
+    }
+
+    // Live subtotals + invoice total while editing a draft.
+    function recalcInvoice() {
+      let total = 0;
+      document.querySelectorAll("#line-rows > tr").forEach((tr, i) => {
+        const qtyEl = tr.querySelector(".line-qty");
+        if (!qtyEl) return;
+        const sub = (parseFloat(qtyEl.value) || 0) * (parseFloat(tr.querySelector(".line-price").value) || 0);
+        total += sub;
+        tr.querySelector(".subtotal").textContent = fmtMoney(sub);
+        tr.querySelector(".line-no").textContent = i + 1;
+      });
+      document.getElementById("invoice-total").textContent = fmtMoney(total);
+    }
+
+    // Order / shipment context for an invoice: PO #, job #, shipment code and delivered (ship) date.
+    async function invoiceContext(invoice) {
+      const [order, shipment] = await Promise.all([
+        invoice.order_id ? apiFetch(`/api/customer-orders/${invoice.order_id}`) : null,
+        invoice.shipment_id ? apiFetch(`/api/shipments/${invoice.shipment_id}`) : null,
+      ]);
+      return { order, shipment, customer: customers.find(c => c.id === invoice.customer_id) || {} };
     }
 
     async function showDetail(id) {
@@ -91,43 +168,120 @@
       card.innerHTML = `
         <h3>${invoice.code} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
         <p class="muted">${customerName(invoice.customer_id)} — dated ${fmtDate(invoice.invoice_date)}</p>
+        <div id="invoice-refs" class="muted"></div>
 
         <div class="row" style="max-width:400px;">
           <div><label>Due date</label><input type="date" id="f-due-date" value="${invoice.due_date ? invoice.due_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
         </div>
         <label>Free text</label><textarea id="f-free-text" rows="2" ${editable ? "" : "disabled"}>${invoice.free_text || ""}</textarea>
 
-        <table style="margin-top:14px;">
-          <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Total</th>${editable ? "<th></th>" : ""}</tr></thead>
-          <tbody id="line-rows">${lineRowsHtml(invoice, editable)}</tbody>
+        <div class="table-scroll" style="margin-top:14px;">
+        <table class="fit-table ${editable ? "lines-table" : ""}">
+          <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
+          <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
+          <tfoot><tr><td></td><td></td><td class="grow">Invoice total</td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
         </table>
+        </div>
         ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>` : ""}
 
-        <p style="margin-top:10px; font-size:16px;"><strong>Total: $${invoiceTotal(invoice).toFixed(2)}</strong></p>
+        ${invoice.status === "sent" || invoice.status === "paid" ? `<h4 style="margin-top:20px;">Payments received</h4>${renderPayments(invoice)}` : ""}
 
-        <div style="margin-top:14px;">
+        <div class="btn-row">
           ${editable ? `<button onclick="saveInvoice(${invoice.id})">Save Changes</button>` : ""}
-          ${invoice.status === "draft" ? `<button onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
-          ${invoice.status === "sent" ? `<button onclick="setStatus(${invoice.id}, 'paid')">Mark Paid</button>` : ""}
-          ${invoice.status !== "paid" && invoice.status !== "void" ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
-          <button onclick="printInvoice(${invoice.id})">Print</button>
+          ${invoice.status !== "void" ? `<button onclick="openEmailComposer(${invoice.id})">✉ Send via Email</button>` : ""}
+          <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
+          ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
+          ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
         <div id="detail-error" class="error"></div>
+        <div id="email-panel"></div>
+        ${invoice.emails.length ? `
+          <h4 style="margin-top:20px;">Email history</h4>
+          <table class="compact-table">
+            <thead><tr><th>Sent</th><th>To</th><th>CC</th><th>Subject</th><th>By</th></tr></thead>
+            <tbody>${invoice.emails.slice().reverse().map(e => `
+              <tr><td class="nowrap">${new Date(e.sent_at + (e.sent_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(e.to_address)}</td>
+                  <td>${escapeHtml(e.cc_address || "")}</td><td>${escapeHtml(e.subject)}</td><td>${escapeHtml(e.sent_by || "")}</td></tr>
+            `).join("")}</tbody>
+          </table>
+        ` : ""}
       `;
+      const { order, shipment } = await invoiceContext(invoice);
+      document.getElementById("invoice-refs").innerHTML = [
+        order ? `Order <a class="link" href="customer-orders.html?id=${order.id}">${order.code}</a>` : "",
+        order && order.po_number ? `Customer PO ${order.po_number}` : "",
+        order && order.job_number ? `Job ${order.job_number}` : "",
+        shipment ? `Shipment <a class="link" href="shipments.html?id=${shipment.id}">${shipment.code}</a>` : "",
+        shipment && shipment.ship_date ? `Shipped ${fmtDate(shipment.ship_date)}` : "",
+        shipment && shipment.delivered_at ? `<strong>Delivered ${fmtDate(shipment.delivered_at)}</strong>` : (shipment ? "Not delivered yet" : ""),
+      ].filter(Boolean).join(" · ");
+    }
+
+    function renderPayments(invoice) {
+      return `
+        <p class="muted">Total: ${fmtMoney(invoice.total)} — Paid: ${fmtMoney(invoice.amount_paid)} — Balance: ${fmtMoney(invoice.balance)}</p>
+        ${invoice.payments.length ? `
+          <table>
+            <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Note</th></tr></thead>
+            <tbody>${invoice.payments.map(p => `
+              <tr><td>${fmtDate(p.paid_date)}</td><td>${fmtMoney(p.amount)}</td><td>${p.method || ""}</td><td>${p.reference || ""}</td><td>${p.note || ""}</td></tr>
+            `).join("")}</tbody>
+          </table>
+        ` : `<p class="muted">No payments recorded yet.</p>`}
+        ${invoice.status === "sent" ? `
+          <div class="row" style="max-width:600px; margin-top:8px;">
+            <div><label>Amount</label><input type="number" step="0.01" id="pay-amount" value="${invoice.balance.toFixed(2)}"></div>
+            <div><label>Paid date</label><input type="date" id="pay-date"></div>
+            <div><label>Method</label><input type="text" id="pay-method" placeholder="wire, check, ..."></div>
+            <div><label>Reference</label><input type="text" id="pay-reference"></div>
+          </div>
+          <button class="secondary" onclick="recordPayment(${invoice.id})" style="margin-top:8px;">Record Payment</button>
+          <div id="payment-error" class="error"></div>
+        ` : ""}
+      `;
+    }
+
+    async function recordPayment(invoiceId) {
+      const errorEl = document.getElementById("payment-error");
+      errorEl.textContent = "";
+      const amount = parseFloat(document.getElementById("pay-amount").value);
+      if (!amount || amount <= 0) {
+        errorEl.textContent = "Enter a payment amount greater than 0.";
+        return;
+      }
+      try {
+        await apiFetch(`/api/invoices/${invoiceId}/payments`, {
+          method: "POST",
+          body: JSON.stringify({
+            amount,
+            paid_date: document.getElementById("pay-date").value || null,
+            method: document.getElementById("pay-method").value || null,
+            reference: document.getElementById("pay-reference").value || null,
+          }),
+        });
+        loadInvoices();
+        showDetail(invoiceId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
     }
 
     function addLine() {
       const tbody = document.getElementById("line-rows");
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><input type="text" class="line-desc" style="width:220px;"></td>
-        <td><input type="number" step="0.01" class="line-qty" value="1" style="width:80px;"></td>
-        <td><input type="number" step="0.01" class="line-price" value="0" style="width:90px;"></td>
-        <td>$0.00</td>
-        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        <td class="line-no"></td>
+        <td></td>
+        <td class="grow"><input type="text" class="line-desc" placeholder="e.g. Handling fee"></td>
+        <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="1"></td>
+        <td class="num">${priceInput("line-price", 0)}</td>
+        <td class="num subtotal">$0.00</td>
+        <td><a class="link" onclick="this.closest('tr').remove(); recalcInvoice();">Remove</a></td>
       `;
       tbody.appendChild(tr);
+      recalcInvoice();
+      tr.querySelector(".line-desc").focus();
     }
 
     async function saveInvoice(id) {
@@ -137,7 +291,8 @@
         description: tr.querySelector(".line-desc").value,
         quantity: parseFloat(tr.querySelector(".line-qty").value) || 0,
         unit_price: parseFloat(tr.querySelector(".line-price").value) || 0,
-        item_id: null,
+        item_id: tr.dataset.itemId ? parseInt(tr.dataset.itemId) : null,
+        order_line_id: tr.dataset.orderLineId ? parseInt(tr.dataset.orderLineId) : null,
       }));
       try {
         await apiFetch(`/api/invoices/${id}`, {
@@ -165,33 +320,79 @@
       }
     }
 
-    async function printInvoice(id) {
+    function printInvoice(id) {
+      openPdf(`/api/invoices/${id}/pdf`);
+    }
+
+    // ---- Email ----
+    async function openEmailComposer(id) {
+      const panel = document.getElementById("email-panel");
       const invoice = await apiFetch(`/api/invoices/${id}`);
-      const win = window.open("", "_blank");
-      win.document.write(`
-        <html><head><title>${invoice.code}</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 40px; color: #111; }
-          h1 { font-size: 22px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ccc; }
-          .total { text-align: right; font-size: 16px; margin-top: 14px; }
-        </style>
-        </head><body>
-          <h1>Invoice ${invoice.code}</h1>
-          <p>${customerName(invoice.customer_id)}</p>
-          <p>Date: ${fmtDate(invoice.invoice_date)} &nbsp; Due: ${fmtDate(invoice.due_date)}</p>
-          <table>
-            <thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead>
-            <tbody>${invoice.lines.map(l => `<tr><td>${l.description}</td><td>${l.quantity}</td><td>$${l.unit_price.toFixed(2)}</td><td>$${lineTotal(l).toFixed(2)}</td></tr>`).join("")}</tbody>
-          </table>
-          <div class="total">Total: $${invoiceTotal(invoice).toFixed(2)}</div>
-          ${invoice.free_text ? `<p style="margin-top:20px; color:#555;">${invoice.free_text}</p>` : ""}
-        </body></html>
-      `);
-      win.document.close();
-      win.focus();
-      win.print();
+      const { order, customer } = await invoiceContext(invoice);
+      const greeting = customer.contact_name || customer.name || "there";
+      const due = invoice.due_date ? `, due ${fmtDate(invoice.due_date)}` : "";
+      const poLine = order && order.po_number ? `\nYour PO #: ${order.po_number}` : "";
+      const signature = [company.name, company.email, company.phone].filter(Boolean).join("\n");
+      const body = `Hi ${greeting},\n\nPlease find attached invoice ${invoice.code} for ${fmtMoney(invoice.balance)}${due}.${poLine}\n\nLet us know if you have any questions.\n\nThank you for your business!\n\n${signature}`;
+
+      panel.innerHTML = `
+        <div class="panel">
+          <h4>Email ${escapeHtml(invoice.code)}</h4>
+          ${emailConfig.configured ? "" : `
+            <div class="notice"><strong>Email isn't set up yet.</strong> Add your mail server to the AT-HUB <code>.env</code> file
+              (<code>SMTP_HOST</code>, <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code>, <code>SMTP_FROM</code>) and restart the server.
+              For Gmail use <code>smtp.gmail.com</code>, port 587, and an App Password.</div>`}
+          ${emailConfig.configured ? `<p class="muted" style="margin:0;">Sends from <strong>${escapeHtml(emailConfig.from_address)}</strong>${company.email ? ` · replies go to ${escapeHtml(company.email)}` : ""}</p>` : ""}
+          <div class="row">
+            <div><label>To <span class="muted">(separate several with commas)</span></label><input type="text" id="em-to" value="${escapeHtml(customer.email || "")}" placeholder="customer@example.com"></div>
+            <div><label>CC</label><input type="text" id="em-cc" placeholder="optional"></div>
+          </div>
+          <label>Subject</label><input type="text" id="em-subject" value="${escapeHtml(`Invoice ${invoice.code} from ${company.name || ""}`.trim())}">
+          <label>Message</label><textarea id="em-body" rows="11">${escapeHtml(body)}</textarea>
+          <label style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="em-attach" checked style="width:auto;"> Attach invoice PDF (${escapeHtml(invoice.code)}.pdf)</label>
+          ${invoice.status === "draft" ? `<p class="muted small">Sending marks this draft invoice as <strong>sent</strong>.</p>` : ""}
+          <div class="btn-row">
+            <button id="em-send" onclick="sendEmail(${invoice.id})" ${emailConfig.configured ? "" : "disabled"}>Send Email</button>
+            <button class="secondary" onclick="printInvoice(${invoice.id})">Preview PDF</button>
+            <button class="secondary" onclick="document.getElementById('email-panel').innerHTML = '';">Cancel</button>
+          </div>
+          <div id="email-error" class="error"></div>
+        </div>
+      `;
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById(customer.email ? "em-body" : "em-to").focus();
+    }
+
+    async function sendEmail(id) {
+      const errorEl = document.getElementById("email-error");
+      const button = document.getElementById("em-send");
+      errorEl.textContent = "";
+      const to = document.getElementById("em-to").value.trim();
+      if (!to) {
+        errorEl.textContent = "Enter at least one recipient.";
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "Sending…";
+      try {
+        await apiFetch(`/api/invoices/${id}/email`, {
+          method: "POST",
+          body: JSON.stringify({
+            to,
+            cc: document.getElementById("em-cc").value.trim() || null,
+            subject: document.getElementById("em-subject").value,
+            body: document.getElementById("em-body").value,
+            attach_pdf: document.getElementById("em-attach").checked,
+          }),
+        });
+        await loadInvoices();
+        await showDetail(id);
+        document.getElementById("email-panel").innerHTML = `<div class="notice info" style="margin-top:14px;">Invoice emailed to ${escapeHtml(to)}.</div>`;
+      } catch (err) {
+        errorEl.textContent = err.message;
+        button.disabled = false;
+        button.textContent = "Send Email";
+      }
     }
 
     async function loadInvoices() {
@@ -200,7 +401,14 @@
     }
 
     async function init() {
-      customers = await apiFetch("/api/customers/");
+      [customers, company, emailConfig, orders, shipments, items] = await Promise.all([
+        apiFetch("/api/customers/"),
+        apiFetch("/api/company/"),
+        apiFetch("/api/invoices/email/config"),
+        apiFetch("/api/customer-orders/"),
+        apiFetch("/api/shipments/"),
+        apiFetch("/api/stock-items/"),
+      ]);
       document.getElementById("search").addEventListener("input", renderInvoices);
       await loadInvoices();
       const params = new URLSearchParams(window.location.search);

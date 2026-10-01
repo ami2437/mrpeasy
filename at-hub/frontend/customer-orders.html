@@ -19,20 +19,24 @@
 
     <div class="card" id="form-card" style="display:none;">
       <h3>New Customer Order</h3>
-      <div class="row">
-        <div><label>Customer</label><select id="f-customer"></select></div>
+      <div class="field-grid">
+        <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo()"></select></div>
+        <div><label>PO #</label><input type="text" id="f-po-number" placeholder="customer's PO #"></div>
+        <div><label>Job #</label><input type="text" id="f-job-number"></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
       </div>
-      <div class="row">
-        <div><label>PO number</label><input type="text" id="f-po-number" placeholder="customer's PO #"></div>
-        <div><label>Job number</label><input type="text" id="f-job-number"></div>
+      <div class="field-grid">
+        <div class="wide"><label>Ship to <span class="muted small">(from the customer — edit for this order)</span></label><textarea id="f-ship-to" rows="3"></textarea></div>
+        <div class="wide"><label>Notes</label><textarea id="f-notes" rows="3"></textarea></div>
       </div>
-      <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
       <h4>Lines</h4>
-      <table class="lines-table">
-        <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Delivery date</th><th></th></tr></thead>
-        <tbody id="lines-body"></tbody>
+      <div class="table-scroll">
+      <table class="lines-table fit-table">
+        <thead><tr><th>#</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Subtotal</th><th>Delivery date</th><th></th></tr></thead>
+        <tbody id="lines-body" oninput="recalcLines('lines-body', 'new-order-total')" onchange="recalcLines('lines-body', 'new-order-total')"></tbody>
+        <tfoot><tr><td></td><td class="grow">Order total</td><td class="num" id="new-order-qty"></td><td></td><td class="num" id="new-order-total">$0.00</td><td></td><td></td></tr></tfoot>
       </table>
+      </div>
       <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
       <div style="margin-top:14px;">
         <button onclick="saveOrder()">Create Order</button>
@@ -43,8 +47,8 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Customer</th><th>Order date</th><th>Delivery</th><th>Status</th><th>Activity</th><th></th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="7">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th>Order date</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th>Shipments</th><th>Invoices</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="13">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -60,6 +64,8 @@
     let orders = [];
     let shipments = [];
     let invoices = [];
+    let currentOrderId = null;
+    let poIdByCode = {};  // booking source links: lot.source_reference is a PO code
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
@@ -67,26 +73,69 @@
       document.getElementById("form-card").style.display = show ? "block" : "none";
       if (show) {
         document.getElementById("lines-body").innerHTML = "";
+        fillShipTo();
         addLine();
       }
+    }
+
+    // A customer's default delivery address: shipping address, else billing.
+    function customerShipTo(customerId) {
+      const c = customers.find(c => c.id === customerId);
+      return c ? (c.shipping_address || c.address || "") : "";
+    }
+    function fillShipTo() {
+      document.getElementById("f-ship-to").value = customerShipTo(parseInt(document.getElementById("f-customer").value));
     }
 
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><select class="l-item">${items.map(i => `<option value="${i.id}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${i.available} available)</option>`).join("")}</select></td>
-        <td><input type="number" step="0.01" class="l-qty" value="1"></td>
-        <td><input type="number" step="0.01" class="l-price" value="0"></td>
-        <td><input type="date" class="l-delivery"></td>
-        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        <td class="line-no"></td>
+        <td class="grow"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)</option>`).join("")}</select></td>
+        <td class="num"><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
+        <td class="num">${priceInput("l-price", 0)}<div data-price-delta data-kind="sale" data-price-input=".l-price"></div></td>
+        <td class="num subtotal"></td>
+        <td><input type="date" class="l-delivery" style="width:140px;"></td>
+        <td><a class="link" onclick="this.closest('tr').remove(); recalcLines('lines-body', 'new-order-total');">Remove</a></td>
       `;
+      const delta = tr.querySelector("[data-price-delta]");
       tr.querySelector(".l-item").addEventListener("change", (e) => {
         const price = e.target.selectedOptions[0].dataset.price;
         tr.querySelector(".l-price").value = price;
+        delta.dataset.item = e.target.value;
+        refreshPriceDeltas(tr);
       });
+      tr.querySelector(".l-price").addEventListener("input", () => refreshPriceDeltas(tr));
       const firstOption = tr.querySelector(".l-item").selectedOptions[0];
-      if (firstOption) tr.querySelector(".l-price").value = firstOption.dataset.price;
+      if (firstOption) {
+        tr.querySelector(".l-price").value = firstOption.dataset.price;
+        delta.dataset.item = firstOption.value;
+      }
       document.getElementById("lines-body").appendChild(tr);
+      recalcLines("lines-body", "new-order-total");
+      refreshPriceDeltas(tr);
+    }
+
+    // Live line subtotals + order total. Each row gives qty/price as an input (.l-qty/.e-line-qty,
+    // .l-price/.e-line-price) or, when read-only, as data-qty / data-price.
+    function recalcLines(tbodyId, totalId) {
+      let total = 0, totalQty = 0, n = 0;
+      document.querySelectorAll(`#${tbodyId} > tr`).forEach(tr => {
+        const qtyEl = tr.querySelector(".l-qty, .e-line-qty");
+        const priceEl = tr.querySelector(".l-price, .e-line-price");
+        const qty = qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty) || 0;
+        const price = priceEl ? parseFloat(priceEl.value) || 0 : parseFloat(tr.dataset.price) || 0;
+        const sub = qty * price;
+        total += sub;
+        totalQty += qty;
+        const subEl = tr.querySelector(".subtotal");
+        if (subEl) subEl.textContent = fmtMoney(sub);
+        const noEl = tr.querySelector(".line-no");
+        if (noEl && !tr.dataset.line) noEl.textContent = ++n;  // new-order form: number rows as they'll be saved
+      });
+      document.getElementById(totalId).textContent = fmtMoney(total);
+      const qtyCell = document.getElementById(totalId.replace("total", "qty"));
+      if (qtyCell) qtyCell.textContent = fmtQty(totalQty);
     }
 
     async function saveOrder() {
@@ -106,12 +155,13 @@
             delivery_date: document.getElementById("f-delivery").value || null,
             po_number: document.getElementById("f-po-number").value || null,
             job_number: document.getElementById("f-job-number").value || null,
+            ship_to_address: document.getElementById("f-ship-to").value || null,
             notes: document.getElementById("f-notes").value,
             lines,
           }),
         });
         toggleForm(false);
-        loadOrders();
+        await loadOrders();
       } catch (err) {
         errorEl.textContent = err.message;
       }
@@ -140,21 +190,41 @@
       const q = document.getElementById("search").value.trim();
       const filtered = orders.filter(o => matchesSearch(o, q));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="7" class="muted">${orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="13" class="muted">${orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(o => {
-        const shipCount = shipments.filter(s => s.order_id === o.id).length;
-        const invCount = invoices.filter(i => i.order_id === o.id).length;
+        const orderShipments = shipments.filter(s => s.order_id === o.id && s.status !== "cancelled");
+        const orderInvoices = invoices.filter(i => i.order_id === o.id);
+        const ordered = o.lines.reduce((sum, l) => sum + l.quantity, 0);
+        const shippedQty = o.lines.reduce((sum, l) => sum + Math.min(l.shipped_quantity, l.quantity), 0);
+        const orderTotal = o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0);
+        const liveInvoices = orderInvoices.filter(i => i.status !== "void");
+        const invoicedAmt = liveInvoices.reduce((sum, i) => sum + i.total, 0);
+        const paidAmt = liveInvoices.reduce((sum, i) => sum + i.amount_paid, 0);
+        const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
         <tr>
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${customerName(o.customer_id)}</td>
+          <td>${escapeHtml(o.po_number || "")}</td>
+          <td>${escapeHtml(o.job_number || "")}</td>
           <td>${fmtDate(o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
+          <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0))}</td>
           <td><span class="tag ${o.status}">${o.status}</span></td>
-          <td class="muted">${shipCount} shipment${shipCount === 1 ? "" : "s"}, ${invCount} invoice${invCount === 1 ? "" : "s"}</td>
-          <td>${o.status === "draft" ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a>` : ""}</td>
+          <td class="muted" title="${escapeHtml(o.notes || "")}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(o.notes || "")}</td>
+          <td>
+            ${progressBar("Shipped", pct, "ship", `${fmtQty(shippedQty)} of ${fmtQty(ordered)} units shipped`)}
+            ${progressBar("Invoiced", orderTotal ? invoicedAmt / orderTotal * 100 : 0, "inv", `${fmtMoney(invoicedAmt)} of ${fmtMoney(orderTotal)} invoiced`)}
+            ${progressBar("Paid", invoicedAmt ? paidAmt / invoicedAmt * 100 : 0, "paid", `${fmtMoney(paidAmt)} of ${fmtMoney(invoicedAmt)} invoiced has been paid`)}
+          </td>
+          <td>${orderShipments.map(s => `<div class="nowrap"><a class="link" href="shipments.html?id=${s.id}">${s.code}</a> <span class="tag ${s.status}">${s.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
+          <td>${orderInvoices.map(i => `<div class="nowrap"><a class="link" href="invoices.html?id=${i.id}">${i.code}</a> <span class="tag ${i.status}">${i.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
+          <td class="nowrap">
+            ${o.status === "draft" ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
+            ${o.status !== "cancelled" ? `<button class="secondary small-btn" onclick="openProfit(${o.id})">Profit</button>` : ""}
+          </td>
         </tr>
       `;
       }).join("");
@@ -163,8 +233,100 @@
     async function confirmOrder(id) {
       try {
         await apiFetch(`/api/customer-orders/${id}/confirm`, { method: "POST" });
-        loadOrders();
+        await loadOrders();
       } catch (err) { alert(err.message); }
+    }
+
+    function itemAvailable(id) {
+      const i = items.find(i => i.id === id);
+      return i ? i.available : 0;
+    }
+
+    // Which shipments hold this line's quantity, e.g. "SH-0001 shipped · 300 · 3 boxes"
+    // One row per shipment holding this line's quantity: "SH-0001 · 100 · shipped"
+    function lineShipmentsHtml(line) {
+      if (!line.shipments.length) return `<span class="muted">—</span>`;
+      return line.shipments.map(s => {
+        const unpicked = s.quantity - s.picked_quantity;
+        const canUnbook = ["new", "ready"].includes(s.status) && unpicked > 0;
+        return `
+        <div class="nowrap" id="alloc-${line.id}-${s.shipment_id}">
+          <a class="link" href="shipments.html?id=${s.shipment_id}">${s.code}</a>
+          <span class="muted small">· ${fmtQty(s.quantity)} · ${s.status === "ready" ? `${fmtQty(s.picked_quantity)} picked` : s.status}</span>
+          ${canUnbook ? `<a class="link small" onclick="showUnbook(${line.id}, ${s.shipment_id}, ${unpicked})">unbook</a>` : ""}
+        </div>`;
+      }).join("");
+    }
+
+    // Inline "unbook N" form in place of the allocation row.
+    function showUnbook(lineId, shipmentId, max) {
+      const el = document.getElementById(`alloc-${lineId}-${shipmentId}`);
+      el.innerHTML = `
+        <span class="small">Unbook</span>
+        <input type="number" step="1" min="1" max="${max}" value="${max}" id="unbook-qty-${lineId}-${shipmentId}" style="width:70px;">
+        <button class="small-btn danger" onclick="unbookLine(${lineId}, ${shipmentId})">OK</button>
+        <a class="link small" onclick="showDetail(currentOrderId)">cancel</a>
+      `;
+      document.getElementById(`unbook-qty-${lineId}-${shipmentId}`).select();
+    }
+
+    async function unbookLine(lineId, shipmentId) {
+      const errorEl = document.getElementById("lines-error");
+      errorEl.textContent = "";
+      const qty = parseFloat(document.getElementById(`unbook-qty-${lineId}-${shipmentId}`).value);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        errorEl.textContent = "Unbook quantity must be a whole number greater than 0.";
+        return;
+      }
+      try {
+        const shipment = await apiFetch(`/api/shipments/${shipmentId}/unbook`, {
+          method: "POST", body: JSON.stringify({ order_line_id: lineId, quantity: qty }),
+        });
+        await loadOrders();
+        await showDetail(currentOrderId);
+        if (shipment.status === "cancelled") {
+          document.getElementById("lines-error").innerHTML = `<span class="muted">${shipment.code} had nothing left booked and was cancelled.</span>`;
+        }
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    // Where the booked/shipped units came from: "PO-0003 · LOT-00012 · 100" or "Manual · LOT-00007 · 20".
+    function bookingSourceHtml(line) {
+      if (!line.booking_sources.length) return `<span class="muted">—</span>`;
+      return line.booking_sources.map(b => {
+        const src = b.source === "purchase" && b.reference
+          ? `<a class="link" href="purchase-orders.html?id=${poIdByCode[b.reference] || ""}">${escapeHtml(b.reference)}</a>`
+          : `<span class="tag source-manual">${b.source === "adjustment" ? "manual adj." : escapeHtml(b.source)}</span>`;
+        return `<div class="nowrap">${src} <span class="muted small">· ${b.lot_code ? escapeHtml(b.lot_code) : "no lot"} · ${fmtQty(b.quantity)}</span></div>`;
+      }).join("");
+    }
+
+    // Invoices raised from the shipments this line went out on.
+    function lineInvoicesHtml(line) {
+      const shipmentIds = line.shipments.map(s => s.shipment_id);
+      const lineInvoices = invoices.filter(i => shipmentIds.includes(i.shipment_id) && i.status !== "void");
+      if (!lineInvoices.length) return `<span class="muted">—</span>`;
+      return lineInvoices.map(i => `
+        <div class="nowrap">
+          <a class="link" href="invoices.html?id=${i.id}">${i.code}</a>
+          <span class="muted small">· ${i.status}</span>
+        </div>
+      `).join("");
+    }
+
+    // Per order line, never merged by item: "#1 BOLT × 1,200, #3 BOLT × 50"
+    function shipmentItemsSummary(shipment) {
+      const byLine = {};
+      shipment.lines.forEach(l => {
+        byLine[l.order_line_id] = byLine[l.order_line_id] || { line_no: l.line_no, item_id: l.item_id, qty: 0 };
+        byLine[l.order_line_id].qty += l.quantity;
+      });
+      return Object.values(byLine).sort((a, b) => (a.line_no || 0) - (b.line_no || 0)).map(x => {
+        const i = items.find(i => i.id === x.item_id);
+        return `<span class="line-no">#${x.line_no ?? "?"}</span> ${i ? i.code : x.item_id} × ${fmtQty(x.qty)}`;
+      }).join(", ");
     }
 
     function itemLabel(id) {
@@ -174,11 +336,13 @@
 
     async function showDetail(id) {
       const order = await apiFetch(`/api/customer-orders/${id}`);
+      currentOrderId = order.id;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
-      const canShip = !["shipped", "invoiced", "cancelled"].includes(order.status);
+      const canBook = !["shipped", "invoiced", "cancelled"].includes(order.status)
+        && order.lines.some(l => l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9);
       const editable = order.status !== "cancelled";
-      const canCancel = order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0);
+      const canCancel = order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0 && l.booked_quantity === 0);
       const orderShipments = shipments.filter(s => s.order_id === order.id);
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
@@ -186,66 +350,95 @@
         <h3>${order.code} <span class="tag ${order.status}">${order.status}</span></h3>
 
         <h4>Order details</h4>
-        <div class="row">
-          <div><label>Customer</label><select id="e-customer" ${editable ? "" : "disabled"}>
-            ${customers.map(c => `<option value="${c.id}" ${c.id === order.customer_id ? "selected" : ""}>${c.name}</option>`).join("")}
+        <div class="field-grid">
+          <div class="wide"><label>Customer</label><select id="e-customer" ${editable ? "" : "disabled"}>
+            ${customers.map(c => `<option value="${c.id}" ${c.id === order.customer_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
           </select></div>
+          <div><label>PO #</label><input type="text" id="e-po-number" value="${escapeHtml(order.po_number || '')}" ${editable ? "" : "disabled"}></div>
+          <div><label>Job #</label><input type="text" id="e-job-number" value="${escapeHtml(order.job_number || '')}" ${editable ? "" : "disabled"}></div>
           <div><label>Delivery date</label><input type="date" id="e-delivery" value="${order.delivery_date ? order.delivery_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
         </div>
-        <div class="row">
-          <div><label>PO number</label><input type="text" id="e-po-number" value="${order.po_number || ''}" ${editable ? "" : "disabled"}></div>
-          <div><label>Job number</label><input type="text" id="e-job-number" value="${order.job_number || ''}" ${editable ? "" : "disabled"}></div>
+        <div class="field-grid">
+          <div class="wide"><label>Ship to
+            ${editable ? `<a class="link small" onclick="document.getElementById('e-ship-to').value = customerShipTo(parseInt(document.getElementById('e-customer').value))">use customer's address</a>` : ""}</label>
+            <textarea id="e-ship-to" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.ship_to_address || '')}</textarea></div>
+          <div class="wide"><label>Notes</label><textarea id="e-notes" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.notes || '')}</textarea></div>
         </div>
-        <label>Notes</label><textarea id="e-notes" rows="2" ${editable ? "" : "disabled"}>${order.notes || ''}</textarea>
         ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;">Save Order Details</button>` : ""}
 
         <h4 style="margin-top:20px;">Lines</h4>
-        <table class="lines-table">
-          <thead><tr><th>Item</th><th>Qty</th><th>Shipped</th><th>Unit price</th><th>Delivery</th>${editable ? "<th></th>" : ""}${canShip ? "<th>Ship now</th>" : ""}</tr></thead>
-          <tbody>
-            ${order.lines.map(l => `
-              <tr data-line="${l.id}">
-                <td>${itemLabel(l.item_id)}</td>
-                <td>${editable && l.shipped_quantity === 0 ? `<input type="number" step="0.01" class="e-line-qty" value="${l.quantity}" style="width:80px;">` : l.quantity}</td>
-                <td>${l.shipped_quantity}</td>
-                <td>${editable ? `<input type="number" step="0.01" class="e-line-price" value="${l.unit_price}" style="width:80px;">` : l.unit_price.toFixed(2)}</td>
-                <td>${editable ? `<input type="date" class="e-line-delivery" value="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}" style="width:140px;">` : fmtDate(l.delivery_date)}</td>
-                ${editable ? `<td>
+        <div class="table-scroll">
+        <table class="lines-table compact-table fit-table">
+          <thead><tr>
+            <th title="Line number — identifies this line even when the same item is on the order more than once">#</th>
+            <th class="grow">Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>
+            <th class="num">Booked</th><th title="Lot each booked unit comes from: a purchase order receipt or a manual stock adjustment">Booking source</th><th class="num">Shipped</th><th>Status</th>
+            <th>Shipments</th><th>Invoices</th><th>Delivery</th>
+            ${editable ? "<th></th>" : ""}${canBook ? `<th title="Quantity to book into a new shipment">Book</th>` : ""}
+          </tr></thead>
+          <tbody id="order-lines-body" oninput="recalcLines('order-lines-body', 'order-total'); refreshPriceDeltas(this)">
+            ${order.lines.map(l => {
+              const openQty = Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity);
+              const item = items.find(i => i.id === l.item_id) || {};
+              return `
+              <tr data-line="${l.id}" data-qty="${l.quantity}" data-price="${l.unit_price}">
+                <td class="line-no">#${l.line_no ?? ""}</td>
+                <td class="grow"><strong>${escapeHtml(item.code || l.item_id)}</strong> ${groupTag(item)}${item.title ? `<div class="muted small">${escapeHtml(item.title)}</div>` : ""}</td>
+                <td class="num">${editable && l.shipped_quantity === 0 ? `<input type="number" step="1" min="1" class="e-line-qty qty-input" value="${l.quantity}">` : fmtQty(l.quantity)}</td>
+                <td class="num">${editable ? priceInput("e-line-price", l.unit_price) : fmtPrice(l.unit_price)}
+                  <div data-price-delta data-kind="sale" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_price}" ${editable ? `data-price-input=".e-line-price"` : ""}></div></td>
+                <td class="num subtotal">${fmtMoney(l.quantity * l.unit_price)}</td>
+                <td class="num">${fmtQty(l.booked_quantity)}</td>
+                <td>${bookingSourceHtml(l)}</td>
+                <td class="num">${fmtQty(l.shipped_quantity)}</td>
+                <td><span class="tag ${l.line_status}">${l.line_status.replace("_", " ")}</span></td>
+                <td>${lineShipmentsHtml(l)}</td>
+                <td>${lineInvoicesHtml(l)}</td>
+                <td>${editable ? `<input type="date" class="e-line-delivery" value="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}" style="width:128px;">` : fmtDate(l.delivery_date)}</td>
+                ${editable ? `<td class="nowrap">
                   <a class="link" onclick="saveLine(${order.id}, ${l.id})">Save</a>
-                  ${l.shipped_quantity === 0 ? ` &nbsp; <a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
+                  ${l.shipped_quantity === 0 && l.booked_quantity === 0 ? `<br><a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
                 </td>` : ""}
-                ${canShip ? `<td><input type="number" step="0.01" class="ship-qty" data-line="${l.id}" value="${(l.quantity - l.shipped_quantity).toFixed(2)}" style="width:90px;"></td>` : ""}
+                ${canBook ? `<td>${openQty > 0
+                  ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div>`
+                  : `<span class="muted small">allocated</span>`}</td>` : ""}
               </tr>
-            `).join("")}
+            `;
+            }).join("")}
           </tbody>
+          <tfoot><tr>
+            <td></td><td class="grow">Order total</td><td class="num" id="order-qty">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td>
+            <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0))}</td>
+            <td colspan="${7 + (editable ? 1 : 0) + (canBook ? 1 : 0)}"></td>
+          </tr></tfoot>
         </table>
+        </div>
         ${editable ? `
-          <div class="row" style="margin-top:8px; max-width:600px;">
-            <div><label>Add item</label><select id="new-line-item">${items.map(i => `<option value="${i.id}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${i.available} available)</option>`).join("")}</select></div>
-            <div><label>Qty</label><input type="number" step="0.01" id="new-line-qty" value="1"></div>
-            <div><label>Unit price</label><input type="number" step="0.01" id="new-line-price" value="0"></div>
+          <div class="row" style="margin-top:8px; max-width:760px;">
+            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}</option>`).join("")}</select></div>
+            <div style="flex:0;"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
+            <div style="flex:0;"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="${items.length ? items[0].selling_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
+              <div data-price-delta data-kind="sale" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
             <div style="flex:0;"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
         ` : ""}
         <div id="lines-error" class="error"></div>
 
-        ${canShip ? `
-          <h4 style="margin-top:20px;">Ship</h4>
-          <div class="row" style="max-width:600px;">
-            <div><label>Carrier</label><input type="text" id="ship-carrier"></div>
-            <div><label>Tracking number</label><input type="text" id="ship-tracking"></div>
-            <div><label>Shipping cost (what we pay the carrier)</label><input type="number" step="0.01" id="ship-cost"></div>
-          </div>
-          <button onclick="shipOrder(${order.id})" style="margin-top:8px;">Ship entered quantities</button>
+        ${canBook ? `
+          <h4 style="margin-top:20px;">Create shipment</h4>
+          <p class="muted">Books the quantities entered above from stock into a new shipment. Nothing leaves on-hand yet —
+            on the shipment, confirm the bookings, then pick; it ships once everything is picked.</p>
+          <button onclick="createShipment(${order.id})">Create Shipment &amp; Book Items</button>
         ` : ""}
         <div id="detail-error" class="error"></div>
 
         <h4 style="margin-top:20px;">Shipments (${orderShipments.length})</h4>
         ${orderShipments.length ? `
           <table>
-            <thead><tr><th>Code</th><th>Ship date</th><th>Status</th></tr></thead>
+            <thead><tr><th>Code</th><th>Created</th><th>Ship date</th><th>Items</th><th>Status</th></tr></thead>
             <tbody>${orderShipments.map(s => `
-              <tr><td><a class="link" href="shipments.html?id=${s.id}">${s.code}</a></td><td>${fmtDate(s.ship_date)}</td><td><span class="tag ${s.status}">${s.status}</span></td></tr>
+              <tr><td><a class="link" href="shipments.html?id=${s.id}">${s.code}</a></td><td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.ship_date)}</td>
+                  <td>${shipmentItemsSummary(s)}</td><td><span class="tag ${s.status}">${s.status}</span></td></tr>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">None yet.</p>`}
@@ -260,11 +453,20 @@
           </table>
         ` : `<p class="muted">None yet.</p>`}
 
-        <div style="margin-top:16px;">
+        <h4 style="margin-top:20px;">Attachments</h4>
+        <p class="muted small" style="margin-top:0;">The customer's PO and anything else that came with the order.</p>
+        <div id="co-attachments"></div>
+
+        <div id="profit-panel"></div>
+
+        <div class="btn-row">
+          ${order.status !== "cancelled" ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
+      refreshPriceDeltas(card);
+      renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "other"]);
     }
 
     async function saveOrderHeader(orderId) {
@@ -278,10 +480,11 @@
             delivery_date: document.getElementById("e-delivery").value || null,
             po_number: document.getElementById("e-po-number").value || null,
             job_number: document.getElementById("e-job-number").value || null,
+            ship_to_address: document.getElementById("e-ship-to").value || null,
             notes: document.getElementById("e-notes").value,
           }),
         });
-        loadOrders();
+        await loadOrders();
         showDetail(orderId);
       } catch (err) {
         errorEl.textContent = err.message;
@@ -302,7 +505,7 @@
             delivery_date: row.querySelector(".e-line-delivery").value || null,
           }),
         });
-        loadOrders();
+        await loadOrders();
         showDetail(orderId);
       } catch (err) {
         errorEl.textContent = err.message;
@@ -314,7 +517,7 @@
       errorEl.textContent = "";
       try {
         await apiFetch(`/api/customer-orders/${orderId}/lines/${lineId}`, { method: "DELETE" });
-        loadOrders();
+        await loadOrders();
         showDetail(orderId);
       } catch (err) {
         errorEl.textContent = err.message;
@@ -333,7 +536,7 @@
             unit_price: parseFloat(document.getElementById("new-line-price").value) || 0,
           }),
         });
-        loadOrders();
+        await loadOrders();
         showDetail(orderId);
       } catch (err) {
         errorEl.textContent = err.message;
@@ -344,49 +547,184 @@
       if (!confirm("Cancel this order? This cannot be undone.")) return;
       try {
         await apiFetch(`/api/customer-orders/${orderId}/cancel`, { method: "POST" });
-        loadOrders();
+        await loadOrders();
         showDetail(orderId);
       } catch (err) {
         alert(err.message);
       }
     }
 
-    async function shipOrder(orderId) {
+    async function createShipment(orderId) {
       const errorEl = document.getElementById("detail-error");
       errorEl.textContent = "";
-      const lines = Array.from(document.querySelectorAll(".ship-qty"))
-        .map(el => ({ line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
-        .filter(l => l.quantity > 0);
+      const entries = Array.from(document.querySelectorAll(".book-qty"))
+        .map(el => ({ line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }));
+      if (entries.some(l => !Number.isInteger(l.quantity) || l.quantity < 0)) {
+        errorEl.textContent = "Book quantities must be whole numbers.";
+        return;
+      }
+      const lines = entries.filter(l => l.quantity > 0);
+      if (!lines.length) {
+        errorEl.textContent = "Enter a quantity to book on at least one line.";
+        return;
+      }
       try {
-        const shipment = await apiFetch(`/api/customer-orders/${orderId}/ship`, {
+        const shipment = await apiFetch(`/api/customer-orders/${orderId}/shipments`, {
           method: "POST",
-          body: JSON.stringify({
-            lines,
-            carrier: document.getElementById("ship-carrier").value || null,
-            tracking_number: document.getElementById("ship-tracking").value || null,
-            shipping_cost: document.getElementById("ship-cost").value ? parseFloat(document.getElementById("ship-cost").value) : null,
-          }),
+          body: JSON.stringify({ lines }),
         });
-        loadOrders();
-        showDetail(orderId);
         window.location.href = `shipments.html?id=${shipment.id}`;
       } catch (err) {
         errorEl.textContent = err.message;
       }
     }
 
+    // ---- Profit ----
+    async function openProfit(orderId) {
+      await showDetail(orderId);
+      showProfit(orderId);
+    }
+
+    async function showProfit(orderId) {
+      const el = document.getElementById("profit-panel");
+      if (!el) return;
+      el.innerHTML = `<div class="panel muted">Calculating profit…</div>`;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      try {
+        const p = await apiFetch(`/api/customer-orders/${orderId}/profit`);
+        el.innerHTML = profitHtml(p);
+      } catch (err) {
+        el.innerHTML = `<div class="panel error">${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function pct(v) { return v == null ? "—" : `${v.toFixed(1)}%`; }
+    function signed(n) { return `<span class="${n < -0.005 ? "neg" : "pos"}">${fmtMoney(n)}</span>`; }
+
+    const KIND_LABEL = { shipped: "shipped", booked: "booked", unbooked: "not booked — projected" };
+
+    function profitHtml(p) {
+      const missing = p.missing_costs.length ? `
+        <div class="notice">
+          <strong>Some lots have no acquisition cost.</strong> Enter what each was acquired at (per unit) — until then they count as $0 cost.
+          <table class="compact-table" style="margin-top:8px; background:transparent;">
+            <thead><tr><th>Lot</th><th>Item</th><th class="num">Qty on this order</th><th>Source</th><th>Unit cost</th><th></th></tr></thead>
+            <tbody>${p.missing_costs.map(m => `
+              <tr>
+                <td><strong>${escapeHtml(m.lot_code)}</strong></td><td>${escapeHtml(m.item_code)}</td>
+                <td class="num">${fmtQty(m.quantity)}</td><td>${escapeHtml(m.source || "")}</td>
+                <td><input type="number" step="${PRICE_STEP}" min="0" id="lot-cost-${m.lot_id}" placeholder="0.00000" style="width:110px;"></td>
+                <td><button class="small-btn" onclick="saveLotCost(${m.lot_id}, ${p.order_id})">Save</button></td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+          <div id="lot-cost-error" class="error"></div>
+        </div>` : "";
+      const otherWarnings = p.warnings.filter(w => !w.includes("no cost recorded"));
+      const warnings = otherWarnings.length ? `<div class="notice info"><ul>${otherWarnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>` : "";
+
+      const bucketRow = (label, b, note) => b.quantity > 0 ? `
+        <tr><td>${label}${note ? ` <span class="muted small">${note}</span>` : ""}</td><td class="num">${fmtQty(b.quantity)}</td>
+            <td class="num">${fmtMoney(b.revenue)}</td><td class="num">${fmtMoney(b.cost)}</td><td class="num">${signed(b.profit)}</td></tr>` : "";
+
+      const lineRows = p.lines.map(l => `
+        <tr>
+          <td><span class="line-no">#${l.line_no ?? ""}</span> <strong>${escapeHtml(l.item_code)}</strong><div class="muted small">${escapeHtml(l.item_title)}</div></td>
+          <td class="num">${fmtQty(l.quantity)}</td>
+          <td class="num">${fmtPrice(l.unit_price)}</td>
+          <td class="num">${fmtMoney(l.revenue)}</td>
+          <td class="num">${fmtMoney(l.cost)}</td>
+          <td class="num">${signed(l.profit)}</td>
+          <td class="num">${pct(l.margin_pct)}</td>
+        </tr>
+        ${l.components.map(c => `
+          <tr class="subrow">
+            <td colspan="2">
+              <span class="tag ${c.estimated ? "estimated" : c.kind}">${KIND_LABEL[c.kind]}</span>
+              ${c.lot_code ? `lot <strong>${escapeHtml(c.lot_code)}</strong>` : `<em>no lot</em>`}
+              ${c.lot_source ? `<span class="muted">from ${escapeHtml(c.lot_source)}</span>` : ""}
+              ${c.shipment_code ? `· <a class="link" href="shipments.html?id=${c.shipment_id}">${escapeHtml(c.shipment_code)}</a>` : ""}
+            </td>
+            <td class="num" colspan="2">${fmtQty(c.quantity)} × ${c.unit_cost == null ? `<span class="neg">no cost</span>` : fmtPrice(c.unit_cost)}</td>
+            <td class="num">${fmtMoney(c.cost)}</td>
+            <td class="num">${signed(c.revenue - c.cost)}</td>
+            <td></td>
+          </tr>`).join("")}
+      `).join("");
+
+      return `
+        <div class="panel">
+          <div class="row" style="align-items:center;">
+            <h4 style="margin:0;">Profit — ${escapeHtml(p.order_code)}</h4>
+            <div style="flex:0; white-space:nowrap;">
+              <a class="link" onclick="showProfit(${p.order_id})">Recalculate</a> &nbsp;
+              <a class="link" onclick="document.getElementById('profit-panel').innerHTML = '';">Close</a>
+            </div>
+          </div>
+          <p class="muted" style="margin:6px 0 0;">Cost comes from the lot each unit is booked or shipped from — its purchase price plus any landed costs (freight, tariff…) applied to that receipt.
+            Quantity not booked yet is projected from the lots booking would use next (oldest first).</p>
+          ${missing}${warnings}
+          <div class="stat-row">
+            <div class="stat"><div class="stat-label">Revenue</div><div class="stat-value">${fmtMoney(p.revenue)}</div></div>
+            <div class="stat"><div class="stat-label">Cost of goods</div><div class="stat-value">${fmtMoney(p.cogs)}</div><div class="stat-sub">lot cost incl. landed</div></div>
+            <div class="stat"><div class="stat-label">Gross profit</div><div class="stat-value ${p.gross_profit < 0 ? "neg" : "pos"}">${fmtMoney(p.gross_profit)}</div></div>
+            <div class="stat"><div class="stat-label">Shipping</div><div class="stat-value" style="font-size:15px;">+${fmtMoney(p.other_charges)} / −${fmtMoney(p.shipping_cost)}</div><div class="stat-sub">charged on invoices / paid to carriers</div></div>
+            <div class="stat"><div class="stat-label">Net profit</div><div class="stat-value ${p.net_profit < 0 ? "neg" : "pos"}">${fmtMoney(p.net_profit)}</div><div class="stat-sub">margin ${pct(p.margin_pct)}</div></div>
+          </div>
+          <table class="compact-table" style="max-width:640px;">
+            <thead><tr><th></th><th class="num">Qty</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th></tr></thead>
+            <tbody>
+              ${bucketRow("Shipped", p.shipped, "actual")}
+              ${bucketRow("Booked", p.booked, "committed")}
+              ${bucketRow("Not booked yet", p.unbooked, "projected")}
+            </tbody>
+          </table>
+          <div class="table-scroll" style="margin-top:14px;">
+            <table class="compact-table">
+              <thead><tr><th>Item / lots</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
+              <tbody>${lineRows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveLotCost(lotId, orderId) {
+      const input = document.getElementById(`lot-cost-${lotId}`);
+      const errorEl = document.getElementById("lot-cost-error");
+      errorEl.textContent = "";
+      if (input.value === "" || parseFloat(input.value) < 0) {
+        errorEl.textContent = "Enter the unit cost this lot was acquired at (0 or more).";
+        return;
+      }
+      try {
+        await apiFetch(`/api/lots/${lotId}/cost`, { method: "PUT", body: JSON.stringify({ unit_cost: parseFloat(input.value) }) });
+        showProfit(orderId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
     async function loadOrders() {
-      orders = await apiFetch("/api/customer-orders/");
+      [orders, shipments, items, invoices] = await Promise.all([
+        apiFetch("/api/customer-orders/"),
+        apiFetch("/api/shipments/"),
+        apiFetch("/api/stock-items/"),
+        apiFetch("/api/invoices/"),
+      ]);
       renderOrders();
     }
 
     async function init() {
-      [customers, items, shipments, invoices] = await Promise.all([
+      let purchaseOrders;
+      [customers, items, shipments, invoices, purchaseOrders] = await Promise.all([
         apiFetch("/api/customers/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/shipments/"),
         apiFetch("/api/invoices/"),
+        apiFetch("/api/purchase-orders/"),
       ]);
+      purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
       await loadOrders();

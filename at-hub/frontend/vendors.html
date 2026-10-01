@@ -27,7 +27,10 @@
         <div><label>Email</label><input type="text" id="f-email"></div>
         <div><label>Phone</label><input type="text" id="f-phone"></div>
       </div>
-      <label>Address</label><textarea id="f-address" rows="2"></textarea>
+      <div class="row">
+        <div><label>Billing address</label><textarea id="f-address" rows="3"></textarea></div>
+        <div><label>Ship-from / pickup address <span class="muted small">(blank = same as billing)</span></label><textarea id="f-shipping-address" rows="3"></textarea></div>
+      </div>
       <div style="margin-top:14px;">
         <button onclick="save()">Save</button>
         <button class="secondary" onclick="toggleForm(false)">Cancel</button>
@@ -55,7 +58,7 @@
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
-      if (!show) ["name", "contact", "email", "phone", "address"].forEach(f => document.getElementById(`f-${f}`).value = "");
+      if (!show) ["name", "contact", "email", "phone", "address", "shipping-address"].forEach(f => document.getElementById(`f-${f}`).value = "");
     }
 
     async function save() {
@@ -70,6 +73,7 @@
             email: document.getElementById("f-email").value,
             phone: document.getElementById("f-phone").value,
             address: document.getElementById("f-address").value,
+            shipping_address: document.getElementById("f-shipping-address").value || null,
           }),
         });
         toggleForm(false);
@@ -120,14 +124,22 @@
           <div><label>Email</label><input type="text" id="e-email" value="${vendor.email || ''}"></div>
           <div><label>Phone</label><input type="text" id="e-phone" value="${vendor.phone || ''}"></div>
         </div>
-        <label>Address</label><textarea id="e-address" rows="2">${vendor.address || ''}</textarea>
+        <div class="row">
+          <div><label>Billing address</label><textarea id="e-address" rows="3">${vendor.address || ''}</textarea></div>
+          <div><label>Ship-from / pickup address <span class="muted small">(blank = same as billing)</span></label><textarea id="e-shipping-address" rows="3">${vendor.shipping_address || ''}</textarea></div>
+        </div>
         <button onclick="saveDetail(${vendor.id})" style="margin-top:8px;">Save Changes</button>
         <div id="detail-error" class="error"></div>
+
+        <h4 style="margin-top:20px;">Item cross-reference</h4>
+        <p class="muted small" style="margin-top:0;">What ${escapeHtml(vendor.name)} calls our items. Filled in automatically when a PO line has a vendor item #;
+          typing their # on a purchase order then picks our item.</p>
+        <div id="xref"></div>
 
         <h4 style="margin-top:20px;">Purchase history (${vendorOrders.length} orders, $${totalSpend.toFixed(2)} total)</h4>
         ${vendorOrders.length ? `
           <table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th>Total</th></tr></thead>
+            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="sum">Total</th></tr></thead>
             <tbody>${vendorOrders.map(o => `
               <tr>
                 <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
@@ -140,6 +152,71 @@
         ` : `<p class="muted">No purchase orders yet.</p>`}
         <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
       `;
+      renderXref(vendor.id);
+    }
+
+    async function renderXref(vendorId) {
+      const el = document.getElementById("xref");
+      const [mappings, items] = await Promise.all([apiFetch(`/api/vendors/${vendorId}/items`), allItems()]);
+      const byId = Object.fromEntries(items.map(i => [i.id, i]));
+      el.innerHTML = `
+        <table class="compact-table no-table-tools" style="max-width:860px;">
+          <thead><tr><th>Their item #</th><th>Their description</th><th>Our item</th><th class="num">Last cost</th><th>Last ordered</th><th></th></tr></thead>
+          <tbody>
+            ${mappings.map(m => {
+              const it = byId[m.item_id] || {};
+              return `<tr>
+                <td><strong>${escapeHtml(m.vendor_item_code)}</strong></td>
+                <td>${escapeHtml(m.vendor_description || "")}</td>
+                <td>${escapeHtml(it.code || m.item_id)} ${groupTag(it)} <span class="muted small">${escapeHtml(it.title || "")}</span></td>
+                <td class="num">${m.last_unit_cost != null ? fmtPrice(m.last_unit_cost) : ""}</td>
+                <td>${m.last_ordered_at ? new Date(m.last_ordered_at).toLocaleDateString() : ""}</td>
+                <td><a class="link small" onclick="deleteXref(${vendorId}, ${m.id})">Remove</a></td>
+              </tr>`;
+            }).join("") || `<tr><td colspan="6" class="muted">No cross-references yet.</td></tr>`}
+            <tr>
+              <td><input type="text" id="xref-code" placeholder="their part #" style="width:120px;"></td>
+              <td><input type="text" id="xref-desc" placeholder="optional"></td>
+              <td><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select></td>
+              <td colspan="3"><button class="secondary small-btn" onclick="addXref(${vendorId})">+ Add</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div id="xref-error" class="error"></div>`;
+    }
+
+    let itemsPromise = null;
+    function allItems() {
+      if (!itemsPromise) itemsPromise = apiFetch("/api/stock-items/");
+      return itemsPromise;
+    }
+
+    async function addXref(vendorId) {
+      const errorEl = document.getElementById("xref-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/vendors/${vendorId}/items`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_id: parseInt(document.getElementById("xref-item").value),
+            vendor_item_code: document.getElementById("xref-code").value,
+            vendor_description: document.getElementById("xref-desc").value || null,
+          }),
+        });
+        renderXref(vendorId);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function deleteXref(vendorId, id) {
+      if (!confirm("Remove this cross-reference?")) return;
+      try {
+        await apiFetch(`/api/vendors/${vendorId}/items/${id}`, { method: "DELETE" });
+        renderXref(vendorId);
+      } catch (err) {
+        document.getElementById("xref-error").textContent = err.message;
+      }
     }
 
     async function saveDetail(id) {
@@ -154,6 +231,7 @@
             email: document.getElementById("e-email").value,
             phone: document.getElementById("e-phone").value,
             address: document.getElementById("e-address").value,
+            shipping_address: document.getElementById("e-shipping-address").value || null,
           }),
         });
         await load();

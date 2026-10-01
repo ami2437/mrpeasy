@@ -10,13 +10,28 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
+    <div class="tabs" id="ship-tabs">
+      <a class="tab active" data-tab="active">Active</a>
+      <a class="tab" data-tab="cancelled">Cancelled <span id="cancelled-count" class="muted"></span></a>
+    </div>
     <div class="card">
-      <input type="text" id="search" placeholder="Search shipment code, order code, carrier, or tracking #...">
+      <div class="row" style="align-items:center;">
+        <input type="text" id="search" placeholder="Search shipment code, order code, carrier, or tracking #...">
+        <select id="status-filter" style="max-width:200px;">
+          <option value="">All statuses</option>
+          <option value="open">Open (new + ready)</option>
+          <option value="new">New (booked)</option>
+          <option value="ready">Ready (picking)</option>
+          <option value="shipped">Shipped (not delivered)</option>
+          <option value="delivered">Delivered</option>
+          <option value="invoiced">Invoiced</option>
+        </select>
+      </div>
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Order</th><th>Ship date</th><th>Carrier</th><th>Tracking</th><th>Status</th></tr></thead>
-        <tbody id="shipments-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Order</th><th>Created</th><th>Ship date</th><th>Delivered</th><th>Picked</th><th>Carrier</th><th>Tracking</th><th>Status</th></tr></thead>
+        <tbody id="shipments-body"><tr><td colspan="9">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -34,6 +49,7 @@
     let lots = [];
     let shipmentsById = {};
     let currentShipmentId = null;
+    let currentTab = "active";
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
@@ -55,16 +71,26 @@
     function renderShipments() {
       const tbody = document.getElementById("shipments-body");
       const q = document.getElementById("search").value.trim();
-      const filtered = shipments.filter(s => matchesSearch(s, q));
+      const statusFilter = document.getElementById("status-filter").value;
+      const cancelledTab = currentTab === "cancelled";
+      document.getElementById("status-filter").style.display = cancelledTab ? "none" : "";
+      const nCancelled = shipments.filter(s => s.status === "cancelled").length;
+      document.getElementById("cancelled-count").textContent = nCancelled ? `(${nCancelled})` : "";
+      const filtered = shipments.filter(s => matchesSearch(s, q) && (s.status === "cancelled") === cancelledTab && (
+        cancelledTab || !statusFilter || (statusFilter === "open" ? ["new", "ready"].includes(s.status) : s.status === statusFilter)
+      ));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">${shipments.length ? "No shipments match your search." : "No shipments yet — ship a customer order to create one."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" class="muted">${shipments.length ? (cancelledTab ? "No cancelled shipments." : "No shipments match this search/filter.") : "No shipments yet — create one from a customer order."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(s => `
         <tr>
           <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
           <td>${orderCode(s.order_id)}</td>
+          <td>${fmtDate(s.created_at)}</td>
           <td>${fmtDate(s.ship_date)}</td>
+          <td>${fmtDate(s.delivered_at)}</td>
+          <td>${pickedSummary(s)}</td>
           <td>${s.carrier || ""}</td>
           <td>${s.tracking_number || ""}</td>
           <td><span class="tag ${s.status}">${s.status}</span></td>
@@ -72,45 +98,365 @@
       `).join("");
     }
 
-    function shippedByItem(shipment) {
-      const totals = {};
-      shipment.lines.forEach(l => { totals[l.item_id] = (totals[l.item_id] || 0) + l.quantity; });
-      return totals;
+    function pickedSummary(shipment) {
+      const qty = shipment.lines.reduce((sum, l) => sum + l.quantity, 0);
+      const picked = shipment.lines.reduce((sum, l) => sum + l.picked_quantity, 0);
+      return `${picked} / ${qty}`;
+    }
+
+    function lotCode(id) { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : ""; }
+
+    const STATUS_HELP = {
+      new: "Items are booked from stock (reserved, still on hand). Confirm the bookings to start picking, unbook individual lines, or cancel to release everything.",
+      ready: "Bookings confirmed — pick the items. The shipment ships automatically once every line is fully picked.",
+      shipped: "Fully picked and shipped — stock has left on-hand. Waiting for proof of delivery.",
+      delivered: "Delivered to the customer — ready to invoice.",
+      invoiced: "Shipped and invoiced.",
+      cancelled: "Cancelled — bookings were released back to stock.",
+    };
+
+    function linesSectionHtml(shipment) {
+      const picking = shipment.status === "ready";
+      const open = ["new", "ready"].includes(shipment.status);
+      return `
+        <h4>Items</h4>
+        <table class="fit-table">
+          <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th><th class="num">Booked</th><th class="num">Picked</th>${picking ? "<th>Pick now</th>" : ""}${open ? "<th>Unbook</th>" : ""}</tr></thead>
+          <tbody>
+            ${shipment.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id).map(l => {
+              const left = Math.max(0, l.quantity - l.picked_quantity);
+              return `
+              <tr>
+                <td class="line-no">#${l.line_no ?? ""}</td>
+                <td class="grow">${itemLabel(l.item_id)}</td>
+                <td>${lotCode(l.lot_id)}</td>
+                <td class="num">${fmtQty(l.quantity)}</td>
+                <td class="num">${fmtQty(l.picked_quantity)}${l.picked_quantity >= l.quantity ? " ✓" : ""}</td>
+                ${picking ? `<td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>` : ""}
+                ${open ? `<td class="nowrap">${left > 0 ? `
+                  <input type="number" step="1" min="1" max="${left}" value="${left}" id="unbook-${l.id}" class="qty-input">
+                  <button class="small-btn secondary" onclick="unbookLine(${shipment.id}, ${l.id})">Unbook</button>` : `<span class="muted small">picked</span>`}</td>` : ""}
+              </tr>
+            `;
+            }).join("")}
+          </tbody>
+        </table>
+        <div style="margin-top:10px;">
+          ${shipment.status === "new" ? `<button onclick="shipmentAction(${shipment.id}, 'confirm-booking')">Confirm Bookings</button>` : ""}
+          ${picking ? `
+            <button onclick="pickEntered(${shipment.id})">Pick Entered Quantities</button>
+            <button onclick="pickAll(${shipment.id})">Pick All &amp; Ship</button>
+          ` : ""}
+          ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
+          ${["shipped", "delivered", "invoiced"].includes(shipment.status) ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
+          ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
+        </div>
+        <div id="lifecycle-error" class="error"></div>
+      `;
+    }
+
+    async function shipmentAction(id, action, body) {
+      const errorEl = document.getElementById("lifecycle-error");
+      errorEl.textContent = "";
+      try {
+        await apiFetch(`/api/shipments/${id}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+        await reloadList();
+        showDetail(id);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    function pickEntered(id) {
+      const lines = Array.from(document.querySelectorAll(".pick-qty"))
+        .map(el => ({ shipment_line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
+        .filter(l => l.quantity > 0);
+      if (!lines.length) {
+        document.getElementById("lifecycle-error").textContent = "Enter a picked quantity on at least one line.";
+        return;
+      }
+      shipmentAction(id, "pick", { lines });
+    }
+
+    async function unbookLine(shipmentId, lineId) {
+      const qty = parseFloat(document.getElementById(`unbook-${lineId}`).value);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        document.getElementById("lifecycle-error").textContent = "Unbook quantity must be a whole number greater than 0.";
+        return;
+      }
+      await shipmentAction(shipmentId, "unbook", { shipment_line_id: lineId, quantity: qty });
+    }
+
+    function pickAll(id) {
+      if (!confirm("Mark every line fully picked? The shipment will ship and stock will leave on-hand.")) return;
+      shipmentAction(id, "pick", { pick_all: true });
+    }
+
+    function cancelShipment(id) {
+      if (!confirm("Cancel this shipment? Its bookings are released back to stock and its packing list is cleared.")) return;
+      shipmentAction(id, "cancel");
+    }
+
+    // Delivered date: set by a POD upload, or by hand (managers and up). It's printed on the invoice.
+    function deliverySectionHtml(shipment) {
+      if (!["shipped", "delivered", "invoiced"].includes(shipment.status)) return `<p class="muted">Available once the shipment has shipped.</p>`;
+      const canMark = AuthGuard.hasRole("manager");
+      const today = new Date().toISOString().substring(0, 10);
+      return `
+        ${shipment.delivered_at
+          ? `<p><span class="tag delivered">Delivered</span> <strong>${fmtDate(shipment.delivered_at)}</strong>
+              <span class="muted small">recorded by ${escapeHtml(shipment.delivered_by || "")}</span></p>`
+          : `<p class="muted">Not delivered yet — uploading a proof of delivery marks it delivered.</p>`}
+        ${canMark ? `
+          <div class="row" style="max-width:520px; align-items:flex-end;">
+            <div><label>Delivered on</label><input type="date" id="delivered-date" value="${shipment.delivered_at ? shipment.delivered_at.substring(0, 10) : today}" max="${today}"></div>
+            <div style="flex:0;"><button class="secondary" style="white-space:nowrap;" onclick="markDelivered(${shipment.id})">${shipment.delivered_at ? "Change date" : "Mark Delivered"}</button></div>
+            ${shipment.delivered_at ? `<div style="flex:0;"><a class="link small" style="white-space:nowrap;" onclick="clearDelivered(${shipment.id})">clear delivery</a></div>` : ""}
+          </div>` : ""}
+        <div id="delivery-error" class="error"></div>`;
+    }
+
+    async function markDelivered(id) {
+      const errorEl = document.getElementById("delivery-error");
+      errorEl.textContent = "";
+      const value = document.getElementById("delivered-date").value;
+      try {
+        await apiFetch(`/api/shipments/${id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: value ? `${value}T12:00:00` : null }) });
+        await reloadList();
+        showDetail(id);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function clearDelivered(id) {
+      if (!confirm("Clear the delivery date? The shipment goes back to Shipped.")) return;
+      try {
+        await apiFetch(`/api/shipments/${id}/undeliver`, { method: "POST" });
+        await reloadList();
+        showDetail(id);
+      } catch (err) {
+        document.getElementById("delivery-error").textContent = err.message;
+      }
+    }
+
+    function unshipShipment(id) {
+      if (!confirm("Undo this shipment? Stock goes back to its lots and stays booked; the shipment returns to New so you can unbook, change, cancel or delete it. (An invoiced shipment needs its invoice voided first.)")) return;
+      shipmentAction(id, "unship");
+    }
+
+    async function deleteShipment(id) {
+      if (!confirm("Delete this shipment permanently? Any bookings are released back to stock. You can then create a new shipment from the order.")) return;
+      try {
+        await apiFetch(`/api/shipments/${id}`, { method: "DELETE" });
+        document.getElementById("detail-card").style.display = "none";
+        await reloadList();
+      } catch (err) {
+        document.getElementById("lifecycle-error").textContent = err.message;
+      }
+    }
+
+    async function saveShipmentInfo(id) {
+      const errorEl = document.getElementById("info-error");
+      errorEl.textContent = "";
+      const cost = document.getElementById("s-cost").value;
+      try {
+        await apiFetch(`/api/shipments/${id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            carrier: document.getElementById("s-carrier").value || null,
+            tracking_number: document.getElementById("s-tracking").value || null,
+            shipping_cost: cost ? parseFloat(cost) : null,
+            notes: document.getElementById("s-notes").value || null,
+          }),
+        });
+        await reloadList();
+        showDetail(id);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    async function reloadList() {
+      shipments = await apiFetch("/api/shipments/");
+      renderShipments();
+    }
+
+    // Packing is per order line: the same item on two order lines is boxed separately.
+    // { order_line_id: { line_no, item_id, qty } }, ordered by line number.
+    function shippedByLine(shipment) {
+      const byLine = {};
+      shipment.lines.forEach(l => {
+        byLine[l.order_line_id] = byLine[l.order_line_id] || { order_line_id: l.order_line_id, line_no: l.line_no, item_id: l.item_id, qty: 0 };
+        byLine[l.order_line_id].qty += l.quantity;
+      });
+      return Object.values(byLine).sort((a, b) => (a.line_no || 0) - (b.line_no || 0));
+    }
+
+    function lineLabel(entry) {
+      const i = itemObj(entry.item_id);
+      return `#${entry.line_no ?? "?"} ${i ? `${i.code} — ${i.title}` : entry.item_id}`;
     }
 
     function boxRowsHtml(shipment) {
       const boxes = shipment.boxes.length ? shipment.boxes : (() => {
-        // default: one box per item holding the full shipped quantity
-        const totals = shippedByItem(shipment);
-        return Object.entries(totals).map(([itemId, qty], idx) => ({
-          item_id: parseInt(itemId), box_number: idx + 1, quantity_in_box: qty, lot_code: "", pallet_number: "",
-        }));
+        // Nothing saved yet: split each line by its item's default pack size.
+        let n = 1;
+        return shippedByLine(shipment).flatMap(e => calculateBoxes(e.qty, packSizeFor(shipment, e)).map(b => ({
+          order_line_id: e.order_line_id, item_id: e.item_id, box_number: n++, quantity_in_box: b.quantity_in_box,
+          lot_code: lotCodeForLine(e.order_line_id), pallet_number: "",
+        })));
       })();
       return boxRowHtmlList(boxes);
+    }
+
+    function lineOptions(selectedLineId) {
+      return shippedByLine(shipmentsById[currentShipmentId]).map(e =>
+        `<option value="${e.order_line_id}" data-item="${e.item_id}" ${e.order_line_id === selectedLineId ? "selected" : ""}>${escapeHtml(lineLabel(e))}</option>`
+      ).join("");
     }
 
     function boxRowHtmlList(boxes) {
       return boxes.map(b => `
         <tr>
-          <td>
-            <select class="box-item">
-              ${items.map(i => `<option value="${i.id}" ${i.id === b.item_id ? "selected" : ""}>${i.code} — ${i.title}</option>`).join("")}
-            </select>
-          </td>
-          <td><input type="number" class="box-number" value="${b.box_number}" style="width:60px;"></td>
-          <td><input type="number" step="0.01" class="box-qty" value="${b.quantity_in_box}" style="width:80px;"></td>
+          <td><select class="box-line">${lineOptions(b.order_line_id)}</select></td>
+          <td><input type="number" step="1" class="box-number" value="${b.box_number}" style="width:60px;"></td>
+          <td><input type="number" step="1" min="1" class="box-qty qty-input" value="${b.quantity_in_box}"></td>
           <td><input type="text" class="box-lot" value="${b.lot_code || ""}" style="width:110px;"></td>
           <td><input type="text" class="box-pallet" value="${b.pallet_number || ""}" style="width:90px;"></td>
-          <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+          <td><a class="link" onclick="this.closest('tr').remove(); refreshBoxSummary();">Remove</a></td>
         </tr>
       `).join("");
+    }
+
+    // Pack size shown per line: the largest saved box, else the item's default, else the whole quantity.
+    function packSizeFor(shipment, entry) {
+      const saved = shipment.boxes.filter(b => b.order_line_id === entry.order_line_id);
+      if (saved.length) return Math.max(...saved.map(b => b.quantity_in_box));
+      const item = itemObj(entry.item_id);
+      return item && item.default_pack_size ? item.default_pack_size : entry.qty;
+    }
+
+    // Reads the (possibly collapsed) box table and shows "3 × 100, 1 × 20" per line, flagging mismatches.
+    function refreshBoxSummary() {
+      const rows = Array.from(document.querySelectorAll("#box-rows tr"));
+      document.querySelectorAll(".pack-size-input").forEach(input => {
+        const lineId = parseInt(input.dataset.line);
+        const qty = parseFloat(input.dataset.qty);
+        const byQty = {};
+        let boxed = 0;
+        rows.filter(tr => parseInt(tr.querySelector(".box-line").value) === lineId).forEach(tr => {
+          const q = parseFloat(tr.querySelector(".box-qty").value) || 0;
+          boxed += q;
+          byQty[q] = (byQty[q] || 0) + 1;
+        });
+        const summary = formatBoxCounts(byQty) || "—";
+        const off = Math.abs(boxed - qty) > 1e-6;
+        document.querySelector(`.box-summary[data-line="${lineId}"]`).innerHTML =
+          summary + (off ? ` <span style="color:#dc2626;font-weight:600;">(boxed ${fmtQty(boxed)} of ${fmtQty(qty)})</span>` : "");
+      });
+      const count = document.getElementById("box-count");
+      if (count) count.textContent = rows.length;
+    }
+
+    function applyPalletToAll(value) {
+      document.querySelectorAll("#box-rows .box-pallet, .line-pallet").forEach(el => { el.value = value; });
+      renderPalletTable();
+    }
+
+    // Normalises "48x54x21", "48 X 54 X 21", "48*54*21", "48in x 54in x 21in" to "48 x 54 x 21" (same as the main portal).
+    function normalizeDimensions(raw) {
+      const text = String(raw || "").trim();
+      const m = text.match(/^([\d.]+)\s*(?:in\.?|")?\s*[xX×*]\s*([\d.]+)\s*(?:in\.?|")?\s*[xX×*]\s*([\d.]+)\s*(?:in\.?|")?$/);
+      return m ? `${+m[1]} x ${+m[2]} x ${+m[3]}` : text;
+    }
+
+    // Pallet weight/dimension rows follow the pallet #s currently typed on the boxes.
+    // Values already typed are kept; otherwise the saved ones are shown.
+    function renderPalletTable(pending = {}) {
+      const container = document.getElementById("pallet-table");
+      if (!container) return;
+      const shipment = shipmentsById[currentShipmentId];
+      const typed = {};
+      container.querySelectorAll("tr[data-pallet]").forEach(tr => {
+        typed[tr.dataset.pallet] = { weight: tr.querySelector(".pallet-weight").value, dimensions: tr.querySelector(".pallet-dimensions").value };
+      });
+      const byPallet = {};
+      document.querySelectorAll("#box-rows tr").forEach(tr => {
+        const pn = tr.querySelector(".box-pallet").value.trim();
+        if (!pn) return;
+        const entry = byPallet[pn] = byPallet[pn] || { boxes: 0, items: new Set() };
+        entry.boxes++;
+        const opt = tr.querySelector(".box-line").selectedOptions[0];
+        if (opt) entry.items.add(itemCode(parseInt(opt.dataset.item)));
+      });
+      const names = Object.keys(byPallet);
+      if (!names.length) {
+        container.innerHTML = `<p class="muted">No pallets yet. Type a pallet # on a line above (or paste pallet data) to enter its weight and dimensions.</p>`;
+        return;
+      }
+      container.innerHTML = `
+        <table class="fit-table no-table-tools">
+          <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead>
+          <tbody>${names.map(pn => {
+            const saved = shipment.pallets.find(p => p.pallet_number === pn) || {};
+            const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, typed[pn] || {}, pending[pn] || {});
+            return `<tr data-pallet="${escapeHtml(pn)}">
+              <td><strong>${escapeHtml(pn)}</strong></td>
+              <td class="grow">${escapeHtml([...byPallet[pn].items].join(", "))}</td>
+              <td class="num">${byPallet[pn].boxes}</td>
+              <td><input type="number" step="0.1" min="0" class="pallet-weight" style="width:100px;" value="${escapeHtml(v.weight)}"></td>
+              <td><input type="text" class="pallet-dimensions" style="width:150px;" placeholder="48 x 40 x 50" value="${escapeHtml(v.dimensions)}"
+                    onblur="this.value = normalizeDimensions(this.value)"></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>`;
+    }
+
+    // Paste rows of: Item # <tab> Pallet # [<tab> Weight] [<tab> Dimensions] -- same format as the main portal.
+    // Tab or comma separated; a header row is skipped; weight/dimensions only need to appear once per pallet.
+    function applyPastedPallets() {
+      const status = document.getElementById("pallet-paste-status");
+      const shipment = shipmentsById[currentShipmentId];
+      const rows = document.getElementById("pallet-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const pending = {};
+      let applied = 0;
+      const unknown = [];
+      rows.forEach(row => {
+        const cols = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+        if (cols.length < 2 || /^item/i.test(cols[0])) return;
+        const [code, pallet, weight, dims] = cols;
+        if (!pallet) return;
+        const entries = shippedByLine(shipment).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
+        if (!entries.length) { unknown.push(code); return; }
+        entries.forEach(e => {
+          const input = document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`);
+          if (input) input.value = pallet;
+          setLinePallet(e.order_line_id, pallet);
+          applied++;
+        });
+        const p = pending[pallet] = pending[pallet] || {};
+        if (weight) p.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || "";
+        if (dims) p.dimensions = normalizeDimensions(dims);
+      });
+      renderPalletTable(pending);
+      status.textContent = `Applied to ${applied} line${applied === 1 ? "" : "s"}.`
+        + (unknown.length ? ` Not on this shipment: ${unknown.join(", ")}.` : "") + " Click Save Packing to keep it.";
+    }
+
+    function collectPallets() {
+      return Array.from(document.querySelectorAll("#pallet-table tr[data-pallet]")).map(tr => ({
+        pallet_number: tr.dataset.pallet,
+        weight: tr.querySelector(".pallet-weight").value ? parseFloat(tr.querySelector(".pallet-weight").value) : null,
+        dimensions: normalizeDimensions(tr.querySelector(".pallet-dimensions").value) || null,
+      }));
     }
 
     // Mirrors the existing portal's calculate_boxes(): full boxes of pack_size, then one remainder box.
     function calculateBoxes(quantity, packSize) {
       if (!packSize || packSize <= 0) packSize = quantity || 1;
       const fullBoxes = Math.floor(quantity / packSize);
-      const remaining = Math.round((quantity - fullBoxes * packSize) * 100) / 100;
+      const remaining = Math.round(quantity - fullBoxes * packSize);
       const boxes = [];
       for (let i = 0; i < fullBoxes; i++) boxes.push({ box_number: i + 1, quantity_in_box: packSize });
       if (remaining > 0) boxes.push({ box_number: fullBoxes + 1, quantity_in_box: remaining });
@@ -118,86 +464,54 @@
     }
 
     function packSizeRowsHtml(shipment) {
-      const totals = shippedByItem(shipment);
-      return Object.entries(totals).map(([itemId, qty]) => {
-        const item = itemObj(parseInt(itemId));
-        const defaultPack = item && item.default_pack_size ? item.default_pack_size : qty;
-        return `
-          <tr>
-            <td>${itemLabel(parseInt(itemId))}</td>
-            <td>${qty}</td>
-            <td><input type="number" step="1" class="pack-size-input" data-item="${itemId}" data-qty="${qty}" value="${defaultPack}" style="width:90px;"></td>
-            <td><a class="link" onclick="splitByPackSize(${itemId})">Split into boxes</a></td>
-          </tr>
-        `;
-      }).join("");
+      return shippedByLine(shipment).map(e => `
+        <tr>
+          <td class="line-no">#${e.line_no ?? ""}</td>
+          <td class="grow">${itemLabel(e.item_id)}</td>
+          <td class="num">${fmtQty(e.qty)}</td>
+          <td><input type="number" step="1" min="1" class="pack-size-input qty-input" data-line="${e.order_line_id}" data-qty="${e.qty}" value="${packSizeFor(shipment, e)}" oninput="splitByPackSize(${e.order_line_id})"></td>
+          <td class="box-summary" data-line="${e.order_line_id}"></td>
+          <td><input type="text" class="line-pallet" data-line="${e.order_line_id}" style="width:100px;" placeholder="optional"
+                value="${escapeHtml(linePallet(shipment, e.order_line_id))}" oninput="setLinePallet(${e.order_line_id}, this.value)"></td>
+        </tr>
+      `).join("");
     }
 
-    function splitByPackSize(itemId) {
-      const input = document.querySelector(`.pack-size-input[data-item="${itemId}"]`);
+    // A line's pallet # = the pallet(s) its saved boxes are on.
+    function linePallet(shipment, lineId) {
+      return [...new Set(shipment.boxes.filter(b => b.order_line_id === lineId).map(b => b.pallet_number).filter(Boolean))].join(", ");
+    }
+
+    // Typing a pallet # on a line puts all of that line's boxes on it.
+    function setLinePallet(lineId, value) {
+      document.querySelectorAll("#box-rows tr").forEach(tr => {
+        if (parseInt(tr.querySelector(".box-line").value) === lineId) tr.querySelector(".box-pallet").value = value;
+      });
+      renderPalletTable();
+    }
+
+    function splitByPackSize(lineId) {
+      const input = document.querySelector(`.pack-size-input[data-line="${lineId}"]`);
       const qty = parseFloat(input.dataset.qty);
       const packSize = parseInt(input.value) || qty;
-      const pallet = document.getElementById("default-pallet").value || "";
-      const lotCode = lotCodeForLine(itemId);
-      const newBoxes = calculateBoxes(qty, packSize).map(b => ({ ...b, item_id: itemId, lot_code: lotCode, pallet_number: pallet }));
+      const lineInput = document.querySelector(`.line-pallet[data-line="${lineId}"]`);
+      const pallet = lineInput ? lineInput.value : "";
+      const newBoxes = calculateBoxes(qty, packSize).map(b => ({ ...b, order_line_id: lineId, lot_code: lotCodeForLine(lineId), pallet_number: pallet }));
 
-      // Replace any existing rows for this item with the freshly-split set.
+      // Replace any existing rows for this line with the freshly-split set.
       const tbody = document.getElementById("box-rows");
       Array.from(tbody.querySelectorAll("tr")).forEach(tr => {
-        if (parseInt(tr.querySelector(".box-item").value) === itemId) tr.remove();
+        if (parseInt(tr.querySelector(".box-line").value) === lineId) tr.remove();
       });
       tbody.insertAdjacentHTML("beforeend", boxRowHtmlList(newBoxes));
+      tbody.querySelectorAll(".box-number").forEach((el, i) => { el.value = i + 1; });
+      refreshBoxSummary();
     }
 
-    function palletWeightRowsHtml(shipment) {
-      const palletNumbers = [...new Set(shipment.boxes.map(b => b.pallet_number).filter(Boolean))];
-      if (!palletNumbers.length) {
-        return `<p class="muted" style="margin-top:16px;">No pallet numbers assigned yet — add one in the box table above to enter weight/dimensions.</p>`;
-      }
-      const rows = palletNumbers.map(pn => {
-        const existing = shipment.pallets.find(p => p.pallet_number === pn) || {};
-        return `
-          <tr data-pallet="${pn}">
-            <td>${pn}</td>
-            <td><input type="number" step="0.01" class="pallet-weight" value="${existing.weight ?? ''}" placeholder="lbs"></td>
-            <td><input type="text" class="pallet-dimensions" value="${existing.dimensions ?? ''}" placeholder="L x W x H"></td>
-          </tr>
-        `;
-      }).join("");
-      return `
-        <h4 style="margin-top:20px;">Pallet weights &amp; dimensions</h4>
-        <table>
-          <thead><tr><th>Pallet #</th><th>Weight</th><th>Dimensions</th></tr></thead>
-          <tbody id="pallet-weight-rows">${rows}</tbody>
-        </table>
-        <button class="secondary" onclick="savePalletWeights(${shipment.id})" style="margin-top:8px;">Save Pallet Info</button>
-        <div id="pallet-weight-error" class="error"></div>
-      `;
-    }
-
-    async function savePalletWeights(shipmentId) {
-      const errorEl = document.getElementById("pallet-weight-error");
-      errorEl.textContent = "";
-      const pallets = Array.from(document.querySelectorAll("#pallet-weight-rows tr")).map(tr => ({
-        pallet_number: tr.dataset.pallet,
-        weight: tr.querySelector(".pallet-weight").value ? parseFloat(tr.querySelector(".pallet-weight").value) : null,
-        dimensions: tr.querySelector(".pallet-dimensions").value || null,
-      }));
-      try {
-        await apiFetch(`/api/shipments/${shipmentId}/pallet-weights`, {
-          method: "PUT",
-          body: JSON.stringify({ pallets }),
-        });
-        showDetail(shipmentId);
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    }
-
-    // Pools all lot codes used across this item's shipment lines, joined -- same pattern as the existing portal.
-    function lotCodeForLine(itemId) {
+    // All lot codes this order line was booked from in this shipment, joined -- same pattern as the existing portal.
+    function lotCodeForLine(orderLineId) {
       const shipment = shipmentsById[currentShipmentId];
-      const lotIds = [...new Set(shipment.lines.filter(l => l.item_id === itemId).map(l => l.lot_id).filter(Boolean))];
+      const lotIds = [...new Set(shipment.lines.filter(l => l.order_line_id === orderLineId).map(l => l.lot_id).filter(Boolean))];
       const codes = lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean);
       return codes.join(", ");
     }
@@ -208,67 +522,107 @@
       currentShipmentId = shipment.id;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
-      const totals = shippedByItem(shipment);
       const ord = order(shipment.order_id);
 
       card.innerHTML = `
         <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
-        <p class="muted">Order ${orderCode(shipment.order_id)} — shipped ${fmtDate(shipment.ship_date)}
-          ${shipment.carrier ? ` via ${shipment.carrier}` : ""}${shipment.tracking_number ? ` (${shipment.tracking_number})` : ""}
-          ${shipment.shipping_cost != null ? ` — cost to ship: $${shipment.shipping_cost.toFixed(2)}` : ""}</p>
+        <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>
+          — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
+        <p>${STATUS_HELP[shipment.status] || ""}</p>
 
-        <h4>What shipped</h4>
-        <table>
-          <thead><tr><th>Item</th><th>Qty</th><th>Unit price</th></tr></thead>
-          <tbody>
-            ${Object.entries(totals).map(([itemId, qty]) => `
-              <tr><td>${itemLabel(parseInt(itemId))}</td><td>${qty}</td>
-                  <td>${(shipment.lines.find(l => l.item_id === parseInt(itemId))?.unit_price || 0).toFixed(2)}</td></tr>
-            `).join("")}
-          </tbody>
-        </table>
+        ${linesSectionHtml(shipment)}
 
-        <h4>Pack sizes</h4>
-        <p class="muted">Pre-filled from each item's default pack size (or the full shipped quantity if none is set) — edit per shipment as needed, same as on the main portal.</p>
-        <div class="row" style="max-width:300px;">
-          <div><label>Default pallet # for new boxes</label><input type="text" id="default-pallet" placeholder="optional"></div>
+        ${shipment.status !== "cancelled" ? `
+        <h4 style="margin-top:20px;">Carrier</h4>
+        <div class="row" style="max-width:700px;">
+          <div><label>Carrier</label><input type="text" id="s-carrier" value="${shipment.carrier || ""}"></div>
+          <div><label>Tracking number</label><input type="text" id="s-tracking" value="${shipment.tracking_number || ""}"></div>
+          <div><label>Shipping cost (what we pay the carrier)</label><input type="number" step="0.01" id="s-cost" value="${shipment.shipping_cost ?? ""}"></div>
         </div>
-        <table>
-          <thead><tr><th>Item</th><th>Shipped qty</th><th>Pack size</th><th></th></tr></thead>
+        <label>Notes</label><textarea id="s-notes" rows="2">${shipment.notes || ""}</textarea>
+        <button class="secondary" onclick="saveShipmentInfo(${shipment.id})" style="margin-top:8px;">Save Carrier Info</button>
+        <div id="info-error" class="error"></div>
+        ` : ""}
+
+        ${shipment.status !== "cancelled" ? `
+        <h4 style="margin-top:20px;">Packing
+          ${shipment.boxes.length
+            ? `<span class="tag shipped">packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}</span>`
+            : `<span class="tag draft">not packed — review and Save Packing</span>`}</h4>
+        <p class="muted">Each order line is split into boxes by its pack size (pre-filled from the item's default) — lines are packed separately even when they're the same item. Change a pack size and the boxes update. You can pack before or after picking.</p>
+        <div class="row" style="max-width:300px;">
+          <div><label>Pallet # for every line (optional)</label>
+            <input type="text" id="default-pallet" placeholder="e.g. PLT-1" oninput="applyPalletToAll(this.value)"></div>
+        </div>
+        <table class="fit-table">
+          <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
           <tbody>${packSizeRowsHtml(shipment)}</tbody>
         </table>
 
-        <h4 style="margin-top:16px;">Packing list / box labels</h4>
-        <p class="muted">Boxed quantity per item must add up to the shipped quantity above before you can print labels.</p>
-        <table class="lines-table">
-          <thead><tr><th>Item</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th>Pallet #</th><th></th></tr></thead>
-          <tbody id="box-rows">${boxRowsHtml(shipment)}</tbody>
-        </table>
-        <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
-        <div style="margin-top:10px;">
+        <details id="box-details" style="margin-top:12px;">
+          <summary class="link" style="cursor:pointer;">Edit individual boxes (<span id="box-count">0</span>) — uneven splits, lot code or pallet per box</summary>
+          <table class="lines-table" style="margin-top:8px;">
+            <thead><tr><th>Order line</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th>Pallet #</th><th></th></tr></thead>
+            <tbody id="box-rows" oninput="refreshBoxSummary(); renderPalletTable()" onchange="refreshBoxSummary(); renderPalletTable()">${boxRowsHtml(shipment)}</tbody>
+          </table>
+          <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
+        </details>
+
+        <h4 style="margin-top:20px;">Pallets <span class="muted small">(optional)</span></h4>
+        <p class="muted">Give lines a pallet # above, then enter each pallet's weight and dimensions here. Or paste from a spreadsheet:
+          <strong>Item # · Pallet # · Weight · Dimensions</strong>, one row per item. Weight and dimensions only need to be on one row per pallet.</p>
+        <details style="margin-bottom:10px;">
+          <summary class="link" style="cursor:pointer;">Paste pallet data</summary>
+          <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="Item&#9;Pallet&#9;Weight&#9;Dimensions&#10;16713&#9;PLT-1&#9;250&#9;48x40x50&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300&#9;48x40x45"></textarea>
+          <div><button class="secondary" onclick="applyPastedPallets()" style="margin-top:6px;">Apply Pasted</button>
+            <span id="pallet-paste-status" class="muted small"></span></div>
+        </details>
+        <div id="pallet-table"></div>
+
+        <div style="margin-top:14px;">
           <button onclick="savePacking(${shipment.id})">Save Packing</button>
           <button class="secondary" onclick="printLabels(${shipment.id})">Print Labels</button>
-          <button class="secondary" onclick="printPackingList(${shipment.id})">Print Packing List</button>
+          <button class="secondary" onclick="printPackingList(${shipment.id})">Packing List PDF</button>
+          <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
+          <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
+          <label class="inline-check"><input type="checkbox" id="pl-pallets" ${shipment.boxes.some(b => b.pallet_number) ? "checked" : ""}> Pallet info</label>
+          <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
         </div>
         <div id="packing-error" class="error"></div>
+        ` : ""}
 
-        ${palletWeightRowsHtml(shipment)}
+        <h4 style="margin-top:20px;">Proof of delivery &amp; documents</h4>
+        <p class="muted small" style="margin-top:0;">Delivery photos, signed packing lists, bills of lading.
+          Drivers can use the phone page: <a class="link" href="pod.html?id=${shipment.id}" target="_blank">pod.html?id=${shipment.id}</a></p>
+        <div id="shipment-attachments"></div>
+
+        <h4 style="margin-top:20px;">Delivery</h4>
+        ${deliverySectionHtml(shipment)}
 
         <h4 style="margin-top:20px;">Invoicing</h4>
         ${shipment.status === "invoiced" ? `
           <p class="muted">Already invoiced. See <a class="link" href="invoices.html">Invoices</a>.</p>
+        ` : !["shipped", "delivered"].includes(shipment.status) ? `
+          <p class="muted">Available once the shipment has shipped.</p>
         ` : `
           <div class="row" style="max-width:500px;">
             <div><label>Due date</label><input type="date" id="inv-due-date"></div>
             <div><label>Shipping charge</label><input type="number" step="0.01" id="inv-shipping" value="0"></div>
           </div>
-          <label>Free text</label><textarea id="inv-free-text" rows="2">Generated via AT-HUB</textarea>
+          <label>Free text</label><textarea id="inv-free-text" rows="2" placeholder="Optional note printed on the invoice"></textarea>
           <button onclick="createInvoice(${shipment.id})" style="margin-top:8px;">Create Invoice from this Shipment</button>
         `}
         <div id="invoice-error" class="error"></div>
 
         <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:16px;">Close</button>
       `;
+      if (document.getElementById("box-rows")) { refreshBoxSummary(); renderPalletTable(); }
+      renderAttachments("shipment-attachments", "shipment", shipment.id, ["pod", "bol", "other"],
+        { notePlaceholder: "Note — e.g. received by / signed by", onChange: async () => {
+          // A POD upload may have just marked it delivered.
+          const fresh = await apiFetch(`/api/shipments/${shipment.id}`);
+          if (fresh.status !== shipment.status || fresh.delivered_at !== shipment.delivered_at) { await reloadList(); showDetail(shipment.id); }
+        } });
     }
 
     function addBoxRow() {
@@ -276,19 +630,21 @@
       const idx = tbody.children.length;
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><select class="box-item">${items.map(i => `<option value="${i.id}">${i.code} — ${i.title}</option>`).join("")}</select></td>
-        <td><input type="number" class="box-number" value="${idx + 1}" style="width:60px;"></td>
-        <td><input type="number" step="0.01" class="box-qty" value="0" style="width:80px;"></td>
+        <td><select class="box-line">${lineOptions(null)}</select></td>
+        <td><input type="number" step="1" class="box-number" value="${idx + 1}" style="width:60px;"></td>
+        <td><input type="number" step="1" min="1" class="box-qty qty-input" value="0"></td>
         <td><input type="text" class="box-lot" style="width:110px;"></td>
         <td><input type="text" class="box-pallet" style="width:90px;"></td>
-        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        <td><a class="link" onclick="this.closest('tr').remove(); refreshBoxSummary();">Remove</a></td>
       `;
       tbody.appendChild(tr);
+      refreshBoxSummary();
     }
 
     function collectBoxes() {
       return Array.from(document.querySelectorAll("#box-rows tr")).map(tr => ({
-        item_id: parseInt(tr.querySelector(".box-item").value),
+        order_line_id: parseInt(tr.querySelector(".box-line").value),
+        item_id: parseInt(tr.querySelector(".box-line").selectedOptions[0].dataset.item),
         box_number: parseInt(tr.querySelector(".box-number").value) || 1,
         quantity_in_box: parseFloat(tr.querySelector(".box-qty").value) || 0,
         lot_code: tr.querySelector(".box-lot").value || null,
@@ -300,9 +656,14 @@
       const errorEl = document.getElementById("packing-error");
       errorEl.textContent = "";
       try {
+        const pallets = collectPallets();
         await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
           method: "PUT",
           body: JSON.stringify({ boxes: collectBoxes() }),
+        });
+        await apiFetch(`/api/shipments/${shipmentId}/pallet-weights`, {
+          method: "PUT",
+          body: JSON.stringify({ pallets }),
         });
         showDetail(shipmentId);
       } catch (err) {
@@ -310,139 +671,27 @@
       }
     }
 
-    // Same layout/fields as the main portal's 4x6 box labels: customer name, a
-    // Shipment/Order#/PO#/Job# row, item code + title, a large Qty-in-Box, and
-    // a fixed footer. Box number and lot code are intentionally NOT printed on
-    // the card (same as the existing portal) -- they're tracked in the box
-    // table above but not meant to be read off a label in the warehouse.
-    function printLabels(shipmentId) {
-      apiFetch(`/api/shipments/${shipmentId}`).then(shipment => {
-        if (!shipment.boxes.length) {
-          alert("Save a packing list first — there are no boxes to print labels for.");
-          return;
-        }
-        const ord = order(shipment.order_id);
-        const win = window.open("", "_blank");
-        const labelsHtml = shipment.boxes.map(b => `
-          <div class="label-card">
-            <div class="label-customer">${customerName(ord ? ord.customer_id : null)}</div>
-            <div class="label-meta-row">
-              <div><span>Shipment</span><strong>${shipment.code}</strong></div>
-              <div><span>Order #</span><strong>${ord ? ord.code : ""}</strong></div>
-              <div><span>PO #</span><strong>${ord && ord.po_number ? ord.po_number : "—"}</strong></div>
-              <div><span>Job #</span><strong>${ord && ord.job_number ? ord.job_number : "—"}</strong></div>
-            </div>
-            <div class="label-item">
-              <div class="label-item-code">ITEM # ${itemCode(b.item_id)}</div>
-              <div class="label-item-title">${(itemObj(b.item_id) || {}).title || ""}</div>
-            </div>
-            <div class="label-qty">${b.quantity_in_box}</div>
-            <div class="label-footer">American Traders LLC - ATind Supplies<br>Questions? Email sales@atindsupplies.com</div>
-          </div>
-        `).join("");
-        win.document.write(`
-          <html><head><title>Labels — ${shipment.code}</title>
-          <style>
-            * { box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; margin: 0; }
-            .label-card {
-              width: 6in; height: 4in; padding: 0.3in;
-              display: flex; flex-direction: column;
-              page-break-after: always;
-            }
-            .label-customer { font-size: 26px; font-weight: 700; margin-bottom: 10px; }
-            .label-meta-row { display: flex; justify-content: space-between; border-top: 2px solid #000; border-bottom: 2px solid #000; padding: 8px 0; margin-bottom: 14px; }
-            .label-meta-row div { font-size: 13px; }
-            .label-meta-row span { display: block; color: #555; font-size: 11px; text-transform: uppercase; }
-            .label-item-code { font-size: 20px; font-weight: 700; }
-            .label-item-title { font-size: 14px; color: #333; margin-bottom: 14px; }
-            .label-qty { font-size: 54px; font-weight: 800; text-align: center; flex: 1; display: flex; align-items: center; justify-content: center; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; }
-            .label-footer { font-size: 11px; color: #666; text-align: center; margin-top: 10px; }
-            @media print { @page { size: 6in 4in; margin: 0; } .label-card { page-break-after: always; } }
-          </style>
-          </head><body>${labelsHtml}</body></html>
-        `);
-        win.document.close();
-        win.focus();
-        win.print();
-      });
-    }
-
-    // Groups boxes by quantity (e.g. "2 box of 40, 1 box of 10") like the existing portal's packing list.
-    function boxBreakdownString(boxes, itemId) {
-      const byQty = {};
-      boxes.filter(b => b.item_id === itemId).forEach(b => {
-        byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1;
-      });
-      return Object.entries(byQty)
-        .sort((a, b) => b[0] - a[0])
-        .map(([qty, count]) => `${count} box of ${qty}`)
-        .join(", ") || "—";
+    // Same layout and fields as the main portal's 4x6 labels (shared printBoxLabels in auth-guard.js).
+    async function printLabels(shipmentId) {
+      const shipment = await apiFetch(`/api/shipments/${shipmentId}`);
+      if (!shipment.boxes.length) {
+        alert("Save a packing list first — there are no boxes to print labels for.");
+        return;
+      }
+      const ord = order(shipment.order_id);
+      const job = ord && ord.job_number ? `-${ord.job_number}` : "";
+      printBoxLabels(shipment.boxes.map(b => ({
+        customer: customerName(ord ? ord.customer_id : null), shipment: shipment.code,
+        order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
+        item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
+      })), `${shipment.code}${job}-Labels`);
     }
 
     function printPackingList(shipmentId) {
-      apiFetch(`/api/shipments/${shipmentId}`).then(async shipment => {
-        const ord = order(shipment.order_id);
-        const fullOrder = await apiFetch(`/api/customer-orders/${shipment.order_id}`);
-        const totals = shippedByItem(shipment);
-
-        const pallets = {};
-        shipment.boxes.forEach(b => {
-          const key = b.pallet_number || "(unassigned)";
-          pallets[key] = pallets[key] || new Set();
-          pallets[key].add(itemCode(b.item_id));
-        });
-
-        const rows = Object.entries(totals).map(([itemId, shippedQty]) => {
-          const id = parseInt(itemId);
-          const orderLine = fullOrder.lines.find(l => l.item_id === id);
-          const ordered = orderLine ? orderLine.quantity : shippedQty;
-          const backordered = orderLine ? Math.max(0, orderLine.quantity - orderLine.shipped_quantity) : 0;
-          return `
-            <tr>
-              <td>${itemCode(id)}</td>
-              <td>${(itemObj(id) || {}).title || ""}</td>
-              <td>${ordered}</td>
-              <td>${shippedQty}</td>
-              <td>${backordered}</td>
-              <td>${boxBreakdownString(shipment.boxes, id)}</td>
-            </tr>
-          `;
-        }).join("");
-
-        const palletRows = Object.entries(pallets).map(([pallet, codes]) => {
-          const info = shipment.pallets.find(p => p.pallet_number === pallet) || {};
-          return `<tr><td>${pallet}</td><td>${[...codes].join(", ")}</td><td>${info.weight ?? ""}</td><td>${info.dimensions ?? ""}</td></tr>`;
-        }).join("");
-
-        const win = window.open("", "_blank");
-        win.document.write(`
-          <html><head><title>Packing List — ${shipment.code}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 40px; color: #111; }
-            h1 { font-size: 22px; margin-bottom: 4px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-            th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ccc; font-size: 13px; }
-          </style>
-          </head><body>
-            <h1>Packing List — ${shipment.code}</h1>
-            <p>${customerName(ord ? ord.customer_id : null)} — Order ${ord ? ord.code : ""}
-              ${ord && ord.po_number ? ` — PO ${ord.po_number}` : ""}${ord && ord.job_number ? ` — Job ${ord.job_number}` : ""}</p>
-            <table>
-              <thead><tr><th>Part #</th><th>Description</th><th>Qty ordered</th><th>Qty shipped</th><th>Backordered</th><th>Box breakdown</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-            <h3 style="margin-top:24px;">Pallet Information</h3>
-            <table>
-              <thead><tr><th>Pallet #</th><th>Items</th><th>Weight</th><th>Dimensions</th></tr></thead>
-              <tbody>${palletRows}</tbody>
-            </table>
-          </body></html>
-        `);
-        win.document.close();
-        win.focus();
-        win.print();
-      });
+      const boxes = document.getElementById("pl-boxes")?.checked ?? true;
+      const pallets = document.getElementById("pl-pallets")?.checked ?? false;
+      const lots = document.getElementById("pl-lots")?.checked ?? false;
+      openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}`);
     }
 
     async function createInvoice(shipmentId) {
@@ -472,6 +721,12 @@
         apiFetch("/api/lots/"),
       ]);
       document.getElementById("search").addEventListener("input", renderShipments);
+      document.getElementById("status-filter").addEventListener("change", renderShipments);
+      document.querySelectorAll("#ship-tabs .tab").forEach(t => t.addEventListener("click", () => {
+        currentTab = t.dataset.tab;
+        document.querySelectorAll("#ship-tabs .tab").forEach(x => x.classList.toggle("active", x === t));
+        renderShipments();
+      }));
       renderShipments();
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");

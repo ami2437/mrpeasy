@@ -19,10 +19,22 @@ def seed_admin_user(db: Session) -> None:
         username=settings.admin_username,
         hashed_password=AuthService.hash_password(settings.admin_password),
         full_name="Administrator",
-        role="admin",
+        role="super_admin",
         is_active=True,
     ))
     db.commit()
+
+
+def ensure_super_admin(db: Session) -> None:
+    """Accounts predate roles (everyone was "admin"): if nobody is a super admin yet,
+    promote the configured admin account (or the oldest active admin) so someone can manage users."""
+    if db.query(User).filter(User.role == "super_admin", User.is_active.is_(True)).first():
+        return
+    user = (db.query(User).filter(User.username == settings.admin_username, User.is_active.is_(True)).first()
+            or db.query(User).filter(User.role == "admin", User.is_active.is_(True)).order_by(User.id).first())
+    if user:
+        user.role = "super_admin"
+        db.commit()
 
 
 class AuthService:
