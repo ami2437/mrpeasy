@@ -53,25 +53,43 @@ async function apiFetch(path, options = {}) {
   return data;
 }
 
-function renderHeader(activePage) {
+// Grouped like MRPeasy's own sidebar: modules are organized under the
+// business function they belong to (CRM, Procurement, Warehouse), not a
+// flat list of pages.
+const NAV_GROUPS = [
+  { label: null, links: [["dashboard.html", "Dashboard"]] },
+  { label: "CRM", links: [["customers.html", "Customers"], ["customer-orders.html", "Customer Orders"]] },
+  { label: "Procurement", links: [["vendors.html", "Vendors"], ["purchase-orders.html", "Purchase Orders"]] },
+  { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"]] },
+];
+
+function renderSidebar(activePage) {
   const user = AuthGuard.getUser();
-  const nav = [
-    ["dashboard.html", "Dashboard"],
-    ["stock-items.html", "Stock Items"],
-    ["lots.html", "Lots"],
-    ["customer-orders.html", "Customer Orders"],
-    ["purchase-orders.html", "Purchase Orders"],
-    ["customers.html", "Customers"],
-    ["vendors.html", "Vendors"],
-  ];
-  const links = nav.map(([href, label]) =>
-    `<a href="${href}" class="${href === activePage ? 'active' : ''}">${label}</a>`
-  ).join("");
+  const groups = NAV_GROUPS.map(group => {
+    const links = group.links.map(([href, label]) =>
+      `<a href="${href}" class="${href === activePage ? 'active' : ''}">${label}</a>`
+    ).join("");
+    return `
+      <div class="nav-group">
+        ${group.label ? `<div class="nav-group-label">${group.label}</div>` : ""}
+        ${links}
+      </div>
+    `;
+  }).join("");
 
   return `
-    <header>
-      <h1>AT-HUB</h1>
-      <nav>${links}<a href="#" onclick="AuthGuard.logout(); return false;">Logout${user ? ` (${user.username})` : ""}</a></nav>
-    </header>
+    <nav class="sidebar">
+      <div class="brand">AT-HUB</div>
+      ${groups}
+      <div class="sidebar-footer">
+        ${user ? `<div class="user-line">${user.username}</div>` : ""}
+        <a href="#" onclick="AuthGuard.logout(); return false;">Logout</a>
+      </div>
+    </nav>
   `;
+}
+
+// Kept as an alias so older pages referencing renderHeader() keep working.
+function renderHeader(activePage) {
+  return renderSidebar(activePage);
 }

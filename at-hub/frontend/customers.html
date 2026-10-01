@@ -7,7 +7,8 @@
   <script src="auth-guard.js"></script>
 </head>
 <body>
-  <div id="header"></div>
+  <div class="app-shell">
+  <div id="sidebar"></div>
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
@@ -44,7 +45,7 @@
 
   <script>
     AuthGuard.requireLogin();
-    document.getElementById("header").innerHTML = renderHeader("customers.html");
+    document.getElementById("sidebar").innerHTML = renderSidebar("customers.html");
     const ENDPOINT = "/api/customers/";
 
     function toggleForm(show = true) {
@@ -90,5 +91,6 @@
     }
     load();
   </script>
+  </div>
 </body>
 </html>

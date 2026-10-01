@@ -7,7 +7,8 @@
   <script src="auth-guard.js"></script>
 </head>
 <body>
-  <div id="header"></div>
+  <div class="app-shell">
+  <div id="sidebar"></div>
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
@@ -48,7 +49,7 @@
 
   <script>
     AuthGuard.requireLogin();
-    document.getElementById("header").innerHTML = renderHeader("customer-orders.html");
+    document.getElementById("sidebar").innerHTML = renderSidebar("customer-orders.html");
 
     let customers = [];
     let items = [];
@@ -203,5 +204,6 @@
     }
     init();
   </script>
+  </div>
 </body>
 </html>

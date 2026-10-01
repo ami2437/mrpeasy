@@ -7,7 +7,8 @@
   <script src="auth-guard.js"></script>
 </head>
 <body>
-  <div id="header"></div>
+  <div class="app-shell">
+  <div id="sidebar"></div>
   <main>
     <div class="card">
       <h2 style="margin-top:0;">Welcome to AT-HUB</h2>
@@ -18,7 +19,7 @@
 
   <script>
     AuthGuard.requireLogin();
-    document.getElementById("header").innerHTML = renderHeader("dashboard.html");
+    document.getElementById("sidebar").innerHTML = renderSidebar("dashboard.html");
 
     async function loadSummary() {
       try {
@@ -44,5 +45,6 @@
     }
     loadSummary();
   </script>
+  </div>
 </body>
 </html>
