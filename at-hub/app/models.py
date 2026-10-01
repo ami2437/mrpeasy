@@ -24,6 +24,8 @@ class StockItem(Base):
     code = Column(String, unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
     unit = Column(String, nullable=True)
+    category = Column(String, nullable=True, index=True)
+    barcode = Column(String, nullable=True, index=True)
     cost_price = Column(Float, nullable=True, default=0)
     selling_price = Column(Float, nullable=True, default=0)
     on_hand = Column(Float, nullable=False, default=0)

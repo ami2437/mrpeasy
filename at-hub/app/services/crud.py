@@ -23,7 +23,10 @@ class StockItemService:
     def list(db: Session, q: Optional[str] = None, low_stock_only: bool = False) -> List[StockItem]:
         query = db.query(StockItem)
         if q:
-            query = query.filter((StockItem.code.ilike(f"%{q}%")) | (StockItem.title.ilike(f"%{q}%")))
+            query = query.filter(
+                (StockItem.code.ilike(f"%{q}%")) | (StockItem.title.ilike(f"%{q}%"))
+                | (StockItem.barcode.ilike(f"%{q}%")) | (StockItem.category.ilike(f"%{q}%"))
+            )
         if low_stock_only:
             # Compare against available (on_hand - booked), not raw on_hand -- stock already
             # promised to a confirmed order isn't free for a reorder decision to ignore.

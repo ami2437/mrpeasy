@@ -31,6 +31,8 @@ class StockItemCreate(BaseModel):
     code: str
     title: str
     unit: Optional[str] = None
+    category: Optional[str] = None
+    barcode: Optional[str] = None
     cost_price: Optional[float] = 0
     selling_price: Optional[float] = 0
     reorder_point: Optional[float] = 0
@@ -40,6 +42,8 @@ class StockItemCreate(BaseModel):
 class StockItemUpdate(BaseModel):
     title: Optional[str] = None
     unit: Optional[str] = None
+    category: Optional[str] = None
+    barcode: Optional[str] = None
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
     reorder_point: Optional[float] = None
@@ -53,6 +57,8 @@ class StockItemResponse(BaseModel):
     code: str
     title: str
     unit: Optional[str] = None
+    category: Optional[str] = None
+    barcode: Optional[str] = None
     cost_price: Optional[float] = None
     selling_price: Optional[float] = None
     on_hand: float

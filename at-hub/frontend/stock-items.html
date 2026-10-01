@@ -12,7 +12,8 @@
   <main>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <input type="text" id="search" placeholder="Search code or title...">
+        <input type="text" id="search" placeholder="Search code, title, barcode, or category...">
+        <select id="category-filter" style="max-width:200px;"><option value="">All categories</option></select>
         <label style="margin:0;"><input type="checkbox" id="low-stock-only" style="width:auto;display:inline-block;"> Low stock only</label>
         <button onclick="toggleForm()">+ New Item</button>
       </div>
@@ -25,6 +26,10 @@
         <div><label>Code</label><input type="text" id="f-code"></div>
         <div><label>Title</label><input type="text" id="f-title"></div>
         <div><label>Unit</label><input type="text" id="f-unit" placeholder="ea, kg, ..."></div>
+      </div>
+      <div class="row">
+        <div><label>Category</label><input type="text" id="f-category" placeholder="e.g. Fasteners"></div>
+        <div><label>Barcode</label><input type="text" id="f-barcode"></div>
       </div>
       <div class="row">
         <div><label>Cost price</label><input type="number" step="0.01" id="f-cost"></div>
@@ -48,8 +53,8 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Title</th><th>Unit</th><th>On hand</th><th>Booked</th><th>Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
-        <tbody id="items-body"><tr><td colspan="11">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Title</th><th>Category</th><th>Unit</th><th>On hand</th><th>Booked</th><th>Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
+        <tbody id="items-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
   </main>
@@ -67,7 +72,7 @@
         document.getElementById("form-title").textContent = "New Stock Item";
         document.getElementById("on-hand-row").style.display = "none";
         document.getElementById("f-code").disabled = false;
-        ["code", "title", "unit", "cost", "sell", "reorder", "pack-size", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
+        ["code", "title", "unit", "category", "barcode", "cost", "sell", "reorder", "pack-size", "on-hand"].forEach(f => document.getElementById(`f-${f}`).value = "");
       }
     }
 
@@ -81,6 +86,8 @@
       document.getElementById("f-code").disabled = true;
       document.getElementById("f-title").value = item.title;
       document.getElementById("f-unit").value = item.unit || "";
+      document.getElementById("f-category").value = item.category || "";
+      document.getElementById("f-barcode").value = item.barcode || "";
       document.getElementById("f-cost").value = item.cost_price ?? "";
       document.getElementById("f-sell").value = item.selling_price ?? "";
       document.getElementById("f-reorder").value = item.reorder_point ?? "";
@@ -100,6 +107,8 @@
             body: JSON.stringify({
               title: document.getElementById("f-title").value,
               unit: document.getElementById("f-unit").value,
+              category: document.getElementById("f-category").value || null,
+              barcode: document.getElementById("f-barcode").value || null,
               cost_price: parseFloat(document.getElementById("f-cost").value) || 0,
               selling_price: parseFloat(document.getElementById("f-sell").value) || 0,
               reorder_point: parseFloat(document.getElementById("f-reorder").value) || 0,
@@ -114,6 +123,8 @@
               code: document.getElementById("f-code").value,
               title: document.getElementById("f-title").value,
               unit: document.getElementById("f-unit").value,
+              category: document.getElementById("f-category").value || null,
+              barcode: document.getElementById("f-barcode").value || null,
               cost_price: parseFloat(document.getElementById("f-cost").value) || 0,
               selling_price: parseFloat(document.getElementById("f-sell").value) || 0,
               reorder_point: parseFloat(document.getElementById("f-reorder").value) || 0,
@@ -129,16 +140,27 @@
       }
     }
 
+    function populateCategoryFilter() {
+      const select = document.getElementById("category-filter");
+      const current = select.value;
+      const categories = [...new Set(items.map(i => i.category).filter(Boolean))].sort();
+      select.innerHTML = `<option value="">All categories</option>` + categories.map(c => `<option value="${c}">${c}</option>`).join("");
+      select.value = current;
+    }
+
     function renderItems() {
       const tbody = document.getElementById("items-body");
-      if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="11" class="muted">No stock items yet.</td></tr>`;
+      const category = document.getElementById("category-filter").value;
+      const filtered = category ? items.filter(i => i.category === category) : items;
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="12" class="muted">${items.length ? "No items in this category." : "No stock items yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = items.map(item => `
+      tbody.innerHTML = filtered.map(item => `
         <tr>
           <td>${item.code}</td>
           <td>${item.title}</td>
+          <td>${item.category || ""}</td>
           <td>${item.unit || ""}</td>
           <td>${item.on_hand}</td>
           <td class="muted">${item.booked}</td>
@@ -160,14 +182,16 @@
         if (q) params.set("q", q);
         if (lowOnly) params.set("low_stock_only", "true");
         items = await apiFetch(`/api/stock-items/?${params.toString()}`);
+        populateCategoryFilter();
         renderItems();
       } catch (err) {
-        document.getElementById("items-body").innerHTML = `<tr><td colspan="11" class="error">${err.message}</td></tr>`;
+        document.getElementById("items-body").innerHTML = `<tr><td colspan="12" class="error">${err.message}</td></tr>`;
       }
     }
 
     document.getElementById("search").addEventListener("input", () => loadItems());
     document.getElementById("low-stock-only").addEventListener("change", () => loadItems());
+    document.getElementById("category-filter").addEventListener("change", renderItems);
     loadItems();
   </script>
   </div>
