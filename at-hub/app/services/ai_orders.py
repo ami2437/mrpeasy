@@ -32,6 +32,7 @@ Return ONLY a JSON object with exactly these keys:
   "order_date": "YYYY-MM-DD"|null,
   "delivery_date": "YYYY-MM-DD"|null,  // requested ship/delivery/due date for the whole order, if any
   "ship_to_address": string|null,      // full ship-to address, lines joined with newlines
+  "job_number": string|null,           // project / job number printed on the PO or its lines, if any
   "notes": string|null,                // special instructions worth keeping (terms, packing, delivery notes)
   "lines": [
     {
@@ -203,11 +204,50 @@ def _match_item(items: List[StockItem], codes: List[Optional[str]], description:
             "confidence": top["score"] if top else 0, "candidates": candidates}
 
 
+NUT_SUFFIX = re.compile(r"[\s-]*nuts?$", re.I)
+TWO_NUTS = re.compile(r"\(2\)|\b2\s*(?:hvy\s*|heavy\s*)?(?:hex\s*)?nuts\b|\btwo\s+nuts\b|\bdouble\s+nut", re.I)
+
+
+def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem]) -> List[Dict[str, Any]]:
+    """Our convention: every bolt/stud on a customer order is followed by its matching nut at $0.
+    The nut is the item whose code is the bolt's code + "-NUT"/"-NUTS" (any spacing/case). One nut
+    per bolt, two when the bolt is described with (2) nuts -- that's how every past order was entered."""
+    by_id = {i.id: i for i in items}
+    nut_for = {}
+    for i in items:
+        if NUT_SUFFIX.search(i.code or ""):
+            nut_for.setdefault(NUT_SUFFIX.sub("", i.code).strip().lower(), i)
+    on_po = {l.get("item_id") for l in lines}  # nuts the customer listed themselves are never doubled
+    out = []
+    for line in lines:
+        out.append(line)
+        bolt = by_id.get(line.get("item_id"))
+        if not bolt or NUT_SUFFIX.search(bolt.code or ""):
+            continue
+        nut = nut_for.get(bolt.code.strip().lower())
+        if not nut or nut.id in on_po or not line.get("quantity"):
+            continue
+        two = bool(TWO_NUTS.search(f"{bolt.title} {line.get('description') or ''}"))
+        out.append({
+            "item_code": nut.code, "customer_item_code": None, "description": nut.title,
+            "quantity": line["quantity"] * (2 if two else 1), "unit": line.get("unit"), "unit_price": 0.0,
+            "delivery_date": line.get("delivery_date"), "item_id": nut.id, "match": "code", "confidence": 1.0,
+            "candidates": [], "companion_of": bolt.code,
+            "companion_note": f"$0 matching nut for {bolt.code}{' (2 per bolt)' if two else ''}",
+        })
+    return out
+
+
 def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
-    text = pdf_text(file_bytes)
-    data = _ask_model(text)
-    items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
+    from app.services import customer_po_templates
     from app.services.item_match import ItemMatcher
+    text = pdf_text(file_bytes)
+    # A known layout is read exactly; anything else goes to the local AI model.
+    data = customer_po_templates.parse(text)
+    source = data["template"] if data else settings.ai_model
+    if not data:
+        data = _ask_model(text)
+    items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
     matcher = ItemMatcher(items)
 
     lines = []
@@ -217,9 +257,12 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
         qty = _num(raw.get("quantity"))
         if not qty and not raw.get("item_code") and not raw.get("description"):
             continue
-        match = _match_item(items, [raw.get("item_code"), raw.get("customer_item_code")], raw.get("description"), matcher)
+        code = raw.get("item_code")
+        # customers print their part #; ours is often the same with "-HPC" added
+        codes = [code, raw.get("customer_item_code"), f"{code}-HPC" if code else None]
+        match = _match_item(items, codes, raw.get("description"), matcher)
         lines.append({
-            "item_code": raw.get("item_code"),
+            "item_code": code,
             "customer_item_code": raw.get("customer_item_code"),
             "description": raw.get("description"),
             "quantity": qty,
@@ -228,16 +271,21 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
             "delivery_date": _date(raw.get("delivery_date")),
             **match,
         })
+    lines = add_nut_companions(lines, items)
 
     return {
-        "model": settings.ai_model,
+        "model": source,
+        "template": data.get("template"),
         "customer_name": data.get("customer_name"),
         "customer": _match_customer(db, data.get("customer_name")),
         "po_number": data.get("po_number"),
         "order_date": _date(data.get("order_date")),
         "delivery_date": _date(data.get("delivery_date")),
+        "job_number": data.get("job_number"),
         "ship_to_address": data.get("ship_to_address"),
         "notes": data.get("notes"),
+        "problems": data.get("problems") or [],
+        "skipped": data.get("skipped") or [],
         "lines": lines,
         "text_preview": text[:4000],
     }

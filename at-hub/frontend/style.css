@@ -637,3 +637,7 @@ button.ai-cand:hover { background: var(--ai-soft); }
 button.ai-cand.on { background: var(--ai); border-color: var(--ai); color: #fff; }
 button.ai-cand i { font-style: normal; font-weight: 700; color: var(--ai); margin-left: 3px; }
 button.ai-cand.on i { color: #fff; }
+
+/* $0 matching nut added under its bolt by the PO import */
+#lines-body tr.nut-companion td { background: var(--surface-2); }
+#lines-body tr.nut-companion td.grow { padding-left: 26px; }

@@ -211,6 +211,11 @@
       document.getElementById("f-po-date").value = d.order_date || "";  // the date printed on the customer's PO
       if (d.ship_to_address) document.getElementById("f-ship-to").value = d.ship_to_address;
       document.getElementById("f-notes").value = d.notes || "";
+      document.getElementById("f-job-number").value = d.job_number || "";
+      (d.problems || []).forEach(p => notes.push(`<span class="neg">${escapeHtml(p)}</span>`));
+      (d.skipped || []).forEach(p => notes.push(escapeHtml(p)));
+      const nuts = d.lines.filter(l => l.companion_of).length;
+      if (nuts) notes.push(`Added ${nuts} matching $0 nut line${nuts === 1 ? "" : "s"} under the bolts (our standard). Remove any that aren't wanted.`);
 
       d.lines.forEach((l, n) => {
         addLine();
@@ -231,6 +236,12 @@
         tr.querySelector(".l-qty").value = l.quantity || 1;
         if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price;
         if (l.delivery_date) tr.querySelector(".l-delivery").value = l.delivery_date;
+        if (l.companion_of) {
+          tr.classList.add("nut-companion");
+          tr.querySelector(".grow").insertAdjacentHTML("beforeend", `<div class="small muted">↳ ${escapeHtml(l.companion_note)}</div>`);
+          refreshPriceDeltas(tr);
+          return;
+        }
         tr.querySelector(".grow").insertAdjacentHTML("beforeend",
           `<div class="small ${l.item_id && l.match === "code" ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
             !l.item_id ? " — not sure which item: pick one below" : l.match === "description" ? " — matched by description, check it" : ""}</div>`
@@ -239,7 +250,7 @@
       });
       if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF.</span>`); }
       recalcLines("lines-body", "new-order-total");
-      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> by the local AI (${escapeHtml(d.model)}).
+      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> ${d.template ? `using the exact <strong>${escapeHtml(d.template)}</strong> PO reader` : `by the local AI (${escapeHtml(d.model)})`}.
         Check every field before creating the order. The PDF will be attached as the customer PO.${notes.length ? `<ul>${notes.map(n => `<li>${n}</li>`).join("")}</ul>` : ""}</div>`;
       document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
     }
