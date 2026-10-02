@@ -232,6 +232,8 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
                 received = f(p["quantity"])
                 rep.add("po lines", f"{po.code} line {p['ord']}: received but has no lot code -- marked received without a lot")
             line.received_quantity = min(received, line.quantity) if received else 0
+            if not received and clean(p["lot_code"]):
+                line.planned_lot_code = p["lot_code"]  # MRPeasy assigns the lot # at order time; keep it for the receipt
         if f(o["fees_sum"]):
             po.charges.append(PurchaseOrderCharge(charge_type="shipping", amount=round(f(o["fees_sum"]), 2),
                                        description="Fees (imported from MRPeasy)", created_by=BY))
@@ -268,7 +270,8 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     cos, co_lines = {}, {}
     lines_by_co_item = defaultdict(list)
     for o in snap("customer_orders"):
-        po_num = clean(re.sub(r"^\s*PO\s*#?\s*", "", o["reference"] or "", flags=re.I))
+        # "PO # 4179330" -> "4179330"; only a literal "PO #" / "PO " before a number is dropped
+        po_num = clean(re.sub(r"^\s*PO\s*#\s*|^\s*PO\s+(?=\d)", "", o["reference"] or "", flags=re.I))
         co = CustomerOrder(
             mrp_id=o["cust_ord_id"], code=o["code"], customer_id=customers[o["customer_id"]].id,
             order_date=dt(o["created"]), delivery_date=dt(o["delivery_date"]), status=CO_STATUS.get(str(o["status"]), "confirmed"),
@@ -542,6 +545,8 @@ def _number_series(db, rep):
                                             ("LOT", Lot, "lot_code", "L", 5), ("V", Vendor, "code", "V", 5)]:
         db.add(NumberSeries(key=key, prefix=prefix, width=width))
         codes = [c for (c,) in db.query(getattr(model, attr)).all()]
+        if key == "LOT":  # lot #s promised to open PO lines are taken too
+            codes += [c for (c,) in db.query(PurchaseOrderLine.planned_lot_code).filter(PurchaseOrderLine.planned_lot_code.isnot(None)).all()]
         nums = [int(c[len(prefix):]) for c in codes if c and c.startswith(prefix) and c[len(prefix):].isdigit() and len(c) - len(prefix) == width]
         rep.add("numbering", f"{key}: next is {prefix}{(max(nums, default=0) + 1):0{width}d}")
 

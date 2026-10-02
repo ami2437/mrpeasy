@@ -681,6 +681,7 @@ class PurchaseOrderLineResponse(BaseModel):
     landed_cost_per_unit: float = 0
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
+    planned_lot_code: Optional[str] = None
 
     class Config:
         from_attributes = True

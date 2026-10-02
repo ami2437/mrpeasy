@@ -49,8 +49,18 @@ def next_lot_code(db: Session) -> str:
     create several lots in one transaction must flush between them so this sees the last one."""
     series = db.query(NumberSeries).filter(NumberSeries.key == "LOT").first()
     prefix, width = (series.prefix, series.width) if series else ("LOT-", 5)
-    codes = db.query(Lot.lot_code).filter(Lot.lot_code.like(f"{prefix}%")).all()
-    return _next_in_series([c for (c,) in codes], prefix, width)
+    codes = [c for (c,) in db.query(Lot.lot_code).filter(Lot.lot_code.like(f"{prefix}%")).all()]
+    # lot #s already promised to open PO lines are taken too
+    codes += [c for (c,) in db.query(PurchaseOrderLine.planned_lot_code).filter(PurchaseOrderLine.planned_lot_code.like(f"{prefix}%")).all()]
+    return _next_in_series(codes, prefix, width)
+
+
+def _planned_lot(db: Session, line) -> Optional[str]:
+    """The lot # assigned to this PO line before it arrived -- used for its first receipt only."""
+    code = (line.planned_lot_code or "").strip()
+    if code and not db.query(Lot).filter(Lot.lot_code == code).first():
+        return code
+    return None
 
 
 def line_landed_per_unit(db: Session, po_line_id: int) -> float:
@@ -1689,7 +1699,7 @@ class PurchaseOrderService:
             landed = line_landed_per_unit(db, line.id)
             lot = Lot(
                 item_id=item.id,
-                lot_code=(recv_line.lot_code or "").strip() or next_lot_code(db),
+                lot_code=(recv_line.lot_code or "").strip() or _planned_lot(db, line) or next_lot_code(db),
                 quantity=recv_line.quantity,
                 initial_quantity=recv_line.quantity,
                 base_unit_cost=line.unit_cost,

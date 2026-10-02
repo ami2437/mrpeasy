@@ -6,6 +6,7 @@
     python -m app.importers.mrpeasy dryrun               load + reconcile the latest snapshot
     python -m app.importers.mrpeasy promote              back up at_hub.db, then replace it with at_hub_import.db
                                                          (stop AT-HUB first; restart it afterwards)
+    python -m app.importers.mrpeasy sample [N]           random-sample validation sheet (local HTML)
 """
 import sys
 from pathlib import Path
@@ -27,6 +28,10 @@ def main(argv):
             from .reconcile import reconcile
             ok = reconcile(snap)
             sys.exit(0 if ok else 1)
+    elif cmd == "sample":
+        from .extract import latest_snapshot
+        from .sample import sample
+        sample(latest_snapshot(), int(argv[1]) if len(argv) > 1 else 4)
     elif cmd == "promote":
         from .promote import promote
         promote()

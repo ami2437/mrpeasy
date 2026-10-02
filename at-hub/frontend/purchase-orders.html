@@ -407,7 +407,7 @@
                 </td>` : ""}
                 ${canReceive ? `
                   <td><input type="number" step="1" min="0" class="recv-qty qty-input" data-line="${l.id}" value="${Math.max(0, Math.round(l.quantity - l.received_quantity))}"></td>
-                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="Auto LOT-#####" style="width:120px;"></td>
+                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="${l.planned_lot_code && !l.received_quantity ? escapeHtml(l.planned_lot_code) : "Auto"}" title="${l.planned_lot_code ? `Lot ${escapeHtml(l.planned_lot_code)} was assigned when this was ordered and is used unless you type another` : "Leave blank for the next lot #, or type the supplier's lot code"}" style="width:120px;"></td>
                 ` : ""}
               </tr>
             `).join("")}

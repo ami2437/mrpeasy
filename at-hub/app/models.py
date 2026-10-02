@@ -344,6 +344,7 @@ class PurchaseOrderLine(Base):
     vendor_item_code = Column(String, nullable=True)  # the vendor's part # -- what the vendor-facing PO shows
     vendor_description = Column(String, nullable=True)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    planned_lot_code = Column(String, nullable=True)  # lot # already assigned before receipt (MRPeasy does this); used when it arrives
 
     allocations = relationship("LandedCostAllocation", backref="po_line")
 
