@@ -4,6 +4,8 @@
     python -m app.importers.mrpeasy load [SNAPSHOT]      build at_hub_import.db from a snapshot
     python -m app.importers.mrpeasy reconcile [SNAPSHOT] compare at_hub_import.db with the snapshot
     python -m app.importers.mrpeasy dryrun               load + reconcile the latest snapshot
+    python -m app.importers.mrpeasy promote              back up at_hub.db, then replace it with at_hub_import.db
+                                                         (stop AT-HUB first; restart it afterwards)
 """
 import sys
 from pathlib import Path
@@ -25,6 +27,9 @@ def main(argv):
             from .reconcile import reconcile
             ok = reconcile(snap)
             sys.exit(0 if ok else 1)
+    elif cmd == "promote":
+        from .promote import promote
+        promote()
     else:
         print(__doc__)
 

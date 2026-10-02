@@ -44,6 +44,9 @@ CUSTOM_LABELS = {
     "custom_572": "Funding Discount",
 }
 DATE_CUSTOM = {"custom_218", "custom_570"}
+# Per-record corrections agreed with the business, applied after mapping (MRPeasy itself is not changed).
+VENDOR_OVERRIDES = {"V00001": {"email": None}}  # Superior Bolts: leave email blank for now
+
 IGNORED_CUSTOM = {"custom_748", "custom_775", "custom_766", "custom_218"}  # not wanted (218 has its own column)
 
 
@@ -155,6 +158,9 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         vendors[v["vendor_id"]] = Vendor(mrp_id=v["vendor_id"], code=v["code"], name=v["title"],
                                          phone=", ".join(every("phone")) or None, email=", ".join(every("email")) or None,
                                          address="\n".join(x for x in [address, *extra] if x) or None)
+    for v in vendors.values():
+        for field, value in VENDOR_OVERRIDES.get(v.code, {}).items():
+            setattr(v, field, value)
     db.add_all(vendors.values())
     db.flush()
 
