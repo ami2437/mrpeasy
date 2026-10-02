@@ -108,17 +108,25 @@
       if (notes) document.getElementById("f-notes").value = notes;
       const body = document.getElementById("lines-body");
       body.innerHTML = "";
-      (r.lines.length ? r.lines : [{}]).forEach(l => {
+      (r.lines.length ? r.lines : [{}]).forEach((l, n) => {
         addLine();
         const tr = body.lastElementChild;
+        tr.querySelector(".l-item").id = `ai-po-item-${n}`;
+        tr.aiAfterPick = () => setTimeout(() => {  // keep the quoted part #, description and price
+          if (l.vendor_item_code) tr.querySelector(".l-vcode").value = l.vendor_item_code;
+          if (l.description) tr.querySelector(".l-vdesc").value = l.description;
+          if (l.unit_price != null) tr.querySelector(".l-cost").value = l.unit_price;
+          refreshPriceDeltas(tr);
+        }, 300);
         if (l.item_id) {
           const sel = tr.querySelector(".l-item");
           sel.value = l.item_id;
           sel.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (l.vendor_item_code || l.description) {
           tr.classList.add("ai-unmatched");
-          tr.querySelector(".vcode-hint").innerHTML = `<span class="neg">Not matched: pick our item</span>`;
+          tr.querySelector(".vcode-hint").innerHTML = `<span class="neg">Not sure: pick our item</span>`;
         }
+        if (l.candidates) tr.querySelector("td").insertAdjacentHTML("beforeend", aiCandidateChips(l.candidates, `ai-po-item-${n}`, l.item_id));
         // after the item's own defaults, so the quoted values win
         setTimeout(() => {
           if (l.vendor_item_code) tr.querySelector(".l-vcode").value = l.vendor_item_code;
@@ -132,9 +140,10 @@
       document.getElementById("po-ai-note").innerHTML = `<div class="ai-review"><div class="ai-review-head">${icon("sparkles")}
         <strong>Drafted from ${escapeHtml(file.name)}</strong>
         <span class="muted small">${r.lines.length} line${r.lines.length === 1 ? "" : "s"}${unmatched ? `, <span class="neg">${unmatched} need our item picked</span>` : ""}.
-        ${r.vendor && r.vendor.vendor_id ? "" : `<span class="neg">Vendor “${escapeHtml(r.vendor_name || "?")}” not found: pick it.</span>`}
+        ${r.vendor && r.vendor.vendor_id ? "" : `<span class="neg">Vendor “${escapeHtml(r.vendor_name || "?")}” not certain: pick it${r.vendor && r.vendor.candidates && r.vendor.candidates.length ? " below" : " (or add it under Vendors)"}.</span>`}
         ${r.shipping_handling ? `Quoted S&amp;H ${fmtMoney(r.shipping_handling)} will be added as an S&amp;H line.` : ""}
-        The document is attached to the PO when you create it.</span></div></div>`;
+        The document is attached to the PO when you create it.</span></div>
+        ${r.vendor && !r.vendor.vendor_id ? aiVendorChips(r.vendor.candidates, "f-vendor") : ""}</div>`;
     }
 
     function addLine() {
@@ -839,7 +848,8 @@ Thank you.</textarea>
             <thead><tr><th>Vendor Part #</th><th>Description</th><th>Our Item</th><th class="num">Qty</th><th class="num">Unit Price</th><th>Check Vs PO</th></tr></thead>
             <tbody>${r.lines.map(l => `<tr>
               <td>${escapeHtml(l.vendor_item_code || "")}</td><td>${escapeHtml(l.description || "")}</td>
-              <td>${l.item_id ? escapeHtml(it(l.item_id).code || "") : `<span class="muted">Not matched</span>`}</td>
+              <td>${l.item_id ? escapeHtml(it(l.item_id).code || "") + (l.match && l.match.startsWith("PO line") ? ` <span class="muted small">(by description)</span>` : "")
+                : l.candidates && l.candidates.length ? `<span class="muted small">Maybe ${escapeHtml(l.candidates[0].code)} (${Math.round(l.candidates[0].score * 100)}%)</span>` : `<span class="muted">Not matched</span>`}</td>
               <td class="num">${l.quantity != null ? fmtQty(l.quantity) : ""}</td><td class="num">${l.unit_price != null ? fmtPrice(l.unit_price) : ""}</td>
               <td>${l.issues && l.issues.length ? `<span class="neg">${escapeHtml(l.issues.join("; "))}</span>` : `<span class="pos">✓ Matches</span>`}</td></tr>`).join("")}</tbody>
           </table>` : ""}

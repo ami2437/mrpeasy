@@ -627,3 +627,13 @@ html[data-theme="dark"] .inv-chip.combined { background: #9d174d; border-color: 
 tr.row-combined > td:first-child { box-shadow: inset 3px 0 0 #be185d; }
 .ship-card.card-combined { border-left: 3px solid #be185d; }
 .chip-stack { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* ---- AI match suggestion chips ---- */
+.ai-cands { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; }
+.ai-cands > span { margin-right: 2px; }
+button.ai-cand { background: var(--surface); color: var(--text); border: 1px solid var(--ai-border); border-radius: 999px; padding: 2px 9px;
+  font-size: 11.5px; font-weight: 400; text-transform: none; white-space: nowrap; }
+button.ai-cand:hover { background: var(--ai-soft); }
+button.ai-cand.on { background: var(--ai); border-color: var(--ai); color: #fff; }
+button.ai-cand i { font-style: normal; font-weight: 700; color: var(--ai); margin-left: 3px; }
+button.ai-cand.on i { color: #fff; }

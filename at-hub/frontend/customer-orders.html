@@ -212,10 +212,14 @@
       if (d.ship_to_address) document.getElementById("f-ship-to").value = d.ship_to_address;
       document.getElementById("f-notes").value = d.notes || "";
 
-      d.lines.forEach(l => {
+      d.lines.forEach((l, n) => {
         addLine();
         const tr = document.querySelector("#lines-body tr:last-child");
         const select = tr.querySelector(".l-item");
+        select.id = `ai-co-item-${n}`;
+        if (!l.item_id) tr.classList.add("ai-unmatched");
+        // picking a suggestion resets the price to the item's default: put the PO's price back
+        tr.aiAfterPick = () => { if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price; };
         const said = [l.item_code, l.customer_item_code, l.description].filter(Boolean).join(" · ");
         if (l.item_id) {
           select.value = l.item_id;
@@ -229,7 +233,8 @@
         if (l.delivery_date) tr.querySelector(".l-delivery").value = l.delivery_date;
         tr.querySelector(".grow").insertAdjacentHTML("beforeend",
           `<div class="small ${l.item_id && l.match === "code" ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
-            !l.item_id ? " — no matching item, pick one" : l.match === "description" ? " — matched by description, check it" : ""}</div>`);
+            !l.item_id ? " — not sure which item: pick one below" : l.match === "description" ? " — matched by description, check it" : ""}</div>`
+          + aiCandidateChips(l.candidates, select.id, l.item_id));
         refreshPriceDeltas(tr);
       });
       if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF.</span>`); }

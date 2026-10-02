@@ -192,30 +192,23 @@ def _match_customer(db: Session, name: Optional[str]) -> Dict[str, Any]:
             "suggested_name": best.name if best else None}
 
 
-def _match_item(items: List[StockItem], codes: List[Optional[str]], description: Optional[str]) -> Dict[str, Any]:
-    for code in codes:
-        key = _norm(code)
-        if not key:
-            continue
-        for item in items:
-            if key in (_norm(item.code), _norm(item.barcode)):
-                return {"item_id": item.id, "match": "code", "confidence": 1.0}
-    desc = _norm(description)
-    if desc:
-        best, score = None, 0.0
-        for item in items:
-            s = difflib.SequenceMatcher(None, _norm(item.title), desc).ratio()
-            if s > score:
-                best, score = item, s
-        if best and score >= 0.75:
-            return {"item_id": best.id, "match": "description", "confidence": round(score, 2)}
-    return {"item_id": None, "match": None, "confidence": 0}
+def _match_item(items: List[StockItem], codes: List[Optional[str]], description: Optional[str], matcher=None) -> Dict[str, Any]:
+    """Our item for a PO line: certain on an exact code, otherwise ranked by fastener attributes.
+    Always returns the top candidates so the user can pick when it isn't sure."""
+    from app.services.item_match import ItemMatcher, pick
+    candidates = (matcher or ItemMatcher(items)).rank(codes, description)
+    item_id = pick(candidates)
+    top = candidates[0] if candidates else None
+    return {"item_id": item_id, "match": ("code" if top and top["score"] >= 0.999 else "description") if item_id else None,
+            "confidence": top["score"] if top else 0, "candidates": candidates}
 
 
 def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
     text = pdf_text(file_bytes)
     data = _ask_model(text)
     items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
+    from app.services.item_match import ItemMatcher
+    matcher = ItemMatcher(items)
 
     lines = []
     for raw in data.get("lines") or []:
@@ -224,7 +217,7 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
         qty = _num(raw.get("quantity"))
         if not qty and not raw.get("item_code") and not raw.get("description"):
             continue
-        match = _match_item(items, [raw.get("item_code"), raw.get("customer_item_code")], raw.get("description"))
+        match = _match_item(items, [raw.get("item_code"), raw.get("customer_item_code")], raw.get("description"), matcher)
         lines.append({
             "item_code": raw.get("item_code"),
             "customer_item_code": raw.get("customer_item_code"),

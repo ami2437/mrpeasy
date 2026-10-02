@@ -1157,3 +1157,31 @@ function invoiceChipFromShipment(s) {
     shipment_codes: s.invoice_shipment_codes && s.invoice_shipment_codes.length ? s.invoice_shipment_codes : [s.code],
     combined_from: s.invoice_combined_from, is_combined: s.invoice_combined }, { here: s.code });
 }
+
+
+// ---- AI match suggestions ----
+// Chips under a scanned line: "15343 · BOLT_HH_5/8-11x1-1/4… 85%". Clicking one picks that item in the
+// line's <select> (and fires change). The chosen one is highlighted; nothing is final until the form is saved.
+function aiCandidateChips(candidates, selectId, pickedId) {
+  if (!candidates || !candidates.length) return `<div class="ai-cands muted small">No similar items found: pick one from the list.</div>`;
+  return `<div class="ai-cands"><span class="small muted">${pickedId ? "Other matches:" : "Best matches, pick one:"}</span>${candidates.map(c =>
+    `<button type="button" class="ai-cand${c.item_id === pickedId ? " on" : ""}" title="${escapeHtml(`${c.title}\n${c.why}`)}"
+      onclick="aiPickCandidate(this, '${selectId}', ${c.item_id})"><b>${escapeHtml(c.code)}</b> ${escapeHtml(c.title.length > 38 ? c.title.slice(0, 38) + "…" : c.title)}
+      <i>${Math.round(c.score * 100)}%</i></button>`).join("")}</div>`;
+}
+function aiPickCandidate(btn, selectId, itemId) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  select.value = itemId;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  btn.parentElement.querySelectorAll(".ai-cand").forEach(b => b.classList.toggle("on", b === btn));
+  btn.closest("tr") && btn.closest("tr").classList.remove("ai-unmatched");
+  if (btn.closest("tr") && btn.closest("tr").aiAfterPick) btn.closest("tr").aiAfterPick();
+}
+// Vendor chips for a scanned vendor document.
+function aiVendorChips(cands, selectId) {
+  if (!cands || !cands.length) return "";
+  return `<div class="ai-cands"><span class="small muted">Vendor matches:</span>${cands.map(c =>
+    `<button type="button" class="ai-cand" title="${escapeHtml(`Matched on ${c.why}`)}" onclick="aiPickCandidate(this, '${selectId}', ${c.vendor_id})">
+      <b>${escapeHtml(c.code || "")}</b> ${escapeHtml(c.name)} <i>${Math.round(c.score * 100)}%</i></button>`).join("")}</div>`;
+}

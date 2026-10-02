@@ -9,6 +9,7 @@ Kinds:
 """
 import base64
 import io
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -16,7 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.models import CustomerOrder, PurchaseOrder, Shipment, StockItem, Vendor, VendorItem
-from app.services.ai_orders import _ask_model, _date, _match_item, _norm, _num, pdf_text
+from app.services.ai_orders import _ask_model, _date, _norm, _num, pdf_text
+from app.services.item_match import ItemMatcher, pick
 import difflib
 
 LINES_SCHEMA = """  "lines": [
@@ -121,19 +123,38 @@ def _read(file_bytes: bytes, filename: str) -> Dict[str, Any]:
         return {"text": "", "images": images}
 
 
-def _match_vendor(db: Session, name: Optional[str]) -> Dict[str, Any]:
-    vendors = db.query(Vendor).all()
-    if not name or not vendors:
-        return {"vendor_id": None, "confidence": 0}
+def _match_vendor(db: Session, name: Optional[str], text: str = "") -> Dict[str, Any]:
+    """Rank our vendors: the name the AI read, plus any of a vendor's phone numbers, email
+    domains or website found anywhere in the document (letterheads are often misread)."""
+    vendors = db.query(Vendor).filter(Vendor.is_active == True).all()  # noqa: E712
     target = _norm(name)
-    best, score = None, 0.0
+    digits = re.sub(r"\D", "", text or "")
+    low = (text or "").lower()
+    ranked = []
     for v in vendors:
         vn = _norm(v.name)
-        s = 1.0 if vn == target else (0.92 if vn and (vn in target or target in vn) else difflib.SequenceMatcher(None, vn, target).ratio())
-        if s > score:
-            best, score = v, s
-    return {"vendor_id": best.id if best and score >= 0.6 else None, "confidence": round(score, 2),
-            "suggested_name": best.name if best else None}
+        s, why = 0.0, ""
+        if target and vn:
+            s = 1.0 if vn == target else (0.92 if (vn in target or target in vn) else difflib.SequenceMatcher(None, vn, target).ratio())
+            why = "name"
+        for ph in re.split(r"[,;/]", v.phone or ""):
+            d = re.sub(r"\D", "", ph)[-10:]
+            if len(d) >= 7 and d in digits:
+                s, why = max(s, 0.97), "phone number on the document"
+        for em in re.split(r"[,;\s]+", v.email or ""):
+            dom = em.split("@")[-1].lower() if "@" in em else ""
+            if dom and dom not in ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com") and dom in low:
+                s, why = max(s, 0.97), "email domain on the document"
+        web = re.search(r"web:\s*(?:https?://)?(?:www\.)?([^\s/]+)", (v.address or "").lower())
+        if web and web.group(1) in low:
+            s, why = max(s, 0.97), "website on the document"
+        if s >= 0.45:
+            ranked.append({"vendor_id": v.id, "name": v.name, "code": v.code, "score": round(s, 2), "why": why})
+    ranked.sort(key=lambda r: -r["score"])
+    top = ranked[0] if ranked else None
+    sure = top and top["score"] >= 0.8 and (len(ranked) == 1 or top["score"] - ranked[1]["score"] >= 0.1)
+    return {"vendor_id": top["vendor_id"] if sure else None, "confidence": top["score"] if top else 0,
+            "suggested_name": top["name"] if top else None, "candidates": ranked[:5]}
 
 
 def _vendor_lines(db: Session, vendor_id: Optional[int], raw_lines: Any) -> List[Dict[str, Any]]:
@@ -142,7 +163,8 @@ def _vendor_lines(db: Session, vendor_id: Optional[int], raw_lines: Any) -> List
     items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
     xref = {}
     if vendor_id:
-        xref = {_norm(m.vendor_item_code): m for m in db.query(VendorItem).filter(VendorItem.vendor_id == vendor_id).all()}
+        xref = {m.vendor_item_code: m.item_id for m in db.query(VendorItem).filter(VendorItem.vendor_id == vendor_id).all()}
+    matcher = ItemMatcher(items, xref)
     lines = []
     for raw in raw_lines or []:
         if not isinstance(raw, dict):
@@ -151,21 +173,33 @@ def _vendor_lines(db: Session, vendor_id: Optional[int], raw_lines: Any) -> List
         code = raw.get("vendor_item_code")
         if not qty and not code and not raw.get("description"):
             continue
-        mapped = xref.get(_norm(code))
-        match = ({"item_id": mapped.item_id, "match": "vendor part #", "confidence": 1.0} if mapped
-                 else _match_item(items, [code], raw.get("description")))
+        candidates = matcher.rank([code], raw.get("description"))
+        item_id = pick(candidates)
         lines.append({"vendor_item_code": code, "description": raw.get("description"), "quantity": qty,
-                      "unit_price": _num(raw.get("unit_price")), **match})
+                      "unit_price": _num(raw.get("unit_price")), "item_id": item_id,
+                      "match": candidates[0]["why"] if item_id else None,
+                      "confidence": candidates[0]["score"] if candidates else 0, "candidates": candidates})
     return lines
 
 
 def _check_invoice_against_po(po: PurchaseOrder, lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Pair each invoice line with a PO line and flag quantity / price differences."""
+    """Pair each invoice line with a PO line and flag quantity / price differences. A line with no
+    certain item is matched by description against this PO's own lines only -- a far smaller,
+    surer set than the whole catalogue."""
     checks, used = [], set()
+    from sqlalchemy.orm import object_session
+    ids = {l.item_id for l in po.lines}
+    po_items = ItemMatcher(object_session(po).query(StockItem).filter(StockItem.id.in_(ids)).all() if ids else [])
     for ln in lines:
         po_line = next((l for l in po.lines if l.id not in used and (
             (ln.get("item_id") and l.item_id == ln["item_id"]) or
             (ln.get("vendor_item_code") and _norm(l.vendor_item_code) == _norm(ln["vendor_item_code"])))), None)
+        if not po_line and ln.get("description"):
+            open_ids = {l.item_id for l in po.lines if l.id not in used}
+            best = po_items.rank([ln.get("vendor_item_code")], ln["description"], top=3, only_ids=open_ids)
+            if best and best[0]["score"] >= 0.5:
+                po_line = next(l for l in po.lines if l.id not in used and l.item_id == best[0]["item_id"])
+                ln = {**ln, "item_id": po_line.item_id, "match": f"PO line by description ({best[0]['why']})"}
         issues = []
         if not po_line:
             issues.append("not on this PO")
@@ -189,7 +223,7 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
 
     if kind == "vendor_invoice":
         po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first() if po_id else None
-        vendor = _match_vendor(db, data.get("vendor_name"))
+        vendor = _match_vendor(db, data.get("vendor_name"), doc["text"])
         lines = _vendor_lines(db, po.vendor_id if po else vendor.get("vendor_id"), data.get("lines"))
         total, sh = _num(data.get("total")), _num(data.get("shipping_handling")) or 0
         subtotal = _num(data.get("subtotal"))
@@ -214,7 +248,7 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
         out["warnings"] = warnings
 
     elif kind == "vendor_order":
-        vendor = _match_vendor(db, data.get("vendor_name"))
+        vendor = _match_vendor(db, data.get("vendor_name"), doc["text"])
         out.update({
             "vendor_name": data.get("vendor_name"), "vendor": vendor,
             "document_number": data.get("document_number"), "document_date": _date(data.get("document_date")),
