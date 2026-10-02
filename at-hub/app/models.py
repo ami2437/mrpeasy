@@ -47,6 +47,7 @@ class StockItem(Base):
     reorder_point = Column(Float, nullable=True, default=0)
     default_pack_size = Column(Integer, nullable=True)  # units per box default; editable per-shipment at packing time
     is_active = Column(Boolean, default=True)
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -87,6 +88,7 @@ class Lot(Base):
     status = Column(String, nullable=False, default="available")  # available | on_hold | rejected
     source = Column(String, nullable=True)  # purchase | adjustment
     source_reference = Column(String, nullable=True)  # e.g. PO code
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     created_at = Column(DateTime, default=datetime.utcnow)
 
     @property
@@ -120,6 +122,7 @@ class Customer(Base):
     phone = Column(String, nullable=True)
     address = Column(Text, nullable=True)  # billing address
     shipping_address = Column(Text, nullable=True)  # default ship-to; blank = same as billing
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -135,6 +138,7 @@ class Vendor(Base):
     phone = Column(String, nullable=True)
     address = Column(Text, nullable=True)
     shipping_address = Column(Text, nullable=True)  # ship-from / pickup address; blank = same as main address
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -151,6 +155,8 @@ class CustomerOrder(Base):
     po_number = Column(String, nullable=True)  # customer's PO reference -- printed on shipment labels
     job_number = Column(String, nullable=True)  # optional job reference -- printed on shipment labels
     ship_to_address = Column(Text, nullable=True)  # this order's delivery address; defaults from the customer
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -170,6 +176,7 @@ class CustomerOrderLine(Base):
     unit_price = Column(Float, nullable=False, default=0)
     delivery_date = Column(DateTime, nullable=True)
     shipped_quantity = Column(Float, nullable=False, default=0)
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
 
     shipment_lines = relationship("ShipmentLine", backref="order_line")
 
@@ -244,6 +251,8 @@ class PurchaseOrder(Base):
     status = Column(String, nullable=False, default="draft")  # draft | ordered | partially_received | received | cancelled
     freight_cost = Column(Float, nullable=True, default=0)
     tariff_cost = Column(Float, nullable=True, default=0)
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -333,6 +342,7 @@ class PurchaseOrderLine(Base):
     received_quantity = Column(Float, nullable=False, default=0)
     vendor_item_code = Column(String, nullable=True)  # the vendor's part # -- what the vendor-facing PO shows
     vendor_description = Column(String, nullable=True)
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
 
     allocations = relationship("LandedCostAllocation", backref="po_line")
 
@@ -460,6 +470,8 @@ class Shipment(Base):
     carrier = Column(String, nullable=True)
     tracking_number = Column(String, nullable=True)
     shipping_cost = Column(Float, nullable=True)  # what WE pay the carrier -- separate from what we invoice the customer
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     status = Column(String, nullable=False, default="new")  # new | ready | shipped | delivered | invoiced | cancelled
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
@@ -553,6 +565,8 @@ class Invoice(Base):
     # JSON record of how this invoice was combined, so it can be shown and undone:
     # {"merged": [{"code", "shipment_ids", "line_ids", "due_date", "free_text"}], "by", "at"}
     combined_info = Column(Text, nullable=True)
+    mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -748,3 +762,14 @@ class VendorPayment(Base):
     @property
     def unapplied(self) -> float:
         return round(self.amount - self.applied, 2)
+
+
+class NumberSeries(Base):
+    """How new document numbers are formed, so AT-HUB continues the numbering customers and
+    vendors already know (e.g. MRPeasy's C89123 -> C89124). Without a row, a document type
+    falls back to AT-HUB's own CO-0001 style."""
+    __tablename__ = "number_series"
+
+    key = Column(String, primary_key=True)  # CO | PO | SH | INV | LOT | V
+    prefix = Column(String, nullable=False)  # e.g. "C", "PO", "Inv-"
+    width = Column(Integer, nullable=False)  # digits, zero-padded

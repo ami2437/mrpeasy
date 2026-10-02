@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config.settings import settings
 from app.config.database import engine, SessionLocal, add_missing_columns
+from app.models import NumberSeries
 from app.models import Base
 from app.services.auth import AuthService, seed_admin_user, ensure_super_admin
 from app.services.crud import ShipmentService, ProductGroupService, backfill_lot_costing, backfill_line_identity, backfill_vendor_codes
@@ -27,7 +28,8 @@ try:
     backfill_lot_costing(db)
     backfill_line_identity(db)
     backfill_vendor_codes(db)
-    if settings.test_data_enabled:
+    # Never seed TEST records into a database built by the MRPeasy import (it carries number series).
+    if settings.test_data_enabled and not db.query(NumberSeries).first():
         ensure_test_data(db)
 finally:
     db.close()

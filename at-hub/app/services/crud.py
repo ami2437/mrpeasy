@@ -9,7 +9,7 @@ from app.models import (
     CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment,
     Shipment, ShipmentLine, ShipmentBox, PalletWeight, Invoice, InvoiceLine, InvoicePayment,
     LandedCost, LandedCostAllocation, CompanyProfile, ProductGroup, VendorItem, VendorBill,
-    PackSizeHistory, FundingImport, InvoiceShipment, PurchaseOrderCharge, VendorPayment,
+    PackSizeHistory, FundingImport, InvoiceShipment, PurchaseOrderCharge, VendorPayment, NumberSeries,
 )
 
 
@@ -24,21 +24,33 @@ def get_company_profile(db: Session) -> CompanyProfile:
     return profile
 
 
+def _next_in_series(existing, prefix: str, width: int) -> str:
+    """One past the highest number in use for prefix+digits. (Counting rows would hand out a
+    code that already exists once any record has been deleted.)"""
+    n = max((int(c[len(prefix):]) for c in existing
+             if c and c.startswith(prefix) and c[len(prefix):].isdigit() and len(c) - len(prefix) == width), default=0)
+    return f"{prefix}{n + 1:0{width}d}"
+
+
 def generate_code(db: Session, model, prefix: str) -> str:
-    """Sequential codes, e.g. CO-0001: one past the highest number in use. (Counting rows
-    would hand out a code that already exists once any record has been deleted.)"""
+    """Sequential codes. A NumberSeries row (set by the MRPeasy import) continues that
+    numbering, e.g. C89124; otherwise AT-HUB's own CO-0001 style."""
+    series = db.query(NumberSeries).filter(NumberSeries.key == prefix).first()
+    if series:
+        codes = db.query(model.code).filter(model.code.like(f"{series.prefix}%")).all()
+        return _next_in_series([c for (c,) in codes], series.prefix, series.width)
     codes = db.query(model.code).filter(model.code.like(f"{prefix}-%")).all()
-    n = max((int(c[len(prefix) + 1:]) for (c,) in codes if c[len(prefix) + 1:].isdigit()), default=0)
-    return f"{prefix}-{n + 1:04d}"
+    return _next_in_series([c for (c,) in codes], f"{prefix}-", 4)
 
 
 # ---- Lot numbering and costing ----
 def next_lot_code(db: Session) -> str:
     """Sequential LOT-00001 numbers, unique across receipts and adjustments. Callers that
     create several lots in one transaction must flush between them so this sees the last one."""
-    codes = db.query(Lot.lot_code).filter(Lot.lot_code.like("LOT-%")).all()
-    n = max((int(c[4:]) for (c,) in codes if c[4:].isdigit()), default=0)
-    return f"LOT-{n + 1:05d}"
+    series = db.query(NumberSeries).filter(NumberSeries.key == "LOT").first()
+    prefix, width = (series.prefix, series.width) if series else ("LOT-", 5)
+    codes = db.query(Lot.lot_code).filter(Lot.lot_code.like(f"{prefix}%")).all()
+    return _next_in_series([c for (c,) in codes], prefix, width)
 
 
 def line_landed_per_unit(db: Session, po_line_id: int) -> float:
