@@ -8,3 +8,4 @@ at-hub/*.log
 at-hub/venv/
 at-hub/__pycache__/
 at-hub/**/__pycache__/
+at-hub/test-docs/

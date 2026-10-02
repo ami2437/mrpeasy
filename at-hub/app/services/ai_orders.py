@@ -117,15 +117,19 @@ def pdf_text(file_bytes: bytes) -> str:
 
 
 # ---- model call ----
-def _ask_model(text: str) -> Dict[str, Any]:
+def _ask_model(text: str, prompt: str = EXTRACTION_PROMPT, images: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Ask the local model for JSON. `images` (base64) switches to the vision model, for scans and photos."""
     url = model_url()
+    model = settings.ai_vision_model if images else settings.ai_model
     body = {
-        "model": settings.ai_model,
-        "prompt": EXTRACTION_PROMPT + text[:MAX_TEXT_CHARS] + "\n---",
+        "model": model,
+        "prompt": prompt + text[:MAX_TEXT_CHARS] + "\n---",
         "format": "json",
         "stream": False,
         "options": {"temperature": 0, "num_ctx": 16384},
     }
+    if images:
+        body["images"] = images
     try:
         resp = httpx.post(f"{url}/api/generate", json=body, timeout=settings.ai_timeout_seconds)
     except httpx.ConnectError:
