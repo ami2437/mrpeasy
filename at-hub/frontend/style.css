@@ -670,3 +670,17 @@ table.list-fit .chip-stack { max-width: 230px; }
 .ship-chip i { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
 .ship-chip.st-ready i { background: #60a5fa; } .ship-chip.st-shipped i { background: #2563eb; }
 .ship-chip.st-delivered i { background: #14b8a6; } .ship-chip.st-invoiced i { background: #9333ea; }
+
+button.ai-btn.cloud { background: var(--surface); color: var(--text-2); border-color: var(--border-strong); }
+button.ai-btn.cloud:hover { background: var(--surface-3); color: var(--text); }
+
+/* ---- Drag a column header to move the column (TableTools) ---- */
+th[draggable="true"] { cursor: grab; }
+th.dragging { opacity: .45; }
+th.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+th.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+.table-tools-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* Notes wrap in a narrow column (up to 4 lines) so the other columns get the room */
+table.list-fit td.notes-cell { min-width: 80px; max-width: 130px; font-size: 12px; line-height: 1.3; }
+table.list-fit td.notes-cell > div { -webkit-line-clamp: 4; }

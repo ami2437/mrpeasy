@@ -623,8 +623,8 @@ const TableTools = {
     return `at_hub_cols:${page}:${heads.join("|")}`;
   },
   load(key) {
-    try { return Object.assign({ hidden: [], widths: {} }, JSON.parse(localStorage.getItem(key)) || {}); }
-    catch { return { hidden: [], widths: {} }; }
+    try { return Object.assign({ hidden: [], widths: {}, order: null }, JSON.parse(localStorage.getItem(key)) || {}); }
+    catch { return { hidden: [], widths: {}, order: null }; }
   },
   save(key, state) {
     try { localStorage.setItem(key, JSON.stringify(state)); } catch {}
@@ -653,9 +653,34 @@ const TableTools = {
 
     const style = document.createElement("style");
     document.head.appendChild(style);
+    // Column order: state.order lists original column indexes in display order. Every row the page
+    // renders arrives in the original order, so each new row is rearranged once (rows with a colspan
+    // cell or a different cell count -- "Loading…", group rows -- are left as they are).
+    const pos = i => (state.order ? state.order.indexOf(i) : i);
+    const arrange = row => {
+      if (!state.order || row.dataset.ttOrd === String(state.order) || row.cells.length !== ths.length
+          || row.querySelector("[colspan]")) return;
+      const cells = row.dataset.ttOrd ? row._ttOriginal : Array.from(row.cells);
+      row._ttOriginal = cells;
+      state.order.forEach(i => row.appendChild(cells[i]));
+      row.dataset.ttOrd = String(state.order);
+    };
+    const applyOrder = () => {
+      const head = table.tHead.rows[0];
+      (state.order || ths.map((_, i) => i)).forEach(i => head.appendChild(ths[i]));
+      Array.from(table.tBodies).forEach(tb => Array.from(tb.rows).forEach(r => {
+        if (!state.order && r._ttOriginal) { r._ttOriginal.forEach(c => r.appendChild(c)); delete r.dataset.ttOrd; }
+        else arrange(r);
+      }));
+      if (table.tFoot && table.tFoot.className === "totals-row") this.refreshTotals(table);
+    };
+    Array.from(table.tBodies).forEach(tb => new MutationObserver(muts => {
+      if (state.order) muts.forEach(m => m.addedNodes.forEach(n => { if (n.tagName === "TR") arrange(n); }));
+    }).observe(tb, { childList: true }));
+
     const applyHidden = () => {
       style.textContent = state.hidden.map(i =>
-        `table[data-tt="${id}"] > * > tr > :nth-child(${i + 1}):not([colspan]) { display: none; }`).join("\n");
+        `table[data-tt="${id}"] > * > tr > :nth-child(${pos(i) + 1}):not([colspan]) { display: none; }`).join("\n");
       menuBtn.classList.toggle("has-hidden", state.hidden.length > 0);
       menuBtn.textContent = state.hidden.length ? `Columns (${state.hidden.length} hidden) ▾` : "Columns ▾";
     };
@@ -668,7 +693,8 @@ const TableTools = {
       if (menu.style.display !== "none") { menu.style.display = "none"; return; }
       menu.innerHTML = ths.map((th, i) => th.dataset.label ? `
         <label><input type="checkbox" data-i="${i}" ${state.hidden.includes(i) ? "" : "checked"}> ${escapeHtml(th.dataset.label)}</label>` : "").join("")
-        + `<div class="table-tools-actions"><a data-act="all">Show all</a> · <a data-act="widths">Reset widths</a></div>`;
+        + `<div class="table-tools-actions"><a data-act="all">Show all</a> · <a data-act="widths">Reset widths</a> · <a data-act="order">Reset order</a></div>`
+        + `<div class="table-tools-hint">Drag a column header to move it.</div>`;
       menu.style.display = "block";
     };
     menu.onchange = e => {
@@ -681,6 +707,7 @@ const TableTools = {
       const act = e.target.dataset.act;
       if (act === "all") { state.hidden = []; menu.querySelectorAll("input").forEach(c => { c.checked = true; }); applyHidden(); }
       if (act === "widths") { state.widths = {}; applyWidths(); }
+      if (act === "order") { state.order = null; applyOrder(); applyHidden(); }
       if (act) this.save(key, state);
     };
     document.addEventListener("click", e => { if (!bar.contains(e.target)) menu.style.display = "none"; });
@@ -704,6 +731,34 @@ const TableTools = {
       th.appendChild(grip);
     });
 
+    let dragFrom = null;
+    ths.forEach((th, i) => {
+      if (!th.dataset.label) return;
+      th.draggable = true;
+      th.addEventListener("dragstart", e => { dragFrom = i; th.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", th.dataset.label); });
+      th.addEventListener("dragend", () => { th.classList.remove("dragging"); ths.forEach(h => h.classList.remove("drop-before", "drop-after")); });
+      th.addEventListener("dragover", e => {
+        if (dragFrom === null || dragFrom === i) return;
+        e.preventDefault();
+        const after = e.offsetX > th.offsetWidth / 2;
+        th.classList.toggle("drop-after", after); th.classList.toggle("drop-before", !after);
+      });
+      th.addEventListener("dragleave", () => th.classList.remove("drop-before", "drop-after"));
+      th.addEventListener("drop", e => {
+        e.preventDefault();
+        if (dragFrom === null || dragFrom === i) return;
+        const after = th.classList.contains("drop-after");
+        const order = (state.order || ths.map((_, j) => j)).filter(j => j !== dragFrom);
+        order.splice(order.indexOf(i) + (after ? 1 : 0), 0, dragFrom);
+        state.order = order.every((v, j) => v === j) ? null : order;
+        dragFrom = null;
+        this.save(key, state);
+        applyOrder();
+        applyHidden();
+      });
+    });
+
+    applyOrder();
     applyHidden();
     applyWidths();
     this.enableSort(table, ths);
@@ -748,7 +803,8 @@ const TableTools = {
         if (sortable.length < 2) return;
         const sorted = [...sortable].sort((a, b) => {
           if (dir === 0) return original.get(a) - original.get(b);
-          const x = this.sortKey(a.cells[col]), y = this.sortKey(b.cells[col]);
+          const at = Array.from(ths[col].parentNode.cells).indexOf(ths[col]);  // columns may have been moved
+          const x = this.sortKey(a.cells[at]), y = this.sortKey(b.cells[at]);
           let c;
           if (x.n != null && y.n != null) c = x.n - y.n;
           else if (x.n != null || y.n != null) c = x.n != null ? -1 : 1;  // numbers before text/blank
@@ -1098,10 +1154,16 @@ applyTheme(currentTheme());  // runs in <head>, before the page paints
 // *suggestion* to fill the form with -- the user still reviews and saves.
 function aiScanButton(kind, callback, opts = {}) {
   const title = opts.title || "Scan a document with AI and pre-fill this form";
+  const cloud = ["vendor_invoice", "vendor_order"].includes(kind) && AuthGuard.hasRole("manager")
+    ? ` <button type="button" class="ai-btn cloud" title="For a hard document: read it with Claude (Anthropic, cloud). Your company details and bank numbers are blanked out on this PC first; only that text is sent. About 1-3 cents."
+        onclick="aiScan(this, '${kind}', '${callback}', ${opts.poId || "null"}, 'claude')">☁ Ask Claude</button>` : "";
   return `<button type="button" class="ai-btn" data-icon="sparkles" title="${escapeHtml(title)}"
-    onclick="aiScan(this, '${kind}', '${callback}', ${opts.poId || "null"})">${escapeHtml(opts.label || "AI Scan")}</button>`;
+    onclick="aiScan(this, '${kind}', '${callback}', ${opts.poId || "null"})">${escapeHtml(opts.label || "AI Scan")}</button>${cloud}`;
 }
-function aiScan(btn, kind, callback, poId) {
+function aiScan(btn, kind, callback, poId, engine = "local") {
+  if (engine === "claude" && !confirm("Send this document to Claude (Anthropic's cloud) to read?\n\n"
+      + "Before it leaves this PC: your company name/addresses, the bill-to/ship-to block and any bank numbers are blanked out. "
+      + "Only that text is sent, never the PDF. Scanned images are not sent.")) return;
   const picker = document.createElement("input");
   picker.type = "file";
   picker.accept = "application/pdf,image/*";
@@ -1110,6 +1172,7 @@ function aiScan(btn, kind, callback, poId) {
     if (!file) return;
     const form = new FormData();
     form.append("kind", kind);
+    if (engine === "claude") form.append("engine", "claude");
     if (poId) form.append("po_id", poId);
     form.append("file", file);
     const label = btn.lastChild.textContent;

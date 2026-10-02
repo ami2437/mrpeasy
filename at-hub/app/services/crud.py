@@ -518,6 +518,13 @@ class CustomerOrderService:
             raise HTTPException(status_code=400, detail="Customer not found")
         if not data.lines:
             raise HTTPException(status_code=400, detail="Order must have at least one line")
+        po = (data.po_number or "").strip()
+        if po and not getattr(data, "allow_duplicate", False):
+            existing = db.query(CustomerOrder).filter(CustomerOrder.customer_id == data.customer_id,
+                                                      CustomerOrder.status != "cancelled").all()
+            dup = next((o for o in existing if (o.po_number or "").strip().lower() == po.lower()), None)
+            if dup:
+                raise HTTPException(status_code=409, detail=f"DUPLICATE_PO|{dup.id}|{dup.code}|Customer PO {po} is already on order {dup.code}")
 
         order = CustomerOrder(
             code=generate_code(db, CustomerOrder, "CO"),

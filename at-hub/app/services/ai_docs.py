@@ -213,13 +213,28 @@ def _check_invoice_against_po(po: PurchaseOrder, lines: List[Dict[str, Any]]) ->
     return checks
 
 
-def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Optional[int] = None) -> Dict[str, Any]:
+def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Optional[int] = None,
+            engine: str = "local") -> Dict[str, Any]:
     if kind not in PROMPTS:
         raise HTTPException(status_code=400, detail=f"Unknown document kind: {kind}")
     doc = _read(file_bytes, filename)
-    data = _ask_model(doc["text"], prompt=PROMPTS[kind], images=doc["images"])
-    out: Dict[str, Any] = {"kind": kind, "model": settings.ai_vision_model if doc["images"] else settings.ai_model,
-                           "scanned_image": bool(doc["images"]), "text_preview": doc["text"][:3000]}
+    out: Dict[str, Any] = {"kind": kind, "scanned_image": bool(doc["images"]), "text_preview": doc["text"][:3000]}
+    if engine == "claude":
+        # Cloud, on an explicit click only: our details and bank numbers are redacted locally first,
+        # and only that text is sent (never the PDF). A scan is an image we can't redact, so it stays here.
+        from app.services import ai_cloud
+        if kind not in ai_cloud.SCHEMAS:
+            raise HTTPException(status_code=400, detail="Ask Claude isn't available for this kind of document")
+        if doc["images"]:
+            raise HTTPException(status_code=400, detail="This is a scanned image: it can't be redacted, so it isn't sent to Claude. Use the local AI scan.")
+        safe, removed = ai_cloud.redact(doc["text"], db)
+        result = ai_cloud.ask_claude(PROMPTS[kind], safe, ai_cloud.SCHEMAS[kind])
+        data = result["data"]
+        out.update({"model": f"Claude ({result['model']})", "cloud": True, "redacted": removed, "tokens": result["tokens"],
+                    "text_preview": safe[:3000]})
+    else:
+        data = _ask_model(doc["text"], prompt=PROMPTS[kind], images=doc["images"])
+        out["model"] = settings.ai_vision_model if doc["images"] else settings.ai_model
 
     if kind == "vendor_invoice":
         po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first() if po_id else None

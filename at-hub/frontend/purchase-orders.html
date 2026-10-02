@@ -138,7 +138,7 @@
       });
       const unmatched = r.lines.filter(l => !l.item_id).length;
       document.getElementById("po-ai-note").innerHTML = `<div class="ai-review"><div class="ai-review-head">${icon("sparkles")}
-        <strong>Drafted from ${escapeHtml(file.name)}</strong>
+        <strong>Drafted from ${escapeHtml(file.name)}</strong>${r.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((r.redacted || []).join("; ") || "nothing needed")}">☁ Claude, redacted</span>` : ""}
         <span class="muted small">${r.lines.length} line${r.lines.length === 1 ? "" : "s"}${unmatched ? `, <span class="neg">${unmatched} need our item picked</span>` : ""}.
         ${r.vendor && r.vendor.vendor_id ? "" : `<span class="neg">Vendor “${escapeHtml(r.vendor_name || "?")}” not certain: pick it${r.vendor && r.vendor.candidates && r.vendor.candidates.length ? " below" : " (or add it under Vendors)"}.</span>`}
         ${r.shipping_handling ? `Quoted S&amp;H ${fmtMoney(r.shipping_handling)} will be added as an S&amp;H line.` : ""}
@@ -840,7 +840,7 @@ Thank you.</textarea>
       const bad = r.lines.filter(l => l.issues && l.issues.length);
       document.getElementById("bill-ai-review").innerHTML = `
         <div class="ai-review">
-          <div class="ai-review-head">${icon("sparkles")} <strong>AI read ${escapeHtml(file.name)}</strong>
+          <div class="ai-review-head">${icon("sparkles")} <strong>${r.cloud ? "Claude" : "AI"} read ${escapeHtml(file.name)}</strong>${r.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((r.redacted || []).join("; ") || "nothing needed")}">☁ cloud, redacted</span>` : ""}
             <span class="muted small">Review the row above, then “Add invoice”.${r.scanned_image ? " Scanned image: double-check the numbers." : ""}</span>
             <a class="link small" style="margin-left:auto;" onclick="document.getElementById('bill-ai-review').innerHTML=''">Dismiss</a></div>
           ${(r.warnings || []).map(w => `<div class="notice">${escapeHtml(w)}</div>`).join("")}

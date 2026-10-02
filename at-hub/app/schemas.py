@@ -254,6 +254,7 @@ class CustomerOrderLineCreate(InputModel):
 
 
 class CustomerOrderCreate(BaseModel):
+    allow_duplicate: bool = False  # create even though this customer PO # is already on another order
     customer_id: int
     delivery_date: Optional[datetime] = None
     po_number: Optional[str] = None
@@ -303,6 +304,8 @@ class CustomerOrderResponse(BaseModel):
     code: str
     customer_id: int
     order_date: datetime
+    created_at: Optional[datetime] = None  # when the order was entered (MRPeasy's "created" for imported ones)
+    created_by: Optional[str] = None
     delivery_date: Optional[datetime] = None
     status: str
     po_number: Optional[str] = None

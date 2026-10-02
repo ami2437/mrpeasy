@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # The URL must be localhost or a private-network address; anything else is refused.
     ai_ollama_url: str = "http://127.0.0.1:11434"
     ai_model: str = "qwen2.5:7b"
+    anthropic_api_key: str = ""  # optional "Ask Claude" (cloud) document reading; blank = feature off
     ai_vision_model: str = "qwen2.5vl:7b"  # reads photos and scanned PDFs (PODs, scanned invoices)
     ai_timeout_seconds: int = 180
 

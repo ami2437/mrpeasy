@@ -34,9 +34,10 @@
     <div class="card" id="form-card" style="display:none;">
       <h3>New Customer Order</h3>
       <div id="ai-draft-note"></div>
+      <div id="po-dup-warning"></div>
       <div class="field-grid">
-        <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo()"></select></div>
-        <div><label>PO #</label><input type="text" id="f-po-number" placeholder="Customer's PO #"></div>
+        <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo(); checkDuplicatePo()"></select></div>
+        <div><label>PO #</label><input type="text" id="f-po-number" placeholder="Customer's PO #" oninput="checkDuplicatePo()"></div>
         <div><label>Customer PO Date</label><input type="date" id="f-po-date"></div>
         <div><label>Job #</label><input type="text" id="f-job-number"></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
@@ -63,7 +64,7 @@
 
     <div class="card">
       <table class="list-fit" id="orders-table">
-        <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th>Order date</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th>Shipments</th><th>Invoices</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th title="When the order was entered">Created</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th>Shipments</th><th>Invoices</th><th></th></tr></thead>
         <tbody id="orders-body"><tr><td colspan="13">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -89,6 +90,7 @@
       document.getElementById("form-card").style.display = show ? "block" : "none";
       aiPdfFile = null;
       document.getElementById("ai-draft-note").innerHTML = "";
+      document.getElementById("po-dup-warning").innerHTML = "";
       if (show) {
         document.getElementById("lines-body").innerHTML = "";
         fillShipTo();
@@ -209,6 +211,7 @@
       document.getElementById("f-po-number").value = d.po_number || "";
       document.getElementById("f-delivery").value = d.delivery_date || "";
       document.getElementById("f-po-date").value = d.order_date || "";  // the date printed on the customer's PO
+      checkDuplicatePo();
       if (d.ship_to_address) document.getElementById("f-ship-to").value = d.ship_to_address;
       document.getElementById("f-notes").value = d.notes || "";
       document.getElementById("f-job-number").value = d.job_number || "";
@@ -256,7 +259,7 @@
       document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
     }
 
-    async function saveOrder() {
+    async function saveOrder(allowDuplicate = false) {
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
       const missing = Array.from(document.querySelectorAll("#lines-body tr")).findIndex(tr => !tr.querySelector(".l-item").value);
@@ -278,6 +281,7 @@
             customer_po_date: document.getElementById("f-po-date").value || null,
             ship_to_address: document.getElementById("f-ship-to").value || null,
             notes: document.getElementById("f-notes").value,
+            allow_duplicate: allowDuplicate,
             lines,
           }),
         });
@@ -293,9 +297,56 @@
         }
         toggleForm(false);
         await loadOrders();
+        showDetail(created.id);
       } catch (err) {
+        if (err.message.startsWith("DUPLICATE_PO|")) {
+          const [, id, code, msg] = err.message.split("|");
+          errorEl.innerHTML = `${escapeHtml(msg)}. <a class="link" onclick="showDetail(${parseInt(id)})">Open ${escapeHtml(code)}</a>`;
+          if (confirm(`${msg}.\n\nCreate another order with the same PO # anyway?`)) return saveOrder(true);
+          return;
+        }
         errorEl.textContent = err.message;
       }
+    }
+
+    // Warn as soon as a PO # that's already on an order is typed or scanned in, before Create is pressed.
+    function checkDuplicatePo() {
+      const el = document.getElementById("po-dup-warning");
+      const po = document.getElementById("f-po-number").value.trim().toLowerCase();
+      const cust = parseInt(document.getElementById("f-customer").value);
+      const dup = po && orders.find(o => o.customer_id === cust && o.status !== "cancelled" && (o.po_number || "").trim().toLowerCase() === po);
+      el.innerHTML = dup ? `<div class="notice">Customer PO ${escapeHtml(dup.po_number)} is already on order
+        <a class="link" onclick="showDetail(${dup.id})">${escapeHtml(dup.code)}</a> (${fmtDate(dup.order_date)}). Creating this would duplicate it.</div>` : "";
+    }
+
+    // Copy an order into the New Order form: same customer, ship-to, job #, notes and lines; new PO # and dates.
+    function copyOrder(orderId) {
+      const o = orders.find(x => x.id === orderId);
+      if (!o) return;
+      document.getElementById("detail-card").style.display = "none";
+      toggleForm(true);
+      document.getElementById("f-customer").value = o.customer_id;
+      document.getElementById("f-ship-to").value = o.ship_to_address || "";
+      document.getElementById("f-job-number").value = o.job_number || "";
+      document.getElementById("f-notes").value = o.notes || "";
+      document.getElementById("f-po-number").value = "";
+      document.getElementById("lines-body").innerHTML = "";
+      o.lines.forEach(l => {
+        addLine();
+        const tr = document.querySelector("#lines-body tr:last-child");
+        const sel = tr.querySelector(".l-item");
+        sel.value = l.item_id;
+        sel.dispatchEvent(new Event("change"));
+        tr.querySelector(".l-qty").value = l.quantity;
+        tr.querySelector(".l-price").value = l.unit_price;
+        refreshPriceDeltas(tr);
+      });
+      recalcLines("lines-body", "new-order-total");
+      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Copied from <strong>${escapeHtml(o.code)}</strong>
+        (${o.lines.length} line${o.lines.length === 1 ? "" : "s"}). Enter the new customer PO # and dates, check quantities, then Create.</div>`;
+      checkDuplicatePo();
+      document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
+      document.getElementById("f-po-number").focus();
     }
 
     function customerName(id) {
@@ -364,7 +415,7 @@
           <td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
-          <td>${fmtDate(o.order_date)}</td>
+          <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
           <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0))}</td>
           <td><span class="tag ${o.status}">${o.status}</span></td>
@@ -504,7 +555,9 @@
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
       card.innerHTML = `
-        <h3>${order.code} <span class="tag ${order.status}">${order.status}</span></h3>
+        <h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status}</span>
+          <span class="muted small" style="font-weight:400;">Created ${fmtDate(order.created_at || order.order_date)}${order.created_by ? ` by ${escapeHtml(order.created_by === "mrpeasy-import" ? "MRPeasy import" : order.created_by)}` : ""}</span>
+          ${isManager ? `<button class="secondary small-btn" style="margin-left:auto;" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}</h3>
 
         <h4>Order details</h4>
         <div class="field-grid">
@@ -624,6 +677,7 @@
 
         <div class="btn-row">
           ${order.status !== "cancelled" && isManager ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
+          ${isManager ? `<button class="secondary" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
