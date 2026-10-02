@@ -62,7 +62,7 @@
     </div>
 
     <div class="card">
-      <table>
+      <table class="list-fit" id="orders-table">
         <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th>Order date</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th>Shipments</th><th>Invoices</th><th></th></tr></thead>
         <tbody id="orders-body"><tr><td colspan="13">Loading...</td></tr></tbody>
       </table>
@@ -215,6 +215,7 @@
       (d.problems || []).forEach(p => notes.push(`<span class="neg">${escapeHtml(p)}</span>`));
       (d.skipped || []).forEach(p => notes.push(escapeHtml(p)));
       const nuts = d.lines.filter(l => l.companion_of).length;
+      d.lines.filter(l => l.nut_skipped).forEach(l => notes.push(escapeHtml(l.nut_skipped)));
       if (nuts) notes.push(`Added ${nuts} matching $0 nut line${nuts === 1 ? "" : "s"} under the bolts (our standard). Remove any that aren't wanted.`);
 
       d.lines.forEach((l, n) => {
@@ -367,13 +368,13 @@
           <td>${fmtDate(o.delivery_date)}</td>
           <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0))}</td>
           <td><span class="tag ${o.status}">${o.status}</span></td>
-          <td class="muted" title="${escapeHtml(o.notes || "")}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(o.notes || "")}</td>
+          <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>
             ${progressBar("Shipped", pct, "ship", `${fmtQty(shippedQty)} of ${fmtQty(ordered)} units shipped`)}
             ${progressBar("Invoiced", orderTotal ? invoicedAmt / orderTotal * 100 : 0, "inv", `${fmtMoney(invoicedAmt)} of ${fmtMoney(orderTotal)} invoiced`)}
             ${progressBar("Paid", invoicedAmt ? paidAmt / invoicedAmt * 100 : 0, "paid", `${fmtMoney(paidAmt)} of ${fmtMoney(invoicedAmt)} invoiced has been paid`)}
           </td>
-          <td>${orderShipments.map(s => `<div class="nowrap"><a class="link" href="shipments.html?id=${s.id}">${s.code}</a> <span class="tag ${s.status}">${s.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
+          <td><div class="chip-stack">${orderShipments.map(s => `<a class="ship-chip st-${s.status}" href="shipments.html?id=${s.id}" title="${escapeHtml(`${s.code} · ${s.status}`)}"><i></i>${escapeHtml(s.code)}</a>`).join("") || '<span class="muted">—</span>'}</div></td>
           <td><div class="chip-stack">${orderInvoices.map(i => invoiceChip(i)).join("") || '<span class="muted">—</span>'}</div></td>
           <td class="nowrap">
             ${o.status === "draft" && AuthGuard.hasRole("manager") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}

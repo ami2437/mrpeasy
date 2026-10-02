@@ -647,3 +647,26 @@ tr.completed-toggle td { background: var(--surface-3) !important; cursor: pointe
 tr.completed-toggle:hover td { background: var(--row-hover) !important; }
 tr.completed-toggle .caret { display: inline-block; width: 14px; color: var(--muted); }
 tr.order-done td { color: var(--text-2); }
+
+/* ---- Record pages (auth-guard.js recordPages): the open record replaces the list ---- */
+main.record-mode > *:not(#detail-card) { display: none !important; }
+main.record-mode > #detail-card { margin-top: 0; }
+.record-backbar { margin: -4px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
+
+/* ---- List tables that fit the window: cells wrap and share the width instead of scrolling sideways ---- */
+table.list-fit { table-layout: auto; width: 100%; font-size: 13px; }
+table.list-fit th, table.list-fit td { padding: 6px 7px; white-space: normal; overflow-wrap: anywhere; }
+table.list-fit th { white-space: normal; line-height: 1.25; }
+table.list-fit td.notes-cell { min-width: 90px; max-width: 170px; }
+table.list-fit td.notes-cell > div { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+table.list-fit .progress-line { gap: 4px; }
+table.list-fit .progress-label { width: auto; min-width: 44px; }
+table.list-fit .pct-bar { width: 38px; }
+table.list-fit .chip-stack { max-width: 230px; }
+/* shipment chip: code with a status dot (new/ready grey-blue, shipped blue, delivered teal, invoiced purple) */
+.ship-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 18px;
+  background: var(--surface-3); border: 1px solid var(--border); color: var(--text); text-decoration: none; white-space: nowrap; }
+.ship-chip:hover { border-color: var(--accent); }
+.ship-chip i { width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
+.ship-chip.st-ready i { background: #60a5fa; } .ship-chip.st-shipped i { background: #2563eb; }
+.ship-chip.st-delivered i { background: #14b8a6; } .ship-chip.st-invoiced i { background: #9333ea; }

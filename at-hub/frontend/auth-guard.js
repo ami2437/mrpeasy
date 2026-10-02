@@ -1185,3 +1185,41 @@ function aiVendorChips(cands, selectId) {
     `<button type="button" class="ai-cand" title="${escapeHtml(`Matched on ${c.why}`)}" onclick="aiPickCandidate(this, '${selectId}', ${c.vendor_id})">
       <b>${escapeHtml(c.code || "")}</b> ${escapeHtml(c.name)} <i>${Math.round(c.score * 100)}%</i></button>`).join("")}</div>`;
 }
+
+// ---- Record pages: opening a record shows it as its own screen, not a panel at the bottom ----
+// Every list page shows a record by filling and un-hiding #detail-card. Watching that card here gives
+// all of them the same behaviour: the list hides, the record starts at the top of the screen with a
+// "Back" bar, and the browser's Back button returns to the list. (Pack Shipments embeds the card in a
+// row instead, so it opts out.)
+(function recordPages() {
+  const NO_PAGE_MODE = ["pack-shipments.html", "pod.html"];
+  document.addEventListener("DOMContentLoaded", () => {
+    const card = document.getElementById("detail-card");
+    const main = card && card.closest("main");
+    if (!card || !main || NO_PAGE_MODE.includes(location.pathname.split("/").pop())) return;
+    const listName = (document.title.split("—")[1] || "List").trim();
+    let open = false;
+    const ensureBar = () => {
+      if (card.querySelector(":scope > .record-backbar")) return;
+      card.insertAdjacentHTML("afterbegin", `<div class="record-backbar"><a class="link" onclick="closeRecordPage()">← Back to ${escapeHtml(listName)}</a></div>`);
+    };
+    const sync = () => {
+      const visible = card.style.display !== "none" && card.innerHTML.trim() !== "";
+      if (visible) ensureBar();
+      if (visible === open) return;
+      open = visible;
+      main.classList.toggle("record-mode", open);
+      if (open) {
+        window.scrollTo({ top: 0 });
+        if (!(history.state && history.state.record)) history.pushState({ record: true }, "", location.href);
+      }
+    };
+    new MutationObserver(sync).observe(card, { attributes: true, attributeFilter: ["style"], childList: true });
+    window.addEventListener("popstate", () => { if (open) { card.style.display = "none"; } });
+    window.closeRecordPage = () => {
+      if (history.state && history.state.record) history.back();  // popstate hides the card
+      else card.style.display = "none";
+    };
+    sync();
+  });
+})();

@@ -208,10 +208,47 @@ NUT_SUFFIX = re.compile(r"[\s-]*nuts?$", re.I)
 TWO_NUTS = re.compile(r"\(2\)|\b2\s*(?:hvy\s*|heavy\s*)?(?:hex\s*)?nuts\b|\btwo\s+nuts\b|\bdouble\s+nut", re.I)
 
 
-def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem]) -> List[Dict[str, Any]]:
-    """Our convention: every bolt/stud on a customer order is followed by its matching nut at $0.
-    The nut is the item whose code is the bolt's code + "-NUT"/"-NUTS" (any spacing/case). One nut
-    per bolt, two when the bolt is described with (2) nuts -- that's how every past order was entered."""
+WITH_NUT = re.compile(r"(?:^|[^a-z])w/.*nuts?(?![a-z])", re.I)  # "_w/A194...NUTS_P-0198": "_" is a word char, so no \b  # "..._W/A194-2H HEX NUT", "w/(2) HVY HEX NUTS"
+ASSEMBLED = re.compile(r"assembl", re.I)
+MENTIONS_NUT = re.compile(r"nuts?(?![a-z])", re.I)
+
+
+def nut_history(db: Session) -> Dict[int, List[int]]:
+    """Per bolt: [orders that had its nut line, orders that didn't] -- how the team actually entered them."""
+    from app.models import CustomerOrderLine
+    items = {i.id: i.code or "" for i in db.query(StockItem).all()}
+    nut_ids = {NUT_SUFFIX.sub("", code).strip().lower(): iid for iid, code in items.items() if NUT_SUFFIX.search(code)}
+    per_order = {}
+    for order_id, item_id in db.query(CustomerOrderLine.order_id, CustomerOrderLine.item_id).all():
+        per_order.setdefault(order_id, set()).add(item_id)
+    hist = {}
+    for ids in per_order.values():
+        for iid in ids:
+            nut = nut_ids.get(items.get(iid, "").strip().lower())
+            if nut and not NUT_SUFFIX.search(items[iid]):
+                hist.setdefault(iid, [0, 0])[0 if nut in ids else 1] += 1
+    return hist
+
+
+def nut_needed(bolt: StockItem, history: Optional[Dict[int, List[int]]]) -> Optional[str]:
+    """None when the bolt gets a separate $0 nut line, else the reason it doesn't."""
+    title = bolt.title or ""
+    if ASSEMBLED.search(title):
+        return "comes with the nut assembled"
+    # what the team did before with this exact bolt beats any reading of its description
+    w, wo = (history or {}).get(bolt.id, (0, 0))
+    if w + wo:
+        return None if w >= wo else f"past orders for it didn't have a separate nut ({w} of {w + wo} did)"
+    if not MENTIONS_NUT.search(title):
+        return "its description doesn't mention a nut"
+    return None
+
+
+def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem], history=None) -> List[Dict[str, Any]]:
+    """Our convention: a bolt/stud sold with a nut is followed by its matching nut at $0. The nut is the
+    item whose code is the bolt's code + "-NUT"/"-NUTS" (any spacing/case). One nut per bolt, two when
+    the bolt is described with (2) nuts. Not added when the nut comes assembled, the bolt isn't sold
+    with a nut, or past orders show the team doesn't add one (see nut_needed)."""
     by_id = {i.id: i for i in items}
     nut_for = {}
     for i in items:
@@ -226,6 +263,10 @@ def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem]) -> L
             continue
         nut = nut_for.get(bolt.code.strip().lower())
         if not nut or nut.id in on_po or not line.get("quantity"):
+            continue
+        reason = nut_needed(bolt, history)
+        if reason:
+            line["nut_skipped"] = f"No $0 nut added for {bolt.code}: {reason}"
             continue
         two = bool(TWO_NUTS.search(f"{bolt.title} {line.get('description') or ''}"))
         out.append({
@@ -271,7 +312,7 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
             "delivery_date": _date(raw.get("delivery_date")),
             **match,
         })
-    lines = add_nut_companions(lines, items)
+    lines = add_nut_companions(lines, items, nut_history(db))
 
     return {
         "model": source,
