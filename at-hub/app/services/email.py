@@ -92,8 +92,10 @@ def _send(db: Session, to: str, cc: str, subject: str, body: str, summary_rows: 
     msg["Message-ID"] = make_msgid(domain=from_address().split("@")[-1])
     msg.set_content(body or "")
     msg.add_alternative(_html_body(body or "", summary_rows, company), subtype="html")
-    if attachment:
-        msg.add_attachment(attachment[0], maintype="application", subtype="pdf", filename=attachment[1])
+    for att in (attachment if isinstance(attachment, list) else [attachment] if attachment else []):
+        # (bytes, filename) is a PDF; (bytes, filename, "image/jpeg") gives the type explicitly
+        maintype, subtype = (att[2] if len(att) > 2 and att[2] else "application/pdf").split("/", 1)
+        msg.add_attachment(att[0], maintype=maintype, subtype=subtype, filename=att[1])
 
     try:
         if settings.smtp_security == "ssl":
@@ -148,6 +150,27 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
     db.add(log)
     if po.status == "draft":
         po.status = "ordered"
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+def send_pods(db: Session, shipment, files: list, to: str, cc: str, subject: str, body: str, sent_by: str):
+    """Email proof-of-delivery files to the customer. files = [(bytes, filename, content_type)]."""
+    from app.models import ShipmentEmail
+    if not files:
+        raise HTTPException(status_code=400, detail="This shipment has no proof of delivery to send")
+    rows = [("Shipment", shipment.code)]
+    if shipment.delivered_at:
+        rows.append(("Delivered", shipment.delivered_at.strftime("%b %d, %Y")))
+    from app.models import CustomerOrder
+    order = db.get(CustomerOrder, shipment.order_id)
+    if order and order.po_number:
+        rows.append(("Your PO #", order.po_number))
+    to_list, cc_list = _send(db, to, cc, subject, body, rows, files)
+    log = ShipmentEmail(shipment_id=shipment.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
+                        subject=subject.strip(), files=", ".join(f[1] for f in files), sent_by=sent_by)
+    db.add(log)
     db.commit()
     db.refresh(log)
     return log

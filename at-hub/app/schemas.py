@@ -232,6 +232,7 @@ class PartyUpdate(BaseModel):
 
 class PartyResponse(BaseModel):
     id: int
+    code: Optional[str] = None  # vendors: V-0001
     name: str
     contact_name: Optional[str] = None
     email: Optional[str] = None
@@ -449,11 +450,26 @@ class BulkPackSizeEntry(BaseModel):
 
 class BulkPackSizeRequest(BaseModel):
     entries: List[BulkPackSizeEntry]
+    source: Optional[str] = None  # "batch packing" when pasted on the batch screen
+    reference: Optional[str] = None  # e.g. the shipment codes it was pasted for
 
 
 class BulkPackSizeResult(BaseModel):
     applied: List[str]
     not_found: List[str]
+    unchanged: List[str] = []
+
+
+class PackSizeHistoryEntry(BaseModel):
+    id: int
+    item_id: int
+    item_code: str
+    pack_size: Optional[int] = None
+    previous_pack_size: Optional[int] = None
+    source: Optional[str] = None
+    reference: Optional[str] = None
+    changed_by: Optional[str] = None
+    changed_at: Optional[datetime] = None
 
 
 class ShipmentResponse(BaseModel):
@@ -472,6 +488,40 @@ class ShipmentResponse(BaseModel):
     lines: List[ShipmentLineResponse] = []
     boxes: List[ShipmentBoxResponse] = []
     pallets: List[PalletWeightResponse] = []
+    pods: List["PodFile"] = []  # proof-of-delivery attachments (filled in by the route)
+    invoice_id: Optional[int] = None  # the live invoice billing this shipment (filled in by the route)
+    invoice_code: Optional[str] = None
+    invoice_status: Optional[str] = None
+    invoice_combined: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class PodFile(BaseModel):
+    id: int
+    filename: str
+    content_type: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class PodEmailRequest(BaseModel):
+    to: str
+    cc: Optional[str] = None
+    subject: str
+    body: str
+    attachment_ids: Optional[List[int]] = None  # default: every POD on the shipment
+
+
+class ShipmentEmailResponse(BaseModel):
+    id: int
+    shipment_id: int
+    to_address: str
+    cc_address: Optional[str] = None
+    subject: str
+    files: Optional[str] = None
+    sent_by: Optional[str] = None
+    sent_at: datetime
 
     class Config:
         from_attributes = True
@@ -487,6 +537,7 @@ class CreateInvoiceRequest(BaseModel):
 class InvoiceLineInput(InputModel):
     item_id: Optional[int] = None
     order_line_id: Optional[int] = None
+    shipment_id: Optional[int] = None  # kept through edits so combined invoices still trace each line
     description: str
     quantity: float
     unit_price: float
@@ -494,6 +545,7 @@ class InvoiceLineInput(InputModel):
 
 class InvoiceLineResponse(InvoiceLineInput):
     id: int
+
 
     class Config:
         from_attributes = True
@@ -503,6 +555,21 @@ class InvoiceUpdateRequest(BaseModel):
     due_date: Optional[datetime] = None
     free_text: Optional[str] = None
     lines: Optional[List[InvoiceLineInput]] = None
+
+
+class CreateCombinedInvoiceRequest(BaseModel):
+    shipment_ids: List[int]
+    due_date: Optional[datetime] = None
+    free_text: Optional[str] = None
+    shipping_charge: Optional[float] = 0
+
+
+class MergeInvoicesRequest(BaseModel):
+    invoice_ids: List[int]  # draft invoices to fold into this one
+
+
+class InvoicePrintOptions(BaseModel):
+    print_zero_lines: bool
 
 
 class InvoiceStatusUpdate(BaseModel):
@@ -520,6 +587,7 @@ class InvoicePaymentInput(BaseModel):
 class InvoicePaymentResponse(InvoicePaymentInput):
     id: int
     invoice_id: int
+    funding_import_id: Optional[int] = None
     created_by: Optional[str] = None
     created_at: datetime
 
@@ -537,6 +605,15 @@ class InvoiceResponse(BaseModel):
     due_date: Optional[datetime] = None
     status: str
     free_text: Optional[str] = None
+    disbursement_date: Optional[datetime] = None
+    funding_amount: Optional[float] = None
+    funding_discount: Optional[float] = None
+    funding_import_id: Optional[int] = None
+    shipment_ids: List[int] = []
+    shipment_codes: List[str] = []
+    is_combined: bool = False
+    combined_from: List[str] = []  # codes of the invoices folded into this one
+    print_zero_lines: bool = False
     lines: List[InvoiceLineResponse] = []
     payments: List[InvoicePaymentResponse] = []
     emails: List["InvoiceEmailResponse"] = []
@@ -618,9 +695,68 @@ class VendorBillInput(BaseModel):
     bill_number: str
     bill_date: Optional[datetime] = None
     due_date: Optional[datetime] = None
-    amount: float
+    amount: float  # the invoice total, including any shipping on it
     note: Optional[str] = None
     attachment_id: Optional[int] = None
+    shipping_amount: Optional[float] = None  # freight/shipping on this invoice -> added to the PO as a charge
+    shipping_type: Optional[str] = None
+
+
+class PurchaseOrderChargeInput(BaseModel):
+    charge_type: str = "shipping"
+    amount: float
+    description: Optional[str] = None
+    vendor_bill_id: Optional[int] = None
+
+
+class PurchaseOrderChargeResponse(PurchaseOrderChargeInput):
+    id: int
+    po_id: int
+    bill_number: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VendorPaymentInput(BaseModel):
+    vendor_id: int
+    amount: float
+    paid_date: Optional[datetime] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    note: Optional[str] = None
+
+
+class VendorPaymentApplication(BaseModel):
+    id: int
+    po_id: int
+    amount: float
+    vendor_bill_id: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VendorPaymentResponse(VendorPaymentInput):
+    id: int
+    code: str
+    applied: float = 0
+    unapplied: float = 0
+    applications: List[VendorPaymentApplication] = []
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ApplyVendorPaymentRequest(BaseModel):
+    po_id: int
+    amount: float
+    vendor_bill_id: Optional[int] = None
 
 
 class VendorBillResponse(VendorBillInput):
@@ -642,6 +778,7 @@ class MarkDeliveredRequest(BaseModel):
 class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
     id: int
     po_id: int
+    vendor_payment_id: Optional[int] = None
     created_by: Optional[str] = None
     created_at: datetime
 
@@ -659,8 +796,13 @@ class PurchaseOrderResponse(BaseModel):
     freight_cost: Optional[float] = None
     tariff_cost: Optional[float] = None
     landed_cost_total: float = 0
+    lines_total: float = 0
+    charges_total: float = 0
+    order_total: float = 0
+    amount_paid: float = 0
     notes: Optional[str] = None
     lines: List[PurchaseOrderLineResponse] = []
+    charges: List[PurchaseOrderChargeResponse] = []
     payments: List[PurchaseOrderPaymentResponse] = []
     emails: List["PurchaseOrderEmailLog"] = []
     bills: List[VendorBillResponse] = []
@@ -898,3 +1040,23 @@ class CompanyProfileResponse(CompanyProfileUpdate):
 
 InvoiceResponse.model_rebuild()
 PurchaseOrderResponse.model_rebuild()
+
+
+class InvoiceFundingUpdate(BaseModel):
+    """Set the funding fields by hand (any of them may be cleared with null)."""
+    disbursement_date: Optional[datetime] = None
+    funding_amount: Optional[float] = None
+    funding_discount: Optional[float] = None
+
+
+class FundingImportResponse(BaseModel):
+    id: int
+    file_name: Optional[str] = None
+    record_payments: bool = True
+    updated_count: int = 0
+    skipped_count: int = 0
+    rolled_back: bool = False
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    summary: Optional[dict] = None
+ShipmentResponse.model_rebuild()

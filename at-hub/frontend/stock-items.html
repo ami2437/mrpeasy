@@ -15,10 +15,20 @@
         <input type="text" id="search" placeholder="Search code, title, barcode, or product group...">
         <select id="category-filter" style="max-width:200px;"><option value="">All product groups</option></select>
         <label style="margin:0;"><input type="checkbox" id="low-stock-only" style="width:auto;display:inline-block;"> Low stock only</label>
+        <button class="secondary" onclick="toggleInsights()" data-icon="chart">Insights</button>
         <button class="secondary" onclick="toggleGroups()">Product Groups</button>
         <button class="secondary" onclick="toggleBulkPackSize()">Bulk Pack Sizes</button>
         <button onclick="toggleForm()">+ New Item</button>
       </div>
+    </div>
+
+    <div class="card" id="insights-card" style="display:none;">
+      <div class="row" style="align-items:center;">
+        <h3 style="margin:0;flex:1;">Item Insights</h3>
+        <div style="flex:0 0 180px;"><select id="ins-days" onchange="loadInsights()">
+          <option value="30">Last 30 Days</option><option value="90" selected>Last 90 Days</option><option value="180">Last 6 Months</option><option value="365">Last 12 Months</option><option value="3650">All Time</option></select></div>
+      </div>
+      <div id="insights-body" class="muted" style="margin-top:10px;">Loading…</div>
     </div>
 
     <div class="card" id="groups-card" style="display:none; max-width:620px;">
@@ -53,7 +63,7 @@
       <div class="row">
         <div><label>Code</label><input type="text" id="f-code"></div>
         <div><label>Title</label><input type="text" id="f-title"></div>
-        <div><label>Unit</label><input type="text" id="f-unit" placeholder="ea, kg, ..."></div>
+        <div><label>Unit</label><input type="text" id="f-unit" placeholder="Ea, Kg, ..."></div>
       </div>
       <div class="row">
         <div><label>Product group <span class="neg">*</span></label><select id="f-category"></select></div>
@@ -63,7 +73,7 @@
         <div><label>Cost price <span class="muted">(avg. of lots on hand)</span></label><input type="number" step="0.00001" id="f-cost"></div>
         <div><label>Selling price</label><input type="number" step="0.00001" id="f-sell"></div>
         <div><label>Reorder point</label><input type="number" step="1" min="0" id="f-reorder"></div>
-        <div><label>Default pack size</label><input type="number" step="1" id="f-pack-size" placeholder="units per box"></div>
+        <div><label>Default pack size</label><input type="number" step="1" id="f-pack-size" placeholder="Units Per Box"></div>
       </div>
       <div class="row" id="on-hand-row" style="display:none;">
         <div>
@@ -76,9 +86,9 @@
         <strong>Adding <span id="adjust-qty"></span> to stock.</strong>
         <span class="muted">This creates a new lot so the stock can be booked and its cost tracked for profit.</span>
         <div class="row">
-          <div><label>Unit cost it was acquired at <span class="neg">*</span></label><input type="number" step="0.00001" min="0" id="f-adj-cost" placeholder="required"></div>
-          <div><label>Lot # <span class="muted">(optional)</span></label><input type="text" id="f-adj-lot" placeholder="auto LOT-#####"></div>
-          <div style="flex:2;"><label>Reason</label><input type="text" id="f-adj-note" placeholder="e.g. found in cycle count"></div>
+          <div><label>Unit cost it was acquired at <span class="neg">*</span></label><input type="number" step="0.00001" min="0" id="f-adj-cost" placeholder="Required"></div>
+          <div><label>Lot # <span class="muted">(optional)</span></label><input type="text" id="f-adj-lot" placeholder="Auto LOT-#####"></div>
+          <div style="flex:2;"><label>Reason</label><input type="text" id="f-adj-note" placeholder="E.g. Found In Cycle Count"></div>
         </div>
       </div>
       <div class="notice info" id="adjust-down" style="display:none;">
@@ -189,7 +199,8 @@
           body: JSON.stringify({ entries }),
         });
         resultEl.innerHTML = `
-          <div class="muted" style="margin-top:8px;">Applied to ${result.applied.length} item(s)${result.applied.length ? ": " + result.applied.join(", ") : ""}.</div>
+          <div class="muted" style="margin-top:8px;">Applied to ${result.applied.length} item(s)${result.applied.length ? ": " + result.applied.join(", ") : ""}. Previous sizes are kept in each item's pack size history.</div>
+          ${result.unchanged && result.unchanged.length ? `<div class="muted">Already that size: ${result.unchanged.join(", ")}</div>` : ""}
           ${result.not_found.length ? `<div class="error">Not found: ${result.not_found.join(", ")}</div>` : ""}
         `;
         loadItems();
@@ -307,7 +318,7 @@
       tbody.innerHTML = filtered.map(item => `
         <tr>
           <td><strong>${escapeHtml(item.code)}</strong></td>
-          <td>${escapeHtml(item.title)} <a class="link small" onclick="showPriceHistory(${item.id})">prices</a></td>
+          <td>${escapeHtml(item.title)} ${hidesMoney() ? "" : `<a class="link small" onclick="showPriceHistory(${item.id})">Prices</a>`} <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a> <a class="link small" onclick="showMovements(${item.id})">Movement</a></td>
           <td>${groupTag(item)}</td>
           <td>${item.unit || ""}</td>
           <td class="num">${fmtQty(item.on_hand)}</td>
@@ -316,7 +327,7 @@
           <td class="num">${fmtPrice(item.cost_price)}</td>
           <td class="num">${fmtPrice(item.selling_price)}</td>
           <td>${item.reorder_point ?? 0}</td>
-          <td>${item.default_pack_size ?? ""}</td>
+          <td class="nowrap">${item.default_pack_size ?? ""} <a class="link small" onclick="showPackSizeHistory(${item.id})" title="Earlier pack sizes">History</a></td>
           <td><a class="link" onclick="editItem(${item.id})">Edit</a></td>
         </tr>
       `).join("");
@@ -334,6 +345,84 @@
       } catch (err) {
         document.getElementById("items-body").innerHTML = `<tr><td colspan="12" class="error">${err.message}</td></tr>`;
       }
+    }
+
+    // ---- Insights: top sellers by units / revenue, slow movers ----
+    function toggleInsights() {
+      const card = document.getElementById("insights-card");
+      card.style.display = card.style.display === "none" ? "block" : "none";
+      if (card.style.display === "block") loadInsights();
+    }
+    async function loadInsights() {
+      const el = document.getElementById("insights-body");
+      el.innerHTML = "Loading…";
+      try {
+        const a = await apiFetch(`/api/stock-items/analytics/summary?days=${document.getElementById("ins-days").value}`);
+        const max = Math.max(1, ...a.top_units.map(r => r.units));
+        const itemCell = r => `<a class="link" onclick="showMovements(${r.item_id})"><strong>${escapeHtml(r.code)}</strong></a><div class="muted small">${escapeHtml(r.title || "")}</div>`;
+        el.classList.remove("muted");
+        el.innerHTML = `
+          <div class="stat-row">
+            <div class="stat"><div class="stat-label">Units Shipped</div><div class="stat-value">${fmtQty(a.totals.units)}</div></div>
+            <div class="stat"><div class="stat-label">Items Sold</div><div class="stat-value">${a.totals.items_sold}</div></div>
+            ${hidesMoney() ? "" : `<div class="stat"><div class="stat-label">Revenue (Shipped)</div><div class="stat-value">${fmtMoney(a.totals.revenue)}</div></div>`}
+            <div class="stat"><div class="stat-label">Slow Movers</div><div class="stat-value ${a.slow_movers.length ? "neg" : ""}">${a.slow_movers.length}</div><div class="stat-sub">In Stock, Nothing Out</div></div>
+          </div>
+          <div class="insights-grid">
+            <div><h4>Top Sellers — Units</h4>
+              <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">Units</th><th class="num">Orders</th><th class="num">Customers</th><th class="num">On Hand</th></tr></thead>
+              <tbody>${a.top_units.map(r => `<tr><td>${itemCell(r)}<div class="bar"><span style="width:${r.units / max * 100}%"></span></div></td>
+                <td class="num"><strong>${fmtQty(r.units)}</strong></td><td class="num">${r.orders}</td><td class="num">${r.customers}</td><td class="num">${fmtQty(r.on_hand)}</td></tr>`).join("")
+                || `<tr><td colspan="5" class="muted">Nothing Shipped In This Period.</td></tr>`}</tbody></table></div>
+            ${hidesMoney() ? "" : `<div><h4>Top Sellers — Revenue</h4>
+              <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">Revenue</th><th class="num">Units</th><th class="num">Avg Price</th></tr></thead>
+              <tbody>${a.top_revenue.map(r => `<tr><td>${itemCell(r)}</td><td class="num"><strong>${fmtMoney(r.revenue)}</strong></td><td class="num">${fmtQty(r.units)}</td><td class="num">${fmtPrice(r.units ? r.revenue / r.units : 0)}</td></tr>`).join("")
+                || `<tr><td colspan="4" class="muted">Nothing Shipped In This Period.</td></tr>`}</tbody></table></div>`}
+            <div><h4>Slow Movers</h4>
+              <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">On Hand</th><th>Last Out</th></tr></thead>
+              <tbody>${a.slow_movers.map(r => `<tr><td>${itemCell(r)}</td><td class="num">${fmtQty(r.on_hand)}</td><td>${r.last_out ? new Date(r.last_out).toLocaleDateString() : `<span class="muted">Never</span>`}</td></tr>`).join("")
+                || `<tr><td colspan="3" class="muted">Everything In Stock Moved In This Period.</td></tr>`}</tbody></table></div>
+          </div>`;
+      } catch (err) { el.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
+    }
+
+    // ---- Movement history of one item: every in/out with running balance ----
+    async function showMovements(itemId) {
+      let modal = document.getElementById("movement-modal");
+      if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "movement-modal";
+        modal.className = "modal-backdrop";
+        modal.onclick = e => { if (e.target === modal) modal.remove(); };
+        document.body.appendChild(modal);
+      }
+      modal.innerHTML = `<div class="modal modal-wide"><p class="muted">Loading…</p></div>`;
+      try {
+        const m = await apiFetch(`/api/stock-items/${itemId}/movements`);
+        const typeTag = t => `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : "draft"}">${escapeHtml(t)}</span>`;
+        const refLink = ref => escapeHtml(ref || "");
+        modal.innerHTML = `<div class="modal modal-wide">
+          <div class="row" style="align-items:center;"><h3 style="margin:0;">${escapeHtml(m.code)} — Movement History</h3>
+            <div style="flex:0;"><a class="link" onclick="document.getElementById('movement-modal').remove()">Close</a></div></div>
+          <p class="muted" style="margin:4px 0 10px;">${escapeHtml(m.title)}</p>
+          <div class="stat-row">
+            <div class="stat"><div class="stat-label">On Hand</div><div class="stat-value">${fmtQty(m.on_hand)}</div></div>
+            <div class="stat"><div class="stat-label">Total In</div><div class="stat-value pos">+${fmtQty(m.total_in)}</div></div>
+            <div class="stat"><div class="stat-label">Total Out</div><div class="stat-value neg">−${fmtQty(m.total_out)}</div></div>
+            <div class="stat"><div class="stat-label">Movements</div><div class="stat-value">${m.movements.length}</div></div>
+          </div>
+          <div class="table-scroll" style="max-height:60vh;">
+          <table class="compact-table">
+            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
+            <tbody>${m.movements.map(t => `<tr>
+              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${typeTag(t.type)}</td>
+              <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
+              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td>${refLink(t.reference)}</td>
+              <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")
+              || `<tr><td colspan="8" class="muted">No Movements Yet.</td></tr>`}</tbody>
+          </table></div>
+        </div>`;
+      } catch (err) { modal.innerHTML = `<div class="modal"><div class="error">${escapeHtml(err.message)}</div></div>`; }
     }
 
     document.getElementById("search").addEventListener("input", () => loadItems());

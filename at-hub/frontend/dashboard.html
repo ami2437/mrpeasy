@@ -12,9 +12,11 @@
   <main>
     <div class="card">
       <h2 style="margin-top:0;">Welcome to AT-HUB</h2>
-      <p class="muted">Stock items, lot tracking, customer orders, and purchase orders — standalone, no MRP dependency.</p>
+      <p class="muted">Stock Items, Lot Tracking, Customer Orders And Purchase Orders.</p>
     </div>
     <div class="card" id="summary">Loading summary...</div>
+
+    <div class="card"><h3 style="margin-top:0;">Needs Attention</h3><div id="dash-actions" class="muted">Loading…</div></div>
 
     <div class="card">
       <h3 style="margin-top:0;">Recent Activity</h3>
@@ -37,16 +39,16 @@
           apiFetch("/api/stock-items/"),
           apiFetch("/api/stock-items/?low_stock_only=true"),
           apiFetch("/api/customer-orders/"),
-          apiFetch("/api/purchase-orders/"),
+          AuthGuard.hasRole("manager") ? apiFetch("/api/purchase-orders/") : Promise.resolve(null),
         ]);
         const openCO = customerOrders.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status)).length;
-        const openPO = purchaseOrders.filter(o => !["received", "cancelled"].includes(o.status)).length;
+        const openPO = (purchaseOrders || []).filter(o => !["received", "cancelled"].includes(o.status)).length;
         document.getElementById("summary").innerHTML = `
           <div class="row">
             <div><div style="font-size:28px;font-weight:700;">${items.length}</div><div class="muted">Stock items</div></div>
             <div><div style="font-size:28px;font-weight:700;color:${lowStock.length ? '#dc2626' : '#111'};">${lowStock.length}</div><div class="muted">Low stock</div></div>
             <div><div style="font-size:28px;font-weight:700;">${openCO}</div><div class="muted">Open customer orders</div></div>
-            <div><div style="font-size:28px;font-weight:700;">${openPO}</div><div class="muted">Open purchase orders</div></div>
+            ${purchaseOrders ? `<div><div style="font-size:28px;font-weight:700;">${openPO}</div><div class="muted">Open Purchase Orders</div></div>` : ""}
           </div>
         `;
 
@@ -67,6 +69,7 @@
       }
     }
     loadSummary();
+    renderActionItems("dash-actions");
   </script>
   </div>
 </body>

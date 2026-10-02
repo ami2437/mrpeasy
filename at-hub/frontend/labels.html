@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — On-Demand Labels</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <h2 style="margin-top:0;">On-Demand Labels</h2>
+      <p class="muted" style="margin:0;">Reprint or adjust a shipment's box label, compose a blank one, or print free text and address labels. 6x4, same layout as box labels.
+        Edits here are print-only — nothing is saved to the shipment.</p>
+    </div>
+
+    <div class="label-workspace">
+      <section class="card label-editor">
+        <div class="seg-tabs" role="tablist">
+          <button class="seg-tab active" data-mode="shipment" data-icon="truck">From Shipment</button>
+          <button class="seg-tab" data-mode="blank" data-icon="tag">Structured Blank</button>
+          <button class="seg-tab" data-mode="free" data-icon="type">Free Text</button>
+          <button class="seg-tab" data-mode="address" data-icon="pin">Address</button>
+        </div>
+
+        <!-- From Shipment -->
+        <div class="lbl-panel active" id="panel-shipment">
+          <label>Shipment</label>
+          <select id="sh-select" data-searchable><option value="">Loading…</option></select>
+          <div id="sh-source" style="margin-top:10px;"></div>
+          <h4 class="lbl-sub">Temporary Edits</h4>
+          <div class="lbl-grid" id="sh-fields"></div>
+        </div>
+
+        <!-- Structured Blank -->
+        <div class="lbl-panel" id="panel-blank">
+          <div class="lbl-grid" style="margin-bottom:8px;">
+            <div class="full"><label>Fill Item From Stock (Optional)</label><select id="bl-item" data-searchable><option value="">—</option></select></div>
+          </div>
+          <div class="lbl-grid" id="bl-fields"></div>
+        </div>
+
+        <!-- Free Text -->
+        <div class="lbl-panel" id="panel-free">
+          <label>Label Text</label>
+          <textarea id="fr-text" rows="8" placeholder="Type Anything — E.g. DO NOT STACK, Returns, Pallet 2 Of 3…"></textarea>
+          <div class="lbl-grid">
+            <div><label>Font Size</label><select id="fr-size"><option value="20">Small</option><option value="28">Medium</option><option value="40" selected>Large</option><option value="56">Extra Large</option><option value="80">Huge</option></select></div>
+            <div><label>Alignment</label><select id="fr-align"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select></div>
+          </div>
+          <div class="lbl-checks">
+            <label class="check-label"><input type="checkbox" id="fr-bold" checked> Bold</label>
+            <label class="check-label"><input type="checkbox" id="fr-border" checked> Border</label>
+            <label class="check-label"><input type="checkbox" id="fr-logo"> Logo</label>
+          </div>
+          <div class="lbl-quick">
+            <span class="muted small">Quick Text:</span>
+
+          </div>
+        </div>
+
+        <!-- Address -->
+        <div class="lbl-panel" id="panel-address">
+          <label>Fill From Customer Order (Optional)</label>
+          <select id="ad-order" data-searchable><option value="">—</option></select>
+          <div class="lbl-grid">
+            <div class="full"><label>From</label><textarea id="ad-from" rows="3"></textarea></div>
+            <div class="full"><label>Ship To</label><textarea id="ad-to" rows="4" placeholder="Company&#10;Street&#10;City, State ZIP"></textarea></div>
+            <div><label>Attention</label><input type="text" id="ad-attn"></div>
+            <div><label>Reference</label><input type="text" id="ad-ref" placeholder="E.g. PO 4512"></div>
+            <div class="full"><label>Note</label><input type="text" id="ad-note" placeholder="E.g. Fragile, This Side Up"></div>
+          </div>
+          <div class="lbl-checks"><label class="check-label"><input type="checkbox" id="ad-number"> Number The Copies (Box 1 Of N)</label></div>
+        </div>
+
+        <div class="lbl-actions">
+          <div class="copies"><label style="margin:0;">Copies</label><input type="number" id="copies" min="1" max="200" value="1" class="qty-input"></div>
+          <span style="flex:1;"></span>
+          <button class="secondary" id="reset-btn">Reset</button>
+          <button id="print-btn">Print Label</button>
+        </div>
+        <div id="lbl-error" class="error"></div>
+      </section>
+
+      <section class="label-preview-wrap">
+        <div class="preview-head"><strong>6x4 Preview</strong><span class="muted small" id="preview-note">Print-Only — Never Saved</span></div>
+        <div class="label-preview-frame"><iframe id="preview" title="Label preview"></iframe></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("labels.html");
+
+    const FIELDS = [
+      ["customer", "Customer", "full"], ["shipment", "Shipment"], ["order", "Order #"], ["po", "PO #"], ["job", "Job #"],
+      ["item_code", "Item Code"], ["qty", "Quantity In Box"], ["item_title", "Item Description", "full area"], ["footer", "Footer", "full area"],
+    ];
+    const QUICK = ["DO NOT STACK", "FRAGILE\nHANDLE WITH CARE", "THIS SIDE UP ↑", "RETURN TO VENDOR", "QC HOLD", "SAMPLE"];
+    let mode = "shipment", company = {}, items = [], orders = [], customers = [], shipments = [];
+    let shipSource = null, shipDraft = {}, blankDraft = {}, dirty = false;
+    const byId = (list, id) => list.find(x => x.id === id) || {};
+    const blank = () => Object.fromEntries(FIELDS.map(([k]) => [k, k === "footer" ? labelDefaultFooter(company) : ""]));
+
+    function buildFields(containerId, prefix) {
+      document.getElementById(containerId).innerHTML = FIELDS.map(([k, label, cls = ""]) => `
+        <div class="${cls.replace("area", "")}"><label>${label}</label>${cls.includes("area")
+          ? `<textarea rows="2" data-prefix="${prefix}" data-key="${k}"></textarea>`
+          : `<input type="text" data-prefix="${prefix}" data-key="${k}">`}</div>`).join("");
+      document.getElementById(containerId).addEventListener("input", e => {
+        const d = e.target.dataset.prefix === "sh" ? shipDraft : blankDraft;
+        d[e.target.dataset.key] = e.target.value;
+        dirty = true;
+        renderPreview();
+      });
+    }
+    function fillFields(prefix, draft) {
+      document.querySelectorAll(`[data-prefix="${prefix}"]`).forEach(el => { el.value = draft[el.dataset.key] ?? ""; });
+    }
+
+    // ---- Preview: the same card HTML the print tab uses, inside an iframe with labels.css ----
+    function cardsFor(copies) {
+      if (mode === "free") {
+        const f = { text: v("fr-text"), size: v("fr-size"), align: v("fr-align"), bold: c("fr-bold"), border: c("fr-border"), logo: c("fr-logo") };
+        return Array.from({ length: copies }, () => freeLabelHtml(f, company));
+      }
+      if (mode === "address") {
+        const a = { from: v("ad-from"), to: v("ad-to"), attn: v("ad-attn"), ref: v("ad-ref"), note: v("ad-note") };
+        return Array.from({ length: copies }, (_, i) => addressLabelHtml(
+          c("ad-number") ? { ...a, note: [a.note, `Box ${i + 1} Of ${copies}`].filter(Boolean).join(" · ") } : a, company));
+      }
+      const d = mode === "shipment" ? shipDraft : blankDraft;
+      return Array.from({ length: copies }, () => boxLabelHtml(d, company));
+    }
+    const v = id => document.getElementById(id).value;
+    const c = id => document.getElementById(id).checked;
+    const copies = () => Math.max(1, Math.min(200, parseInt(v("copies")) || 1));
+
+    function renderPreview() {
+      const frame = document.getElementById("preview");
+      frame.srcdoc = `<!DOCTYPE html><html><head><link rel="stylesheet" href="${location.origin}/labels.css">
+        <style>body{padding:0;margin:0;background:#fff;overflow:hidden}.label-card{margin:0}</style></head>
+        <body>${cardsFor(1)[0]}</body></html>`;
+      frame.onload = () => fitLabelText(frame.contentDocument);
+      const n = copies();
+      document.getElementById("preview-note").textContent = n > 1 ? `Showing 1 Of ${n} Copies — Print-Only` : "Print-Only — Never Saved";
+    }
+
+    function switchMode(next) {
+      if (next === mode) return;
+      if (dirty && !confirm("Discard the temporary edits on this label?")) return;
+      mode = next;
+      dirty = false;
+      document.querySelectorAll(".seg-tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+      document.querySelectorAll(".lbl-panel").forEach(p => p.classList.toggle("active", p.id === `panel-${mode}`));
+      renderPreview();
+    }
+
+    // ---- From Shipment: pick a distinct box (item + qty), or an unpacked line with a pack size ----
+    function shipmentLabelBase(s) {
+      const o = byId(orders, s.order_id);
+      return { customer: byId(customers, o.customer_id).name || "", shipment: s.code, order: o.code || "", po: o.po_number || "", job: o.job_number || "", footer: labelDefaultFooter(company) };
+    }
+    function selectShipment(id) {
+      const s = shipments.find(x => x.id === parseInt(id));
+      const el = document.getElementById("sh-source");
+      shipSource = null;
+      if (!s) { el.innerHTML = ""; return; }
+      const seen = new Map();
+      s.boxes.forEach(b => { const k = `${b.item_id}:${b.quantity_in_box}`; if (!seen.has(k)) seen.set(k, { ...b, count: 0 }); seen.get(k).count++; });
+      const boxes = [...seen.values()];
+      const lines = s.lines.reduce((m, l) => { m[l.item_id] = (m[l.item_id] || 0) + l.quantity; return m; }, {});
+      el.innerHTML = boxes.length ? `
+        <label>Box Label <span class="muted small">(${s.boxes.length} box${s.boxes.length === 1 ? "" : "es"} packed)</span></label>
+        <select id="sh-box">${boxes.map((b, i) => `<option value="${i}">${escapeHtml(byId(items, b.item_id).code || "")} — Qty ${fmtQty(b.quantity_in_box)} — ×${b.count}</option>`).join("")}</select>
+        <button class="secondary small-btn" style="margin-top:8px;" onclick="printAllBoxes(${s.id})">Print All ${s.boxes.length} Box Labels As Packed</button>`
+        : `<div class="lbl-grid">
+            <div class="full"><label>Item <span class="muted small">(not packed yet — pick a pack size)</span></label>
+              <select id="sh-line">${Object.entries(lines).map(([itemId, q]) => `<option value="${itemId}" data-qty="${q}">${escapeHtml(byId(items, parseInt(itemId)).code || "")} — ${fmtQty(q)} Booked</option>`).join("")}</select></div>
+            <div><label>Pack Size</label><input type="number" min="1" id="sh-pack" class="qty-input"></div>
+          </div>`;
+      const apply = () => {
+        let item, qty;
+        if (boxes.length) { const b = boxes[parseInt(v("sh-box"))]; item = byId(items, b.item_id); qty = b.quantity_in_box; }
+        else { const sel = document.getElementById("sh-line"); if (!sel || !sel.value) return; item = byId(items, parseInt(sel.value)); qty = v("sh-pack") || item.default_pack_size || sel.selectedOptions[0].dataset.qty; document.getElementById("sh-pack").value = qty; }
+        shipSource = { ...shipmentLabelBase(s), item_code: item.code || "", item_title: item.title || "", qty: String(Math.round(qty)) };
+        shipDraft = { ...shipSource };
+        dirty = false;
+        fillFields("sh", shipDraft);
+        renderPreview();
+      };
+      el.querySelectorAll("select, input").forEach(x => x.addEventListener("change", apply));
+      apply();
+    }
+    function printAllBoxes(id) {
+      const s = shipments.find(x => x.id === id);
+      const base = shipmentLabelBase(s);
+      printBoxLabels(s.boxes.map(b => ({ ...base, item_code: byId(items, b.item_id).code, item_title: byId(items, b.item_id).title, qty: b.quantity_in_box })), `${s.code}-Labels`);
+    }
+
+    function fillAddressFromOrder(id) {
+      const o = byId(orders, parseInt(id));
+      if (!o.id) return;
+      const cust = byId(customers, o.customer_id);
+      document.getElementById("ad-to").value = [cust.name, o.ship_to_address || cust.shipping_address || cust.address].filter(Boolean).join("\n");
+      document.getElementById("ad-attn").value = cust.contact_name || "";
+      document.getElementById("ad-ref").value = [o.po_number ? `PO ${o.po_number}` : "", o.code].filter(Boolean).join(" · ");
+      dirty = true;
+      renderPreview();
+    }
+
+    function resetEditor() {
+      if (mode === "shipment") { shipDraft = shipSource ? { ...shipSource } : blank(); fillFields("sh", shipDraft); }
+      if (mode === "blank") { blankDraft = blank(); fillFields("bl", blankDraft); }
+      if (mode === "free") document.getElementById("fr-text").value = "";
+      if (mode === "address") { ["ad-to", "ad-attn", "ad-ref", "ad-note"].forEach(id => document.getElementById(id).value = ""); document.getElementById("ad-from").value = companyFrom(); }
+      document.getElementById("copies").value = 1;
+      dirty = false;
+      renderPreview();
+    }
+    const companyFrom = () => [company.name, company.address, company.phone].filter(Boolean).join("\n");
+
+    function printNow() {
+      const err = document.getElementById("lbl-error");
+      err.textContent = "";
+      if (mode === "shipment" && !shipSource) { err.textContent = "Pick A Shipment First."; return; }
+      if (mode === "free" && !v("fr-text").trim()) { err.textContent = "Type Some Text First."; return; }
+      if (mode === "address" && !v("ad-to").trim()) { err.textContent = "Enter A Ship To Address."; return; }
+      const n = copies();
+      const title = mode === "shipment" ? `${shipDraft.shipment || "Label"}-OnDemand` : `${mode}-label`;
+      // Card HTML for the print tab needs absolute logo URLs.
+      const html = cardsFor(n).join("").replaceAll('src="/api/company/logo"', `src="${location.origin}/api/company/logo"`);
+      printLabelCards(html, title);
+    }
+
+    async function init() {
+      document.querySelector(".lbl-quick").innerHTML = `<span class="muted small">Quick Text:</span>` +
+        QUICK.map((q, i) => `<a class="pack-chip" data-q="${i}">${escapeHtml(q.split("\n")[0])}</a>`).join("");
+      document.querySelector(".lbl-quick").onclick = e => {
+        const q = e.target.dataset.q; if (q == null) return;
+        document.getElementById("fr-text").value = QUICK[q]; dirty = true; renderPreview();
+      };
+      [company, items, orders, customers, shipments] = await Promise.all([
+        labelCompany(), apiFetch("/api/stock-items/"), apiFetch("/api/customer-orders/"), apiFetch("/api/customers/"), apiFetch("/api/shipments/"),
+      ]);
+      buildFields("sh-fields", "sh");
+      buildFields("bl-fields", "bl");
+      shipDraft = blank(); blankDraft = blank();
+      fillFields("sh", shipDraft); fillFields("bl", blankDraft);
+      const live = shipments.filter(s => s.status !== "cancelled").sort((a, b) => b.id - a.id);
+      const shSel = document.getElementById("sh-select");
+      shSel.innerHTML = `<option value="">— Select A Shipment —</option>` + live.map(s => {
+        const o = byId(orders, s.order_id);
+        return `<option value="${s.id}" data-search="${escapeHtml([o.po_number, o.job_number].filter(Boolean).join(" "))}">${escapeHtml(s.code)} — ${escapeHtml(o.code || "")} — ${escapeHtml(byId(customers, o.customer_id).name || "")} (${s.status})</option>`;
+      }).join("");
+      shSel.dispatchEvent(new Event("change"));  // refresh the search box text
+      shSel.addEventListener("change", () => selectShipment(shSel.value));
+      const blItem = document.getElementById("bl-item");
+      blItem.innerHTML = `<option value="">—</option>` + items.map(i => `<option value="${i.id}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+      blItem.dispatchEvent(new Event("change"));  // refresh the search box text
+      blItem.addEventListener("change", () => {
+        const it = byId(items, parseInt(blItem.value));
+        if (!it.id) return;
+        Object.assign(blankDraft, { item_code: it.code, item_title: it.title, qty: blankDraft.qty || (it.default_pack_size ? String(it.default_pack_size) : "") });
+        fillFields("bl", blankDraft); dirty = true; renderPreview();
+      });
+      const adOrder = document.getElementById("ad-order");
+      adOrder.innerHTML = `<option value="">—</option>` + orders.filter(o => o.status !== "cancelled").sort((a, b) => b.id - a.id)
+        .map(o => `<option value="${o.id}">${escapeHtml(o.code)} — ${escapeHtml(byId(customers, o.customer_id).name || "")}${o.po_number ? ` — PO ${escapeHtml(o.po_number)}` : ""}</option>`).join("");
+      adOrder.dispatchEvent(new Event("change"));  // refresh the search box text
+      adOrder.addEventListener("change", () => fillAddressFromOrder(adOrder.value));
+      document.getElementById("ad-from").value = companyFrom();
+      const preset = new URLSearchParams(location.search).get("shipment_id");
+      if (preset) { shSel.value = preset; shSel.dispatchEvent(new Event("change")); }
+      renderPreview();
+    }
+
+    document.querySelectorAll(".seg-tab").forEach(t => t.addEventListener("click", () => switchMode(t.dataset.mode)));
+    ["fr-text", "fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "ad-from", "ad-to", "ad-attn", "ad-ref", "ad-note", "ad-number", "copies"]
+      .forEach(id => document.getElementById(id).addEventListener("input", () => { if (id !== "copies") dirty = true; renderPreview(); }));
+    ["fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "ad-number"].forEach(id => document.getElementById(id).addEventListener("change", renderPreview));
+    document.getElementById("reset-btn").onclick = resetEditor;
+    document.getElementById("print-btn").onclick = printNow;
+    init().catch(err => { document.getElementById("lbl-error").textContent = err.message; });
+  </script>
+  </div>
+</body>
+</html>

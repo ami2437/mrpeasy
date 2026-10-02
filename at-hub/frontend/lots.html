@@ -54,9 +54,9 @@
       const lot = lots.find(l => l.id === lotId);
       const cell = document.getElementById(`cost-${lotId}`);
       cell.innerHTML = `
-        <input type="number" step="${PRICE_STEP}" min="0" id="cost-input-${lotId}" value="${lot.base_unit_cost ?? ""}" placeholder="unit cost" style="width:100px;">
+        <input type="number" step="${PRICE_STEP}" min="0" id="cost-input-${lotId}" value="${lot.base_unit_cost ?? ""}" placeholder="Unit Cost" style="width:100px;">
         <button class="small-btn" onclick="saveCost(${lotId})">Save</button>
-        <div class="muted small">what it was acquired at${lot.landed_cost_per_unit ? "; landed costs stay on top" : ""}</div>
+        <div class="muted small">What It Was Acquired At${lot.landed_cost_per_unit ? "; Landed Costs Stay On Top" : ""}</div>
         <div class="error" id="cost-error-${lotId}"></div>
       `;
       document.getElementById(`cost-input-${lotId}`).focus();
@@ -109,12 +109,12 @@
           <tr>
             <td><strong>${escapeHtml(lot.lot_code)}</strong></td>
             <td>${item ? `${escapeHtml(item.code)}<div class="muted small">${escapeHtml(item.title)}</div>` : lot.item_id}</td>
-            <td class="num">${fmtQty(lot.quantity)}${lot.initial_quantity ? `<div class="muted small">of ${fmtQty(lot.initial_quantity)}</div>` : ""}</td>
+            <td class="num">${fmtQty(lot.quantity)}${lot.initial_quantity ? `<div class="muted small">Of ${fmtQty(lot.initial_quantity)}</div>` : ""}</td>
             <td class="num">${lot.base_unit_cost != null ? fmtPrice(lot.base_unit_cost) : ""}</td>
             <td class="num muted">${lot.landed_cost_per_unit ? fmtPrice(lot.landed_cost_per_unit) : "—"}</td>
             <td class="num" id="cost-${lot.id}">
-              ${missing ? `<span class="neg">no cost</span><br><a class="link" onclick="editCost(${lot.id})">Set cost</a>`
-                        : `<strong>${fmtPrice(lot.unit_cost)}</strong><br><a class="link small" onclick="editCost(${lot.id})">edit</a>`}
+              ${missing ? `<span class="neg">No Cost</span><br><a class="link" onclick="editCost(${lot.id})">Set cost</a>`
+                        : `<strong>${fmtPrice(lot.unit_cost)}</strong><br><a class="link small" onclick="editCost(${lot.id})">Edit</a>`}
             </td>
             <td>${fmtDate(lot.received_date)}</td>
             <td>${fmtDate(lot.expiry_date)}</td>

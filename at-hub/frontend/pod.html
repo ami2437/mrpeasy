@@ -8,7 +8,9 @@
   <script src="auth-guard.js"></script>
   <style>
     /* Phone-first: drivers open this on the truck. No sidebar, big touch targets. */
-    body { background: #f4f5f7; }
+    body { background: var(--bg); }
+    .pod-nav { display: flex; gap: 14px; font-size: 15px; }
+    .pod-nav a { padding: 6px 2px; }
     .pod { max-width: 560px; margin: 0 auto; padding: 14px 16px 90px; }
     .pod-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
     .pod-top .brand { font-weight: 800; font-size: 18px; color: #1b2430; display: flex; align-items: center; gap: 8px; }
@@ -40,7 +42,8 @@
   <div class="pod">
     <div class="pod-top">
       <div class="brand"><img src="/api/company/logo" alt="" onerror="this.remove()">Proof of Delivery</div>
-      <a class="link small" href="shipments.html">Full app</a>
+      <span class="pod-nav"><a class="link" href="dashboard.html" id="pod-home">⌂ Home</a>
+        <a class="link" href="shipments.html">Shipments</a></span>
     </div>
     <div id="app"></div>
   </div>
@@ -48,6 +51,7 @@
 
   <script>
     AuthGuard.requireLogin();
+    document.getElementById("pod-home").href = homePage();
     let shipments = [], orders = [], customers = [];
     let selected = new Set();   // shipment ids the photos will go on
     let pending = [];           // photos taken but not uploaded yet
@@ -133,15 +137,42 @@
             <input type="file" accept="image/*,application/pdf" multiple style="display:none;" onchange="addPhotos(this.files); this.value='';">
           </label>
           <div class="previews" id="previews"></div>
+          <div style="margin-top:10px;">${aiScanButton("pod", "applyPodScan", { label: "AI Read Signed POD", title: "Read the signed receipt: fills who signed, notes exceptions and checks it's for these shipments" })}</div>
+          <div id="pod-ai"></div>
           <label style="margin-top:12px;">Received by</label>
           <input type="text" id="pod-receiver" placeholder="Name of the person who signed">
           <label>Note</label>
-          <textarea id="pod-note" rows="2" placeholder="e.g. left at dock 3, 2 pallets"></textarea>
+          <textarea id="pod-note" rows="2" placeholder="E.g. Left At Dock 3, 2 Pallets"></textarea>
           <button class="big-btn" id="pod-upload" onclick="uploadPod()">Upload to ${chosen.length} shipment${chosen.length === 1 ? "" : "s"} &amp; mark delivered</button>
           <div id="pod-error" class="error"></div>
           <div id="pod-done"></div>
         </div>`;
       renderPreviews();
+    }
+
+    // AI: read the signed receipt. Fills "received by", notes shortages/damage, adds the
+    // photo, and checks the references on it against the shipments being delivered.
+    function applyPodScan(r, file) {
+      if (!pending.includes(file)) { pending.push(file); renderPreviews(); }
+      const recv = document.getElementById("pod-receiver");
+      if (r.received_by && !recv.value) recv.value = r.received_by;
+      const noteEl = document.getElementById("pod-note");
+      const extra = [r.pieces && `Pieces: ${r.pieces}`, r.exceptions && `Exception: ${r.exceptions}`].filter(Boolean).join(" — ");
+      if (extra && !noteEl.value.includes(extra)) noteEl.value = [noteEl.value, extra].filter(Boolean).join(" — ");
+      const matchedIds = r.shipment_matches.map(m => m.shipment_id);
+      const extraMatches = r.shipment_matches.filter(m => !selected.has(m.shipment_id));
+      const unconfirmed = [...selected].filter(id => r.references.length && !matchedIds.includes(id)).map(id => (byId(id) || {}).code);
+      document.getElementById("pod-ai").innerHTML = `<div class="ai-review" style="margin-top:10px;">
+        <div class="ai-review-head">${icon("sparkles")} <strong>AI read the receipt</strong></div>
+        <div class="small">${r.signed ? `<span class="pos">✓ Signed</span>` : `<span class="neg">No signature found</span>`}
+          ${r.received_by ? ` by <strong>${escapeHtml(r.received_by)}</strong>` : ""}${r.delivery_date ? ` on ${escapeHtml(r.delivery_date)}` : ""}</div>
+        ${r.references.length ? `<div class="small muted">References on it: ${r.references.map(escapeHtml).join(", ")}</div>` : ""}
+        ${r.exceptions ? `<div class="notice">Exception noted: ${escapeHtml(r.exceptions)}</div>` : ""}
+        ${unconfirmed.length ? `<div class="notice">Not found on the receipt: ${unconfirmed.map(escapeHtml).join(", ")}. Check it's the right paperwork.</div>` : ""}
+        ${extraMatches.length ? `<div class="small" style="margin-top:6px;">Also on this receipt: ${extraMatches.map(m =>
+          `<a class="link" onclick="selected.add(${m.shipment_id}); renderUpload();">+ ${escapeHtml(m.code)}</a>`).join(" ")}</div>` : ""}
+        ${matchedIds.length && !unconfirmed.length ? `<div class="small pos">✓ Matches the selected shipment${selected.size === 1 ? "" : "s"}</div>` : ""}
+      </div>`;
     }
 
     function backToPicker() {

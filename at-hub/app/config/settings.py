@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # Where uploaded attachments (PDFs, photos) are stored.
     upload_dir: str = "./uploads"
 
+    # Private AI for reading customer PO PDFs into draft orders. Runs on a local Ollama
+    # server (https://ollama.com) -- documents never leave this machine / network.
+    # The URL must be localhost or a private-network address; anything else is refused.
+    ai_ollama_url: str = "http://127.0.0.1:11434"
+    ai_model: str = "qwen2.5:7b"
+    ai_vision_model: str = "qwen2.5vl:7b"  # reads photos and scanned PDFs (PODs, scanned invoices)
+    ai_timeout_seconds: int = 180
+
     # Keep TEST-* products, a test customer/vendor and an open test order ready at every startup.
     test_data_enabled: bool = False
 

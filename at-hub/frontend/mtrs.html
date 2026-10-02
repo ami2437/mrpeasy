@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — MTR Library</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <h2 style="margin-top:0;">MTR Library</h2>
+      <p class="muted" style="margin-top:0;">Every material test report linked to purchase order lines — by item, with the date, purchase order and vendor it came from,
+        and the customer orders its material shipped on. Upload MTRs on a purchase order and tick the lines each one covers.</p>
+      <div class="row" style="align-items:flex-end;">
+        <div style="flex:2;"><label>Item</label><select id="f-item" data-searchable></select></div>
+        <div><label>Vendor</label><select id="f-vendor"><option value="">All Vendors</option></select></div>
+        <div style="flex:2;"><label>Search</label><input type="text" id="f-search" placeholder="PO #, Heat #, File Name, Customer Order…"></div>
+      </div>
+      <div id="unlinked"></div>
+    </div>
+
+    <div class="card">
+      <div class="table-scroll">
+      <table class="compact-table">
+        <thead><tr><th></th><th>PO Date</th><th>Item</th><th>Purchase Order</th><th>Vendor</th><th>Heat #</th><th>MTR File</th><th>Shipped On (Customer Orders)</th></tr></thead>
+        <tbody id="mtr-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="card" id="email-card" style="display:none;max-width:680px;">
+      <h3 style="margin-top:0;">Email Selected MTRs</h3>
+      <p class="muted small" style="margin-top:0;">To send MTRs for a specific order, open the order (Shipped On column) — its MTR section picks the traced reports for you and logs the email on the order.</p>
+      <div class="row">
+        <div><label>To</label><input type="text" id="e-to" placeholder="customer@example.com"></div>
+        <div><label>CC</label><input type="text" id="e-cc"></div>
+      </div>
+      <label>Subject</label><input type="text" id="e-subject" value="Material Test Reports">
+      <label>Message</label><textarea id="e-body" rows="4">Hello,
+
+Please find attached the requested material test reports.
+
+Thank you.</textarea>
+      <div style="margin-top:10px;"><button id="e-send" onclick="sendSelected()">Send</button> <span class="muted small" id="e-count"></span></div>
+      <div id="e-error" class="error"></div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("mtrs.html");
+    const isManager = AuthGuard.hasRole("manager");
+    let rows = [];
+    const fmtDate = d => d ? new Date(d).toLocaleDateString() : "";
+
+    async function init() {
+      const items = await apiFetch("/api/stock-items/");
+      const sel = document.getElementById("f-item");
+      sel.innerHTML = `<option value="">All Items</option>` + items.map(i =>
+        `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+      const preset = new URLSearchParams(location.search).get("item_id");
+      if (preset) { sel.value = preset; sel.dispatchEvent(new Event("change")); }
+      sel.addEventListener("change", load);
+      document.getElementById("f-vendor").addEventListener("change", render);
+      document.getElementById("f-search").addEventListener("input", render);
+      load();
+      if (isManager) loadUnlinked();
+    }
+
+    async function load() {
+      const itemId = document.getElementById("f-item").value;
+      try {
+        rows = await apiFetch(`/api/mtrs/${itemId ? `?item_id=${itemId}` : ""}`);
+      } catch (err) {
+        document.getElementById("mtr-body").innerHTML = `<tr><td colspan="8" class="error">${escapeHtml(err.message)}</td></tr>`;
+        return;
+      }
+      const vsel = document.getElementById("f-vendor"), keep = vsel.value;
+      const vendors = [...new Map(rows.filter(r => r.vendor_id).map(r => [r.vendor_id, r.vendor])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+      vsel.innerHTML = `<option value="">All Vendors</option>` + vendors.map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`).join("");
+      vsel.value = vendors.some(([id]) => String(id) === keep) ? keep : "";
+      render();
+    }
+
+    function render() {
+      const vendorId = document.getElementById("f-vendor").value;
+      const words = document.getElementById("f-search").value.toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = rows.filter(r => (!vendorId || String(r.vendor_id) === vendorId) && words.every(w =>
+        [r.po_code, r.heat_number, r.filename, r.note, r.item_code, r.item_title, r.vendor,
+         ...r.shipped_on.flatMap(s => [s.order_code, s.customer, s.po_number, s.shipment_code])].join(" ").toLowerCase().includes(w)));
+      const body = document.getElementById("mtr-body");
+      if (!shown.length) {
+        body.innerHTML = `<tr><td colspan="8" class="muted">${rows.length ? "No MTRs Match These Filters." : "No MTRs Linked Yet — Upload One On A Purchase Order And Tick The Lines It Covers."}</td></tr>`;
+        updateEmail();
+        return;
+      }
+      body.innerHTML = shown.map(r => {
+        const orders = [...new Map(r.shipped_on.map(s => [s.order_id, s])).values()];
+        return `<tr>
+          <td><input type="checkbox" class="sel-mtr" value="${r.attachment_id}" onchange="updateEmail()"></td>
+          <td class="nowrap">${fmtDate(r.po_date)}</td>
+          <td><strong>${escapeHtml(r.item_code || "")}</strong><div class="muted small">${escapeHtml(r.item_title || "")}</div></td>
+          <td>${isManager ? `<a class="link" href="purchase-orders.html?id=${r.po_id}">${escapeHtml(r.po_code || "")}</a>` : escapeHtml(r.po_code || "")}
+            <div class="muted small">${fmtQty(r.received_qty)} Of ${fmtQty(r.po_line_qty)} Received</div></td>
+          <td>${escapeHtml(r.vendor || "")}</td>
+          <td>${escapeHtml(r.heat_number || "")}</td>
+          <td><a class="link" onclick="openAttachment(${r.attachment_id})">${escapeHtml(r.filename)}</a>${r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : ""}</td>
+          <td class="mtr-trace">${orders.length ? orders.map(s => `<a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(s.order_code)}</a>
+              <span class="muted">${escapeHtml(s.customer)}${s.po_number ? ` · PO ${escapeHtml(s.po_number)}` : ""}</span>`).join("<br>") : `<span class="muted small">Not Shipped Yet</span>`}</td>
+        </tr>`;
+      }).join("");
+      updateEmail();
+    }
+
+    function updateEmail() {
+      const n = new Set(Array.from(document.querySelectorAll(".sel-mtr:checked")).map(c => c.value)).size;
+      document.getElementById("email-card").style.display = n ? "block" : "none";
+      document.getElementById("e-count").textContent = `${n} MTR${n === 1 ? "" : "s"} Selected`;
+    }
+
+    async function sendSelected() {
+      const err = document.getElementById("e-error"), btn = document.getElementById("e-send");
+      err.textContent = "";
+      const ids = [...new Set(Array.from(document.querySelectorAll(".sel-mtr:checked")).map(c => parseInt(c.value)))];
+      btn.disabled = true; btn.textContent = "Sending…";
+      try {
+        await apiFetch("/api/mtrs/email", { method: "POST", body: JSON.stringify({
+          attachment_ids: ids, to: document.getElementById("e-to").value, cc: document.getElementById("e-cc").value || null,
+          subject: document.getElementById("e-subject").value, body: document.getElementById("e-body").value }) });
+        document.querySelectorAll(".sel-mtr:checked").forEach(c => c.checked = false);
+        updateEmail();
+        alert("Sent.");
+      } catch (e) { err.textContent = e.message; }
+      btn.disabled = false; btn.textContent = "Send";
+    }
+
+    async function loadUnlinked() {
+      try {
+        const list = await apiFetch("/api/mtrs/unlinked");
+        if (!list.length) return;
+        document.getElementById("unlinked").innerHTML = `<div class="panel" style="margin-top:10px;border-color:#f59e0b;background:#fffbeb;">
+          <strong>${list.length} MTR${list.length === 1 ? "" : "s"} Not Linked To Any Line Yet</strong> — they won't show up by item until linked:
+          ${list.map(u => `<a class="link" href="purchase-orders.html?id=${u.po_id}">${escapeHtml(u.po_code || "")}</a> <span class="muted small">${escapeHtml(u.filename)}</span>`).join(" · ")}</div>`;
+      } catch (e) { /* the list still works without the reminder */ }
+    }
+
+    init();
+  </script>
+  </div>
+</body>
+</html>

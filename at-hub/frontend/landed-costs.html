@@ -33,8 +33,8 @@
         <div><label>Amount ($)</label><input type="number" step="0.01" min="0" id="f-amount" oninput="schedulePreview()"></div>
       </div>
       <div class="row">
-        <div><label>Paid to</label><input type="text" id="f-paid-to" placeholder="carrier / broker"></div>
-        <div><label>Their reference / bill #</label><input type="text" id="f-reference"></div>
+        <div><label>Paid to</label><input type="text" id="f-paid-to" placeholder="Carrier / Broker"></div>
+        <div><label>Vendor Reference / Bill #</label><input type="text" id="f-reference"></div>
         <div><label>Date</label><input type="date" id="f-date"></div>
       </div>
       <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
@@ -66,7 +66,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("landed-costs.html");
 
     let landedCosts = [];

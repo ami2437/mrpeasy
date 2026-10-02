@@ -40,7 +40,7 @@
 
     <div class="card">
       <table>
-        <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
+        <thead><tr><th>Vendor ID</th><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
         <tbody id="body"><tr><td colspan="5">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -49,7 +49,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("vendors.html");
     const ENDPOINT = "/api/vendors/";
 
@@ -86,16 +86,17 @@
     function render() {
       const tbody = document.getElementById("body");
       const q = document.getElementById("search").value.trim().toLowerCase();
-      const filtered = rows.filter(r => !q || r.name.toLowerCase().includes(q) || (r.contact_name || "").toLowerCase().includes(q));
+      const filtered = rows.filter(r => !q || r.name.toLowerCase().includes(q) || (r.code || "").toLowerCase().includes(q) || (r.contact_name || "").toLowerCase().includes(q));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">${rows.length ? "No vendors match your search." : "None yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${rows.length ? "No vendors match your search." : "None yet."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(r => {
         const orderCount = orders.filter(o => o.vendor_id === r.id).length;
         return `
         <tr>
-          <td><a class="link" onclick="showDetail(${r.id})">${r.name}</a></td>
+          <td><strong>${escapeHtml(r.code || "")}</strong></td>
+          <td><a class="link" onclick="showDetail(${r.id})">${escapeHtml(r.name)}</a></td>
           <td>${r.contact_name || ""}</td>
           <td>${r.email || ""}</td>
           <td>${r.phone || ""}</td>
@@ -112,10 +113,10 @@
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const vendorOrders = orders.filter(o => o.vendor_id === id);
-      const totalSpend = vendorOrders.reduce((sum, o) => sum + o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0), 0);
+      const totalSpend = vendorOrders.reduce((sum, o) => sum + o.order_total, 0);
 
       card.innerHTML = `
-        <h3>${vendor.name}</h3>
+        <h3>${escapeHtml(vendor.name)} <span class="tag draft">${escapeHtml(vendor.code || "")}</span></h3>
         <div class="row">
           <div><label>Name</label><input type="text" id="e-name" value="${vendor.name}"></div>
           <div><label>Contact name</label><input type="text" id="e-contact" value="${vendor.contact_name || ''}"></div>
@@ -131,9 +132,9 @@
         <button onclick="saveDetail(${vendor.id})" style="margin-top:8px;">Save Changes</button>
         <div id="detail-error" class="error"></div>
 
-        <h4 style="margin-top:20px;">Item cross-reference</h4>
-        <p class="muted small" style="margin-top:0;">What ${escapeHtml(vendor.name)} calls our items. Filled in automatically when a PO line has a vendor item #;
-          typing their # on a purchase order then picks our item.</p>
+        <h4 style="margin-top:20px;">Part # Mapping (Our Item ↔ Vendor Part #)</h4>
+        <p class="muted small" style="margin-top:0;">What ${escapeHtml(vendor.name)} (${escapeHtml(vendor.code || "")}) calls our items. Learned automatically from every PO line with a vendor part #.
+          On a new PO for this vendor, picking our item fills in their part #, description and last cost; typing their part # picks our item.</p>
         <div id="xref"></div>
 
         <h4 style="margin-top:20px;">Purchase history (${vendorOrders.length} orders, $${totalSpend.toFixed(2)} total)</h4>
@@ -145,7 +146,7 @@
                 <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
                 <td>${fmtDate(o.order_date)}</td>
                 <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
-                <td>$${o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0).toFixed(2)}</td>
+                <td>${fmtMoney(o.order_total)}</td>
               </tr>
             `).join("")}</tbody>
           </table>
@@ -161,23 +162,23 @@
       const byId = Object.fromEntries(items.map(i => [i.id, i]));
       el.innerHTML = `
         <table class="compact-table no-table-tools" style="max-width:860px;">
-          <thead><tr><th>Their item #</th><th>Their description</th><th>Our item</th><th class="num">Last cost</th><th>Last ordered</th><th></th></tr></thead>
+          <thead><tr><th>Our Item</th><th>Vendor Part #</th><th>Vendor Description</th><th class="num">Last Cost</th><th>Last Ordered</th><th></th></tr></thead>
           <tbody>
             ${mappings.map(m => {
               const it = byId[m.item_id] || {};
               return `<tr>
+                <td><strong>${escapeHtml(it.code || m.item_id)}</strong> ${groupTag(it)} <div class="muted small">${escapeHtml(it.title || "")}</div></td>
                 <td><strong>${escapeHtml(m.vendor_item_code)}</strong></td>
                 <td>${escapeHtml(m.vendor_description || "")}</td>
-                <td>${escapeHtml(it.code || m.item_id)} ${groupTag(it)} <span class="muted small">${escapeHtml(it.title || "")}</span></td>
                 <td class="num">${m.last_unit_cost != null ? fmtPrice(m.last_unit_cost) : ""}</td>
                 <td>${m.last_ordered_at ? new Date(m.last_ordered_at).toLocaleDateString() : ""}</td>
                 <td><a class="link small" onclick="deleteXref(${vendorId}, ${m.id})">Remove</a></td>
               </tr>`;
-            }).join("") || `<tr><td colspan="6" class="muted">No cross-references yet.</td></tr>`}
+            }).join("") || `<tr><td colspan="6" class="muted">No Part # Mappings Yet.</td></tr>`}
             <tr>
-              <td><input type="text" id="xref-code" placeholder="their part #" style="width:120px;"></td>
-              <td><input type="text" id="xref-desc" placeholder="optional"></td>
-              <td><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select></td>
+              <td style="min-width:240px;"><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select></td>
+              <td><input type="text" id="xref-code" placeholder="Vendor Part #" style="width:120px;"></td>
+              <td><input type="text" id="xref-desc" placeholder="Optional"></td>
               <td colspan="3"><button class="secondary small-btn" onclick="addXref(${vendorId})">+ Add</button></td>
             </tr>
           </tbody>

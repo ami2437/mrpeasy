@@ -13,15 +13,29 @@
     <div class="card">
       <div class="row" style="align-items:center;">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
-        <button onclick="toggleForm()">+ New Order</button>
+        <button class="manager-only" onclick="toggleForm()">+ New Order</button>
+        <button class="ai-btn manager-only" data-icon="sparkles" style="flex:0 0 auto;" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
+    </div>
+
+    <div class="card" id="ai-card" style="display:none;">
+      <h3 style="margin-top:0;">Create an order from a customer PO (private AI)</h3>
+      <p class="muted" style="margin-top:0;">The PDF is read by an AI model running on our own machine, not a cloud service, so nothing leaves the company.
+        It fills in a draft order for you to check. Nothing is saved until you click <strong>Create Order</strong>, and the PDF is then attached to the order as the customer PO.</p>
+      <div id="ai-status" class="small muted">Checking the local AI…</div>
+      <div class="row" style="align-items:center; margin-top:8px;">
+        <input type="file" id="ai-file" accept=".pdf" style="flex:1 1 280px;">
+        <button style="flex:0 0 auto;" id="ai-read-btn" onclick="readPoWithAi()">Read PDF</button>
+      </div>
+      <div id="ai-error" class="error"></div>
     </div>
 
     <div class="card" id="form-card" style="display:none;">
       <h3>New Customer Order</h3>
+      <div id="ai-draft-note"></div>
       <div class="field-grid">
         <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo()"></select></div>
-        <div><label>PO #</label><input type="text" id="f-po-number" placeholder="customer's PO #"></div>
+        <div><label>PO #</label><input type="text" id="f-po-number" placeholder="Customer's PO #"></div>
         <div><label>Job #</label><input type="text" id="f-job-number"></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
       </div>
@@ -71,6 +85,8 @@
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
+      aiPdfFile = null;
+      document.getElementById("ai-draft-note").innerHTML = "";
       if (show) {
         document.getElementById("lines-body").innerHTML = "";
         fillShipTo();
@@ -81,7 +97,7 @@
     // A customer's default delivery address: shipping address, else billing.
     function customerShipTo(customerId) {
       const c = customers.find(c => c.id === customerId);
-      return c ? (c.shipping_address || c.address || "") : "";
+      return c ? (c.shipping_address || c.address || "N/A") : "N/A";
     }
     function fillShipTo() {
       document.getElementById("f-ship-to").value = customerShipTo(parseInt(document.getElementById("f-customer").value));
@@ -138,9 +154,93 @@
       if (qtyCell) qtyCell.textContent = fmtQty(totalQty);
     }
 
+    // ---- AI PO import: local model reads the PDF, we prefill the New Order form ----
+    let aiPdfFile = null;  // attached to the order as its customer PO once it's created
+
+    async function toggleAiPanel() {
+      const card = document.getElementById("ai-card");
+      card.style.display = card.style.display === "none" ? "block" : "none";
+      if (card.style.display === "none") return;
+      const el = document.getElementById("ai-status");
+      try {
+        const s = await apiFetch("/api/ai-orders/status");
+        el.innerHTML = s.reachable && s.model_installed
+          ? `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`
+          : `<span class="neg">● Not Ready</span> — ${escapeHtml(s.message)}`;
+      } catch (e) { el.textContent = e.message; }
+    }
+
+    async function readPoWithAi() {
+      const err = document.getElementById("ai-error");
+      err.textContent = "";
+      const file = document.getElementById("ai-file").files[0];
+      if (!file) { err.textContent = "Choose the PO PDF first."; return; }
+      const btn = document.getElementById("ai-read-btn");
+      btn.disabled = true;
+      btn.textContent = "Reading… (can take a minute)";
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const draft = await apiUpload("/api/ai-orders/extract", form);
+        fillOrderFromDraft(draft, file);
+        document.getElementById("ai-card").style.display = "none";
+      } catch (e) {
+        err.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Read PDF";
+      }
+    }
+
+    function fillOrderFromDraft(d, file) {
+      toggleForm(true);  // resets the form (and aiPdfFile), so set the file after
+      aiPdfFile = file;
+      document.getElementById("lines-body").innerHTML = "";
+      const notes = [];
+      if (d.customer.customer_id) {
+        document.getElementById("f-customer").value = d.customer.customer_id;
+        fillShipTo();
+        if (d.customer.confidence < 1) notes.push(`Customer read as "${d.customer_name}" and matched to <strong>${escapeHtml(d.customer.suggested_name)}</strong>. Check it.`);
+      } else {
+        notes.push(`<span class="neg">Customer "${escapeHtml(d.customer_name || "?")}" isn't in Customers. Pick one (or add them first).</span>`);
+      }
+      document.getElementById("f-po-number").value = d.po_number || "";
+      document.getElementById("f-delivery").value = d.delivery_date || "";
+      if (d.ship_to_address) document.getElementById("f-ship-to").value = d.ship_to_address;
+      document.getElementById("f-notes").value = d.notes || "";
+
+      d.lines.forEach(l => {
+        addLine();
+        const tr = document.querySelector("#lines-body tr:last-child");
+        const select = tr.querySelector(".l-item");
+        const said = [l.item_code, l.customer_item_code, l.description].filter(Boolean).join(" · ");
+        if (l.item_id) {
+          select.value = l.item_id;
+          select.dispatchEvent(new Event("change"));
+        } else {
+          select.insertAdjacentHTML("afterbegin", `<option value="" selected>— pick item —</option>`);
+          select.value = "";
+        }
+        tr.querySelector(".l-qty").value = l.quantity || 1;
+        if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price;
+        if (l.delivery_date) tr.querySelector(".l-delivery").value = l.delivery_date;
+        tr.querySelector(".grow").insertAdjacentHTML("beforeend",
+          `<div class="small ${l.item_id && l.match === "code" ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
+            !l.item_id ? " — no matching item, pick one" : l.match === "description" ? " — matched by description, check it" : ""}</div>`);
+        refreshPriceDeltas(tr);
+      });
+      if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF.</span>`); }
+      recalcLines("lines-body", "new-order-total");
+      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> by the local AI (${escapeHtml(d.model)}).
+        Check every field before creating the order. The PDF will be attached as the customer PO.${notes.length ? `<ul>${notes.map(n => `<li>${n}</li>`).join("")}</ul>` : ""}</div>`;
+      document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
+    }
+
     async function saveOrder() {
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
+      const missing = Array.from(document.querySelectorAll("#lines-body tr")).findIndex(tr => !tr.querySelector(".l-item").value);
+      if (missing >= 0) { errorEl.textContent = `Pick an item for line ${missing + 1}.`; return; }
       const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
         item_id: parseInt(tr.querySelector(".l-item").value),
         quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
@@ -148,7 +248,7 @@
         delivery_date: tr.querySelector(".l-delivery").value || null,
       }));
       try {
-        await apiFetch("/api/customer-orders/", {
+        const created = await apiFetch("/api/customer-orders/", {
           method: "POST",
           body: JSON.stringify({
             customer_id: parseInt(document.getElementById("f-customer").value),
@@ -160,6 +260,16 @@
             lines,
           }),
         });
+        if (aiPdfFile) {
+          const form = new FormData();
+          form.append("entity_type", "customer_order");
+          form.append("entity_id", created.id);
+          form.append("category", "customer_po");
+          form.append("note", "Imported with AI");
+          form.append("files", aiPdfFile);
+          try { await apiUpload("/api/attachments/", form); }
+          catch (e) { alert(`Order ${created.code} was created, but attaching the PDF failed: ${e.message}`); }
+        }
         toggleForm(false);
         await loadOrders();
       } catch (err) {
@@ -222,8 +332,8 @@
           <td>${orderShipments.map(s => `<div class="nowrap"><a class="link" href="shipments.html?id=${s.id}">${s.code}</a> <span class="tag ${s.status}">${s.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
           <td>${orderInvoices.map(i => `<div class="nowrap"><a class="link" href="invoices.html?id=${i.id}">${i.code}</a> <span class="tag ${i.status}">${i.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
           <td class="nowrap">
-            ${o.status === "draft" ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
-            ${o.status !== "cancelled" ? `<button class="secondary small-btn" onclick="openProfit(${o.id})">Profit</button>` : ""}
+            ${o.status === "draft" && AuthGuard.hasRole("manager") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
+            ${o.status !== "cancelled" && AuthGuard.hasRole("manager") ? `<button class="secondary small-btn" onclick="openProfit(${o.id})">Profit</button>` : ""}
           </td>
         </tr>
       `;
@@ -253,7 +363,7 @@
         <div class="nowrap" id="alloc-${line.id}-${s.shipment_id}">
           <a class="link" href="shipments.html?id=${s.shipment_id}">${s.code}</a>
           <span class="muted small">· ${fmtQty(s.quantity)} · ${s.status === "ready" ? `${fmtQty(s.picked_quantity)} picked` : s.status}</span>
-          ${canUnbook ? `<a class="link small" onclick="showUnbook(${line.id}, ${s.shipment_id}, ${unpicked})">unbook</a>` : ""}
+          ${canUnbook ? `<a class="link small" onclick="showUnbook(${line.id}, ${s.shipment_id}, ${unpicked})">Unbook</a>` : ""}
         </div>`;
       }).join("");
     }
@@ -265,7 +375,7 @@
         <span class="small">Unbook</span>
         <input type="number" step="1" min="1" max="${max}" value="${max}" id="unbook-qty-${lineId}-${shipmentId}" style="width:70px;">
         <button class="small-btn danger" onclick="unbookLine(${lineId}, ${shipmentId})">OK</button>
-        <a class="link small" onclick="showDetail(currentOrderId)">cancel</a>
+        <a class="link small" onclick="showDetail(currentOrderId)">Cancel</a>
       `;
       document.getElementById(`unbook-qty-${lineId}-${shipmentId}`).select();
     }
@@ -298,15 +408,15 @@
       return line.booking_sources.map(b => {
         const src = b.source === "purchase" && b.reference
           ? `<a class="link" href="purchase-orders.html?id=${poIdByCode[b.reference] || ""}">${escapeHtml(b.reference)}</a>`
-          : `<span class="tag source-manual">${b.source === "adjustment" ? "manual adj." : escapeHtml(b.source)}</span>`;
-        return `<div class="nowrap">${src} <span class="muted small">· ${b.lot_code ? escapeHtml(b.lot_code) : "no lot"} · ${fmtQty(b.quantity)}</span></div>`;
+          : `<span class="tag source-manual">${b.source === "adjustment" ? "Manual Adj." : escapeHtml(b.source)}</span>`;
+        return `<div class="nowrap">${src} <span class="muted small">· ${b.lot_code ? escapeHtml(b.lot_code) : "No Lot"} · ${fmtQty(b.quantity)}</span></div>`;
       }).join("");
     }
 
     // Invoices raised from the shipments this line went out on.
     function lineInvoicesHtml(line) {
       const shipmentIds = line.shipments.map(s => s.shipment_id);
-      const lineInvoices = invoices.filter(i => shipmentIds.includes(i.shipment_id) && i.status !== "void");
+      const lineInvoices = invoices.filter(i => (i.shipment_ids || [i.shipment_id]).some(id => shipmentIds.includes(id)) && i.status !== "void");
       if (!lineInvoices.length) return `<span class="muted">—</span>`;
       return lineInvoices.map(i => `
         <div class="nowrap">
@@ -341,8 +451,9 @@
       card.style.display = "block";
       const canBook = !["shipped", "invoiced", "cancelled"].includes(order.status)
         && order.lines.some(l => l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9);
-      const editable = order.status !== "cancelled";
-      const canCancel = order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0 && l.booked_quantity === 0);
+      const isManager = AuthGuard.hasRole("manager");  // employees view orders and ship them, nothing else
+      const editable = isManager && order.status !== "cancelled";
+      const canCancel = isManager && order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0 && l.booked_quantity === 0);
       const orderShipments = shipments.filter(s => s.order_id === order.id);
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
@@ -401,7 +512,7 @@
                 </td>` : ""}
                 ${canBook ? `<td>${openQty > 0
                   ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div>`
-                  : `<span class="muted small">allocated</span>`}</td>` : ""}
+                  : `<span class="muted small">Allocated</span>`}</td>` : ""}
               </tr>
             `;
             }).join("")}
@@ -443,7 +554,7 @@
           </table>
         ` : `<p class="muted">None yet.</p>`}
 
-        <h4 style="margin-top:20px;">Invoices (${orderInvoices.length})</h4>
+        ${isManager ? `<h4 style="margin-top:20px;">Invoices (${orderInvoices.length})</h4>
         ${orderInvoices.length ? `
           <table>
             <thead><tr><th>Code</th><th>Date</th><th>Status</th></tr></thead>
@@ -451,22 +562,27 @@
               <tr><td><a class="link" href="invoices.html?id=${i.id}">${i.code}</a></td><td>${fmtDate(i.invoice_date)}</td><td><span class="tag ${i.status === 'paid' ? 'shipped' : i.status === 'void' ? 'cancelled' : i.status === 'sent' ? 'confirmed' : 'draft'}">${i.status}</span></td></tr>
             `).join("")}</tbody>
           </table>
-        ` : `<p class="muted">None yet.</p>`}
+        ` : `<p class="muted">None yet.</p>`}` : ""}
 
         <h4 style="margin-top:20px;">Attachments</h4>
         <p class="muted small" style="margin-top:0;">The customer's PO and anything else that came with the order.</p>
         <div id="co-attachments"></div>
 
+        <h4 style="margin-top:20px;">Material Test Reports (MTRs)</h4>
+        <p class="muted small" style="margin-top:0;">MTRs for the lots this order shipped from. Tick the ones the customer needs and email them.</p>
+        <div id="co-mtrs"></div>
+
         <div id="profit-panel"></div>
 
         <div class="btn-row">
-          ${order.status !== "cancelled" ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
+          ${order.status !== "cancelled" && isManager ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
       refreshPriceDeltas(card);
       renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "other"]);
+      renderOrderMtrs("co-mtrs", order.id);
     }
 
     async function saveOrderHeader(orderId) {
@@ -641,11 +757,11 @@
           <tr class="subrow">
             <td colspan="2">
               <span class="tag ${c.estimated ? "estimated" : c.kind}">${KIND_LABEL[c.kind]}</span>
-              ${c.lot_code ? `lot <strong>${escapeHtml(c.lot_code)}</strong>` : `<em>no lot</em>`}
-              ${c.lot_source ? `<span class="muted">from ${escapeHtml(c.lot_source)}</span>` : ""}
+              ${c.lot_code ? `Lot <strong>${escapeHtml(c.lot_code)}</strong>` : `<em>No Lot</em>`}
+              ${c.lot_source ? `<span class="muted">From ${escapeHtml(c.lot_source)}</span>` : ""}
               ${c.shipment_code ? `· <a class="link" href="shipments.html?id=${c.shipment_id}">${escapeHtml(c.shipment_code)}</a>` : ""}
             </td>
-            <td class="num" colspan="2">${fmtQty(c.quantity)} × ${c.unit_cost == null ? `<span class="neg">no cost</span>` : fmtPrice(c.unit_cost)}</td>
+            <td class="num" colspan="2">${fmtQty(c.quantity)} × ${c.unit_cost == null ? `<span class="neg">No Cost</span>` : fmtPrice(c.unit_cost)}</td>
             <td class="num">${fmtMoney(c.cost)}</td>
             <td class="num">${signed(c.revenue - c.cost)}</td>
             <td></td>
@@ -666,9 +782,9 @@
           ${missing}${warnings}
           <div class="stat-row">
             <div class="stat"><div class="stat-label">Revenue</div><div class="stat-value">${fmtMoney(p.revenue)}</div></div>
-            <div class="stat"><div class="stat-label">Cost of goods</div><div class="stat-value">${fmtMoney(p.cogs)}</div><div class="stat-sub">lot cost incl. landed</div></div>
+            <div class="stat"><div class="stat-label">Cost of goods</div><div class="stat-value">${fmtMoney(p.cogs)}</div><div class="stat-sub">Lot Cost Incl. Landed</div></div>
             <div class="stat"><div class="stat-label">Gross profit</div><div class="stat-value ${p.gross_profit < 0 ? "neg" : "pos"}">${fmtMoney(p.gross_profit)}</div></div>
-            <div class="stat"><div class="stat-label">Shipping</div><div class="stat-value" style="font-size:15px;">+${fmtMoney(p.other_charges)} / −${fmtMoney(p.shipping_cost)}</div><div class="stat-sub">charged on invoices / paid to carriers</div></div>
+            <div class="stat"><div class="stat-label">Shipping</div><div class="stat-value" style="font-size:15px;">+${fmtMoney(p.other_charges)} / −${fmtMoney(p.shipping_cost)}</div><div class="stat-sub">Charged On Invoices / Paid To Carriers</div></div>
             <div class="stat"><div class="stat-label">Net profit</div><div class="stat-value ${p.net_profit < 0 ? "neg" : "pos"}">${fmtMoney(p.net_profit)}</div><div class="stat-sub">margin ${pct(p.margin_pct)}</div></div>
           </div>
           <table class="compact-table" style="max-width:640px;">
@@ -710,7 +826,7 @@
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/shipments/"),
         apiFetch("/api/stock-items/"),
-        apiFetch("/api/invoices/"),
+        apiFetch("/api/invoices/").catch(() => []),  // managers only
       ]);
       renderOrders();
     }
@@ -721,8 +837,8 @@
         apiFetch("/api/customers/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/shipments/"),
-        apiFetch("/api/invoices/"),
-        apiFetch("/api/purchase-orders/"),
+        apiFetch("/api/invoices/").catch(() => []),
+        apiFetch("/api/purchase-orders/").catch(() => []),
       ]);
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");

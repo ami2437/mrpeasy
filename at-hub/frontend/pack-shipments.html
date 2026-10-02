@@ -2,276 +2,726 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>AT-HUB — Batch Pack Shipments</title>
+  <title>AT-HUB — Batch Shipments</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="shipment-detail.js"></script>
 </head>
 <body>
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card">
-      <p class="muted" style="margin-top:0;">Pack shipments one at a time or all at once. Each order line is split into boxes by its pack size
-        (pre-filled from the item's default). Packed shipments stay listed so you can re-pack or print their labels.</p>
-      <div class="row" style="align-items:center;">
-        <select id="view-filter" style="max-width:240px;">
+    <div class="card batch-toolbar">
+      <div class="filters">
+        <input type="text" id="search" placeholder="Search shipment, order, customer, PO or item #...">
+        <select id="view-filter">
+          <option value="active">All active (not invoiced)</option>
           <option value="unpacked">Needs packing</option>
-          <option value="all">All open &amp; shipped (not invoiced)</option>
+          <option value="open">Open — booked / picking</option>
+          <option value="shipped">Shipped — awaiting delivery</option>
+          <option value="delivered">Delivered — ready to invoice</option>
+          <option value="all">Everything incl. invoiced</option>
         </select>
-        <label style="white-space:nowrap;"><input type="checkbox" id="select-all"> Select all shown</label>
-        <button onclick="packAll()">Pack All Unpacked</button>
-        <button class="secondary" onclick="printSelectedLabels()">Print Labels for Selected</button>
+        <a class="link small" onclick="expandAll(true)">Expand all</a>
+        <a class="link small" onclick="expandAll(false)">Collapse all</a>
+        <a class="link small" onclick="togglePastePanel('pack')">Paste Pack Sizes</a>
+        <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
+        <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
+      </div>
+      <div class="batch-actions">
+        <label class="check-label"><input type="checkbox" id="select-all"> All shown</label>
+        <span class="sel-count" id="sel-count">0 selected</span>
+        <button onclick="bulkSavePacking()" title="Save packing (boxes + pallets) for the selected shipments as shown">Save Packing</button>
+        <button class="secondary" onclick="printSelectedLabels()">Print Labels</button>
+        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>
+        <button class="secondary" onclick="bulkConfirm()">Confirm Bookings</button>
+        <button class="secondary" onclick="bulkPickAll()">Pick All &amp; Ship</button>
+        <span id="bulk-deliver" style="display:none;" class="check-label">
+          <button class="secondary" onclick="bulkDeliver()" title="Managers: mark delivered without a POD">Mark Delivered</button>
+          <input type="date" id="bulk-delivered-date" style="width:auto;padding:5px 6px;font-size:13px;">
+        </span>
+        <span class="check-label manager-only">
+          <button class="secondary" onclick="bulkInvoice()">Create Invoices</button>
+          <label class="check-label" title="Selected shipments of the same order go on one invoice"><input type="checkbox" id="bulk-combine"> One Per Order</label>
+        </span>
+      </div>
+      <div class="small muted" style="margin-top:6px;">Packing list prints:
+        <label class="inline-check"><input type="checkbox" id="pl-all-boxes" checked> Box details</label>
+        <label class="inline-check"><input type="checkbox" id="pl-all-pallets" checked> Pallet info</label>
+        <label class="inline-check"><input type="checkbox" id="pl-all-lots"> Lot #</label>
       </div>
       <div id="bulk-error" class="error"></div>
-      <div id="bulk-result" class="muted"></div>
+      <div id="bulk-result" class="small"></div>
+    </div>
+
+    <div class="card" id="paste-pack-panel" style="display:none;">
+      <h3 style="margin-top:0;">Paste Pack Sizes</h3>
+      <div class="paste-grid">
+        <div>
+          <textarea id="paste-pack-text" rows="7" placeholder="Item#&#9;Pack Size&#10;16713&#9;50&#10;15420&#9;100"></textarea>
+          <div class="btn-row" style="margin-top:8px;">
+            <button onclick="applyPaste('pack')">Apply Pack Sizes</button>
+            <label class="check-label"><input type="checkbox" id="paste-save-defaults" checked> Save As The Items' New Default</label>
+          </div>
+        </div>
+        <div class="muted small">
+          <p style="margin-top:0;">Two columns copied from Excel (tab or comma separated, header optional): <strong>Item # · Pack Size</strong>.</p>
+          <p>Applies to the <strong>selected</strong> shipments, or every shipment shown if none are selected. Start a row with a shipment code
+            (e.g. <code>SH-0012</code>) to aim it at one shipment.</p>
+          <p>The new size becomes the item's default; the previous one is kept in its history (see <a class="link" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</a>).</p>
+        </div>
+      </div>
+      <div id="paste-pack-result" class="small" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="card" id="paste-pallet-panel" style="display:none;">
+      <h3 style="margin-top:0;">Paste Pallets</h3>
+      <div class="paste-grid">
+        <div>
+          <textarea id="paste-pallet-text" rows="7" placeholder="Item#&#9;Pallet#&#9;Weight&#9;Dimensions&#10;16713&#9;PLT-1&#9;250&#9;48x40x50&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300&#9;48x40x45"></textarea>
+          <div class="btn-row" style="margin-top:8px;"><button onclick="applyPaste('pallet')">Apply Pallets</button></div>
+        </div>
+        <div class="muted small">
+          <p style="margin-top:0;">Copied from Excel: <strong>Item # · Pallet #</strong> · Weight · Dimensions. Weight and dimensions only need to be on one row per pallet.</p>
+          <p>Applies to the <strong>selected</strong> shipments, or every shipment shown if none are selected. Start a row with a shipment code to aim it at one shipment.</p>
+        </div>
+      </div>
+      <div id="paste-pallet-result" class="small" style="margin-top:8px;"></div>
     </div>
 
     <div id="shipments-container"><div class="card">Loading...</div></div>
+    <div id="detail-holder" style="display:none;"><div class="card" id="detail-card" style="display:none;"></div></div>
   </main>
 
   <script>
     AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("pack-shipments.html");
 
+    // Globals the shared shipment-detail.js reads.
     let shipments = [];
     let orders = [];
     let items = [];
     let customers = [];
     let lots = [];
+    let shipmentsById = {};
+    let currentShipmentId = null;
+
+    let packHistory = [];          // /api/stock-items/pack-sizes/history
     const selected = new Set();
+    const openCards = new Set();
+    const drafts = {};             // unsaved edits per shipment, kept across re-renders
+    const pendingPallets = {};     // shipmentId -> { pallet#: {weight, dimensions} } from a paste
+    let detailOpenId = null;
 
-    function order(id) { return orders.find(o => o.id === id); }
-    function itemObj(id) { return items.find(i => i.id === id); }
-    function itemLabel(id) { const i = itemObj(id); return i ? `${i.code} — ${i.title}` : id; }
-    function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
+    const canManage = AuthGuard.hasRole("manager");
+    if (canManage) document.getElementById("bulk-deliver").style.display = "inline-flex";
+    document.getElementById("bulk-delivered-date").value = new Date().toISOString().substring(0, 10);
 
-    // Everything is per order line: the same item on two lines is packed as two lines.
-    function qtyByLine(shipment) {
-      const byLine = {};
-      shipment.lines.forEach(l => {
-        byLine[l.order_line_id] = byLine[l.order_line_id] || { order_line_id: l.order_line_id, line_no: l.line_no, item_id: l.item_id, qty: 0 };
-        byLine[l.order_line_id].qty += l.quantity;
-      });
-      return Object.values(byLine).sort((a, b) => (a.line_no || 0) - (b.line_no || 0));
-    }
+    function byId(id) { return shipments.find(s => s.id === id); }
+    function cardEl(id) { return document.querySelector(`.ship-card[data-shipment="${id}"]`); }
 
     function boxedByLine(shipment) {
       const totals = {};
       shipment.boxes.forEach(b => { totals[b.order_line_id] = (totals[b.order_line_id] || 0) + b.quantity_in_box; });
       return totals;
     }
-
     function isPacked(shipment) {
+      if (!shipment.boxes.length) return false;
       const boxed = boxedByLine(shipment);
-      return qtyByLine(shipment).every(e => Math.abs((boxed[e.order_line_id] || 0) - e.qty) < 1e-6);
+      return shippedByLine(shipment).every(e => Math.abs((boxed[e.order_line_id] || 0) - e.qty) < 1e-6);
     }
-
-    // Mirrors the existing portal's calculate_boxes(): full boxes of pack_size, then one remainder box.
-    function calculateBoxes(quantity, packSize) {
-      if (!packSize || packSize <= 0) packSize = quantity || 1;
-      const fullBoxes = Math.floor(quantity / packSize);
-      const remaining = Math.round(quantity - fullBoxes * packSize);
-      const boxes = [];
-      for (let i = 0; i < fullBoxes; i++) boxes.push({ quantity_in_box: packSize });
-      if (remaining > 0) boxes.push({ quantity_in_box: remaining });
-      return boxes;
+    function lotCodesFor(shipment, lineId) {
+      const ids = [...new Set(shipment.lines.filter(l => l.order_line_id === lineId).map(l => l.lot_id).filter(Boolean))];
+      return ids.map(lotCode).filter(Boolean).join(", ");
     }
-
-    function lotCodeForLine(shipment, orderLineId) {
-      const lotIds = [...new Set(shipment.lines.filter(l => l.order_line_id === orderLineId).map(l => l.lot_id).filter(Boolean))];
-      return lotIds.map(id => { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : null; }).filter(Boolean).join(", ");
-    }
-
-    function boxBreakdown(shipment, orderLineId) {
+    function splitText(qty, pack) {
       const byQty = {};
-      shipment.boxes.filter(b => b.order_line_id === orderLineId).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
+      calculateBoxes(qty, pack || qty).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
       return formatBoxCounts(byQty);
     }
 
-    // Pack size shown for an already-packed line = its largest box; otherwise the item default.
-    function packSizeFor(shipment, entry) {
-      const boxes = shipment.boxes.filter(b => b.order_line_id === entry.order_line_id);
-      if (boxes.length) return Math.max(...boxes.map(b => b.quantity_in_box));
-      const item = itemObj(entry.item_id);
-      return item && item.default_pack_size ? item.default_pack_size : entry.qty;
+    // Every pack size we know for an item: the current default first, then earlier ones.
+    function knownPackSizes(itemId) {
+      const item = itemObj(itemId) || {};
+      const sizes = [];
+      if (item.default_pack_size) sizes.push(item.default_pack_size);
+      packHistory.filter(h => h.item_id === itemId).forEach(h => {
+        [h.pack_size, h.previous_pack_size].forEach(v => { if (v && !sizes.includes(v)) sizes.push(v); });
+      });
+      return sizes;
+    }
+    function packHistoryTitle(itemId) {
+      const rows = packHistory.filter(h => h.item_id === itemId);
+      if (!rows.length) return "No pack size changes recorded yet";
+      return rows.map(h => `${new Date(h.changed_at).toLocaleDateString()}: ${h.previous_pack_size ?? "—"} → ${h.pack_size ?? "—"} (${h.source || ""}${h.changed_by ? `, ${h.changed_by}` : ""})`).join("\n");
     }
 
+    // ---- filtering ----
+    function matches(s, q) {
+      if (!q) return true;
+      const ord = order(s.order_id) || {};
+      const hay = [s.code, ord.code, ord.po_number, ord.job_number, customerName(ord.customer_id), s.carrier, s.tracking_number,
+        ...s.lines.map(l => itemCode(l.item_id))].join(" ").toLowerCase();
+      return hay.includes(q.toLowerCase());
+    }
     function visibleShipments() {
       const view = document.getElementById("view-filter").value;
-      return shipments.filter(s => view === "all" || !isPacked(s));
+      const q = document.getElementById("search").value.trim();
+      return shipments.filter(s => {
+        if (s.status === "cancelled" || !s.lines.length) return false;
+        if (view !== "all" && s.status === "invoiced") return false;
+        if (view === "unpacked" && isPacked(s)) return false;
+        if (view === "open" && !["new", "ready"].includes(s.status)) return false;
+        if (view === "shipped" && s.status !== "shipped") return false;
+        if (view === "delivered" && s.status !== "delivered") return false;
+        return matches(s, q);
+      });
     }
 
-    function renderShipments() {
+    // ---- rendering ----
+    function headHtml(s) {
+      const ord = order(s.order_id) || {};
+      const packed = isPacked(s);
+      const units = s.lines.reduce((t, l) => t + l.quantity, 0);
+      const nLines = shippedByLine(s).length;
+      const pallets = new Set(s.boxes.map(b => b.pallet_number).filter(Boolean)).size;
+      return `
+        <div class="ship-head" onclick="toggleCard(${s.id})">
+          <input type="checkbox" class="ship-select" ${selected.has(s.id) ? "checked" : ""} onclick="event.stopPropagation()" onchange="toggleSelect(${s.id}, this.checked)">
+          <span class="caret">▶</span>
+          <span class="code">${escapeHtml(s.code)}${drafts[s.id] ? `<span class="dirty-dot" title="Unsaved packing changes">●</span>` : ""}</span>
+          <span class="nowrap">${shipmentStatusHtml(s)}</span>
+          <span class="who" title="${escapeHtml(customerName(ord.customer_id))}">${escapeHtml(ord.code || "")} · <strong>${escapeHtml(customerName(ord.customer_id) || "")}</strong>${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</span>
+          <span class="meta hide-sm">${nLines} line${nLines === 1 ? "" : "s"} · ${fmtQty(units)} units${pallets ? ` · ${pallets} pallet${pallets === 1 ? "" : "s"}` : ""} · ${podCellHtml(s)}</span>
+          <span class="tag ${packed ? "shipped" : "draft"}">${packed ? `Packed · ${s.boxes.length} box${s.boxes.length === 1 ? "" : "es"}` : "Not Packed"}</span>
+        </div>`;
+    }
+
+    function lineRowsHtml(s) {
+      const draft = (drafts[s.id] || {}).lines || {};
+      return shippedByLine(s).map(e => {
+        const d = draft[e.order_line_id] || {};
+        const pack = d.pack ?? packSizeFor(s, e);
+        const pallet = d.pallet ?? linePallet(s, e.order_line_id);
+        const picked = s.lines.filter(l => l.order_line_id === e.order_line_id).reduce((t, l) => t + l.picked_quantity, 0);
+        const sizes = knownPackSizes(e.item_id);
+        const item = itemObj(e.item_id) || {};
+        const savedSplit = boxBreakdownFor(s, e.order_line_id);
+        return `
+          <tr data-line="${e.order_line_id}" data-item="${e.item_id}" data-qty="${e.qty}" ${d.dirty ? 'data-dirty="1"' : ""}>
+            <td class="line-no">#${e.line_no ?? ""}</td>
+            <td class="grow">${escapeHtml(itemLabel(e.item_id))}</td>
+            <td class="num">${fmtQty(e.qty)}</td>
+            <td class="num">${fmtQty(picked)}${picked >= e.qty ? " ✓" : ""}</td>
+            <td>
+              <input type="number" step="1" min="1" class="bp-pack qty-input" value="${pack}" oninput="lineEdited(this)">
+              ${sizes.length ? `<div class="pack-hints" title="${escapeHtml(packHistoryTitle(e.item_id))}">${sizes.map(v =>
+                `<span class="pack-chip ${v === item.default_pack_size ? "current" : ""}" onclick="pickPackSize(this, ${v})">${v}${v === item.default_pack_size ? " Default" : ""}</span>`).join("")}<a class="link small" onclick="showPackSizeHistory(${e.item_id})">History</a></div>` : ""}
+            </td>
+            <td class="box-preview">${d.dirty || !savedSplit ? splitText(e.qty, pack) : savedSplit}</td>
+            <td><input type="text" class="pallet-input" value="${escapeHtml(pallet)}" placeholder="Optional" oninput="lineEdited(this, true)"></td>
+          </tr>`;
+      }).join("");
+    }
+
+    function boxBreakdownFor(s, lineId) {
+      const byQty = {};
+      s.boxes.filter(b => b.order_line_id === lineId).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
+      return formatBoxCounts(byQty);
+    }
+
+    function lifecycleButtons(s) {
+      const b = [];
+      if (s.status === "new") b.push(`<button class="secondary" onclick="runOne(${s.id}, 'confirm-booking')">Confirm Bookings</button>`);
+      if (["new", "ready"].includes(s.status)) b.push(`<button class="secondary" onclick="pickAllOne(${s.id})">Pick All &amp; Ship</button>`);
+      if (s.status === "shipped" && canManage) b.push(`<button class="secondary" onclick="runOne(${s.id}, 'delivered', {delivered_at: null})" title="Mark delivered today without a POD">Mark Delivered</button>`);
+      if (["shipped", "delivered"].includes(s.status)) b.push(`<button class="secondary" onclick="invoiceOne(${s.id})">Create Invoice</button>`);
+      return b.join("");
+    }
+
+    function bodyHtml(s) {
+      const nLines = shippedByLine(s).length;
+      return `
+        <details class="ship-section" open>
+          <summary>Items (${nLines})</summary>
+          <table class="fit-table no-table-tools">
+            <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Picked</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
+            <tbody>${lineRowsHtml(s)}</tbody>
+          </table>
+        </details>
+        <details class="ship-section pallet-section">
+          <summary>Pallets (<span class="pallet-count">0</span>) — weight &amp; dimensions</summary>
+          <div class="pallet-area"></div>
+        </details>
+        <div class="ship-actions">
+          <button onclick="saveOne(${s.id})">Save Packing</button>
+          <button class="secondary" onclick="printLabels(${s.id})">Labels</button>
+          <button class="secondary" onclick="packingListOne(${s.id})">Packing List</button>
+          ${lifecycleButtons(s)}
+          <span class="spacer"></span>
+          <a class="link small" onclick="openDetail(${s.id})">Full details — picking, carrier, boxes, POD, delivery…</a>
+        </div>
+        <div class="error" id="err-${s.id}"></div>
+        <div class="detail-slot"></div>`;
+    }
+
+    function renderCard(s) {
+      return `<div class="ship-card ${openCards.has(s.id) ? "open" : ""} ${selected.has(s.id) ? "selected" : ""}" data-shipment="${s.id}">
+        ${headHtml(s)}<div class="ship-body">${openCards.has(s.id) ? bodyHtml(s) : ""}</div></div>`;
+    }
+
+    function renderAll() {
+      // Keep any unsaved edits and the open detail panel through the redraw.
+      document.querySelectorAll(".ship-card").forEach(c => captureDraft(parseInt(c.dataset.shipment)));
+      document.getElementById("detail-holder").appendChild(document.getElementById("detail-card"));
+
       const container = document.getElementById("shipments-container");
       const shown = visibleShipments();
-      if (!shown.length) {
-        container.innerHTML = `<div class="card muted">${shipments.length
-          ? "Every open shipment is packed. Switch the view to \"All\" to re-pack or print labels."
-          : "No open or shipped (un-invoiced) shipments. Create a shipment from a customer order first."}</div>`;
-        return;
-      }
-      container.innerHTML = shown.map(shipment => {
-        const ord = order(shipment.order_id);
-        const packed = isPacked(shipment);
-        const pallet = (shipment.boxes.find(b => b.pallet_number) || {}).pallet_number || "";
-        return `
-          <div class="card" data-shipment="${shipment.id}">
-            <div class="row" style="align-items:center;">
-              <h3 style="margin:0;">
-                <input type="checkbox" class="ship-select" data-id="${shipment.id}" ${selected.has(shipment.id) ? "checked" : ""}>
-                <a class="link" href="shipments.html?id=${shipment.id}">${shipment.code}</a>
-                <span class="tag ${shipment.status}">${shipment.status}</span>
-                <span class="muted" style="font-weight:normal;">— Order ${ord ? ord.code : ""} (${customerName(ord ? ord.customer_id : null)})</span>
-              </h3>
-              <span class="tag ${packed ? "shipped" : "draft"}">${packed ? `packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}` : "not packed"}</span>
-            </div>
-            <div class="row" style="max-width:300px; margin-top:8px;">
-              <div><label>Pallet # (applies to all boxes below)</label><input type="text" class="shipment-pallet" value="${pallet}"></div>
-            </div>
-            <table class="lines-table fit-table">
-              <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th></tr></thead>
-              <tbody>
-                ${qtyByLine(shipment).map(e => `
-                    <tr data-line="${e.order_line_id}" data-item="${e.item_id}" data-qty="${e.qty}">
-                      <td class="line-no">#${e.line_no ?? ""}</td>
-                      <td class="grow">${itemLabel(e.item_id)}</td>
-                      <td class="num">${fmtQty(e.qty)}</td>
-                      <td><input type="number" step="1" min="1" class="pack-size-input qty-input" value="${packSizeFor(shipment, e)}"></td>
-                      <td class="box-preview">${boxBreakdown(shipment, e.order_line_id) || '<span class="muted">—</span>'}</td>
-                    </tr>
-                `).join("")}
-              </tbody>
-            </table>
-            <button onclick="packShipment(${shipment.id})" style="margin-top:8px;">${packed ? "Re-pack" : "Pack"} This Shipment</button>
-            <div class="error" id="error-${shipment.id}"></div>
-          </div>
-        `;
-      }).join("");
-
-      container.querySelectorAll(".ship-select").forEach(cb => cb.addEventListener("change", () => {
-        const id = parseInt(cb.dataset.id);
-        cb.checked ? selected.add(id) : selected.delete(id);
-      }));
-      // Live preview of the split as the pack size is edited.
-      container.querySelectorAll(".pack-size-input").forEach(input => input.addEventListener("input", () => {
-        const tr = input.closest("tr");
-        const qty = parseFloat(tr.dataset.qty);
-        const byQty = {};
-        calculateBoxes(qty, parseFloat(input.value) || qty).forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
-        tr.querySelector(".box-preview").innerHTML = formatBoxCounts(byQty);
-      }));
+      container.innerHTML = shown.length ? shown.map(renderCard).join("")
+        : `<div class="card muted">${shipments.length ? "No shipments match this view/search." : "No shipments yet — create one from a customer order."}</div>`;
+      shown.filter(s => openCards.has(s.id)).forEach(s => renderPallets(s.id));
+      if (detailOpenId && cardEl(detailOpenId)) attachDetail(detailOpenId);
+      updateSelectionUi();
     }
 
-    function buildBoxes(shipmentEl, shipment) {
-      const pallet = shipmentEl.querySelector(".shipment-pallet").value || null;
+    function ensureBody(id) {
+      const card = cardEl(id);
+      if (!card) return null;
+      const body = card.querySelector(".ship-body");
+      if (!body.innerHTML.trim()) { body.innerHTML = bodyHtml(byId(id)); renderPallets(id); }
+      return card;
+    }
+
+    function toggleCard(id) {
+      const card = cardEl(id);
+      openCards.has(id) ? openCards.delete(id) : openCards.add(id);
+      card.classList.toggle("open", openCards.has(id));
+      if (openCards.has(id)) ensureBody(id);
+    }
+    function expandAll(open) {
+      visibleShipments().forEach(s => { open ? openCards.add(s.id) : openCards.delete(s.id); });
+      renderAll();
+    }
+
+    // ---- selection ----
+    function toggleSelect(id, on) {
+      on ? selected.add(id) : selected.delete(id);
+      const card = cardEl(id);
+      if (card) card.classList.toggle("selected", on);
+      updateSelectionUi();
+    }
+    function updateSelectionUi() {
+      const shown = visibleShipments();
+      const nShownSel = shown.filter(s => selected.has(s.id)).length;
+      document.getElementById("sel-count").textContent = `${selected.size} selected`;
+      const all = document.getElementById("select-all");
+      all.checked = shown.length > 0 && nShownSel === shown.length;
+      all.indeterminate = nShownSel > 0 && nShownSel < shown.length;
+    }
+    function selectedShipments() { return shipments.filter(s => selected.has(s.id)); }
+
+    // ---- line edits, drafts and pallets ----
+    function lineEdited(input, palletChanged = false) {
+      const tr = input.closest("tr");
+      tr.dataset.dirty = "1";
+      const qty = parseFloat(tr.dataset.qty);
+      tr.querySelector(".box-preview").innerHTML = splitText(qty, parseInt(tr.querySelector(".bp-pack").value) || qty);
+      const id = parseInt(tr.closest(".ship-card").dataset.shipment);
+      captureDraft(id);
+      if (palletChanged) renderPallets(id);
+      markDirtyHead(id);
+    }
+    function pickPackSize(chip, value) {
+      const input = chip.closest("td").querySelector(".bp-pack");
+      input.value = value;
+      lineEdited(input);
+    }
+    function markDirtyHead(id) {
+      const code = cardEl(id)?.querySelector(".ship-head .code");
+      if (code && !code.querySelector(".dirty-dot")) code.insertAdjacentHTML("beforeend", `<span class="dirty-dot" title="Unsaved packing changes">●</span>`);
+    }
+
+    function captureDraft(id) {
+      const card = cardEl(id);
+      if (!card || !card.querySelector(".ship-body tbody")) return;
+      const lines = {};
+      let dirty = false;
+      card.querySelectorAll(".ship-body tr[data-line]").forEach(tr => {
+        if (tr.dataset.dirty !== "1") return;
+        dirty = true;
+        lines[tr.dataset.line] = { pack: parseInt(tr.querySelector(".bp-pack").value) || null, pallet: tr.querySelector(".pallet-input").value, dirty: true };
+      });
+      const pallets = {};
+      card.querySelectorAll(".pallet-area tr[data-pallet]").forEach(tr => {
+        pallets[tr.dataset.pallet] = { weight: tr.querySelector(".w-input").value, dimensions: tr.querySelector(".dim-input").value, typed: tr.dataset.typed === "1" };
+        if (tr.dataset.typed === "1") dirty = true;
+      });
+      if (dirty) drafts[id] = { lines, pallets };
+    }
+
+    // Pallet weight/dimension rows follow the pallet #s typed on the lines.
+    function renderPallets(id) {
+      const card = cardEl(id);
+      const area = card && card.querySelector(".pallet-area");
+      if (!area) return;
+      const s = byId(id);
+      const typed = {};
+      area.querySelectorAll("tr[data-pallet]").forEach(tr => {
+        typed[tr.dataset.pallet] = { weight: tr.querySelector(".w-input").value, dimensions: tr.querySelector(".dim-input").value, typed: tr.dataset.typed === "1" };
+      });
+      const draftPallets = (drafts[id] || {}).pallets || {};
+      const byPallet = {};
+      card.querySelectorAll(".ship-body tr[data-line]").forEach(tr => {
+        tr.querySelector(".pallet-input").value.split(",").map(p => p.trim()).filter(Boolean).forEach(pn => {
+          const e = byPallet[pn] = byPallet[pn] || { items: new Set() };
+          e.items.add(itemCode(parseInt(tr.dataset.item)));
+        });
+      });
+      const names = Object.keys(byPallet);
+      card.querySelector(".pallet-count").textContent = names.length;
+      if (!names.length) {
+        area.innerHTML = `<p class="muted small">Type a pallet # on a line (or paste pallet data) to enter its weight and dimensions.</p>`;
+        return;
+      }
+      if ((pendingPallets[id] && Object.keys(pendingPallets[id]).length)) card.querySelector(".pallet-section").open = true;
+      area.innerHTML = `
+        <table class="fit-table no-table-tools">
+          <thead><tr><th>Pallet #</th><th class="grow">Items</th><th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead>
+          <tbody>${names.map(pn => {
+            const saved = s.pallets.find(p => p.pallet_number === pn) || {};
+            const pend = (pendingPallets[id] || {})[pn];
+            const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, draftPallets[pn] || {}, typed[pn] || {}, pend ? { ...pend, typed: true } : {});
+            return `<tr data-pallet="${escapeHtml(pn)}" ${v.typed ? 'data-typed="1"' : ""}>
+              <td><strong>${escapeHtml(pn)}</strong></td>
+              <td class="grow">${escapeHtml([...byPallet[pn].items].join(", "))}</td>
+              <td><input type="number" step="0.1" min="0" class="w-input" value="${escapeHtml(v.weight)}" oninput="palletEdited(this)"></td>
+              <td><input type="text" class="dim-input" placeholder="48 x 40 x 50" value="${escapeHtml(v.dimensions)}"
+                    oninput="palletEdited(this)" onblur="this.value = normalizeDimensions(this.value)"></td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>`;
+      delete pendingPallets[id];
+    }
+    function palletEdited(input) {
+      input.closest("tr").dataset.typed = "1";
+      const id = parseInt(input.closest(".ship-card").dataset.shipment);
+      captureDraft(id);
+      markDirtyHead(id);
+    }
+
+    // Unedited lines keep their saved boxes (including hand-made uneven splits);
+    // edited or never-packed lines are split fresh by pack size.
+    function buildBoxes(id) {
+      const card = ensureBody(id);
+      const s = byId(id);
       const boxes = [];
-      let boxNumber = 1;
-      shipmentEl.querySelectorAll("tbody tr[data-line]").forEach(tr => {
+      let n = 1;
+      card.querySelectorAll(".ship-body tr[data-line]").forEach(tr => {
         const lineId = parseInt(tr.dataset.line);
         const itemId = parseInt(tr.dataset.item);
         const qty = parseFloat(tr.dataset.qty);
-        const packSize = parseInt(tr.querySelector(".pack-size-input").value) || qty;
-        const lotCode = lotCodeForLine(shipment, lineId) || null;
-        calculateBoxes(qty, packSize).forEach(b => boxes.push({
-          order_line_id: lineId, item_id: itemId, box_number: boxNumber++, quantity_in_box: b.quantity_in_box, lot_code: lotCode, pallet_number: pallet,
-        }));
+        const saved = s.boxes.filter(b => b.order_line_id === lineId).sort((a, b) => a.box_number - b.box_number);
+        const savedQty = saved.reduce((t, b) => t + b.quantity_in_box, 0);
+        if (tr.dataset.dirty !== "1" && saved.length && Math.abs(savedQty - qty) < 1e-6) {
+          saved.forEach(b => boxes.push({ order_line_id: lineId, item_id: itemId, box_number: n++, quantity_in_box: b.quantity_in_box,
+            lot_code: b.lot_code, pallet_number: b.pallet_number }));
+          return;
+        }
+        const pack = parseInt(tr.querySelector(".bp-pack").value) || qty;
+        const pallet = tr.querySelector(".pallet-input").value.split(",")[0].trim() || null;
+        calculateBoxes(qty, pack).forEach(b => boxes.push({ order_line_id: lineId, item_id: itemId, box_number: n++,
+          quantity_in_box: b.quantity_in_box, lot_code: lotCodesFor(s, lineId) || null, pallet_number: pallet }));
       });
       return boxes;
     }
-
-    async function saveBoxes(shipment) {
-      const shipmentEl = document.querySelector(`[data-shipment="${shipment.id}"]`);
-      await apiFetch(`/api/shipments/${shipment.id}/boxes`, {
-        method: "PUT",
-        body: JSON.stringify({ boxes: buildBoxes(shipmentEl, shipment) }),
-      });
-      selected.add(shipment.id);  // just packed -> ready to print
+    function collectPalletRows(id) {
+      return Array.from(cardEl(id).querySelectorAll(".pallet-area tr[data-pallet]")).map(tr => ({
+        pallet_number: tr.dataset.pallet,
+        weight: tr.querySelector(".w-input").value ? parseFloat(tr.querySelector(".w-input").value) : null,
+        dimensions: normalizeDimensions(tr.querySelector(".dim-input").value) || null,
+      }));
     }
 
-    async function packShipment(shipmentId) {
-      const errorEl = document.getElementById(`error-${shipmentId}`);
-      errorEl.textContent = "";
+    async function savePackingFor(id) {
+      const boxes = buildBoxes(id);
+      const pallets = collectPalletRows(id);
+      await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes }) });
+      await apiFetch(`/api/shipments/${id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets }) });
+      delete drafts[id];
+      const card = cardEl(id);
+      if (card) card.querySelector(".ship-body").innerHTML = "";  // redraw from the saved state
+    }
+
+    async function saveOne(id) {
+      const err = document.getElementById(`err-${id}`);
+      err.textContent = "";
       try {
-        await saveBoxes(shipments.find(s => s.id === shipmentId));
-        document.getElementById("bulk-result").textContent = "Packed and selected for printing.";
-        await load();
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
+        await savePackingFor(id);
+        selected.add(id);  // just packed -> ready to print
+        await reloadList();
+        showResult(`${byId(id).code} packed and selected for printing.`);
+      } catch (e) { err.textContent = e.message; }
     }
 
-    async function packAll() {
-      const errorEl = document.getElementById("bulk-error");
-      const resultEl = document.getElementById("bulk-result");
-      errorEl.textContent = "";
-      resultEl.textContent = "";
-      const targets = shipments.filter(s => !isPacked(s) && document.querySelector(`[data-shipment="${s.id}"]`));
-      if (!targets.length) {
-        resultEl.textContent = "Nothing unpacked is shown.";
-        return;
+    // ---- per-shipment lifecycle ----
+    async function runOne(id, action, body) {
+      const err = document.getElementById(`err-${id}`);
+      if (err) err.textContent = "";
+      try {
+        await apiFetch(`/api/shipments/${id}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+        await reloadList();
+      } catch (e) { if (err) err.textContent = e.message; else showError(e.message); }
+    }
+    async function pickAllOne(id) {
+      if (!confirm("Mark every line fully picked? The shipment ships and stock leaves on-hand.")) return;
+      const s = byId(id);
+      if (s.status === "new") {
+        try { await apiFetch(`/api/shipments/${id}/confirm-booking`, { method: "POST" }); }
+        catch (e) { document.getElementById(`err-${id}`).textContent = e.message; return; }
       }
-      let packed = 0;
-      const failed = [];
-      for (const shipment of targets) {
+      runOne(id, "pick", { pick_all: true });
+    }
+    async function invoiceOne(id) {
+      try {
+        const inv = await apiFetch(`/api/invoices/from-shipment/${id}`, { method: "POST", body: JSON.stringify({ shipping_charge: 0 }) });
+        await reloadList();
+        showResult(`Created <a class="link" href="invoices.html?id=${inv.id}">${escapeHtml(inv.code)}</a> (draft) from ${escapeHtml(byId(id)?.code || "")}.`, true);
+      } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
+    }
+    function plQuery() {
+      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}`;
+    }
+    function packingListOne(id) { openPdf(`/api/shipments/${id}/packing-list.pdf?${plQuery()}`); }
+
+    // ---- full detail panel (shared with the Shipments page), embedded in the card ----
+    function attachDetail(id) {
+      const card = cardEl(id);
+      const panel = document.getElementById("detail-card");
+      panel.classList.add("embedded");
+      card.querySelector(".detail-slot").appendChild(panel);
+    }
+    async function openDetail(id) {
+      detailOpenId = id;
+      attachDetail(id);
+      await showDetail(id);
+      document.getElementById("detail-card").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    onShipmentDetailClose = () => { detailOpenId = null; };
+
+    // ---- bulk actions over the selected shipments ----
+    function showError(html) { document.getElementById("bulk-error").innerHTML = html; }
+    function showResult(html, raw = false) { document.getElementById("bulk-result").innerHTML = raw ? html : escapeHtml(html); }
+
+    async function bulkRun(label, eligible, action) {
+      showError(""); showResult("");
+      const chosen = selectedShipments();
+      if (!chosen.length) { showError("Tick at least one shipment first."); return; }
+      const targets = chosen.filter(eligible);
+      const skipped = chosen.filter(s => !eligible(s));
+      const ok = [], failed = [];
+      for (const s of targets) {
+        try { await action(s); ok.push(s.code); }
+        catch (e) { failed.push(`${escapeHtml(s.code)}: ${escapeHtml(e.message)}`); }
+      }
+      await reloadList();
+      showResult(`${label}: ${ok.length} done${ok.length ? ` (${ok.join(", ")})` : ""}`
+        + (skipped.length ? ` · ${skipped.length} skipped — not at that stage (${skipped.map(s => s.code).join(", ")})` : ""));
+      if (failed.length) showError(failed.join("<br>"));
+    }
+
+    function bulkSavePacking() {
+      bulkRun("Packed", s => !["cancelled", "invoiced"].includes(s.status), s => savePackingFor(s.id));
+    }
+    function bulkConfirm() {
+      bulkRun("Bookings confirmed", s => s.status === "new", s => apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" }));
+    }
+    function bulkPickAll() {
+      const n = selectedShipments().filter(s => ["new", "ready"].includes(s.status)).length;
+      if (!n || !confirm(`Pick everything and ship ${n} shipment(s)? Stock leaves on-hand.`)) { if (!n) showError("None of the selected shipments are open (new/ready)."); return; }
+      bulkRun("Shipped", s => ["new", "ready"].includes(s.status), async s => {
+        if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
+        await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
+      });
+    }
+    function bulkDeliver() {
+      const date = document.getElementById("bulk-delivered-date").value;
+      bulkRun("Marked delivered (no POD)", s => s.status === "shipped", s => apiFetch(`/api/shipments/${s.id}/delivered`, {
+        method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }),
+      }));
+    }
+    async function bulkInvoice() {
+      const eligible = selectedShipments().filter(s => ["shipped", "delivered"].includes(s.status));
+      if (!eligible.length) { showError("None of the selected shipments are shipped/delivered and un-invoiced."); return; }
+      const combine = document.getElementById("bulk-combine").checked;
+      if (!combine) {
+        if (!confirm(`Create ${eligible.length} draft invoice(s), one per shipment?`)) return;
+        return bulkRun("Invoiced", s => ["shipped", "delivered"].includes(s.status),
+          s => apiFetch(`/api/invoices/from-shipments`, { method: "POST", body: JSON.stringify({ shipment_ids: [s.id], shipping_charge: 0 }) }));
+      }
+      // One invoice per order: group the selected shipments by order.
+      const groups = {};
+      eligible.forEach(s => { (groups[s.order_id] = groups[s.order_id] || []).push(s); });
+      if (!confirm(`Create ${Object.keys(groups).length} draft invoice(s), one per order, covering ${eligible.length} shipment(s)?`)) return;
+      showError(""); showResult("");
+      const made = [], failed = [];
+      for (const list of Object.values(groups)) {
         try {
-          await saveBoxes(shipment);
-          packed += 1;
-        } catch (err) {
-          failed.push(`${shipment.code}: ${err.message}`);
-        }
+          const inv = await apiFetch(`/api/invoices/from-shipments`, { method: "POST", body: JSON.stringify({ shipment_ids: list.map(s => s.id), shipping_charge: 0 }) });
+          made.push(`<a class="link" href="invoices.html?id=${inv.id}">${escapeHtml(inv.code)}</a> (${list.map(s => escapeHtml(s.code)).join(" + ")})`);
+        } catch (e) { failed.push(`${list.map(s => escapeHtml(s.code)).join(" + ")}: ${escapeHtml(e.message)}`); }
       }
-      resultEl.textContent = `Packed ${packed} shipment(s) — they're selected, hit "Print Labels for Selected" to print them together.`;
-      if (failed.length) errorEl.innerHTML = failed.join("<br>");
-      await load();
+      await reloadList();
+      showResult(`Created ${made.length} invoice(s): ${made.join(", ")}`, true);
+      if (failed.length) showError(failed.join("<br>"));
     }
 
     async function printSelectedLabels() {
-      const errorEl = document.getElementById("bulk-error");
-      errorEl.textContent = "";
-      const ids = [...selected];
-      if (!ids.length) {
-        errorEl.textContent = "Select at least one shipment (tick its checkbox) to print labels.";
-        return;
-      }
-      const chosen = await Promise.all(ids.map(id => apiFetch(`/api/shipments/${id}`)));
-      const unpacked = chosen.filter(s => !s.boxes.length);
-      if (unpacked.length) {
-        errorEl.textContent = `Not packed yet, so no labels: ${unpacked.map(s => s.code).join(", ")}. Pack them first.`;
-        return;
-      }
-      const labels = chosen.flatMap(shipment => {
-        const ord = order(shipment.order_id);
-        return shipment.boxes.map(b => {
-          const item = itemObj(b.item_id) || {};
-          return {
-            customer: customerName(ord ? ord.customer_id : null), shipment: shipment.code,
-            order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
-            item_code: item.code || b.item_id, item_title: item.title || "", qty: b.quantity_in_box,
-          };
-        });
+      showError("");
+      const chosen = selectedShipments();
+      if (!chosen.length) { showError("Tick at least one shipment to print labels."); return; }
+      const fresh = await Promise.all(chosen.map(s => apiFetch(`/api/shipments/${s.id}`)));
+      const unpacked = fresh.filter(s => !s.boxes.length);
+      if (unpacked.length) { showError(`Not packed yet, so no labels: ${unpacked.map(s => s.code).join(", ")}. Save their packing first.`); return; }
+      const labels = fresh.flatMap(s => {
+        const ord = order(s.order_id) || {};
+        return s.boxes.map(b => ({
+          customer: customerName(ord.customer_id), shipment: s.code, order: ord.code || "", po: ord.po_number || "", job: ord.job_number || "",
+          item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
+        }));
       });
       printBoxLabels(labels, "Batch Labels");
     }
 
-    async function load() {
-      let all;
-      [all, orders, items, customers, lots] = await Promise.all([
+    function printSelectedPackingLists() {
+      showError("");
+      const chosen = selectedShipments();
+      if (!chosen.length) { showError("Tick at least one shipment."); return; }
+      openPdf(`/api/shipments/packing-lists.pdf?ids=${chosen.map(s => s.id).join(",")}&${plQuery()}`);
+    }
+
+    // ---- paste: Item # / Pack size / Pallet # / Weight / Dimensions ----
+    function togglePastePanel(kind) {
+      const p = document.getElementById(`paste-${kind}-panel`);
+      p.style.display = p.style.display === "none" ? "block" : "none";
+      if (p.style.display === "block") document.getElementById(`paste-${kind}-text`).focus();
+    }
+
+    // After the pack size manager changes something: refresh defaults and history chips.
+    async function afterPackChange() {
+      [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
+      renderAll();
+    }
+
+    // kind "pack": Item # · Pack Size.  kind "pallet": Item # · Pallet # · Weight · Dimensions.
+    async function applyPaste(kind) {
+      const out = document.getElementById(`paste-${kind}-result`);
+      out.innerHTML = "";
+      const shown = visibleShipments();
+      const scope = shown.filter(s => selected.has(s.id));
+      const targets = scope.length ? scope : shown;
+      const byCode = Object.fromEntries(shipments.map(s => [s.code.toLowerCase(), s]));
+      const packByCode = {};
+      const notOnShipments = new Set();
+      const touched = new Set();
+      let lineHits = 0;
+
+      document.getElementById(`paste-${kind}-text`).value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
+        let cols = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+        let only = null;
+        if (byCode[cols[0].toLowerCase()]) { only = byCode[cols[0].toLowerCase()]; cols = cols.slice(1); }
+        const [code, a, b, c] = cols;
+        if (!code || /^item/i.test(code) || /^ship/i.test(code)) return;  // header row
+        const pack = kind === "pack" ? parseInt(String(a || "").replace(/[^\d]/g, "")) || null : null;
+        const [pallet, weight, dims] = kind === "pallet" ? [a, b, c] : [];
+        if (kind === "pack" && !pack) return;
+        if (kind === "pallet" && !pallet) return;
+        if (pack) packByCode[code] = pack;
+        let found = false;
+        (only ? [only] : targets).forEach(s => {
+          const entries = shippedByLine(s).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
+          if (!entries.length) return;
+          found = true;
+          touched.add(s.id);
+          if (!openCards.has(s.id)) { openCards.add(s.id); cardEl(s.id)?.classList.add("open"); }
+          const card = ensureBody(s.id);
+          if (!card) return;
+          entries.forEach(e => {
+            const tr = card.querySelector(`tr[data-line="${e.order_line_id}"]`);
+            if (pack) tr.querySelector(".bp-pack").value = pack;
+            if (pallet) tr.querySelector(".pallet-input").value = pallet;
+            lineEdited(tr.querySelector(".bp-pack"));
+            lineHits++;
+          });
+          if (pallet && (weight || dims)) {
+            const forShipment = pendingPallets[s.id] = pendingPallets[s.id] || {};
+            const p = forShipment[pallet] = forShipment[pallet] || {};
+            if (weight) p.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || "";
+            if (dims) p.dimensions = normalizeDimensions(dims);
+          }
+        });
+        if (!found) notOnShipments.add(code);
+      });
+      touched.forEach(id => { renderPallets(id); captureDraft(id); });
+
+      const msgs = [`Filled <strong>${lineHits}</strong> line(s) on <strong>${touched.size}</strong> shipment(s)${scope.length ? " (selected)" : " (all shown)"}.`];
+      const entries = Object.entries(packByCode).map(([code, pack_size]) => ({ code, pack_size }));
+      if (kind === "pack" && entries.length && document.getElementById("paste-save-defaults").checked) {
+        try {
+          const codes = [...touched].map(id => byId(id).code);
+          const res = await apiFetch("/api/stock-items/pack-sizes/bulk", { method: "POST", body: JSON.stringify({
+            entries, source: "batch packing", reference: codes.slice(0, 20).join(", ") + (codes.length > 20 ? "…" : ""),
+          }) });
+          [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
+          if (res.applied.length) msgs.push(`New default pack size saved for ${res.applied.length} item(s): ${escapeHtml(res.applied.join(", "))}. Previous sizes kept in history.`);
+          if (res.unchanged.length) msgs.push(`Already the default: ${escapeHtml(res.unchanged.join(", "))}.`);
+          if (res.not_found.length) msgs.push(`<span class="neg">Not in Stock Items: ${escapeHtml(res.not_found.join(", "))}.</span>`);
+        } catch (e) { msgs.push(`<span class="neg">Couldn't save item defaults: ${escapeHtml(e.message)}</span>`); }
+      }
+      if (notOnShipments.size) msgs.push(`<span class="neg">Not on any ${scope.length ? "selected" : "shown"} shipment: ${escapeHtml([...notOnShipments].join(", "))}.</span>`);
+      msgs.push("Review the boxes, then <strong>Save Packing</strong> (per shipment, or select them and use the bulk button).");
+      out.innerHTML = `<ul class="result-list">${msgs.map(m => `<li>${m}</li>`).join("")}</ul>`;
+    }
+
+    // ---- loading ----
+    async function reloadList() {
+      shipments = await apiFetch("/api/shipments/");
+      // Saved shipments re-render from the server; forget selections that no longer exist.
+      [...selected].forEach(id => { if (!byId(id)) selected.delete(id); });
+      renderAll();
+    }
+
+    async function init() {
+      try { await loadAll(); } catch (e) {
+        document.getElementById("shipments-container").innerHTML = `<div class="card error">Couldn't load shipments: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+    async function loadAll() {
+      [shipments, orders, items, customers, lots, packHistory] = await Promise.all([
         apiFetch("/api/shipments/"),
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/customers/"),
         apiFetch("/api/lots/"),
+        // History is optional: a missing endpoint shouldn't leave the screen empty.
+        apiFetch("/api/stock-items/pack-sizes/history").catch(() => []),
       ]);
-      shipments = all.filter(s => !["cancelled", "invoiced"].includes(s.status) && s.lines.length);
-      renderShipments();
+      renderAll();
+      const id = parseInt(new URLSearchParams(location.search).get("id"));
+      if (id && byId(id)) { openCards.add(id); renderAll(); }
     }
 
-    document.getElementById("view-filter").addEventListener("change", renderShipments);
+    document.getElementById("view-filter").addEventListener("change", renderAll);
+    document.getElementById("search").addEventListener("input", renderAll);
     document.getElementById("select-all").addEventListener("change", e => {
       visibleShipments().forEach(s => e.target.checked ? selected.add(s.id) : selected.delete(s.id));
-      renderShipments();
+      document.querySelectorAll(".ship-card").forEach(c => {
+        const on = selected.has(parseInt(c.dataset.shipment));
+        c.classList.toggle("selected", on);
+        c.querySelector(".ship-select").checked = on;
+      });
+      updateSelectionUi();
     });
-    load();
+    init();
   </script>
   </div>
 </body>

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import LotResponse, LotStatusUpdate, LotCostUpdate
 from app.services.crud import LotService
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, require_role
 
 router = APIRouter(prefix="/api/lots", tags=["lots"], dependencies=[Depends(get_current_active_user)])
 
@@ -28,7 +28,7 @@ def set_lot_status(lot_id: int, data: LotStatusUpdate, db: Session = Depends(get
     return LotService.set_status(db, lot_id, data.status)
 
 
-@router.put("/{lot_id}/cost", response_model=LotResponse)
+@router.put("/{lot_id}/cost", response_model=LotResponse, dependencies=[Depends(require_role("manager"))])
 def set_lot_cost(lot_id: int, data: LotCostUpdate, db: Session = Depends(get_db)):
     """Record what a lot was acquired at (e.g. an adjustment lot created without a cost)."""
     return LotService.set_cost(db, lot_id, data.unit_cost)

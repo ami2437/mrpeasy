@@ -56,6 +56,21 @@ class StockItem(Base):
         return self.on_hand - self.booked
 
 
+class PackSizeHistory(Base):
+    """Every change to an item's default pack size. The item keeps the newest as its
+    default; this keeps the earlier ones so they can still be looked up or reused."""
+    __tablename__ = "pack_size_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
+    pack_size = Column(Integer, nullable=True)
+    previous_pack_size = Column(Integer, nullable=True)
+    source = Column(String, nullable=True)  # item edit | bulk paste | batch packing
+    reference = Column(String, nullable=True)  # e.g. shipment codes it was pasted for
+    changed_by = Column(String, nullable=True)
+    changed_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Lot(Base):
     __tablename__ = "lots"
 
@@ -113,6 +128,7 @@ class Vendor(Base):
     __tablename__ = "vendors"
 
     id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=True, index=True)  # V-0001, assigned on create; keys the vendor part # mapping
     name = Column(String, nullable=False)
     contact_name = Column(String, nullable=True)
     email = Column(String, nullable=True)
@@ -237,10 +253,28 @@ class PurchaseOrder(Base):
     payments = relationship("PurchaseOrderPayment", backref="po", cascade="all, delete-orphan")
     emails = relationship("PurchaseOrderEmail", cascade="all, delete-orphan", order_by="PurchaseOrderEmail.sent_at.desc()")
     bills = relationship("VendorBill", cascade="all, delete-orphan", order_by="VendorBill.bill_date")
+    charges = relationship("PurchaseOrderCharge", cascade="all, delete-orphan", order_by="PurchaseOrderCharge.id")
 
     @property
     def landed_cost_total(self) -> float:
         return sum(a.amount for l in self.lines for a in l.allocations)
+
+    @property
+    def lines_total(self) -> float:
+        return round(sum(l.quantity * l.unit_cost for l in self.lines), 2)
+
+    @property
+    def charges_total(self) -> float:
+        return round(sum(c.amount for c in self.charges), 2)
+
+    @property
+    def order_total(self) -> float:
+        """What we owe the vendor: lines + freight/shipping/handling charges (+ pre-landed-cost legacy fees)."""
+        return round(self.lines_total + self.charges_total + (self.freight_cost or 0) + (self.tariff_cost or 0), 2)
+
+    @property
+    def amount_paid(self) -> float:
+        return round(sum(p.amount for p in self.payments), 2)
 
 
 class PurchaseOrderPayment(Base):
@@ -256,6 +290,7 @@ class PurchaseOrderPayment(Base):
     reference = Column(String, nullable=True)
     note = Column(Text, nullable=True)
     vendor_bill_id = Column(Integer, ForeignKey("vendor_bills.id"), nullable=True, index=True)  # which vendor invoice this pays
+    vendor_payment_id = Column(Integer, ForeignKey("vendor_payments.id"), nullable=True, index=True)  # applied from a payment made before/without a PO
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -333,6 +368,20 @@ class PurchaseOrderEmail(Base):
     cc_address = Column(String, nullable=True)
     subject = Column(String, nullable=False)
     body = Column(Text, nullable=True)
+    sent_by = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ShipmentEmail(Base):
+    """Log of proof-of-delivery emails sent to the customer for a shipment."""
+    __tablename__ = "shipment_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False, index=True)
+    to_address = Column(String, nullable=False)
+    cc_address = Column(String, nullable=True)
+    subject = Column(String, nullable=False)
+    files = Column(Text, nullable=True)  # file names that were attached
     sent_by = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
 
@@ -471,6 +520,15 @@ class PalletWeight(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class InvoiceShipment(Base):
+    """Which shipments an invoice bills. Usually one; several when shipments of the same
+    order are combined into one invoice. (Invoice.shipment_id keeps the first one.)"""
+    __tablename__ = "invoice_shipments"
+
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), primary_key=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), primary_key=True, index=True)
+
+
 class Invoice(Base):
     """Native invoice generated from a shipment. No MRP involvement -- this app
     owns invoicing end to end."""
@@ -485,10 +543,21 @@ class Invoice(Base):
     due_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | sent | paid | void
     free_text = Column(Text, nullable=True)
+    # Factoring / funding report fields (the portal's custom_570/571/572), filled by the
+    # bulk funding upload or by hand. funding_amount + funding_discount should equal the total.
+    disbursement_date = Column(DateTime, nullable=True)
+    funding_amount = Column(Float, nullable=True)
+    funding_discount = Column(Float, nullable=True)
+    funding_import_id = Column(Integer, ForeignKey("funding_imports.id"), nullable=True, index=True)
+    print_zero_lines = Column(Boolean, default=False)  # $0 lines are left off the PDF unless this is ticked
+    # JSON record of how this invoice was combined, so it can be shown and undone:
+    # {"merged": [{"code", "shipment_ids", "line_ids", "due_date", "free_text"}], "by", "at"}
+    combined_info = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    shipments = relationship("Shipment", secondary="invoice_shipments", order_by="Shipment.id")
     lines = relationship("InvoiceLine", backref="invoice", cascade="all, delete-orphan")
     payments = relationship("InvoicePayment", backref="invoice", cascade="all, delete-orphan")
     emails = relationship("InvoiceEmail", backref="invoice", cascade="all, delete-orphan", order_by="InvoiceEmail.sent_at")
@@ -502,6 +571,24 @@ class Invoice(Base):
         return sum(p.amount for p in self.payments)
 
     @property
+    def shipment_ids(self) -> list:
+        return [s.id for s in self.shipments]
+
+    @property
+    def shipment_codes(self) -> list:
+        return [s.code for s in self.shipments]
+
+    @property
+    def is_combined(self) -> bool:
+        return len(self.shipments) > 1
+
+    @property
+    def combined_from(self) -> list:
+        import json
+        info = json.loads(self.combined_info) if self.combined_info else {}
+        return [m["code"] for m in info.get("merged", [])]
+
+    @property
     def balance(self) -> float:
         return self.total - self.amount_paid
 
@@ -513,6 +600,7 @@ class InvoiceLine(Base):
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
     item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True)  # null for e.g. a Shipping charge line
     order_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=True)  # the order line this bills
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=True)  # which shipment it shipped on (combined invoices)
     description = Column(String, nullable=False)
     quantity = Column(Float, nullable=False, default=1)
     unit_price = Column(Float, nullable=False, default=0)
@@ -532,6 +620,21 @@ class InvoiceEmail(Base):
     sent_at = Column(DateTime, default=datetime.utcnow)
 
 
+class FundingImport(Base):
+    """One bulk funding upload, kept so it can be reviewed and rolled back."""
+    __tablename__ = "funding_imports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_name = Column(String, nullable=True)
+    record_payments = Column(Boolean, default=True)
+    updated_count = Column(Integer, default=0)
+    skipped_count = Column(Integer, default=0)
+    summary = Column(Text, nullable=True)  # JSON: skipped matches, discrepancies, invalid rows
+    rolled_back = Column(Boolean, default=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class InvoicePayment(Base):
     """A payment received from the customer against this invoice."""
     __tablename__ = "invoice_payments"
@@ -543,6 +646,7 @@ class InvoicePayment(Base):
     method = Column(String, nullable=True)  # wire, check, card, ach, ...
     reference = Column(String, nullable=True)
     note = Column(Text, nullable=True)
+    funding_import_id = Column(Integer, ForeignKey("funding_imports.id"), nullable=True, index=True)  # created by a bulk funding upload
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -565,3 +669,82 @@ class CompanyProfile(Base):
     def has_logo(self) -> bool:
         return bool(self.logo_data)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MtrLink(Base):
+    """Which purchase-order lines a material test report (an 'mtr' attachment on a PO) covers.
+    One MTR can cover several lines, but not necessarily all of them. Through the lots received
+    from those lines, every shipped unit traces back to its MTR."""
+    __tablename__ = "mtr_links"
+    __table_args__ = (UniqueConstraint("attachment_id", "po_line_id", name="uq_mtr_link"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    attachment_id = Column(Integer, ForeignKey("attachments.id"), nullable=False, index=True)
+    po_line_id = Column(Integer, ForeignKey("purchase_order_lines.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False, index=True)
+    heat_number = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MtrEmail(Base):
+    """Log of MTRs emailed to a customer, usually for one of their orders."""
+    __tablename__ = "mtr_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True, index=True)
+    to_address = Column(String, nullable=False)
+    cc_address = Column(String, nullable=True)
+    subject = Column(String, nullable=False)
+    files = Column(Text, nullable=True)  # file names that were attached
+    sent_by = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PurchaseOrderCharge(Base):
+    """Freight / shipping / handling the vendor bills on top of the lines -- usually on each
+    invoice as it ships. Counted in the PO total so payments reconcile to it."""
+    __tablename__ = "purchase_order_charges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False, index=True)
+    charge_type = Column(String, nullable=False, default="shipping")  # shipping | freight | handling | other
+    amount = Column(Float, nullable=False, default=0)
+    description = Column(String, nullable=True)
+    vendor_bill_id = Column(Integer, ForeignKey("vendor_bills.id"), nullable=True, index=True)  # the invoice it was billed on
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    bill = relationship("VendorBill")
+
+    @property
+    def bill_number(self):
+        return self.bill.bill_number if self.bill else None
+
+
+class VendorPayment(Base):
+    """Money sent to a vendor, possibly before any PO exists. Applied to POs in parts
+    (each application is a PurchaseOrderPayment pointing back here); the rest stays
+    'unapplied' and is offered when a PO for that vendor is opened."""
+    __tablename__ = "vendor_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)  # VP-0001
+    vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    paid_date = Column(DateTime, nullable=True)
+    method = Column(String, nullable=True)
+    reference = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    applications = relationship("PurchaseOrderPayment", backref="vendor_payment")
+
+    @property
+    def applied(self) -> float:
+        return round(sum(a.amount for a in self.applications), 2)
+
+    @property
+    def unapplied(self) -> float:
+        return round(self.amount - self.applied, 2)

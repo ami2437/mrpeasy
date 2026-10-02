@@ -11,12 +11,33 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
-      <input type="text" id="search" placeholder="Search invoice code, customer, PO #, job #, or item code...">
+      <div class="row" style="align-items:center;">
+        <input type="text" id="search" placeholder="Search invoice code, customer, PO #, job #, or item code...">
+        <button class="secondary" style="flex:0 0 auto;" onclick="toggleFunding()">Bulk Funding Upload</button>
+      </div>
+    </div>
+
+    <div class="card" id="funding-card" style="display:none;">
+      <h3 style="margin-top:0;">Bulk funding upload</h3>
+      <p class="muted" style="margin-top:0;">Upload the factor's funding report (.xlsx or .csv), the same file as in the portal. Needed columns:
+        <strong>Item Number</strong> (our invoice #), <strong>Disbursement Date</strong>, <strong>Funding Amount</strong>, <strong>Discount</strong>
+        (an <em>Item Type</em> column, if present, keeps only "Invoice" rows; the "Associated Items" sheet is used when there is one).
+        Preview first — nothing changes until you Apply. Invoices that already have different funding values are reported, never overwritten.</p>
+      <div class="row" style="align-items:center;">
+        <input type="file" id="funding-file" accept=".xlsx,.xlsm,.csv" style="flex:1 1 280px;">
+        <label class="check-label" style="flex:0 0 auto;"><input type="checkbox" id="funding-payments" checked> Also record funding + discount as payments (marks the invoice paid)</label>
+        <button style="flex:0 0 auto;" onclick="previewFunding()">Preview</button>
+        <button style="flex:0 0 auto;" id="funding-apply" onclick="applyFunding()" disabled>Apply</button>
+      </div>
+      <div id="funding-error" class="error"></div>
+      <div id="funding-preview"></div>
+      <h4>Recent uploads</h4>
+      <div id="funding-history" class="muted">—</div>
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Code</th><th>Customer</th><th>Order</th><th>PO #</th><th>Job #</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Payment</th><th>Status</th></tr></thead>
-        <tbody id="invoices-body"><tr><td colspan="13">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Customer</th><th>Order</th><th>PO #</th><th>Job #</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Payment</th><th>Disbursed</th><th class="num">Funding</th><th class="num">Discount</th><th>Status</th></tr></thead>
+        <tbody id="invoices-body"><tr><td colspan="16">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -24,7 +45,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("invoices.html");
 
     let invoices = [];
@@ -76,28 +97,40 @@
       return `${state}${progressBar("", pct, "paid", `${fmtMoney(inv.amount_paid)} of ${fmtMoney(total)} paid`)}`;
     }
 
+    // "Combined" badge; hovering lists the shipments (and invoices) it was combined from.
+    function combinedTitle(inv) {
+      return `Combined invoice — shipments ${inv.shipment_codes.join(" + ")}`
+        + (inv.combined_from && inv.combined_from.length ? `; invoices ${[inv.code, ...inv.combined_from].join(" + ")}` : "");
+    }
+    function combinedBadge(inv) {
+      return inv.is_combined ? ` <span class="tag combined" title="${escapeHtml(combinedTitle(inv))}">Combined</span>` : "";
+    }
+
     function renderInvoices() {
       const tbody = document.getElementById("invoices-body");
       const q = document.getElementById("search").value.trim();
       const filtered = invoices.filter(inv => matchesSearch(inv, q));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="13" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="16" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(inv => `
         <tr>
-          <td><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}</td>
           <td>${customerName(inv.customer_id)}</td>
           <td>${refLink("order", inv.order_id)}</td>
           <td>${escapeHtml(orderField(inv, "po_number"))}</td>
           <td>${escapeHtml(orderField(inv, "job_number"))}</td>
-          <td>${refLink("shipment", inv.shipment_id)}</td>
+          <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
           <td>${fmtDate(inv.due_date)}</td>
           <td class="num">${inv.status === 'void' ? '' : fmtMoney(invoiceTotal(inv))}</td>
           <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.amount_paid)}</td>
           <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.balance)}</td>
           <td>${paymentCell(inv)}</td>
+          <td>${fmtDate(inv.disbursement_date)}</td>
+          <td class="num">${inv.funding_amount != null ? fmtMoney(inv.funding_amount) : ""}</td>
+          <td class="num">${inv.funding_discount != null ? fmtMoney(inv.funding_discount) : ""}</td>
           <td><span class="tag ${inv.status === 'paid' ? 'shipped' : inv.status === 'void' ? 'cancelled' : inv.status === 'sent' ? 'confirmed' : 'draft'}">${inv.status}</span></td>
         </tr>
       `).join("");
@@ -113,11 +146,18 @@
       return code && line.description.startsWith(`${code} — `) ? line.description.slice(code.length + 3) : line.description;
     }
 
+    // On a combined invoice, each line shows the shipment it went out on.
+    function lineShipmentTag(invoice, l) {
+      if ((invoice.shipment_ids || []).length < 2 || !l.shipment_id) return "";
+      const sh = shipments.find(s => s.id === l.shipment_id);
+      return `<div class="muted small">${escapeHtml(sh ? sh.code : "")}</div>`;
+    }
+
     function lineRowsHtml(invoice, editable) {
       return invoice.lines.map((l, idx) => editable ? `
-        <tr data-idx="${idx}" data-item-id="${l.item_id ?? ""}" data-order-line-id="${l.order_line_id ?? ""}">
+        <tr data-idx="${idx}" data-item-id="${l.item_id ?? ""}" data-order-line-id="${l.order_line_id ?? ""}" data-shipment-id="${l.shipment_id ?? ""}">
           <td class="line-no">${idx + 1}</td>
-          <td><strong>${escapeHtml(itemCodeOf(l))}</strong></td>
+          <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
           <td class="grow"><input type="text" class="line-desc" value="${escapeHtml(lineDescription(l))}"></td>
           <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="${l.quantity}"></td>
           <td class="num">${priceInput("line-price", l.unit_price)}</td>
@@ -127,7 +167,7 @@
       ` : `
         <tr>
           <td class="line-no">${idx + 1}</td>
-          <td><strong>${escapeHtml(itemCodeOf(l))}</strong></td>
+          <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
           <td class="grow">${escapeHtml(lineDescription(l))}</td>
           <td class="num">${fmtQty(l.quantity)}</td>
           <td class="num">${fmtPrice(l.unit_price)}</td>
@@ -163,59 +203,130 @@
       const invoice = await apiFetch(`/api/invoices/${id}`);
       const card = document.getElementById("detail-card");
       card.style.display = "block";
-      const editable = invoice.status === "draft";
+      const editable = invoice.status !== "void";  // sent/paid invoices can be corrected too
 
+      const zeroLines = invoice.lines.filter(l => Math.abs(l.quantity * l.unit_price) < 0.005).length;
+      // Other draft invoices of the same order that can be folded into this one.
+      const mergeable = editable ? invoices.filter(i => i.id !== invoice.id && i.order_id && i.order_id === invoice.order_id
+        && i.status === "draft" && !i.payments.length && !i.emails.length && i.funding_amount == null) : [];
       card.innerHTML = `
-        <h3>${invoice.code} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
-        <p class="muted">${customerName(invoice.customer_id)} — dated ${fmtDate(invoice.invoice_date)}</p>
+        <h3 style="margin-top:0;">${invoice.code}${combinedBadge(invoice)} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
+        <p class="muted" style="margin:0 0 4px;">${escapeHtml(customerName(invoice.customer_id))} — dated ${fmtDate(invoice.invoice_date)}</p>
         <div id="invoice-refs" class="muted"></div>
 
-        <div class="row" style="max-width:400px;">
-          <div><label>Due date</label><input type="date" id="f-due-date" value="${invoice.due_date ? invoice.due_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
-        </div>
-        <label>Free text</label><textarea id="f-free-text" rows="2" ${editable ? "" : "disabled"}>${invoice.free_text || ""}</textarea>
-
-        <div class="table-scroll" style="margin-top:14px;">
-        <table class="fit-table ${editable ? "lines-table" : ""}">
-          <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
-          <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
-          <tfoot><tr><td></td><td></td><td class="grow">Invoice total</td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
-        </table>
-        </div>
-        ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>` : ""}
-
-        ${invoice.status === "sent" || invoice.status === "paid" ? `<h4 style="margin-top:20px;">Payments received</h4>${renderPayments(invoice)}` : ""}
-
-        <div class="btn-row">
+        <div class="action-bar">
           ${editable ? `<button onclick="saveInvoice(${invoice.id})">Save Changes</button>` : ""}
-          ${invoice.status !== "void" ? `<button onclick="openEmailComposer(${invoice.id})">✉ Send via Email</button>` : ""}
+          ${invoice.status !== "void" ? `<button onclick="openEmailComposer(${invoice.id})">✉ Send Via Email</button>` : ""}
           <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
           ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
           ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
+          <label class="check-label" title="$0 lines are left off the PDF unless this is ticked">
+            <input type="checkbox" ${invoice.print_zero_lines ? "checked" : ""} onchange="setPrintZero(${invoice.id}, this.checked)">
+            Print $0 Lines${zeroLines ? ` <span class="muted small">(${zeroLines} on this invoice)</span>` : ""}</label>
+          <span style="flex:1;"></span>
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
         <div id="detail-error" class="error"></div>
         <div id="email-panel"></div>
+        ${["sent", "paid"].includes(invoice.status) ? `<div class="notice">This invoice has already been ${invoice.status === "paid" ? "paid" : "sent"}.
+          You can still correct it. After saving, re-send it so the customer has the updated copy${invoice.status === "paid" ? "; if the total changes it goes back to Sent with a balance" : ""}.</div>` : ""}
+        ${invoice.is_combined ? `
+        <section class="dsec combined-box"><h4 class="dsec-title">Combined Invoice</h4>
+          <p style="margin-top:0;">This invoice bills <strong>${invoice.shipment_codes.length} shipments</strong> of the same order:
+            ${invoice.shipment_ids.map((id, i) => `<a class="link" href="shipments.html?id=${id}">${escapeHtml(invoice.shipment_codes[i])}</a>`).join(" + ")}.</p>
+          ${invoice.combined_from.length
+            ? `<p>Combined from invoices <strong>${escapeHtml([invoice.code, ...invoice.combined_from].join(" + "))}</strong>
+                (${escapeHtml(invoice.combined_from.join(", "))} folded into ${escapeHtml(invoice.code)}).</p>`
+            : `<p>Created as one invoice for these shipments.</p>`}
+          <button class="secondary" onclick="splitInvoice(${invoice.id})">Undo Combine</button>
+          <span class="muted small">${invoice.combined_from.length
+            ? `Restores ${escapeHtml(invoice.combined_from.join(", "))} with their own lines and shipments.`
+            : "Splits it into one invoice per shipment."} The Shipping line stays on ${escapeHtml(invoice.code)}. Not possible once payments or funding are recorded.</span>
+          <div id="split-error" class="error"></div>
+        </section>` : ""}
+
+        <section class="dsec"><h4 class="dsec-title">Details</h4>
+          <div class="row" style="max-width:400px;">
+            <div><label>Due Date</label><input type="date" id="f-due-date" value="${invoice.due_date ? invoice.due_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
+          </div>
+          <label>Free Text</label><textarea id="f-free-text" rows="2" ${editable ? "" : "disabled"}>${invoice.free_text || ""}</textarea>
+        </section>
+
+        <section class="dsec"><h4 class="dsec-title">Lines</h4>
+          <div class="table-scroll">
+          <table class="fit-table ${editable ? "lines-table" : ""}">
+            <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
+            <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
+            <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
+          </table>
+          </div>
+          ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add Line</button>` : ""}
+          ${zeroLines && !invoice.print_zero_lines ? `<p class="muted small">${zeroLines} line(s) at $0 won't print on the PDF. Tick "Print $0 Lines" above to include them.</p>` : ""}
+        </section>
+
+        ${mergeable.length ? `
+        <section class="dsec"><h4 class="dsec-title">Combine Invoices</h4>
+          <p class="muted small" style="margin-top:0;">Other draft invoices of this order. Their lines and shipments move onto ${escapeHtml(invoice.code)} and the emptied drafts are deleted.
+            Only drafts with no payments, emails or funding can be combined. Anything already sent has to be voided and re-invoiced instead.</p>
+          <div>${mergeable.map(i => `<label class="check-label" style="margin-right:14px;"><input type="checkbox" class="merge-inv" value="${i.id}">
+            ${escapeHtml(i.code)} <span class="muted small">${fmtMoney(i.total)} · ${(i.shipment_ids || []).map(id => (shipments.find(s => s.id === id) || {}).code || "").join(", ")}</span></label>`).join("")}</div>
+          <button class="secondary" style="margin-top:8px;" onclick="mergeInvoices(${invoice.id})">Combine Into ${escapeHtml(invoice.code)}</button>
+          <div id="merge-error" class="error"></div>
+        </section>` : ""}
+
+        ${invoice.status === "sent" || invoice.status === "paid" ? `<section class="dsec"><h4 class="dsec-title">Payments Received</h4>${renderPayments(invoice)}</section>` : ""}
+        ${invoice.status !== "void" ? `<section class="dsec">${fundingSectionHtml(invoice)}</section>` : ""}
+
         ${invoice.emails.length ? `
-          <h4 style="margin-top:20px;">Email history</h4>
+          <section class="dsec"><h4 class="dsec-title">Email History</h4>
           <table class="compact-table">
             <thead><tr><th>Sent</th><th>To</th><th>CC</th><th>Subject</th><th>By</th></tr></thead>
             <tbody>${invoice.emails.slice().reverse().map(e => `
               <tr><td class="nowrap">${new Date(e.sent_at + (e.sent_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(e.to_address)}</td>
                   <td>${escapeHtml(e.cc_address || "")}</td><td>${escapeHtml(e.subject)}</td><td>${escapeHtml(e.sent_by || "")}</td></tr>
             `).join("")}</tbody>
-          </table>
+          </table></section>
         ` : ""}
       `;
-      const { order, shipment } = await invoiceContext(invoice);
+      const { order } = await invoiceContext(invoice);
+      const invShipments = (invoice.shipment_ids || []).map(id => shipments.find(s => s.id === id)).filter(Boolean);
       document.getElementById("invoice-refs").innerHTML = [
         order ? `Order <a class="link" href="customer-orders.html?id=${order.id}">${order.code}</a>` : "",
-        order && order.po_number ? `Customer PO ${order.po_number}` : "",
-        order && order.job_number ? `Job ${order.job_number}` : "",
-        shipment ? `Shipment <a class="link" href="shipments.html?id=${shipment.id}">${shipment.code}</a>` : "",
-        shipment && shipment.ship_date ? `Shipped ${fmtDate(shipment.ship_date)}` : "",
-        shipment && shipment.delivered_at ? `<strong>Delivered ${fmtDate(shipment.delivered_at)}</strong>` : (shipment ? "Not delivered yet" : ""),
+        order && order.po_number ? `Customer PO ${escapeHtml(order.po_number)}` : "",
+        order && order.job_number ? `Job ${escapeHtml(order.job_number)}` : "",
+        ...invShipments.map(sh => `Shipment <a class="link" href="shipments.html?id=${sh.id}">${sh.code}</a>`
+          + (sh.delivered_at ? ` <strong>delivered ${fmtDate(sh.delivered_at)}</strong>` : sh.ship_date ? ` shipped ${fmtDate(sh.ship_date)}` : "")),
       ].filter(Boolean).join(" · ");
+    }
+
+    async function splitInvoice(id) {
+      if (!confirm("Undo this combine? The lines and shipments go back onto separate invoices.")) return;
+      try {
+        const made = await apiFetch(`/api/invoices/${id}/split`, { method: "POST" });
+        await loadInvoices();
+        await showDetail(id);
+        document.getElementById("detail-error").innerHTML = `<span class="pos">Split off ${made.map(i => `<a class="link" onclick="showDetail(${i.id})">${escapeHtml(i.code)}</a>`).join(", ")}.</span>`;
+      } catch (e) { document.getElementById("split-error").textContent = e.message; }
+    }
+
+    async function setPrintZero(id, on) {
+      try {
+        await apiFetch(`/api/invoices/${id}/print-options`, { method: "PUT", body: JSON.stringify({ print_zero_lines: on }) });
+        await loadInvoices();
+        showDetail(id);
+      } catch (e) { document.getElementById("detail-error").textContent = e.message; }
+    }
+
+    async function mergeInvoices(id) {
+      const ids = Array.from(document.querySelectorAll(".merge-inv:checked")).map(c => parseInt(c.value));
+      if (!ids.length) { document.getElementById("merge-error").textContent = "Tick at least one invoice to combine."; return; }
+      const codes = ids.map(i => (invoices.find(x => x.id === i) || {}).code).join(", ");
+      if (!confirm(`Combine ${codes} into this invoice? Those drafts will be deleted and their shipments billed here.`)) return;
+      try {
+        await apiFetch(`/api/invoices/${id}/merge`, { method: "POST", body: JSON.stringify({ invoice_ids: ids }) });
+        await loadInvoices();
+        showDetail(id);
+      } catch (e) { document.getElementById("merge-error").textContent = e.message; }
     }
 
     function renderPayments(invoice) {
@@ -233,13 +344,145 @@
           <div class="row" style="max-width:600px; margin-top:8px;">
             <div><label>Amount</label><input type="number" step="0.01" id="pay-amount" value="${invoice.balance.toFixed(2)}"></div>
             <div><label>Paid date</label><input type="date" id="pay-date"></div>
-            <div><label>Method</label><input type="text" id="pay-method" placeholder="wire, check, ..."></div>
+            <div><label>Method</label><input type="text" id="pay-method" placeholder="Wire, Check, ..."></div>
             <div><label>Reference</label><input type="text" id="pay-reference"></div>
           </div>
           <button class="secondary" onclick="recordPayment(${invoice.id})" style="margin-top:8px;">Record Payment</button>
           <div id="payment-error" class="error"></div>
         ` : ""}
       `;
+    }
+
+    // Factoring fields: set by the bulk funding upload, or by hand (managers).
+    function fundingSectionHtml(invoice) {
+      const can = AuthGuard.hasRole("manager");
+      const sum = (invoice.funding_amount || 0) + (invoice.funding_discount || 0);
+      const off = invoice.funding_amount != null && Math.abs(sum - invoice.total) > 0.009;
+      return `
+        <h4 class="dsec-title">Funding</h4>
+        <div class="row" style="max-width:640px;">
+          <div><label>Disbursement date</label><input type="date" id="fund-date" value="${invoice.disbursement_date ? invoice.disbursement_date.substring(0, 10) : ""}" ${can ? "" : "disabled"}></div>
+          <div><label>Funding amount</label><input type="number" step="0.01" id="fund-amount" value="${invoice.funding_amount ?? ""}" ${can ? "" : "disabled"}></div>
+          <div><label>Discount</label><input type="number" step="0.01" id="fund-discount" value="${invoice.funding_discount ?? ""}" ${can ? "" : "disabled"}></div>
+          ${can ? `<div style="flex:0;"><button class="secondary" onclick="saveFunding(${invoice.id})">Save</button></div>` : ""}
+        </div>
+        ${invoice.funding_amount != null ? `<p class="small ${off ? "neg" : "muted"}">Funding + discount = ${fmtMoney(sum)}${off ? ` — doesn't match the invoice total ${fmtMoney(invoice.total)}` : " — matches the invoice total"}${invoice.funding_import_id ? ` · from bulk upload #${invoice.funding_import_id}` : ""}</p>` : ""}
+        <div id="funding-detail-error" class="error"></div>`;
+    }
+
+    async function saveFunding(id) {
+      const v = k => document.getElementById(k).value;
+      try {
+        await apiFetch(`/api/invoices/${id}/funding`, { method: "PUT", body: JSON.stringify({
+          disbursement_date: v("fund-date") ? `${v("fund-date")}T12:00:00` : null,
+          funding_amount: v("fund-amount") === "" ? null : parseFloat(v("fund-amount")),
+          funding_discount: v("fund-discount") === "" ? null : parseFloat(v("fund-discount")),
+        }) });
+        loadInvoices();
+        showDetail(id);
+      } catch (err) { document.getElementById("funding-detail-error").textContent = err.message; }
+    }
+
+    // ---- bulk funding upload ----
+    function toggleFunding() {
+      const card = document.getElementById("funding-card");
+      card.style.display = card.style.display === "none" ? "block" : "none";
+      if (card.style.display === "block") loadFundingHistory();
+    }
+
+    function fundingForm() {
+      const file = document.getElementById("funding-file").files[0];
+      if (!file) throw new Error("Choose the funding report file first.");
+      const form = new FormData();
+      form.append("file", file);
+      form.append("record_payments", document.getElementById("funding-payments").checked ? "true" : "false");
+      return form;
+    }
+
+    const FUNDING_ACTIONS = {
+      update: ["confirmed", "Will update"], matches: ["draft", "Already applied"],
+      discrepancy: ["overdue", "Different values on invoice"], invalid: ["cancelled", "Skipped"],
+    };
+
+    function fundingRowsHtml(result) {
+      const c = result.counts;
+      return `
+        <p><strong>${result.total_rows}</strong> row(s): <span class="pos">${c.update} to update</span> · ${c.matches} already applied ·
+          <span class="neg">${c.discrepancy} with different values</span> · ${c.invalid} invalid</p>
+        ${result.warnings && result.warnings.length ? `<div class="notice"><ul>${result.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>` : ""}
+        <div class="table-scroll"><table class="compact-table no-table-tools">
+          <thead><tr><th>Row</th><th>Invoice</th><th>Status</th><th>Disbursed</th><th class="num">Funding</th><th class="num">Discount</th>
+            <th class="num">Sum</th><th class="num">Invoice total</th><th class="num">Balance</th><th>Result</th><th>Notes</th></tr></thead>
+          <tbody>${result.rows.map(r => {
+            const [cls, label] = FUNDING_ACTIONS[r.action];
+            const notes = r.errors.length ? r.errors.join("; ")
+              : r.action === "discrepancy" ? `On invoice: ${fmtDate(r.existing.disbursement_date)} · ${fmtMoney(r.existing.funding_amount)} · ${fmtMoney(r.existing.funding_discount)}`
+              : (!r.matches_invoice_total ? "Sum doesn't equal invoice total" : "");
+            return `<tr>
+              <td>${r.row_number}</td>
+              <td>${r.invoice_id ? `<a class="link" onclick="showDetail(${r.invoice_id})">${escapeHtml(r.matched_code)}</a>${r.matched_code.toLowerCase() !== r.invoice_code.toLowerCase() ? ` <span class="muted small">(${escapeHtml(r.invoice_code)})</span>` : ""}` : escapeHtml(r.invoice_code)}</td>
+              <td>${r.invoice_status ? `<span class="tag ${r.invoice_status === "paid" ? "shipped" : r.invoice_status === "sent" ? "confirmed" : "draft"}">${r.invoice_status}</span>` : ""}</td>
+              <td>${fmtDate(r.disbursement_date)}</td>
+              <td class="num">${r.funding_amount != null ? fmtMoney(r.funding_amount) : ""}</td>
+              <td class="num">${r.funding_discount != null ? fmtMoney(r.funding_discount) : ""}</td>
+              <td class="num ${r.invoice_id && !r.matches_invoice_total ? "neg" : ""}">${fmtMoney(r.sum_check)}</td>
+              <td class="num">${r.invoice_total != null ? fmtMoney(r.invoice_total) : ""}</td>
+              <td class="num">${r.invoice_balance != null ? fmtMoney(r.invoice_balance) : ""}</td>
+              <td><span class="tag ${cls}">${label}</span></td>
+              <td class="small">${escapeHtml(notes)}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table></div>`;
+    }
+
+    async function previewFunding() {
+      const err = document.getElementById("funding-error");
+      err.textContent = "";
+      document.getElementById("funding-apply").disabled = true;
+      try {
+        const result = await apiUpload("/api/invoice-funding/preview", fundingForm());
+        document.getElementById("funding-preview").innerHTML = fundingRowsHtml(result);
+        document.getElementById("funding-apply").disabled = !result.counts.update;
+      } catch (e) { err.textContent = e.message; }
+    }
+
+    async function applyFunding() {
+      const err = document.getElementById("funding-error");
+      err.textContent = "";
+      const payments = document.getElementById("funding-payments").checked;
+      if (!confirm(`Apply this upload?${payments ? " Funding and discount will be recorded as payments." : " Only the funding fields will be set."} You can roll it back afterwards.`)) return;
+      try {
+        const result = await apiUpload("/api/invoice-funding/apply", fundingForm());
+        document.getElementById("funding-preview").innerHTML =
+          `<div class="notice info">Upload #${result.import_id}: updated ${result.updated_count} invoice(s).</div>` + fundingRowsHtml(result);
+        document.getElementById("funding-apply").disabled = true;
+        await loadInvoices();
+        loadFundingHistory();
+      } catch (e) { err.textContent = e.message; }
+    }
+
+    async function loadFundingHistory() {
+      const el = document.getElementById("funding-history");
+      try {
+        const rows = await apiFetch("/api/invoice-funding/imports");
+        el.innerHTML = rows.length ? `<table class="compact-table no-table-tools">
+          <thead><tr><th>#</th><th>When</th><th>File</th><th>By</th><th class="num">Updated</th><th class="num">Skipped</th><th>Payments</th><th></th></tr></thead>
+          <tbody>${rows.map(b => `<tr>
+            <td>${b.id}</td><td>${new Date(b.created_at + (String(b.created_at).endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(b.file_name || "")}</td>
+            <td>${escapeHtml(b.created_by || "")}</td><td class="num">${b.updated_count}</td><td class="num">${b.skipped_count}</td>
+            <td>${b.record_payments ? "recorded" : "fields only"}</td>
+            <td>${b.rolled_back ? `<span class="tag cancelled">Rolled Back</span>` : AuthGuard.hasRole("manager") ? `<a class="link" onclick="rollbackFunding(${b.id})">Roll back</a>` : ""}</td>
+          </tr>`).join("")}</tbody></table>` : "No uploads yet.";
+      } catch (e) { el.textContent = e.message; }
+    }
+
+    async function rollbackFunding(id) {
+      if (!confirm(`Roll back upload #${id}? Its payments are removed and the funding fields it set are cleared.`)) return;
+      try {
+        await apiFetch(`/api/invoice-funding/imports/${id}/rollback`, { method: "POST" });
+        await loadInvoices();
+        loadFundingHistory();
+      } catch (e) { document.getElementById("funding-error").textContent = e.message; }
     }
 
     async function recordPayment(invoiceId) {
@@ -285,6 +528,9 @@
     }
 
     async function saveInvoice(id) {
+      const inv = invoices.find(x => x.id === id);
+      if (inv && ["sent", "paid"].includes(inv.status)
+          && !confirm(`${inv.code} has already been ${inv.status}. Save the changes? Remember to re-send the corrected invoice.`)) return;
       const errorEl = document.getElementById("detail-error");
       errorEl.textContent = "";
       const lines = Array.from(document.querySelectorAll("#line-rows tr")).map(tr => ({
@@ -293,6 +539,7 @@
         unit_price: parseFloat(tr.querySelector(".line-price").value) || 0,
         item_id: tr.dataset.itemId ? parseInt(tr.dataset.itemId) : null,
         order_line_id: tr.dataset.orderLineId ? parseInt(tr.dataset.orderLineId) : null,
+        shipment_id: tr.dataset.shipmentId ? parseInt(tr.dataset.shipmentId) : null,
       }));
       try {
         await apiFetch(`/api/invoices/${id}`, {
@@ -345,7 +592,7 @@
           ${emailConfig.configured ? `<p class="muted" style="margin:0;">Sends from <strong>${escapeHtml(emailConfig.from_address)}</strong>${company.email ? ` · replies go to ${escapeHtml(company.email)}` : ""}</p>` : ""}
           <div class="row">
             <div><label>To <span class="muted">(separate several with commas)</span></label><input type="text" id="em-to" value="${escapeHtml(customer.email || "")}" placeholder="customer@example.com"></div>
-            <div><label>CC</label><input type="text" id="em-cc" placeholder="optional"></div>
+            <div><label>CC</label><input type="text" id="em-cc" placeholder="Optional"></div>
           </div>
           <label>Subject</label><input type="text" id="em-subject" value="${escapeHtml(`Invoice ${invoice.code} from ${company.name || ""}`.trim())}">
           <label>Message</label><textarea id="em-body" rows="11">${escapeHtml(body)}</textarea>

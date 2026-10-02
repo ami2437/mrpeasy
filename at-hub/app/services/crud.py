@@ -9,6 +9,7 @@ from app.models import (
     CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment,
     Shipment, ShipmentLine, ShipmentBox, PalletWeight, Invoice, InvoiceLine, InvoicePayment,
     LandedCost, LandedCostAllocation, CompanyProfile, ProductGroup, VendorItem, VendorBill,
+    PackSizeHistory, FundingImport, InvoiceShipment, PurchaseOrderCharge, VendorPayment,
 )
 
 
@@ -98,6 +99,14 @@ def backfill_line_identity(db: Session) -> None:
             line_ids = {sl.order_line_id for sl in shipment.lines if sl.item_id == il.item_id}
             if len(line_ids) == 1:
                 il.order_line_id = line_ids.pop()
+    # Invoices from before combined invoicing: link their single shipment.
+    linked = {i for (i,) in db.query(InvoiceShipment.invoice_id).all()}
+    for inv in db.query(Invoice).filter(Invoice.shipment_id.isnot(None)).all():
+        if inv.id not in linked:
+            db.add(InvoiceShipment(invoice_id=inv.id, shipment_id=inv.shipment_id))
+            for line in inv.lines:
+                if line.item_id and line.shipment_id is None:
+                    line.shipment_id = inv.shipment_id
     db.commit()
 
 
@@ -239,6 +248,8 @@ class StockItemService:
         adj_cost = updates.pop("adjustment_unit_cost", None)
         adj_lot_code = (updates.pop("adjustment_lot_code", None) or "").strip()
         adj_note = (updates.pop("adjustment_note", None) or "").strip()
+        if "default_pack_size" in updates:
+            StockItemService.set_pack_size(db, item, updates.pop("default_pack_size"), created_by, "item edit")
 
         for key, value in updates.items():
             setattr(item, key, value)
@@ -323,19 +334,53 @@ class StockItemService:
         return None
 
     @staticmethod
-    def bulk_set_pack_sizes(db: Session, entries) -> dict:
-        """Paste-a-list bulk update of default_pack_size by item code, same idea as the
-        existing portal's Pack Size Processor -- update the catalog for many items at once."""
-        applied, not_found = [], []
-        for entry in entries:
-            item = db.query(StockItem).filter(StockItem.code == entry.code).first()
-            if not item:
-                not_found.append(entry.code)
-                continue
-            item.default_pack_size = entry.pack_size
-            applied.append(entry.code)
+    def delete_pack_size_history(db: Session, entry_id: int) -> None:
+        entry = db.get(PackSizeHistory, entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Pack size history entry not found")
+        db.delete(entry)
         db.commit()
-        return {"applied": applied, "not_found": not_found}
+
+    @staticmethod
+    def set_pack_size(db: Session, item: StockItem, pack_size: Optional[int], by: str = None,
+                      source: str = "item edit", reference: str = None) -> bool:
+        """Change the item's default pack size, keeping the old one in PackSizeHistory.
+        Returns False when it was already that size (nothing recorded)."""
+        if item.default_pack_size == pack_size:
+            return False
+        db.add(PackSizeHistory(item_id=item.id, pack_size=pack_size, previous_pack_size=item.default_pack_size,
+                               source=source, reference=reference, changed_by=by))
+        item.default_pack_size = pack_size
+        return True
+
+    @staticmethod
+    def bulk_set_pack_sizes(db: Session, entries, by: str = None, source: str = "bulk paste", reference: str = None) -> dict:
+        """Paste-a-list bulk update of default_pack_size by item code, same idea as the
+        existing portal's Pack Size Processor -- update the catalog for many items at once.
+        The newest size becomes the default; the previous one stays in the history."""
+        applied, not_found, unchanged = [], [], []
+        for entry in entries:
+            code = (entry.code or "").strip()
+            item = db.query(StockItem).filter(func.lower(StockItem.code) == code.lower()).first()
+            if not item:
+                not_found.append(code)
+                continue
+            if entry.pack_size is None or entry.pack_size <= 0:
+                raise HTTPException(status_code=400, detail=f"{code}: pack size must be a whole number above 0")
+            changed = StockItemService.set_pack_size(db, item, entry.pack_size, by, source, reference)
+            (applied if changed else unchanged).append(item.code)
+        db.commit()
+        return {"applied": applied, "not_found": not_found, "unchanged": unchanged}
+
+    @staticmethod
+    def pack_size_history(db: Session, item_id: Optional[int] = None) -> list:
+        query = db.query(PackSizeHistory, StockItem.code).join(StockItem, StockItem.id == PackSizeHistory.item_id)
+        if item_id:
+            query = query.filter(PackSizeHistory.item_id == item_id)
+        rows = query.order_by(PackSizeHistory.changed_at.desc(), PackSizeHistory.id.desc()).all()
+        return [dict(id=h.id, item_id=h.item_id, item_code=code, pack_size=h.pack_size,
+                     previous_pack_size=h.previous_pack_size, source=h.source, reference=h.reference,
+                     changed_by=h.changed_by, changed_at=h.changed_at) for h, code in rows]
 
 
 # ---- Customers / Vendors ----
@@ -354,6 +399,8 @@ class PartyService:
 
     def create(self, db: Session, data):
         party = self.model(**data.dict())
+        if self.model is Vendor:
+            party.code = generate_code(db, Vendor, "V")
         db.add(party)
         db.commit()
         db.refresh(party)
@@ -869,7 +916,7 @@ class ShipmentService:
         An invoiced shipment must have its invoice voided first."""
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status == "invoiced":
-            live = db.query(Invoice).filter(Invoice.shipment_id == shipment.id, Invoice.status != "void").first()
+            live = InvoiceService.live_invoice_for_shipment(db, shipment.id)
             if live:
                 raise HTTPException(status_code=400, detail=f"Shipment is invoiced on {live.code} -- void that invoice first")
         elif shipment.status not in ("shipped", "delivered"):
@@ -908,7 +955,7 @@ class ShipmentService:
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status in ShipmentService.SHIPPED_STATUSES:
             raise HTTPException(status_code=400, detail="Un-ship this shipment before deleting it")
-        if db.query(Invoice).filter(Invoice.shipment_id == shipment.id).first():
+        if db.query(InvoiceShipment).filter(InvoiceShipment.shipment_id == shipment.id).first():
             raise HTTPException(status_code=400, detail="An invoice references this shipment, so it can't be deleted")
         if shipment.status in ShipmentService.OPEN_STATUSES:
             for line in shipment.lines:
@@ -1077,20 +1124,39 @@ class InvoiceService:
         return invoice
 
     @staticmethod
-    def create_from_shipment(db: Session, shipment_id: int, data, created_by: str) -> Invoice:
-        shipment = ShipmentService.get(db, shipment_id)
-        if shipment.status not in ShipmentService.SHIPPED_STATUSES:
-            raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} is {shipment.status} -- only shipped shipments can be invoiced")
-        if db.query(Invoice).filter(Invoice.shipment_id == shipment.id).first():
-            raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} has already been invoiced")
+    def live_invoice_for_shipment(db: Session, shipment_id: int) -> Optional[Invoice]:
+        """The non-void invoice billing this shipment, if any."""
+        return (db.query(Invoice).join(InvoiceShipment, InvoiceShipment.invoice_id == Invoice.id)
+                .filter(InvoiceShipment.shipment_id == shipment_id, Invoice.status != "void").first())
 
-        order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
+    @staticmethod
+    def create_from_shipment(db: Session, shipment_id: int, data, created_by: str) -> Invoice:
+        return InvoiceService.create_from_shipments(db, [shipment_id], data, created_by)
+
+    @staticmethod
+    def create_from_shipments(db: Session, shipment_ids: List[int], data, created_by: str) -> Invoice:
+        """One invoice for one or more shipped shipments of the SAME order. Lines stay per
+        order line per shipment, so every line still traces back to the shipment it left on."""
+        ids = list(dict.fromkeys(shipment_ids))
+        if not ids:
+            raise HTTPException(status_code=400, detail="Pick at least one shipment")
+        shipments = [ShipmentService.get(db, sid) for sid in ids]
+        if len({s.order_id for s in shipments}) > 1:
+            raise HTTPException(status_code=400, detail="Only shipments of the same order can be combined on one invoice")
+        for shipment in shipments:
+            if shipment.status not in ("shipped", "delivered", "invoiced"):
+                raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} is {shipment.status} -- only shipped shipments can be invoiced")
+            live = InvoiceService.live_invoice_for_shipment(db, shipment.id)
+            if live:
+                raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} is already on invoice {live.code}")
+        shipments.sort(key=lambda s: (s.ship_date or s.created_at or datetime.min, s.id))
+        order = db.query(CustomerOrder).filter(CustomerOrder.id == shipments[0].order_id).first()
 
         invoice = Invoice(
             code=generate_code(db, Invoice, "INV"),
             customer_id=order.customer_id,
             order_id=order.id,
-            shipment_id=shipment.id,
+            shipment_id=shipments[0].id,
             due_date=data.due_date,
             free_text=data.free_text or None,
             status="draft",
@@ -1098,42 +1164,136 @@ class InvoiceService:
         )
         db.add(invoice)
         db.flush()
-
-        # One invoice line per order line: a line booked from several lots collapses into one,
-        # but two order lines for the same item stay separate (they may differ in price).
-        qty_by_line, order_lines = ShipmentService.quantities_by_order_line(shipment)
-        for line_id in sorted(qty_by_line, key=lambda i: (order_lines[i].line_no or 0, i)):
-            ol = order_lines[line_id]
-            item = db.query(StockItem).filter(StockItem.id == ol.item_id).first()
-            db.add(InvoiceLine(
-                invoice_id=invoice.id,
-                item_id=ol.item_id,
-                order_line_id=ol.id,
-                description=item.title if item else f"Item {ol.item_id}",
-                quantity=qty_by_line[line_id],
-                unit_price=ol.unit_price,
-            ))
+        for shipment in shipments:
+            db.add(InvoiceShipment(invoice_id=invoice.id, shipment_id=shipment.id))
+            # One invoice line per order line: a line booked from several lots collapses into one,
+            # but two order lines for the same item stay separate (they may differ in price).
+            qty_by_line, order_lines = ShipmentService.quantities_by_order_line(shipment)
+            for line_id in sorted(qty_by_line, key=lambda i: (order_lines[i].line_no or 0, i)):
+                ol = order_lines[line_id]
+                item = db.query(StockItem).filter(StockItem.id == ol.item_id).first()
+                db.add(InvoiceLine(
+                    invoice_id=invoice.id, item_id=ol.item_id, order_line_id=ol.id, shipment_id=shipment.id,
+                    description=item.title if item else f"Item {ol.item_id}",
+                    quantity=qty_by_line[line_id], unit_price=ol.unit_price,
+                ))
+            shipment.status = "invoiced"
 
         if data.shipping_charge and data.shipping_charge > 0:
-            db.add(InvoiceLine(
-                invoice_id=invoice.id,
-                item_id=None,
-                description="Shipping",
-                quantity=1,
-                unit_price=data.shipping_charge,
-            ))
-
-        shipment.status = "invoiced"
+            db.add(InvoiceLine(invoice_id=invoice.id, item_id=None, description="Shipping", quantity=1,
+                               unit_price=data.shipping_charge))
         db.commit()
         db.refresh(invoice)
         return invoice
 
     @staticmethod
+    def split(db: Session, invoice_id: int) -> List[Invoice]:
+        """Undo a combine. Invoices that were folded in come back under their old number
+        (or a new one if it has been reused since); an invoice created from several
+        shipments at once is split into one invoice per shipment. The shipping line and
+        any payments stay on this invoice. Returns the invoices that were split off."""
+        import json
+        invoice = InvoiceService.get(db, invoice_id)
+        if invoice.status == "void":
+            raise HTTPException(status_code=400, detail="This invoice is void")
+        if len(invoice.shipments) < 2:
+            raise HTTPException(status_code=400, detail=f"{invoice.code} isn't a combined invoice")
+        if invoice.payments or invoice.funding_amount is not None:
+            raise HTTPException(status_code=400, detail=f"{invoice.code} has payments or funding recorded -- remove those before splitting it")
+        info = json.loads(invoice.combined_info) if invoice.combined_info else {}
+        groups = [dict(g) for g in info.get("merged", [])]
+        if not groups:  # made combined in one go: every shipment after the first gets its own invoice
+            groups = [{"code": None, "shipment_ids": [sh.id], "line_ids": None, "due_date": None, "free_text": None}
+                      for sh in invoice.shipments[1:]]
+        created = []
+        for g in groups:
+            code = g["code"] if g["code"] and not db.query(Invoice).filter(Invoice.code == g["code"]).first() else generate_code(db, Invoice, "INV")
+            new = Invoice(code=code, customer_id=invoice.customer_id, order_id=invoice.order_id,
+                          shipment_id=g["shipment_ids"][0] if g["shipment_ids"] else None,
+                          due_date=datetime.fromisoformat(g["due_date"]) if g["due_date"] else invoice.due_date,
+                          free_text=g["free_text"] if g["code"] else invoice.free_text,
+                          status="draft" if invoice.status == "draft" else "sent",
+                          print_zero_lines=invoice.print_zero_lines, created_by=invoice.created_by)
+            db.add(new)
+            db.flush()
+            for line in list(invoice.lines):
+                belongs = (line.id in g["line_ids"]) if g["line_ids"] is not None else (line.shipment_id in g["shipment_ids"])
+                if belongs and not (line.item_id is None and line.description == "Shipping"):
+                    invoice.lines.remove(line)
+                    new.lines.append(line)
+            for sh in [x for x in invoice.shipments if x.id in g["shipment_ids"]]:
+                invoice.shipments.remove(sh)
+                new.shipments.append(sh)
+            created.append(new)
+        db.flush()
+        db.refresh(invoice)
+        remaining = [sh.id for sh in invoice.shipments]
+        invoice.shipment_id = remaining[0] if remaining else invoice.shipment_id
+        invoice.combined_info = None
+        db.commit()
+        for new in created:
+            db.refresh(new)
+        return created
+
+    @staticmethod
+    def merge(db: Session, target_id: int, other_ids: List[int]) -> Invoice:
+        """Fold other DRAFT invoices of the same order into this draft: their lines and
+        shipments move here and the emptied drafts are deleted. Anything that has gone out
+        (sent/paid), has payments, emails or funding can't be merged -- void it instead."""
+        target = InvoiceService.get(db, target_id)
+        others = [InvoiceService.get(db, i) for i in dict.fromkeys(other_ids) if i != target_id]
+        if not others:
+            raise HTTPException(status_code=400, detail="Pick at least one other invoice to combine")
+        for inv in [target] + others:
+            if inv.status != "draft":
+                raise HTTPException(status_code=400, detail=f"{inv.code} is {inv.status} -- only draft invoices can be combined")
+            if inv.payments or inv.emails or inv.funding_amount is not None:
+                raise HTTPException(status_code=400, detail=f"{inv.code} already has payments, emails or funding -- it can't be combined")
+            if inv.order_id != target.order_id or not inv.order_id:
+                raise HTTPException(status_code=400, detail=f"{inv.code} is for a different order -- only invoices of the same order can be combined")
+        import json
+        info = json.loads(target.combined_info) if target.combined_info else {}
+        merged = info.setdefault("merged", [])
+        for inv in others:
+            # Remember the draft as it was, so the combine can be undone.
+            merged.append({
+                "code": inv.code, "shipment_ids": [x.id for x in inv.shipments],
+                "line_ids": [l.id for l in inv.lines],
+                "due_date": inv.due_date.isoformat() if inv.due_date else None, "free_text": inv.free_text,
+            })
+        target.combined_info = json.dumps(info)
+        for inv in others:
+            for line in list(inv.lines):
+                if line.item_id is None and line.description == "Shipping":
+                    existing = next((l for l in target.lines if l.item_id is None and l.description == "Shipping"), None)
+                    if existing:  # one Shipping line, charges added together
+                        existing.unit_price = existing.quantity * existing.unit_price + line.quantity * line.unit_price
+                        existing.quantity = 1
+                        inv.lines.remove(line)
+                        continue
+                # Move through the relationship: deleting the emptied draft cascades to
+                # whatever is still in its lines collection.
+                inv.lines.remove(line)
+                target.lines.append(line)
+            # Move the shipments through the relationship; deleting the draft also deletes
+            # whatever links its (loaded) shipments collection still holds.
+            moved = list(inv.shipments)
+            inv.shipments = []
+            db.flush()
+            for shipment in moved:
+                target.shipments.append(shipment)
+            db.flush()
+            db.delete(inv)
+        db.commit()
+        db.refresh(target)
+        return target
+
+    @staticmethod
     def update(db: Session, invoice_id: int, data) -> Invoice:
         """Edit line items / free text / due date while still in draft."""
         invoice = InvoiceService.get(db, invoice_id)
-        if invoice.status != "draft":
-            raise HTTPException(status_code=400, detail=f"Invoice is already {invoice.status}, cannot edit")
+        if invoice.status == "void":
+            raise HTTPException(status_code=400, detail="This invoice is void -- it can't be edited")
 
         if data.due_date is not None:
             invoice.due_date = data.due_date
@@ -1147,11 +1307,19 @@ class InvoiceService:
                     invoice_id=invoice.id,
                     item_id=line.item_id,
                     order_line_id=line.order_line_id,
+                    shipment_id=line.shipment_id,
                     description=line.description,
                     quantity=line.quantity,
                     unit_price=line.unit_price,
                 ))
 
+        # A sent/paid invoice can be corrected; its paid status follows the new total.
+        db.flush()
+        db.refresh(invoice)
+        if invoice.status == "paid" and invoice.balance > 0.005:
+            invoice.status = "sent"
+        elif invoice.status == "sent" and invoice.payments and invoice.balance <= 0.005:
+            invoice.status = "paid"
         db.commit()
         db.refresh(invoice)
         return invoice
@@ -1163,6 +1331,11 @@ class InvoiceService:
         invoice = InvoiceService.get(db, invoice_id)
         if status == "void" and invoice.payments:
             raise HTTPException(status_code=400, detail="Invoice has payments recorded against it, cannot void")
+        if status == "void":
+            # Its shipments become billable again (they can go on a new or combined invoice).
+            for shipment in invoice.shipments:
+                if shipment.status == "invoiced":
+                    shipment.status = "delivered" if shipment.delivered_at else "shipped"
         invoice.status = status
         db.commit()
         db.refresh(invoice)
@@ -1367,15 +1540,15 @@ class PurchaseOrderService:
     @staticmethod
     def add_line(db: Session, po_id: int, data) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
-        if po.status in ("received", "cancelled"):
-            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Order is cancelled")
         item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, data)
         db.add(PurchaseOrderLine(po_id=po.id, item_id=item_id, quantity=data.quantity, unit_cost=data.unit_cost,
                                  vendor_item_code=code, vendor_description=desc))
         VendorItemService.learn(db, po.vendor_id, item_id, code, desc, data.unit_cost)
         db.flush()
-        if po.status != "draft":
-            po.status = "partially_received" if any(l.received_quantity > 0 for l in po.lines) else "ordered"
+        db.refresh(po)
+        PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
         return po
@@ -1383,8 +1556,8 @@ class PurchaseOrderService:
     @staticmethod
     def update_line(db: Session, po_id: int, line_id: int, data) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
-        if po.status in ("received", "cancelled"):
-            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Order is cancelled")
         line = db.query(PurchaseOrderLine).filter(
             PurchaseOrderLine.id == line_id, PurchaseOrderLine.po_id == po.id
         ).first()
@@ -1411,15 +1584,29 @@ class PurchaseOrderService:
             for lot in db.query(Lot).filter(Lot.po_line_id == line.id).all():
                 lot.base_unit_cost = line.unit_cost
             recompute_lot_costs(db, [line.id])
+        PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
         return po
 
     @staticmethod
+    def refresh_status(po) -> None:
+        """Lines can be added or changed after receipt, so re-derive received/partial/ordered."""
+        if po.status in ("draft", "cancelled"):
+            return
+        goods = [l for l in po.lines if not getattr(l, "is_charge", False)]
+        if goods and all(l.received_quantity >= l.quantity - 1e-9 for l in goods):
+            po.status = "received"
+        elif any(l.received_quantity > 0 for l in goods):
+            po.status = "partially_received"
+        else:
+            po.status = "ordered"
+
+    @staticmethod
     def remove_line(db: Session, po_id: int, line_id: int) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
-        if po.status in ("received", "cancelled"):
-            raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Order is cancelled")
         line = db.query(PurchaseOrderLine).filter(
             PurchaseOrderLine.id == line_id, PurchaseOrderLine.po_id == po.id
         ).first()
@@ -1433,6 +1620,9 @@ class PurchaseOrderService:
         if len(po.lines) <= 1:
             raise HTTPException(status_code=400, detail="Order must have at least one line")
         db.delete(line)
+        db.flush()
+        db.refresh(po)
+        PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
         return po
@@ -1527,8 +1717,7 @@ class PurchaseOrderService:
                     amount=amount, po_ids=[po.id], created_by=created_by,
                 )
 
-        fully_received = all(l.received_quantity >= l.quantity - 1e-9 for l in po.lines)
-        po.status = "received" if fully_received else "partially_received"
+        PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
         return po
@@ -1573,9 +1762,18 @@ class VendorBillService:
             raise HTTPException(status_code=400, detail="Invoice amount must be greater than 0")
         if any(b.bill_number.lower() == number.lower() for b in po.bills):
             raise HTTPException(status_code=400, detail=f"Vendor invoice {number} is already recorded on {po.code}")
-        db.add(VendorBill(po_id=po.id, bill_number=number, bill_date=data.bill_date or datetime.utcnow(),
+        shipping = round(data.shipping_amount or 0, 2)
+        if shipping < 0 or shipping > data.amount + 0.005:
+            raise HTTPException(status_code=400, detail="S&H on the invoice must be between 0 and the invoice amount")
+        bill = VendorBill(po_id=po.id, bill_number=number, bill_date=data.bill_date or datetime.utcnow(),
                           due_date=data.due_date, amount=round(data.amount, 2), note=data.note,
-                          attachment_id=data.attachment_id, created_by=created_by))
+                          attachment_id=data.attachment_id, created_by=created_by)
+        db.add(bill)
+        db.flush()
+        if shipping > 0:
+            # The shipping billed on this invoice becomes a PO charge, so the PO total grows to match what's billed.
+            db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(data.shipping_type), amount=shipping,
+                                       description=f"Billed on invoice {number}", vendor_bill_id=bill.id, created_by=created_by))
         db.commit()
         db.refresh(po)
         return po
@@ -1588,10 +1786,148 @@ class VendorBillService:
             raise HTTPException(status_code=404, detail="Vendor invoice not found")
         if bill.payments:
             raise HTTPException(status_code=400, detail=f"Payments are recorded against {bill.bill_number} -- it can't be deleted")
+        for charge in [c for c in po.charges if c.vendor_bill_id == bill.id]:
+            po.charges.remove(charge)
         db.delete(bill)
         db.commit()
         db.refresh(po)
         return po
+
+
+CHARGE_TYPES = ("shipping", "freight", "handling", "other")
+
+
+def _charge_type(value: Optional[str]) -> str:
+    value = (value or "shipping").strip().lower()
+    if value not in CHARGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Charge type must be one of: {', '.join(CHARGE_TYPES)}")
+    return value
+
+
+class PurchaseOrderChargeService:
+    """Freight / shipping / handling on a PO, optionally tied to the vendor invoice it was billed on."""
+
+    @staticmethod
+    def add(db: Session, po_id: int, data, created_by: str) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail="This purchase order is cancelled")
+        if data.amount <= 0:
+            raise HTTPException(status_code=400, detail="Charge amount must be greater than 0")
+        if data.vendor_bill_id and not any(b.id == data.vendor_bill_id for b in po.bills):
+            raise HTTPException(status_code=400, detail="That vendor invoice isn't on this purchase order")
+        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(data.charge_type), amount=round(data.amount, 2),
+                                   description=(data.description or "").strip() or None, vendor_bill_id=data.vendor_bill_id,
+                                   created_by=created_by))
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
+    def remove(db: Session, po_id: int, charge_id: int) -> PurchaseOrder:
+        po = PurchaseOrderService.get(db, po_id)
+        charge = next((c for c in po.charges if c.id == charge_id), None)
+        if not charge:
+            raise HTTPException(status_code=404, detail="Charge not found")
+        if charge.vendor_bill_id:
+            raise HTTPException(status_code=400, detail=f"This S&H comes from vendor invoice {charge.bill_number} -- "
+                                                        "delete or correct that invoice instead")
+        po.charges.remove(charge)
+        db.commit()
+        db.refresh(po)
+        return po
+
+
+class VendorPaymentService:
+    """Payments to a vendor recorded on their own (often before the PO exists), then applied
+    to one or more POs. Every application is a normal PO payment linked back here."""
+
+    @staticmethod
+    def list(db: Session, vendor_id: Optional[int] = None, open_only: bool = False) -> List[VendorPayment]:
+        q = db.query(VendorPayment)
+        if vendor_id:
+            q = q.filter(VendorPayment.vendor_id == vendor_id)
+        rows = q.order_by(VendorPayment.id.desc()).all()
+        return [r for r in rows if r.unapplied > 0.005] if open_only else rows
+
+    @staticmethod
+    def get(db: Session, payment_id: int) -> VendorPayment:
+        vp = db.query(VendorPayment).filter(VendorPayment.id == payment_id).first()
+        if not vp:
+            raise HTTPException(status_code=404, detail="Vendor payment not found")
+        return vp
+
+    @staticmethod
+    def create(db: Session, data, created_by: str) -> VendorPayment:
+        if not db.query(Vendor).filter(Vendor.id == data.vendor_id).first():
+            raise HTTPException(status_code=400, detail="Vendor not found")
+        if data.amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+        vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=round(data.amount, 2),
+                           paid_date=data.paid_date or datetime.utcnow(), method=data.method, reference=data.reference,
+                           note=data.note, created_by=created_by)
+        db.add(vp)
+        db.commit()
+        db.refresh(vp)
+        return vp
+
+    @staticmethod
+    def apply(db: Session, payment_id: int, data, created_by: str) -> VendorPayment:
+        vp = VendorPaymentService.get(db, payment_id)
+        po = PurchaseOrderService.get(db, data.po_id)
+        if po.vendor_id != vp.vendor_id:
+            raise HTTPException(status_code=400, detail=f"{vp.code} was paid to a different vendor than {po.code}")
+        if po.status == "cancelled":
+            raise HTTPException(status_code=400, detail=f"{po.code} is cancelled")
+        amount = round(data.amount or 0, 2)
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount to apply must be greater than 0")
+        if amount > vp.unapplied + 0.005:
+            raise HTTPException(status_code=400, detail=f"Only {vp.unapplied:,.2f} of {vp.code} is left to apply")
+        po_balance = round(po.order_total - po.amount_paid, 2)
+        if amount > po_balance + 0.005:
+            raise HTTPException(status_code=400, detail=f"{po.code} only has {po_balance:,.2f} left to pay")
+        if data.vendor_bill_id:
+            bill = next((b for b in po.bills if b.id == data.vendor_bill_id), None)
+            if not bill:
+                raise HTTPException(status_code=400, detail="That vendor invoice isn't on this purchase order")
+            if amount > bill.balance + 0.005:
+                raise HTTPException(status_code=400, detail=f"Vendor invoice {bill.bill_number} only has {bill.balance:,.2f} left to pay")
+        db.add(PurchaseOrderPayment(po_id=po.id, amount=amount, paid_date=vp.paid_date, method=vp.method,
+                                    reference=vp.reference or vp.code, note=f"Applied from {vp.code}",
+                                    vendor_bill_id=data.vendor_bill_id, vendor_payment_id=vp.id, created_by=created_by))
+        db.commit()
+        db.refresh(vp)
+        return vp
+
+    @staticmethod
+    def unapply(db: Session, payment_id: int, po_payment_id: int) -> VendorPayment:
+        vp = VendorPaymentService.get(db, payment_id)
+        application = next((a for a in vp.applications if a.id == po_payment_id), None)
+        if not application:
+            raise HTTPException(status_code=404, detail="That application isn't part of this payment")
+        db.delete(application)
+        db.commit()
+        db.refresh(vp)
+        return vp
+
+    @staticmethod
+    def delete(db: Session, payment_id: int) -> None:
+        vp = VendorPaymentService.get(db, payment_id)
+        if vp.applications:
+            raise HTTPException(status_code=400, detail=f"{vp.code} is applied to purchase orders -- unapply it first")
+        db.delete(vp)
+        db.commit()
+
+
+def backfill_vendor_codes(db: Session) -> None:
+    """Give every vendor created before vendor codes existed its V-#### code."""
+    missing = db.query(Vendor).filter(Vendor.code.is_(None)).order_by(Vendor.id).all()
+    for v in missing:
+        v.code = generate_code(db, Vendor, "V")
+        db.flush()
+    if missing:
+        db.commit()
 
 
 # ---- Landed costs ----

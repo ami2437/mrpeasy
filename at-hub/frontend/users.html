@@ -47,8 +47,8 @@
         <tbody>
           <tr><td><span class="tag role-super_admin">Super admin</span></td><td>Everything, plus this screen: create accounts, assign roles, reset passwords, deactivate users.</td></tr>
           <tr><td><span class="tag role-admin">Admin</span></td><td>Everything except user management — including company settings and the logo.</td></tr>
-          <tr><td><span class="tag role-manager">Manager</span></td><td>Day-to-day work plus undo/delete shipments and managing product groups.</td></tr>
-          <tr><td><span class="tag role-employee">Employee</span></td><td>Day-to-day work: orders, shipments, packing, receiving, invoices.</td></tr>
+          <tr><td><span class="tag role-manager">Manager</span></td><td>All day-to-day work including pricing, invoices, purchasing, vendors and landed costs, plus undo/delete shipments and managing product groups.</td></tr>
+          <tr><td><span class="tag role-employee">Employee</span></td><td>Shipping floor only: view customer orders, create, pick and pack shipments, proof of delivery, stock items and lots, MTR lookup. No prices, costs, invoices, purchasing or other money work.</td></tr>
         </tbody>
       </table>
     </div>
@@ -113,10 +113,10 @@
           <td>${escapeHtml(u.email || "")}</td>
           <td><span class="tag role-${u.role}">${ROLE_LABELS[u.role] || u.role}</span></td>
           <td>${u.is_active
-            ? (u.must_change_password ? `<span class="tag draft">must set password</span>` : `<span class="tag shipped">active</span>`)
-            : `<span class="tag cancelled">deactivated</span>`}</td>
-          <td>${fmtDateTime(u.last_login) || `<span class="muted">never</span>`}</td>
-          <td>${fmtDate(u.created_at)}${u.created_by ? ` <span class="muted small">by ${escapeHtml(u.created_by)}</span>` : ""}</td>
+            ? (u.must_change_password ? `<span class="tag draft">Must Set Password</span>` : `<span class="tag shipped">Active</span>`)
+            : `<span class="tag cancelled">Deactivated</span>`}</td>
+          <td>${fmtDateTime(u.last_login) || `<span class="muted">Never</span>`}</td>
+          <td>${fmtDate(u.created_at)}${u.created_by ? ` <span class="muted small">By ${escapeHtml(u.created_by)}</span>` : ""}</td>
           <td><a class="link" onclick="showDetail(${u.id})">Manage</a></td>
         </tr>`).join("");
     }
@@ -157,7 +157,7 @@
       card.style.display = "block";
       card.innerHTML = `
         <h3 style="margin-top:0;">${escapeHtml(u.username)} <span class="tag role-${u.role}">${ROLE_LABELS[u.role]}</span>
-          ${u.is_active ? "" : `<span class="tag cancelled">deactivated</span>`}</h3>
+          ${u.is_active ? "" : `<span class="tag cancelled">Deactivated</span>`}</h3>
         ${message ? `<div class="notice info">${message}</div>` : ""}
         <div class="row">
           <div><label>Full name</label><input type="text" id="e-full-name" value="${escapeHtml(u.full_name || "")}"></div>

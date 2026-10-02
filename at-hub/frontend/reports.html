@@ -10,6 +10,8 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
+    <div class="card" id="action-card"><h3 style="margin-top:0;">Action Items</h3><div id="action-items" class="muted">Loading…</div></div>
+
     <div class="card" id="summary-card">Loading...</div>
 
     <div class="card">
@@ -86,7 +88,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("reports.html");
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
@@ -179,7 +181,7 @@
       // ---- Purchasing by vendor ----
       const byVendor = {};
       purchaseOrders.forEach(o => {
-        const total = o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0);
+        const total = o.order_total;
         byVendor[o.vendor_id] = byVendor[o.vendor_id] || { count: 0, total: 0 };
         byVendor[o.vendor_id].count += 1;
         byVendor[o.vendor_id].total += total;
@@ -223,8 +225,8 @@
       // ---- Payables ----
       const byVendorAP = {};
       purchaseOrders.filter(o => o.status !== "cancelled" && o.status !== "draft").forEach(o => {
-        const value = o.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0) + (o.freight_cost || 0) + (o.tariff_cost || 0);
-        const paid = o.payments.reduce((s, p) => s + p.amount, 0);
+        const value = o.order_total;
+        const paid = o.amount_paid;
         if (value - paid <= 0.005) return;
         byVendorAP[o.vendor_id] = byVendorAP[o.vendor_id] || { count: 0, value: 0, paid: 0 };
         byVendorAP[o.vendor_id].count += 1;
@@ -273,6 +275,7 @@
         : `<tr><td colspan="4" class="muted">Nothing expiring in the next 30 days.</td></tr>`;
     }
     load();
+    renderActionItems("action-items");
   </script>
   </div>
 </body>

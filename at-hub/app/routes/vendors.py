@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import PartyCreate, PartyUpdate, PartyResponse, VendorItemInput, VendorItemResponse
 from app.services.crud import vendor_service, VendorItemService
-from app.dependencies import get_current_active_user
+from app.dependencies import require_role, get_current_active_user
 
-router = APIRouter(prefix="/api/vendors", tags=["vendors"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/vendors", tags=["vendors"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
 
 
 @router.get("/", response_model=list[PartyResponse])

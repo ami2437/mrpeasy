@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import LandedCostInput, LandedCostPreviewRequest, LandedCostResponse, LandedCostAllocationResponse
 from app.services.crud import LandedCostService
-from app.dependencies import get_current_active_user
+from app.dependencies import require_role, get_current_active_user
 from app.models import User
 
-router = APIRouter(prefix="/api/landed-costs", tags=["landed-costs"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/landed-costs", tags=["landed-costs"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
 
 
 @router.get("/", response_model=list[LandedCostResponse])

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.config.settings import settings
 from app.dependencies import ROLE_RANK, get_current_active_user
-from app.models import Attachment, CustomerOrder, PurchaseOrder, Shipment, User
+from app.models import Attachment, CustomerOrder, MtrLink, PurchaseOrder, Shipment, User
 from app.schemas import AttachmentResponse
 from app.services.crud import ShipmentService
 
@@ -31,6 +31,12 @@ CATEGORIES = {
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif",
                       ".xlsx", ".xls", ".csv", ".doc", ".docx", ".txt", ".eml", ".msg"}
 MAX_BYTES = 25 * 1024 * 1024
+# Documents that carry prices; employees never list, open or upload them.
+MONEY_CATEGORIES = {"customer_po", "vendor_invoice", "vendor_quote"}
+
+
+def _hides_money(user: User) -> bool:
+    return ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]
 
 
 def upload_root() -> Path:
@@ -56,10 +62,11 @@ def _get(db: Session, attachment_id: int) -> Attachment:
 
 @router.get("/", response_model=List[AttachmentResponse])
 def list_attachments(entity_type: str = Query(...), entity_id: int = Query(...), db: Session = Depends(get_db),
-                     _: User = Depends(get_current_active_user)):
-    return (db.query(Attachment)
-            .filter(Attachment.entity_type == entity_type, Attachment.entity_id == entity_id)
-            .order_by(Attachment.created_at.desc()).all())
+                     user: User = Depends(get_current_active_user)):
+    q = db.query(Attachment).filter(Attachment.entity_type == entity_type, Attachment.entity_id == entity_id)
+    if _hides_money(user):
+        q = q.filter(Attachment.category.notin_(MONEY_CATEGORIES))
+    return q.order_by(Attachment.created_at.desc()).all()
 
 
 @router.post("/", response_model=List[AttachmentResponse])
@@ -76,6 +83,8 @@ async def upload(entity_type: str = Form(...), entity_id: int = Form(...), categ
         _check_entity(db, entity_type, eid)
     if category not in CATEGORIES[entity_type]:
         raise HTTPException(status_code=400, detail=f"'{category}' isn't a valid document type here")
+    if category in MONEY_CATEGORIES and _hides_money(user):
+        raise HTTPException(status_code=403, detail="This document type needs the manager role")
     if not files:
         raise HTTPException(status_code=400, detail="Choose at least one file")
 
@@ -126,8 +135,10 @@ async def upload(entity_type: str = Form(...), entity_id: int = Form(...), categ
 
 @router.get("/{attachment_id}/file")
 def download(attachment_id: int, download: bool = False, db: Session = Depends(get_db),
-             _: User = Depends(get_current_active_user)):
+             user: User = Depends(get_current_active_user)):
     att = _get(db, attachment_id)
+    if att.category in MONEY_CATEGORIES and _hides_money(user):
+        raise HTTPException(status_code=403, detail="This document needs the manager role")
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() not in path.parents or not path.exists():
         raise HTTPException(status_code=404, detail="The file is missing from the server")
@@ -144,6 +155,7 @@ def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depen
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() in path.parents and path.exists():
         path.unlink()
+    db.query(MtrLink).filter(MtrLink.attachment_id == att.id).delete()
     db.delete(att)
     db.commit()
     return Response(status_code=204)

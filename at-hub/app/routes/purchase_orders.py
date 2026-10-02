@@ -4,16 +4,16 @@ from app.config.database import get_db
 from app.schemas import (
     PurchaseOrderCreate, PurchaseOrderResponse, ReceiveOrderRequest,
     PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
-    PurchaseOrderEmailRequest, VendorBillInput,
+    PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput,
 )
 from app.dependencies import require_role
 from app.services.pdf import purchase_order_pdf
 from app.services import email as email_service
-from app.services.crud import PurchaseOrderService, PurchaseOrderPaymentService, VendorBillService
+from app.services.crud import PurchaseOrderService, PurchaseOrderPaymentService, VendorBillService, PurchaseOrderChargeService
 from app.dependencies import get_current_active_user
 from app.models import User
 
-router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
 
 
 @router.get("/", response_model=list[PurchaseOrderResponse])
@@ -99,3 +99,14 @@ def add_bill(po_id: int, data: VendorBillInput, db: Session = Depends(get_db), c
 @router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_role("manager"))])
 def delete_bill(po_id: int, bill_id: int, db: Session = Depends(get_db)):
     return VendorBillService.delete(db, po_id, bill_id)
+
+
+@router.post("/{po_id}/charges", response_model=PurchaseOrderResponse)
+def add_charge(po_id: int, data: PurchaseOrderChargeInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Freight / shipping / handling on top of the lines (counted in the PO total)."""
+    return PurchaseOrderChargeService.add(db, po_id, data, created_by=current_user.username)
+
+
+@router.delete("/{po_id}/charges/{charge_id}", response_model=PurchaseOrderResponse)
+def remove_charge(po_id: int, charge_id: int, db: Session = Depends(get_db)):
+    return PurchaseOrderChargeService.remove(db, po_id, charge_id)

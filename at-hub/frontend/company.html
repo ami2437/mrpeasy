@@ -124,9 +124,9 @@
     async function loadEmailStatus() {
       const cfg = await apiFetch("/api/invoices/email/config");
       document.getElementById("email-status").innerHTML = cfg.configured
-        ? `<span class="tag shipped">ready</span> Invoices are sent from <strong>${escapeHtml(cfg.from_address)}</strong> via ${escapeHtml(cfg.host)}.
+        ? `<span class="tag shipped">Ready</span> Invoices are sent from <strong>${escapeHtml(cfg.from_address)}</strong> via ${escapeHtml(cfg.host)}.
            Customer replies go to the company email above.`
-        : `<span class="tag draft">not set up</span> To send invoices by email, add these to the AT-HUB <code>.env</code> file and restart the server:
+        : `<span class="tag draft">Not Set Up</span> To send invoices by email, add these to the AT-HUB <code>.env</code> file and restart the server:
            <pre style="background:#f4f6f9; padding:10px; border-radius:6px; margin:8px 0 0;">SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=you@yourdomain.com

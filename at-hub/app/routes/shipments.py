@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
+from app.schemas import PodEmailRequest, ShipmentEmailResponse
 from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest
 from app.services.crud import ShipmentService
 from app.dependencies import get_current_active_user, require_role
@@ -10,9 +11,32 @@ from app.services.pdf import packing_list_pdf
 router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(get_current_active_user)])
 
 
+def with_pods(db: Session, shipments):
+    """Attach each shipment's proof-of-delivery files (for the POD column / email)."""
+    from app.models import Attachment
+    one = not isinstance(shipments, list)
+    items = [shipments] if one else shipments
+    by_id = {}
+    for att in (db.query(Attachment).filter(Attachment.entity_type == "shipment", Attachment.category == "pod",
+                                            Attachment.entity_id.in_([s.id for s in items]))
+                .order_by(Attachment.created_at).all()):
+        by_id.setdefault(att.entity_id, []).append(att)
+    from app.models import Invoice, InvoiceShipment
+    live = {}
+    for link, inv in (db.query(InvoiceShipment, Invoice).join(Invoice, Invoice.id == InvoiceShipment.invoice_id)
+                      .filter(InvoiceShipment.shipment_id.in_([s.id for s in items]), Invoice.status != "void").all()):
+        live[link.shipment_id] = inv
+    for s in items:
+        s.pods = by_id.get(s.id, [])
+        inv = live.get(s.id)
+        s.invoice_id, s.invoice_code, s.invoice_status = (inv.id, inv.code, inv.status) if inv else (None, None, None)
+        s.invoice_combined = bool(inv) and len(inv.shipments) > 1
+    return shipments
+
+
 @router.get("/", response_model=list[ShipmentResponse])
 def list_shipments(db: Session = Depends(get_db)):
-    return ShipmentService.list(db)
+    return with_pods(db, ShipmentService.list(db))
 
 
 @router.get("/unpacked/list", response_model=list[ShipmentResponse])
@@ -21,9 +45,51 @@ def list_unpacked(db: Session = Depends(get_db)):
     return ShipmentService.unpacked(db)
 
 
+@router.get("/packing-lists.pdf")
+def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: bool = False, db: Session = Depends(get_db)):
+    """Several packing lists in one PDF (batch screen): ?ids=3,7,9."""
+    from io import BytesIO
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+    for raw in ids.split(","):
+        if raw.strip().isdigit():
+            shipment = ShipmentService.get(db, int(raw))
+            pdf = packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots)
+            for page in PdfReader(BytesIO(pdf)).pages:
+                writer.add_page(page)
+    out = BytesIO()
+    writer.write(out)
+    return Response(out.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="Packing-Lists.pdf"'})
+
+
 @router.get("/{shipment_id}", response_model=ShipmentResponse)
 def get_shipment(shipment_id: int, db: Session = Depends(get_db)):
-    return ShipmentService.get(db, shipment_id)
+    return with_pods(db, ShipmentService.get(db, shipment_id))
+
+
+@router.get("/{shipment_id}/pod-emails", response_model=list[ShipmentEmailResponse])
+def pod_emails(shipment_id: int, db: Session = Depends(get_db)):
+    from app.models import ShipmentEmail
+    return db.query(ShipmentEmail).filter(ShipmentEmail.shipment_id == shipment_id).order_by(ShipmentEmail.sent_at.desc()).all()
+
+
+@router.post("/{shipment_id}/email-pod", response_model=ShipmentEmailResponse)
+def email_pod(shipment_id: int, data: PodEmailRequest, db: Session = Depends(get_db),
+              current_user: User = Depends(get_current_active_user)):
+    """Email the proof-of-delivery files to the customer (e.g. when they say it never arrived)."""
+    from app.models import Attachment
+    from app.routes.attachments import upload_root
+    from app.services import email as email_service
+    shipment = ShipmentService.get(db, shipment_id)
+    query = db.query(Attachment).filter(Attachment.entity_type == "shipment", Attachment.entity_id == shipment.id)
+    query = query.filter(Attachment.id.in_(data.attachment_ids)) if data.attachment_ids else query.filter(Attachment.category == "pod")
+    files = []
+    for att in query.all():
+        path = (upload_root() / att.stored_name).resolve()
+        if path.exists():
+            files.append((path.read_bytes(), att.filename, att.content_type or "application/octet-stream"))
+    return email_service.send_pods(db, shipment, files, data.to, data.cc, data.subject, data.body, current_user.username)
 
 
 @router.get("/{shipment_id}/packing-list.pdf")
@@ -46,7 +112,10 @@ def set_pallet_weights(shipment_id: int, data: SetPalletWeightsRequest, db: Sess
 
 
 @router.put("/{shipment_id}", response_model=ShipmentResponse)
-def update_shipment(shipment_id: int, data: ShipmentUpdate, db: Session = Depends(get_db)):
+def update_shipment(shipment_id: int, data: ShipmentUpdate, db: Session = Depends(get_db),
+                    current_user: User = Depends(get_current_active_user)):
+    if current_user.role == "employee":
+        data.shipping_cost = ShipmentService.get(db, shipment_id).shipping_cost  # employees don't see or set costs
     return ShipmentService.update(db, shipment_id, data)
 
 

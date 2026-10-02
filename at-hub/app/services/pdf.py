@@ -18,7 +18,7 @@ from reportlab.platypus import (
 from reportlab.lib.utils import ImageReader
 from sqlalchemy.orm import Session
 
-from app.models import CustomerOrder, Customer, Shipment, StockItem, Lot, Invoice, PurchaseOrder, Vendor
+from app.models import CustomerOrder, Customer, Shipment, ShipmentLine, StockItem, Lot, Invoice, PurchaseOrder, Vendor
 from app.services.crud import get_company_profile
 
 NAVY = colors.HexColor("#1b2430")
@@ -111,9 +111,12 @@ def p(text, style="body") -> Paragraph:
 
 
 # ---- page furniture ----
-def _numbered_canvas(footer_text: str, watermark: str = None, watermark_color=None):
+def _numbered_canvas(footer_text: str, watermark: str = None, watermark_color=None,
+                     trace_text: str = None, signature: str = None):
     """Canvas that knows the page count, so every page gets 'Page x of y' plus the footer,
-    and optionally a diagonal PAID / VOID / DRAFT watermark."""
+    and optionally a diagonal PAID / VOID / DRAFT watermark. trace_text (bold, every page)
+    identifies the document if a page gets separated; signature draws a sign-here line in
+    the bottom-right corner of the last page."""
     class NumberedCanvas(rl_canvas.Canvas):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -146,22 +149,39 @@ def _numbered_canvas(footer_text: str, watermark: str = None, watermark_color=No
             self.setStrokeColor(BORDER)
             self.setLineWidth(0.6)
             self.line(0.6 * inch, 0.55 * inch, w - 0.6 * inch, 0.55 * inch)
-            self.setFont(FONT, 7.5)
             self.setFillColor(MUTED)
-            self.drawString(0.6 * inch, 0.38 * inch, footer_text)
+            if trace_text:
+                self.setFont(FONT_BOLD, 8)
+                self.setFillColor(NAVY)
+                self.drawString(0.6 * inch, 0.38 * inch, trace_text)
+                self.setFillColor(MUTED)
+                self.setFont(FONT, 7)
+                self.drawString(0.6 * inch, 0.24 * inch, footer_text)
+            else:
+                self.setFont(FONT, 7.5)
+                self.drawString(0.6 * inch, 0.38 * inch, footer_text)
+            self.setFont(FONT, 7.5)
             self.drawRightString(w - 0.6 * inch, 0.38 * inch, f"Page {self._pageNumber} of {total}")
+            if signature and self._pageNumber == total:
+                x1, x2, y = w - 0.6 * inch - 3.0 * inch, w - 0.6 * inch, 0.95 * inch
+                self.setStrokeColor(NAVY)
+                self.setLineWidth(0.8)
+                self.line(x1, y, x2, y)
+                self.setFont(FONT, 8)
+                self.drawString(x1, y - 11, signature)
             self.restoreState()
 
     return NumberedCanvas
 
 
-def _build(story, footer_text, title, watermark=None, watermark_color=None) -> bytes:
+def _build(story, footer_text, title, watermark=None, watermark_color=None, trace_text=None, signature=None) -> bytes:
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=letter, title=title,
-        leftMargin=0.6 * inch, rightMargin=0.6 * inch, topMargin=0.55 * inch, bottomMargin=0.8 * inch,
+        leftMargin=0.6 * inch, rightMargin=0.6 * inch, topMargin=0.55 * inch,
+        bottomMargin=(1.45 if signature else 0.8) * inch,  # room for the sign-here line
     )
-    doc.build(story, canvasmaker=_numbered_canvas(footer_text, watermark, watermark_color))
+    doc.build(story, canvasmaker=_numbered_canvas(footer_text, watermark, watermark_color, trace_text, signature))
     return buf.getvalue()
 
 
@@ -201,7 +221,9 @@ def invoice_line_description(line, item) -> str:
 
 
 def address_lines(text):
-    return [l.strip() for l in (text or "").splitlines() if l.strip()]
+    """Address text -> lines; "N/A" when nothing is on file."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    return lines or ["N/A"]
 
 
 def _header(company, title: str, doc_number: str, status_label: str = None, status_color=None):
@@ -326,10 +348,12 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
     company = get_company_profile(db)
     customer = db.query(Customer).filter(Customer.id == invoice.customer_id).first()
     order = db.query(CustomerOrder).filter(CustomerOrder.id == invoice.order_id).first() if invoice.order_id else None
-    shipment = db.query(Shipment).filter(Shipment.id == invoice.shipment_id).first() if invoice.shipment_id else None
+    shipments = list(invoice.shipments) or (
+        [db.query(Shipment).filter(Shipment.id == invoice.shipment_id).first()] if invoice.shipment_id else [])
+    shipments = [s for s in shipments if s]
+    combined = len(shipments) > 1
 
-    story = _header(company, "INVOICE", invoice.code, invoice.status,
-                    INVOICE_STATUS_COLORS.get(invoice.status))
+    story = _header(company, "INVOICE", invoice.code)  # customer-facing: no internal status label
 
     ship_addr = (order.ship_to_address if order else None) or (customer.shipping_address if customer else None)
     bill_addr = customer.address if customer else None
@@ -347,29 +371,37 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
         ("Order #", order.code if order else None),
         ("Customer PO #", order.po_number if order else None),
         ("Job #", order.job_number if order else None),
-        ("Shipment #", shipment.code if shipment else None),
-        ("Shipped", date(shipment.ship_date) if shipment else None),
-        ("Delivered", date(shipment.delivered_at) if shipment else None),
-    ])
+    ] + ([("Shipments", ", ".join(s.code for s in shipments))] if combined else [
+        ("Shipment #", shipments[0].code if shipments else None),
+        ("Shipped", date(shipments[0].ship_date) if shipments else None),
+        ("Delivered", date(shipments[0].delivered_at) if shipments else None),
+    ]))
     story += [_two_boxes(bill_to, meta), Spacer(1, 18)]
 
     line_items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in invoice.lines if l.item_id})).all()}
+    # $0 lines (free samples, no-charge items) stay off the customer's copy unless asked for.
+    printed = [l for l in invoice.lines if invoice.print_zero_lines or abs(l.quantity * l.unit_price) >= 0.005]
+    by_id = {s.id: s for s in shipments}
     rows = []
-    for i, l in enumerate(invoice.lines, 1):
+    for i, l in enumerate(printed, 1):
         item = line_items.get(l.item_id)
-        rows.append([str(i), p(item.code if item else "", "td"), p(invoice_line_description(l, item), "td"),
-                     qty(l.quantity), price(l.unit_price), money(l.quantity * l.unit_price)])
+        row = [str(i), p(item.code if item else "", "td"), p(invoice_line_description(l, item), "td")]
+        if combined:
+            sh = by_id.get(l.shipment_id)
+            row.append(p(f"{sh.code}\n{date(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
+        rows.append(row + [qty(l.quantity), price(l.unit_price), money(l.quantity * l.unit_price)])
     code_w = fit_width([i.code for i in line_items.values()], 0.9 * inch)
+    ship_w = 1.0 * inch if combined else 0
     story.append(_data_table(
-        ["#", "Item #", "Description", "Qty", "Unit price", "Amount"], rows,
-        [0.35 * inch, code_w, 7.3 * inch - 0.35 * inch - code_w - 3.1 * inch, 0.9 * inch, 1.05 * inch, 1.15 * inch], right_cols=(3, 4, 5),
+        ["#", "Item #", "Description"] + (["Shipment"] if combined else []) + ["Qty", "Unit price", "Amount"], rows,
+        [0.35 * inch, code_w, 7.3 * inch - 0.35 * inch - code_w - 3.1 * inch - ship_w] + ([ship_w] if combined else [])
+        + [0.9 * inch, 1.05 * inch, 1.15 * inch],
+        right_cols=(4, 5, 6) if combined else (3, 4, 5),
     ))
 
-    total_rows = [[p("Subtotal", "total_k"), p(money(invoice.total), "total_v")]]
-    if invoice.amount_paid > 0:
-        total_rows.append([p("Paid", "total_k"), p(money(-invoice.amount_paid), "total_v")])
-    grand_label = "Balance due" if invoice.amount_paid > 0 else "Total due"
-    total_rows.append([p(grand_label, "grand_k"), p(money(invoice.balance), "grand_v")])
+    # Customer copy: what was billed, never what has been paid or how.
+    total_rows = [[p("Subtotal", "total_k"), p(money(invoice.total), "total_v")],
+                  [p("Total due", "grand_k"), p(money(invoice.total), "grand_v")]]
     totals = Table(total_rows, colWidths=[1.5 * inch, 1.4 * inch])
     totals.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
@@ -381,17 +413,11 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
     totals.hAlign = "RIGHT"
     story += [Spacer(1, 10), KeepTogether(totals)]
 
-    if invoice.payments:
-        pay_rows = [[date(pm.paid_date), pm.method or "", pm.reference or "", money(pm.amount)] for pm in invoice.payments]
-        story += [Spacer(1, 16), p("PAYMENTS RECEIVED", "label"), Spacer(1, 4),
-                  _data_table(["Date", "Method", "Reference", "Amount"], pay_rows,
-                              [1.4 * inch, 1.6 * inch, 3.0 * inch, 1.3 * inch], right_cols=(3,))]
-
     free_text = invoice.free_text if invoice.free_text != "Generated via AT-HUB" else None
     story += _notes_box([("NOTES", free_text), ("PAYMENT INSTRUCTIONS & TERMS", company.invoice_notes)])
     story += [Spacer(1, 18), p("Thank you for your business!", "thanks")]
 
-    watermark = {"paid": ("PAID", GREEN), "void": ("VOID", RED)}.get(invoice.status)
+    watermark = {"void": ("VOID", RED)}.get(invoice.status)
     return _build(story, _footer_text(company), f"Invoice {invoice.code}",
                   watermark[0] if watermark else None, watermark[1] if watermark else None)
 
@@ -409,8 +435,7 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         StockItem.id.in_({l.item_id for l in shipment.lines} | {b.item_id for b in shipment.boxes})).all()}
     lots = {l.id: l for l in db.query(Lot).filter(Lot.id.in_({l.lot_id for l in shipment.lines if l.lot_id})).all()}
 
-    story = _header(company, "PACKING LIST", shipment.code, shipment.status,
-                    {"shipped": GREEN, "delivered": GREEN, "invoiced": GREEN, "cancelled": RED}.get(shipment.status, ACCENT))
+    story = _header(company, "PACKING LIST", shipment.code)  # customer-facing: no internal status label
 
     ship_addr = ((order.ship_to_address if order else None)
                  or (customer.shipping_address if customer else None) or (customer.address if customer else None))
@@ -438,6 +463,27 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         if l.lot_id in lots:
             lots_by_line.setdefault(l.order_line_id, []).append(lots[l.lot_id].lot_code)
 
+    # Earlier shipments of the same order lines, so the customer can match a partial
+    # delivery to what came before: "SH-0004: 200 · delivered Sep 03, 2026".
+    previous = {}
+    earlier = (db.query(ShipmentLine, Shipment).join(Shipment, Shipment.id == ShipmentLine.shipment_id)
+               .filter(ShipmentLine.order_line_id.in_(list(shipped_by_line)), Shipment.id != shipment.id,
+                       Shipment.status.in_(("shipped", "delivered", "invoiced")))
+               .order_by(Shipment.ship_date, Shipment.id).all())
+    for sl, sh in earlier:
+        entry = previous.setdefault(sl.order_line_id, {}).setdefault(sh.id, {"code": sh.code, "qty": 0, "sh": sh})
+        entry["qty"] += sl.quantity
+
+    def previous_text(line_id):
+        out = []
+        for e in previous.get(line_id, {}).values():
+            sh = e["sh"]
+            when = (f"delivered {date(sh.delivered_at)}" if sh.delivered_at
+                    else f"shipped {date(sh.ship_date)}" if sh.ship_date else "")
+            out.append(f"{e['code']}: {qty(e['qty'])}" + (f" · {when}" if when else ""))
+        return "\n".join(out)
+    show_previous = bool(previous)
+
     rows, total_units, box_texts = [], 0, []
     for line_id in sorted(shipped_by_line, key=lambda i: (order_lines[i].line_no or 0, i)):
         ol, shipped = order_lines[line_id], shipped_by_line[line_id]
@@ -453,6 +499,8 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), p(item.title if item else "", "td")]
         if include_lots:
             row.append(p(", ".join(dict.fromkeys(lots_by_line.get(line_id, []))) or "—", "td_muted"))
+        if show_previous:
+            row.append(p(previous_text(line_id) or "—", "td_muted"))
         row += [qty(ol.quantity), qty(shipped), qty(backordered)]
         if include_boxes:
             row.append(p(boxes, "td"))
@@ -463,9 +511,11 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         total_units += shipped
     # Fixed columns, then Boxes sized to its longest line ("12 Box × 1,000" never wraps);
     # Description takes whatever width is left.
-    headers = ["Line", "Item #", "Description"] + (["Lot #"] if include_lots else []) + ["Ordered", "Shipped", "Backorder"]
+    headers = (["Line", "Item #", "Description"] + (["Lot #"] if include_lots else [])
+               + (["Previously shipped"] if show_previous else []) + ["Ordered", "Shipped", "Backorder"])
     code_w = fit_width([i.code for i in items.values()], 0.85 * inch)
-    widths = [0.4 * inch, code_w, 0] + ([0.85 * inch] if include_lots else []) + [0.62 * inch, 0.62 * inch, 0.72 * inch]
+    widths = ([0.4 * inch, code_w, 0] + ([0.85 * inch] if include_lots else [])
+              + ([1.75 * inch] if show_previous else []) + [0.62 * inch, 0.62 * inch, 0.72 * inch])
     num_cols = tuple(range(len(headers) - 3, len(headers)))
     if include_boxes:
         td = S["td"]
@@ -490,19 +540,18 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
     total_weight = sum(pw.weight or 0 for pw in shipment.pallets)
     pallet_count = len([k for k in pallets if k != "Unassigned"])
 
-    cells = [[p("TOTAL UNITS", "label"), p(qty(total_units), "party")]]
-    if include_boxes:
-        cells.append([p("TOTAL BOXES", "label"), p(str(len(shipment.boxes)) if shipment.boxes else "—", "party")])
-    if include_pallets:
+    cells = []
+    if include_pallets and pallet_count:
         cells.append([p("PALLETS", "label"), p(str(pallet_count) if pallet_count else "—", "party")])
         cells.append([p("TOTAL WEIGHT", "label"), p(f"{total_weight:,.1f} lbs" if total_weight else "—", "party")])
-    summary = Table([cells], colWidths=[7.3 * inch / len(cells)] * len(cells))
-    summary.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), LIGHT), ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
-        ("LINEBEFORE", (1, 0), (-1, -1), 0.5, BORDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-    ]))
-    story += [Spacer(1, 14), summary]
+    if cells:
+        summary = Table([cells], colWidths=[7.3 * inch / len(cells)] * len(cells))
+        summary.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), LIGHT), ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
+            ("LINEBEFORE", (1, 0), (-1, -1), 0.5, BORDER),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ]))
+        story += [Spacer(1, 14), summary]
 
     if include_pallets and pallet_count:
         prow = []
@@ -518,15 +567,14 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
 
     story += _notes_box([("NOTES", shipment.notes)])
 
-    sig = Table([["", "", "", ""], [p("Packed by / date", "small"), "", p("Received by / date", "small"), ""]],
-                colWidths=[3.3 * inch, 0.7 * inch, 3.3 * inch, 0.0001 * inch], rowHeights=[28, 14])
-    sig.setStyle(TableStyle([
-        ("LINEBELOW", (0, 0), (0, 0), 0.8, NAVY), ("LINEBELOW", (2, 0), (2, 0), 0.8, NAVY),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    story += [Spacer(1, 30), KeepTogether(sig)]
-
-    return _build(story, _footer_text(company), f"Packing list {shipment.code}")
+    trace = "  ·  ".join(x for x in [
+        f"Packing list {shipment.code}",
+        f"PO # {order.po_number}" if order and order.po_number else None,
+        f"Order {order.code}" if order else None,
+        f"Job {order.job_number}" if order and order.job_number else None,
+    ] if x)
+    return _build(story, _footer_text(company), f"Packing list {shipment.code}", trace_text=trace,
+                  signature="Received by / date")
 
 
 # ---- purchase order ----
@@ -564,14 +612,19 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False)
         amount = l.quantity * l.unit_cost
         total += amount
         if for_vendor:
-            rows.append([str(i), p(l.vendor_item_code or "—", "td"), p(description, "td"),
-                         qty(l.quantity), price(l.unit_cost), money(amount)])
+            rows.append([str(i), p(description, "td"), qty(l.quantity), price(l.unit_cost), money(amount)])
         else:
             rows.append([str(i), p(item.code if item else l.item_id, "td"), p(l.vendor_item_code or "—", "td"),
                          p(description, "td"), qty(l.quantity), price(l.unit_cost), money(amount)])
+    # Freight / shipping / handling charges billed on top of the lines.
+    for c in po.charges:
+        label = c.charge_type.capitalize() + (f" — invoice {c.bill_number}" if c.bill_number else "") + (f" ({c.description})" if c.description and not c.bill_number else "")
+        total += c.amount
+        rows.append([""] + ([] if for_vendor else ["", ""]) + [p(label, "td"), "", "", money(c.amount)])
     if for_vendor:
-        story.append(_data_table(["#", "Item number", "Description", "Qty", "Unit price", "Amount"], rows,
-                                 [0.35 * inch, 1.3 * inch, 2.75 * inch, 0.8 * inch, 1.0 * inch, 1.1 * inch], right_cols=(3, 4, 5)))
+        # No item # column on the vendor's copy -- description only.
+        story.append(_data_table(["#", "Description", "Qty", "Unit price", "Amount"], rows,
+                                 [0.35 * inch, 4.05 * inch, 0.8 * inch, 1.0 * inch, 1.1 * inch], right_cols=(2, 3, 4)))
     else:
         story.append(_data_table(["#", "Our item #", "Vendor item #", "Description", "Qty", "Unit cost", "Amount"], rows,
                                  [0.35 * inch, 1.3 * inch, 1.0 * inch, 1.8 * inch, 0.7 * inch, 1.0 * inch, 1.15 * inch],
