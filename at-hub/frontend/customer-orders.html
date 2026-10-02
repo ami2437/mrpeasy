@@ -302,6 +302,29 @@
       return c ? c.name : id;
     }
 
+    // A shipment can carry lines from more than one order (MRPeasy's S00004 covers C85448 and C85449),
+    // so an order's shipments are those filed under it plus any that carry one of its lines.
+    function shipmentsForOrder(o) {
+      const lineIds = new Set(o.lines.map(l => l.id));
+      return shipments.filter(s => s.order_id === o.id || (s.lines || []).some(l => lineIds.has(l.order_line_id)));
+    }
+
+    // Finished = fully shipped, invoiced and paid (or cancelled). Employees don't see invoices,
+    // so for them an order is finished once it's fully shipped.
+    let showCompleted = false;
+    function orderProgress(o) {
+      const ordered = o.lines.reduce((sum, l) => sum + l.quantity, 0);
+      const shippedQty = o.lines.reduce((sum, l) => sum + Math.min(l.shipped_quantity, l.quantity), 0);
+      const orderTotal = o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0);
+      const liveInvoices = invoices.filter(i => i.order_id === o.id && i.status !== "void");
+      const invoicedAmt = liveInvoices.reduce((sum, i) => sum + i.total, 0);
+      const paidAmt = liveInvoices.reduce((sum, i) => sum + i.amount_paid, 0);
+      const allShipped = ordered > 0 && shippedQty >= ordered - 1e-9;
+      const done = o.status === "cancelled" || (allShipped && (!AuthGuard.hasRole("manager")
+        || (liveInvoices.length && invoicedAmt >= orderTotal - 0.01 && paidAmt >= invoicedAmt - 0.01)));
+      return { ordered, shippedQty, orderTotal, invoicedAmt, paidAmt, done };
+    }
+
     function matchesSearch(o, q) {
       if (!q) return true;
       q = q.toLowerCase();
@@ -323,18 +346,19 @@
         tbody.innerHTML = `<tr><td colspan="13" class="muted">${orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = filtered.map(o => {
-        const orderShipments = shipments.filter(s => s.order_id === o.id && s.status !== "cancelled");
+      // In-progress orders first (newest first); finished ones fold away below unless expanded or searched for.
+      const newest = (a, b) => new Date(b.order_date) - new Date(a.order_date) || b.id - a.id;
+      const prog = new Map(filtered.map(o => [o.id, orderProgress(o)]));
+      const open = filtered.filter(o => !prog.get(o.id).done).sort(newest);
+      const finished = filtered.filter(o => prog.get(o.id).done).sort(newest);
+      const expanded = showCompleted || (q && !open.length);
+      const row = o => {
+        const { ordered, shippedQty, orderTotal, invoicedAmt, paidAmt, done } = prog.get(o.id);
+        const orderShipments = shipmentsForOrder(o).filter(s => s.status !== "cancelled");
         const orderInvoices = invoices.filter(i => i.order_id === o.id);
-        const ordered = o.lines.reduce((sum, l) => sum + l.quantity, 0);
-        const shippedQty = o.lines.reduce((sum, l) => sum + Math.min(l.shipped_quantity, l.quantity), 0);
-        const orderTotal = o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0);
-        const liveInvoices = orderInvoices.filter(i => i.status !== "void");
-        const invoicedAmt = liveInvoices.reduce((sum, i) => sum + i.total, 0);
-        const paidAmt = liveInvoices.reduce((sum, i) => sum + i.amount_paid, 0);
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
-        <tr>
+        <tr class="${done ? "order-done" : ""}">
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td>
@@ -357,7 +381,11 @@
           </td>
         </tr>
       `;
-      }).join("");
+      };
+      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="13" class="muted">No orders in progress${q ? " match your search" : ""}.</td></tr>`)
+        + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
+            <td colspan="13"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — shipped, invoiced and paid${expanded ? "" : " · click to show"}</span></td></tr>`
+          + (expanded ? finished.map(row).join("") : "") : "");
     }
 
     async function confirmOrder(id) {
@@ -471,7 +499,7 @@
       const isManager = AuthGuard.hasRole("manager");  // employees view orders and ship them, nothing else
       const editable = isManager && order.status !== "cancelled";
       const canCancel = isManager && order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0 && l.booked_quantity === 0);
-      const orderShipments = shipments.filter(s => s.order_id === order.id);
+      const orderShipments = shipmentsForOrder(order);
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
       card.innerHTML = `

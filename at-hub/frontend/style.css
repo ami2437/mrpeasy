@@ -641,3 +641,9 @@ button.ai-cand.on i { color: #fff; }
 /* $0 matching nut added under its bolt by the PO import */
 #lines-body tr.nut-companion td { background: var(--surface-2); }
 #lines-body tr.nut-companion td.grow { padding-left: 26px; }
+
+/* ---- Customer orders: finished orders fold away below the ones in progress ---- */
+tr.completed-toggle td { background: var(--surface-3) !important; cursor: pointer; font-weight: 600; user-select: none; border-top: 2px solid var(--border-strong); }
+tr.completed-toggle:hover td { background: var(--row-hover) !important; }
+tr.completed-toggle .caret { display: inline-block; width: 14px; color: var(--muted); }
+tr.order-done td { color: var(--text-2); }
