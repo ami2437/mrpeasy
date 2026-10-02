@@ -10,12 +10,13 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card">
-      <div class="row" style="align-items:center;">
+    <div class="card page-toolbar">
+      <h1 class="page-title">Users & Roles</h1>
+      <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search username, name, or email...">
         <select id="role-filter" style="max-width:180px;"><option value="">All roles</option></select>
-        <label class="inline-check" style="flex:0;white-space:nowrap;"><input type="checkbox" id="show-inactive"> Show deactivated</label>
-        <button onclick="toggleForm(true)" style="flex:0;white-space:nowrap;">+ New User</button>
+        <label class="inline-check"><input type="checkbox" id="show-inactive"> Show deactivated</label>
+        <button onclick="toggleForm(true)">+ New User</button>
       </div>
     </div>
 

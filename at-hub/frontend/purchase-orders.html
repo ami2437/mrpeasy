@@ -10,11 +10,12 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card">
-      <div class="row" style="align-items:center;">
+    <div class="card page-toolbar">
+      <h1 class="page-title">Purchase Orders</h1>
+      <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search PO code, vendor, or item code...">
-        <button class="secondary" style="flex:0 0 auto;" onclick="toggleVendorPayments()" data-icon="dollar">Vendor Payments <span id="vp-badge"></span></button>
-        <button style="flex:0 0 auto;" onclick="toggleForm()">+ New Purchase Order</button>
+        <button class="secondary" onclick="toggleVendorPayments()" data-icon="dollar">Vendor Payments <span id="vp-badge"></span></button>
+        <button onclick="toggleForm()">+ New Purchase Order</button>
       </div>
     </div>
 

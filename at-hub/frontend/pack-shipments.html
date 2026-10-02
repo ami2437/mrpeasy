@@ -266,7 +266,7 @@
     }
 
     function renderCard(s) {
-      return `<div class="ship-card ${openCards.has(s.id) ? "open" : ""} ${selected.has(s.id) ? "selected" : ""}" data-shipment="${s.id}">
+      return `<div class="ship-card ${s.invoice_combined ? "card-combined" : ""} ${openCards.has(s.id) ? "open" : ""} ${selected.has(s.id) ? "selected" : ""}" data-shipment="${s.id}">
         ${headHtml(s)}<div class="ship-body">${openCards.has(s.id) ? bodyHtml(s) : ""}</div></div>`;
     }
 

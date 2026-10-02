@@ -10,10 +10,11 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card">
-      <div class="row" style="align-items:center;">
+    <div class="card page-toolbar">
+      <h1 class="page-title">Invoices</h1>
+      <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search invoice code, customer, PO #, job #, or item code...">
-        <button class="secondary" style="flex:0 0 auto;" onclick="toggleFunding()">Bulk Funding Upload</button>
+        <button class="secondary" onclick="toggleFunding()">Bulk Funding Upload</button>
       </div>
     </div>
 
@@ -103,7 +104,7 @@
         + (inv.combined_from && inv.combined_from.length ? `; invoices ${[inv.code, ...inv.combined_from].join(" + ")}` : "");
     }
     function combinedBadge(inv) {
-      return inv.is_combined ? ` <span class="tag combined" title="${escapeHtml(combinedTitle(inv))}">Combined</span>` : "";
+      return inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "";
     }
 
     function renderInvoices() {
@@ -115,7 +116,7 @@
         return;
       }
       tbody.innerHTML = filtered.map(inv => `
-        <tr>
+        <tr class="${inv.is_combined ? "row-combined" : ""}">
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}</td>
           <td>${customerName(inv.customer_id)}</td>
           <td>${refLink("order", inv.order_id)}</td>

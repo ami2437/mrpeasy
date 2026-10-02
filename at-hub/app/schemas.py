@@ -493,6 +493,8 @@ class ShipmentResponse(BaseModel):
     invoice_code: Optional[str] = None
     invoice_status: Optional[str] = None
     invoice_combined: bool = False
+    invoice_shipment_codes: List[str] = []  # every shipment on that invoice (more than one when combined)
+    invoice_combined_from: List[str] = []
 
     class Config:
         from_attributes = True

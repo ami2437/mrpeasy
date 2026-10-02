@@ -31,6 +31,8 @@ def with_pods(db: Session, shipments):
         inv = live.get(s.id)
         s.invoice_id, s.invoice_code, s.invoice_status = (inv.id, inv.code, inv.status) if inv else (None, None, None)
         s.invoice_combined = bool(inv) and len(inv.shipments) > 1
+        s.invoice_shipment_codes = inv.shipment_codes if inv else []
+        s.invoice_combined_from = inv.combined_from if inv else []
     return shipments
 
 

@@ -523,10 +523,8 @@ async function showDetail(id) {
     ${AuthGuard.hasRole("manager") ? `</section><section class="dsec"><h4 class="dsec-title">Invoicing</h4>
     ${shipment.status === "invoiced" ? `
       <p>Invoiced on ${invoicesForShipment.length ? invoicesForShipment.map(inv =>
-        `<a class="link" href="invoices.html?id=${inv.id}"><strong>${escapeHtml(inv.code)}</strong></a>
-          <span class="tag ${{ draft: "draft", sent: "confirmed", paid: "shipped" }[inv.status] || "draft"}">${inv.status}</span>
-          ${inv.is_combined ? `<span class="tag combined" title="${escapeHtml(`Combined with ${inv.shipment_codes.filter(c => c !== shipment.code).join(", ")}`)}">Combined</span>` : ""}
-          <span class="muted small">${fmtMoney(inv.total)}</span>`).join(", ") : `<a class="link" href="invoices.html">Invoices</a>`}</p>
+        `${invoiceChip(inv, { here: shipment.code })} <span class="muted small">${inv.status} · ${fmtMoney(inv.total)}${inv.is_combined
+          ? ` · combined with ${escapeHtml(inv.shipment_codes.filter(c => c !== shipment.code).join(", "))}` : ""}</span>`).join(", ") : `<a class="link" href="invoices.html">Invoices</a>`}</p>
     ` : !["shipped", "delivered"].includes(shipment.status) ? `
       <p class="muted">Available once the shipment has shipped.</p>
     ` : `
@@ -790,7 +788,5 @@ async function openPackSizeManager(onChange) {
 function shipmentStatusHtml(s) {
   const tag = `<span class="tag ${s.status}">${s.status}</span>`;
   if (s.status !== "invoiced" || !s.invoice_code || !AuthGuard.hasRole("manager")) return tag;
-  const cls = { draft: "draft", sent: "confirmed", paid: "shipped" }[s.invoice_status] || "draft";
-  return `${tag} <a class="tag ${cls}" href="invoices.html?id=${s.invoice_id}" onclick="event.stopPropagation()"
-    title="${escapeHtml(`${s.invoice_code} · ${s.invoice_status}${s.invoice_combined ? " · combined invoice" : ""}`)}">${escapeHtml(s.invoice_status)}${s.invoice_combined ? " · Combined" : ""}</a>`;
+  return invoiceChipFromShipment(s);
 }

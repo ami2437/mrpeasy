@@ -79,7 +79,7 @@
         return;
       }
       tbody.innerHTML = filtered.map(s => `
-        <tr>
+        <tr class="${s.invoice_combined ? "row-combined" : ""}">
           <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
           <td>${orderCode(s.order_id)}</td>
           <td>${fmtDate(s.created_at)}</td>

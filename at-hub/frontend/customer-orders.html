@@ -10,11 +10,12 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card">
-      <div class="row" style="align-items:center;">
+    <div class="card page-toolbar">
+      <h1 class="page-title">Customer Orders</h1>
+      <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
         <button class="manager-only" onclick="toggleForm()">+ New Order</button>
-        <button class="ai-btn manager-only" data-icon="sparkles" style="flex:0 0 auto;" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
+        <button class="ai-btn manager-only" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
     </div>
 
@@ -330,7 +331,7 @@
             ${progressBar("Paid", invoicedAmt ? paidAmt / invoicedAmt * 100 : 0, "paid", `${fmtMoney(paidAmt)} of ${fmtMoney(invoicedAmt)} invoiced has been paid`)}
           </td>
           <td>${orderShipments.map(s => `<div class="nowrap"><a class="link" href="shipments.html?id=${s.id}">${s.code}</a> <span class="tag ${s.status}">${s.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
-          <td>${orderInvoices.map(i => `<div class="nowrap"><a class="link" href="invoices.html?id=${i.id}">${i.code}</a> <span class="tag ${i.status}">${i.status}</span></div>`).join("") || '<span class="muted">—</span>'}</td>
+          <td><div class="chip-stack">${orderInvoices.map(i => invoiceChip(i)).join("") || '<span class="muted">—</span>'}</div></td>
           <td class="nowrap">
             ${o.status === "draft" && AuthGuard.hasRole("manager") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
             ${o.status !== "cancelled" && AuthGuard.hasRole("manager") ? `<button class="secondary small-btn" onclick="openProfit(${o.id})">Profit</button>` : ""}
@@ -419,10 +420,7 @@
       const lineInvoices = invoices.filter(i => (i.shipment_ids || [i.shipment_id]).some(id => shipmentIds.includes(id)) && i.status !== "void");
       if (!lineInvoices.length) return `<span class="muted">—</span>`;
       return lineInvoices.map(i => `
-        <div class="nowrap">
-          <a class="link" href="invoices.html?id=${i.id}">${i.code}</a>
-          <span class="muted small">· ${i.status}</span>
-        </div>
+        <div class="nowrap">${invoiceChip(i)}</div>
       `).join("");
     }
 
@@ -557,9 +555,10 @@
         ${isManager ? `<h4 style="margin-top:20px;">Invoices (${orderInvoices.length})</h4>
         ${orderInvoices.length ? `
           <table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th></tr></thead>
+            <thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Shipments</th></tr></thead>
             <tbody>${orderInvoices.map(i => `
-              <tr><td><a class="link" href="invoices.html?id=${i.id}">${i.code}</a></td><td>${fmtDate(i.invoice_date)}</td><td><span class="tag ${i.status === 'paid' ? 'shipped' : i.status === 'void' ? 'cancelled' : i.status === 'sent' ? 'confirmed' : 'draft'}">${i.status}</span></td></tr>
+              <tr class="${i.is_combined ? "row-combined" : ""}"><td>${invoiceChip(i)}</td><td>${fmtDate(i.invoice_date)}</td><td><span class="tag ${i.status === 'paid' ? 'shipped' : i.status === 'void' ? 'cancelled' : i.status === 'sent' ? 'confirmed' : 'draft'}">${i.status}</span></td>
+                <td class="small">${escapeHtml((i.shipment_codes || []).join(" + "))}</td></tr>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">None yet.</p>`}` : ""}

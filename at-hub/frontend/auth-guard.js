@@ -1134,3 +1134,26 @@ function setFileInput(input, file) {
   if (!input || !file) return;
   try { const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files; } catch {}
 }
+
+// ---- Invoice chip: one compact look for an invoice everywhere it's listed ----
+// "● INV-0005" with the dot coloured by status; a combined invoice turns dark pink with "⧉ 3"
+// (shipments on it). Hover gives the full story. Accepts an invoice object, or a shipment's
+// invoice_* fields via invoiceChipFromShipment().
+function invoiceChip(inv, opts = {}) {
+  if (!inv || !inv.code) return "";
+  const ships = inv.shipment_codes || [];
+  const combined = inv.is_combined || ships.length > 1;
+  const status = inv.status || "draft";
+  const tip = [`${inv.code} · ${status[0].toUpperCase()}${status.slice(1)}`,
+    combined ? `Combined invoice: ${ships.length} shipments (${ships.join(" + ")})` : (ships[0] ? `Shipment ${ships[0]}` : ""),
+    inv.combined_from && inv.combined_from.length ? `Merged in: ${inv.combined_from.join(", ")}` : "",
+    opts.here ? `This shipment: ${opts.here}` : ""].filter(Boolean).join("\n");
+  return `<a class="inv-chip st-${escapeHtml(status)}${combined ? " combined" : ""}" href="invoices.html?id=${inv.id}"
+    onclick="event.stopPropagation()" title="${escapeHtml(tip)}"><i></i>${escapeHtml(inv.code)}${combined ? `<b>⧉ ${ships.length}</b>` : ""}</a>`;
+}
+function invoiceChipFromShipment(s) {
+  if (!s.invoice_code) return "";
+  return invoiceChip({ id: s.invoice_id, code: s.invoice_code, status: s.invoice_status,
+    shipment_codes: s.invoice_shipment_codes && s.invoice_shipment_codes.length ? s.invoice_shipment_codes : [s.code],
+    combined_from: s.invoice_combined_from, is_combined: s.invoice_combined }, { here: s.code });
+}
