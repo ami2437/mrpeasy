@@ -257,6 +257,7 @@ class CustomerOrderCreate(BaseModel):
     customer_id: int
     delivery_date: Optional[datetime] = None
     po_number: Optional[str] = None
+    customer_po_date: Optional[datetime] = None
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
@@ -305,6 +306,7 @@ class CustomerOrderResponse(BaseModel):
     delivery_date: Optional[datetime] = None
     status: str
     po_number: Optional[str] = None
+    customer_po_date: Optional[datetime] = None
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
@@ -319,6 +321,7 @@ class CustomerOrderUpdate(BaseModel):
     customer_id: Optional[int] = None
     delivery_date: Optional[datetime] = None
     po_number: Optional[str] = None
+    customer_po_date: Optional[datetime] = None
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None

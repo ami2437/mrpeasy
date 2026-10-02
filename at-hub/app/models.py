@@ -153,6 +153,7 @@ class CustomerOrder(Base):
     delivery_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | confirmed | shipped | invoiced | cancelled
     po_number = Column(String, nullable=True)  # customer's PO reference -- printed on shipment labels
+    customer_po_date = Column(DateTime, nullable=True)  # when the customer issued their PO (MRPeasy custom_218)
     job_number = Column(String, nullable=True)  # optional job reference -- printed on shipment labels
     ship_to_address = Column(Text, nullable=True)  # this order's delivery address; defaults from the customer
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it

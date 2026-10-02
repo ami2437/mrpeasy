@@ -44,6 +44,7 @@ CUSTOM_LABELS = {
     "custom_572": "Funding Discount",
 }
 DATE_CUSTOM = {"custom_218", "custom_570"}
+IGNORED_CUSTOM = {"custom_748", "custom_775", "custom_766", "custom_218"}  # not wanted (218 has its own column)
 
 
 # ---------- small helpers ----------
@@ -82,7 +83,7 @@ def address_text(a) -> str:
 def custom_fields(rec: dict) -> str:
     out = {}
     for k, v in rec.items():
-        if not k.startswith("custom_") or v in (None, ""):
+        if not k.startswith("custom_") or v in (None, "") or k in IGNORED_CUSTOM:
             continue
         if k in DATE_CUSTOM and dt(v):
             v = dt(v).strftime("%Y-%m-%d")
@@ -147,9 +148,13 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     vendors = {}
     for v in snap("vendors"):
         cd = v.get("contact_data") or []
-        pick = lambda t: next((d["value"] for d in cd if d["type"] == t), None)
-        vendors[v["vendor_id"]] = Vendor(mrp_id=v["vendor_id"], code=v["code"], name=v["title"], phone=clean(pick("phone")),
-                                         email=clean(pick("email")), address=address_text(pick("address")))
+        every = lambda t: [clean(d["value"]) for d in cd if d["type"] == t and isinstance(d["value"], str) and clean(d["value"])]
+        # AT-HUB has one phone/email field: keep every value; fax and website go under the address
+        address = address_text(next((d["value"] for d in cd if d["type"] == "address"), None))
+        extra = [f"Fax: {x}" for x in every("fax")] + [f"Web: {x}" for x in every("web")]
+        vendors[v["vendor_id"]] = Vendor(mrp_id=v["vendor_id"], code=v["code"], name=v["title"],
+                                         phone=", ".join(every("phone")) or None, email=", ".join(every("email")) or None,
+                                         address="\n".join(x for x in [address, *extra] if x) or None)
     db.add_all(vendors.values())
     db.flush()
 
@@ -261,7 +266,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         co = CustomerOrder(
             mrp_id=o["cust_ord_id"], code=o["code"], customer_id=customers[o["customer_id"]].id,
             order_date=dt(o["created"]), delivery_date=dt(o["delivery_date"]), status=CO_STATUS.get(str(o["status"]), "confirmed"),
-            po_number=po_num, job_number=clean(o.get("custom_814")), ship_to_address=address_text(o["shipping_address"]),
+            po_number=po_num, customer_po_date=dt(o.get("custom_218")), job_number=clean(o.get("custom_814")), ship_to_address=address_text(o["shipping_address"]),
             notes=clean((o["notes"] or "").replace("\r\n", "\n")), custom_fields=custom_fields(o), created_by=BY,
             created_at=dt(o["created"]))
         db.add(co)

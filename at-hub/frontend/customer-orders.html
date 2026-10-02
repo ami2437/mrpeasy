@@ -37,6 +37,7 @@
       <div class="field-grid">
         <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo()"></select></div>
         <div><label>PO #</label><input type="text" id="f-po-number" placeholder="Customer's PO #"></div>
+        <div><label>Customer PO Date</label><input type="date" id="f-po-date"></div>
         <div><label>Job #</label><input type="text" id="f-job-number"></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
       </div>
@@ -207,6 +208,7 @@
       }
       document.getElementById("f-po-number").value = d.po_number || "";
       document.getElementById("f-delivery").value = d.delivery_date || "";
+      document.getElementById("f-po-date").value = d.order_date || "";  // the date printed on the customer's PO
       if (d.ship_to_address) document.getElementById("f-ship-to").value = d.ship_to_address;
       document.getElementById("f-notes").value = d.notes || "";
 
@@ -256,6 +258,7 @@
             delivery_date: document.getElementById("f-delivery").value || null,
             po_number: document.getElementById("f-po-number").value || null,
             job_number: document.getElementById("f-job-number").value || null,
+            customer_po_date: document.getElementById("f-po-date").value || null,
             ship_to_address: document.getElementById("f-ship-to").value || null,
             notes: document.getElementById("f-notes").value,
             lines,
@@ -464,6 +467,7 @@
             ${customers.map(c => `<option value="${c.id}" ${c.id === order.customer_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
           </select></div>
           <div><label>PO #</label><input type="text" id="e-po-number" value="${escapeHtml(order.po_number || '')}" ${editable ? "" : "disabled"}></div>
+          <div><label>Customer PO Date</label><input type="date" id="e-po-date" value="${order.customer_po_date ? order.customer_po_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
           <div><label>Job #</label><input type="text" id="e-job-number" value="${escapeHtml(order.job_number || '')}" ${editable ? "" : "disabled"}></div>
           <div><label>Delivery date</label><input type="date" id="e-delivery" value="${order.delivery_date ? order.delivery_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
         </div>
@@ -595,6 +599,7 @@
             delivery_date: document.getElementById("e-delivery").value || null,
             po_number: document.getElementById("e-po-number").value || null,
             job_number: document.getElementById("e-job-number").value || null,
+            customer_po_date: document.getElementById("e-po-date").value || null,
             ship_to_address: document.getElementById("e-ship-to").value || null,
             notes: document.getElementById("e-notes").value,
           }),

@@ -514,6 +514,7 @@ class CustomerOrderService:
             customer_id=data.customer_id,
             delivery_date=data.delivery_date,
             po_number=data.po_number,
+            customer_po_date=data.customer_po_date,
             job_number=data.job_number,
             ship_to_address=data.ship_to_address or customer.shipping_address or customer.address,
             notes=data.notes,
