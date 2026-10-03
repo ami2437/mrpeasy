@@ -46,3 +46,23 @@ def test_vendor_files_by_so_number(make, api, tmp_path):
 
 def test_bad_folder(api):
     api.post("/api/file-matcher/scan", json={"path": "C:/no/such/folder", "kind": "customer"}, expect=400)
+
+
+def test_browser_folder_upload(make, api):
+    """Browse-folder flow: names are matched first, then only the matched files are uploaded."""
+    a = make.item()
+    n1, n2 = (str(random.randint(5_000_000, 9_999_999)) for _ in range(2))
+    o1 = make.order(lines=[(a, 1, 1)], po_number=n1)
+    make.order(lines=[(a, 1, 1)], po_number=n2)
+    names = [{"file": f"Picked/2025/CHART_PO_{n1}.PDF", "size": 10}, {"file": f"Picked/CHART_PO_{n2}.pdf", "size": 10},
+             {"file": f"Picked/CHART_PO_{n2} rev.pdf", "size": 10}, {"file": "Picked/notes.txt", "size": 3}]
+    rows = {r["file"]: r for r in api.post("/api/file-matcher/scan-names", json={"kind": "customer", "files": names})["files"]}
+    assert len(rows) == 3 and rows[f"Picked/2025/CHART_PO_{n1}.PDF"]["record_id"] == o1["id"]
+    assert rows[f"Picked/CHART_PO_{n2}.pdf"]["status"] == "ambiguous"
+    import json
+    up = [f"Picked/2025/CHART_PO_{n1}.PDF", f"Picked/CHART_PO_{n2}.pdf"]  # second one must be refused
+    res = api.post("/api/file-matcher/attach-upload", data={"kind": "customer", "all_names": json.dumps(names), "rels": json.dumps(up)},
+                   files=[("files", (u.split("/")[-1], PDF, "application/pdf")) for u in up])
+    assert [x["record_id"] for x in res["attached"]] == [o1["id"]] and len(res["skipped"]) == 1
+    att = api.get(f"/api/attachments/?entity_type=customer_order&entity_id={o1['id']}")
+    assert att[0]["filename"] == f"CHART_PO_{n1}.PDF"

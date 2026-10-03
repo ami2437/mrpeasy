@@ -13,14 +13,14 @@
     <div class="card page-toolbar">
       <h1 class="page-title">File Matcher</h1>
       <div class="row toolbar-row">
-        <input type="text" id="fm-path" placeholder="Folder on this PC, e.g. C:\Users\...\ATIND Supplies\Purchase Orders - Hudson" style="flex:4;">
-        <select id="fm-kind" style="flex:0 0 190px;">
-          <option value="customer">Customer orders</option>
+        <select id="fm-kind" style="flex:0 0 260px;">
+          <option value="customer">Customer orders (customer POs)</option>
           <option value="vendor">Purchase orders (vendor docs)</option>
         </select>
-        <button style="flex:0 0 auto;" onclick="scan()" data-icon="search">Scan Folder</button>
+        <button style="flex:0 0 auto;" onclick="document.getElementById('fm-picker').click()" data-icon="search">Browse Folder…</button>
+        <input type="file" id="fm-picker" webkitdirectory multiple style="display:none;" onchange="picked_folder(this.files)">
+        <span id="fm-folder" class="muted small" style="flex:1; align-self:center;">Pick the folder that holds the PDFs (subfolders included). Only file names are checked until you attach or read.</span>
       </div>
-      <div id="fm-recent" class="small muted" style="margin-top:6px;"></div>
     </div>
 
     <div class="card">
@@ -47,27 +47,29 @@
       ambiguous: ["Not certain", "overdue", ""], no_match: ["No match", "cancelled", ""],
       ready: ["AI: ready", "shipped", ""], unsure: ["AI: needs a person", "overdue", ""], created: ["Created", "confirmed", ""], failed: ["Failed", "overdue", ""],
     };
-    let rows = [], folder = "", kind = "customer", view = "match";
-    const RECENT_KEY = "at_hub_fm_recent";
-    const recent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch (e) { return []; } };
-    function showRecent() {
-      const r = recent();
-      document.getElementById("fm-recent").innerHTML = r.length ? "Recent: " + r.map(x => `<a class="link" onclick='usePath(${JSON.stringify(x)})'>${escapeHtml(x.path.split(/[\\/]/).slice(-2).join("\\"))}</a> <span class="muted">(${x.kind})</span>`).join(" · ") : "";
+    let rows = [], folder = "", kind = "customer", view = "match", fileByRel = {}, allNames = [];
+    document.getElementById("fm-kind").onchange = e => {
+      document.getElementById("fm-what").textContent = e.target.value === "customer" ? "customer orders' PO #" : "POs' vendor SO # and our PO #";
+      if (allNames.length) scan();  // same folder, other kind
+    };
+    // The browser lists the picked folder; only names + sizes go to the server for matching.
+    function picked_folder(list) {
+      const pdfs = [...list].filter(f => /\.pdf$/i.test(f.name));
+      fileByRel = Object.fromEntries(pdfs.map(f => [f.webkitRelativePath || f.name, f]));
+      allNames = pdfs.map(f => ({ file: f.webkitRelativePath || f.name, size: f.size }));
+      folder = pdfs.length ? (pdfs[0].webkitRelativePath || "").split("/")[0] : "";
+      document.getElementById("fm-folder").innerHTML = `<strong>${escapeHtml(folder || "(folder)")}</strong> — ${pdfs.length} PDF${pdfs.length === 1 ? "" : "s"} of ${list.length} file${list.length === 1 ? "" : "s"}`;
+      scan();
     }
-    function usePath(x) { document.getElementById("fm-path").value = x.path; document.getElementById("fm-kind").value = x.kind; scan(); }
-    showRecent();
-    document.getElementById("fm-kind").onchange = e => document.getElementById("fm-what").textContent = e.target.value === "customer" ? "customer orders' PO #" : "POs' vendor SO # and our PO #";
 
     async function scan() {
-      const path = document.getElementById("fm-path").value.trim();
       kind = document.getElementById("fm-kind").value;
       const msg = document.getElementById("fm-msg");
-      msg.textContent = "Scanning…";
+      if (!allNames.length) { msg.textContent = "That folder has no PDFs."; return; }
+      msg.textContent = "Matching…";
       try {
-        const r = await apiFetch("/api/file-matcher/scan", { method: "POST", body: JSON.stringify({ path, kind }) });
-        rows = r.files; folder = r.folder; msg.textContent = "";
-        try { localStorage.setItem(RECENT_KEY, JSON.stringify([{ path: folder, kind }, ...recent().filter(x => x.path !== folder || x.kind !== kind)].slice(0, 5))); } catch (e) {}
-        showRecent();
+        rows = (await apiFetch("/api/file-matcher/scan-names", { method: "POST", body: JSON.stringify({ kind, files: allNames }) })).files;
+        msg.textContent = "";
         view = rows.some(x => x.status === "match") ? "match" : "no_match";
         render();
       } catch (e) { msg.innerHTML = `<span class="neg">${escapeHtml(e.message)}</span>`; }
@@ -114,13 +116,21 @@
       if (!files.length) return;
       if (!confirm(`Attach ${files.length} file${files.length === 1 ? "" : "s"} to the matching ${kind === "customer" ? "orders" : "POs"}?`)) return;
       const msg = document.getElementById("fm-msg");
-      msg.textContent = "Attaching…";
+      let attached = 0, skipped = 0;
       try {
-        const r = await apiFetch("/api/file-matcher/attach", { method: "POST", body: JSON.stringify({ path: folder, kind, files, category: document.getElementById("fm-cat")?.value || null }) });
+        for (let k = 0; k < files.length; k += 20) {
+          msg.textContent = `Attaching ${Math.min(k + 20, files.length)} of ${files.length}…`;
+          const part = files.slice(k, k + 20), form = new FormData();
+          form.append("kind", kind); form.append("all_names", JSON.stringify(allNames)); form.append("rels", JSON.stringify(part));
+          form.append("category", document.getElementById("fm-cat")?.value || "");
+          part.forEach(rel => form.append("files", fileByRel[rel], fileByRel[rel].name));
+          const r = await apiUpload("/api/file-matcher/attach-upload", form);
+          attached += r.attached.length; skipped += r.skipped.length;
+        }
         await scan();
-        msg.innerHTML = `<span class="pos">Attached ${r.attached.length}.</span>${r.skipped.length ? ` Skipped ${r.skipped.length} (no longer certain).` : ""}`;
-        toast(`Attached ${r.attached.length} file${r.attached.length === 1 ? "" : "s"}`);
-      } catch (e) { msg.innerHTML = `<span class="neg">${escapeHtml(e.message)}</span>`; }
+        msg.innerHTML = `<span class="pos">Attached ${attached}.</span>${skipped ? ` Skipped ${skipped} (no longer certain).` : ""}`;
+        toast(`Attached ${attached} file${attached === 1 ? "" : "s"}`);
+      } catch (e) { await scan(); msg.innerHTML = `<span class="neg">${escapeHtml(e.message)}</span> (attached ${attached} before the error)`; }
     }
 
     // AI reads go one at a time (the local model handles one request well); the table updates as each finishes.
@@ -133,7 +143,7 @@
       for (const [n, r] of todo.entries()) {
         document.getElementById("fm-msg").textContent = `Reading ${n + 1} of ${todo.length}: ${r.file}… (each can take a minute)`;
         try {
-          const res = await apiFetch("/api/file-matcher/read", { method: "POST", body: JSON.stringify({ path: folder, kind, file: r.file }) });
+          const res = await (() => { const fd = new FormData(); fd.append("kind", kind); fd.append("rel", r.file); fd.append("file", fileByRel[r.file], fileByRel[r.file].name); return apiUpload("/api/file-matcher/read-upload", fd); })();
           const d = res.draft, who = kind === "customer" ? (d.customer?.suggested_name || d.customer_name) : (d.vendor?.suggested_name || d.vendor_name);
           r.status = res.ready ? "ready" : "unsure";
           r.why = `${who || "?"} · ${kind === "customer" ? "PO " + (d.po_number || "?") : "SO " + (d.document_number || "?")} · ${(d.lines || []).length} lines`
@@ -151,7 +161,7 @@
       for (const [n, r] of todo.entries()) {
         document.getElementById("fm-msg").textContent = `Creating ${n + 1} of ${todo.length}…`;
         try {
-          const res = await apiFetch("/api/file-matcher/create", { method: "POST", body: JSON.stringify({ path: folder, kind, file: r.file }) });
+          const res = await (() => { const fd = new FormData(); fd.append("kind", kind); fd.append("rel", r.file); fd.append("file", fileByRel[r.file], fileByRel[r.file].name); return apiUpload("/api/file-matcher/create-upload", fd); })();
           r.status = "created"; r.record = res.record; r.record_id = res.record_id; r.why = "draft created, PDF attached — check and confirm it";
         } catch (e) { r.status = "failed"; r.why = e.message; }
         render();
