@@ -14,6 +14,8 @@
     <div class="card page-toolbar">
       <h1 class="page-title">Vendors</h1>
       <div class="row toolbar-row">
+        <button class="secondary" onclick="ContactCards.exportCsv()">Export CSV</button>
+        <button class="secondary" onclick="openImport('vendors', () => ContactCards.load())">Import CSV</button>
         <button onclick="ContactCards.create()">+ New Vendor</button>
       </div>
     </div>

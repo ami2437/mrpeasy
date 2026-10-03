@@ -62,7 +62,15 @@
 
     <div class="card">
       <div class="tabs" id="list-tabs"></div>
-      <table class="list-fit">
+      <div id="items-view" style="display:none;">
+        <table class="list-fit" id="items-table">
+          <thead><tr><th title="PO, vendor and the vendor's SO #">PO</th><th>Item</th><th>Vendor part # / Description</th>
+            <th class="num sum">Qty</th><th class="num sum">Received</th><th class="num sum">Open</th><th class="num">Unit cost</th><th class="num sum">Line total</th>
+            <th data-type="date">Created</th><th data-type="date">Expected</th><th>PO status</th></tr></thead>
+          <tbody id="items-body"></tbody>
+        </table>
+      </div>
+      <table class="list-fit" id="orders-table">
         <thead><tr><th>Code</th><th>Vendor</th><th title="The vendor's sales order / confirmation #">Vendor SO #</th><th title="When the PO was entered">Created</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
         <tbody id="orders-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
@@ -298,6 +306,29 @@
       return i ? `${i.code} — ${i.title}` : id;
     }
 
+    // Items tab: one row per PO line across all live POs
+    function renderItemLines(q) {
+      const words = (q || "").toLowerCase().split(/\s+/).filter(Boolean);
+      const itemBy = Object.fromEntries(items.map(i => [i.id, i]));
+      const rows = [];
+      orders.filter(o => o.status !== "cancelled").sort((a, b) => b.id - a.id).forEach(o => o.lines.forEach(l => {
+        const it = itemBy[l.item_id] || {};
+        const hay = `${o.code} ${vendorName(o.vendor_id)} ${o.vendor_so_number || ""} ${it.code || ""} ${it.title || ""} ${l.vendor_item_code || ""} ${l.vendor_description || ""}`.toLowerCase();
+        if (words.length && !words.every(w => hay.includes(w))) return;
+        rows.push(`<tr>
+          <td><a class="link" onclick="showDetail(${o.id})">${escapeHtml(o.code)}</a><div class="muted small">${escapeHtml(vendorName(o.vendor_id))}${o.vendor_so_number ? ` · SO ${escapeHtml(o.vendor_so_number)}` : ""}</div></td>
+          <td><a class="link" href="item.html?id=${l.item_id}"><strong>${escapeHtml(it.code || "")}</strong></a> ${groupTag(it)}</td>
+          <td>${escapeHtml(l.vendor_item_code || "")}<div class="muted small">${escapeHtml(l.vendor_description || it.title || "")}</div></td>
+          <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.received_quantity)}</td><td class="num">${fmtQty(Math.max(0, l.quantity - l.received_quantity))}</td>
+          <td class="num">${fmtPrice(l.unit_cost)}</td><td class="num">${fmtMoney(lineAmount(l.quantity, l.unit_cost))}</td>
+          <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
+          <td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td></tr>`);
+      }));
+      const tbody = document.getElementById("items-body");
+      tbody.innerHTML = rows.join("") || `<tr><td colspan="11" class="muted">No lines match.</td></tr>`;
+      limitRows(tbody, "po-items", () => renderItemLines(document.getElementById("search").value.trim()));
+    }
+
     function matchesSearch(o, q) {
       if (!q) return true;
       q = q.toLowerCase();
@@ -316,7 +347,8 @@
     function listTabs(active, cancelled, noun) {
       document.getElementById("list-tabs").innerHTML = `
         <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
-        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>`;
+        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>
+        <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every PO, searchable and filterable">Items</div>`;
     }
     // Open POs first (newest entered first); finished ones -- everything received, or cancelled -- fold away at the
     // bottom. Paid isn't part of it (MRPeasy payment history isn't imported yet): the Balance column still shows it.
@@ -330,6 +362,10 @@
       const searched = orders.filter(o => matchesSearch(o, q));
       const cancelledOnes = searched.filter(o => o.status === "cancelled");
       listTabs(searched.length - cancelledOnes.length, cancelledOnes.length, "Purchase Orders");
+      showTable(document.getElementById("items-table"), listView === "items");
+      showTable(document.getElementById("orders-table"), listView !== "items");
+      document.getElementById("items-view").style.display = listView === "items" ? "" : "none";
+      if (listView === "items") { renderItemLines(q); return; }
       const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
         tbody.innerHTML = `<tr><td colspan="12" class="muted">${listView === "cancelled" ? "No cancelled purchase orders." : orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
@@ -1080,11 +1116,13 @@ Thank you.</textarea>
     }
 
     // ---- line tools on a saved PO: drag order, replace item, act on several ticked lines ----
-    async function savePoLineOrder(poId, ids) {
+    async function savePoLineOrder(poId, ids, undoable = true) {
+      const before = (orders.find(o => o.id === poId) || { lines: [] }).lines.map(l => l.id);
       try {
         await apiFetch(`/api/purchase-orders/${poId}/line-order`, { method: "PUT", body: JSON.stringify({ line_ids: ids }) });
         await loadOrders();
         showDetail(poId);  // the # column follows the new order
+        if (undoable && before.length === ids.length) Undo.push("Moved a line", () => savePoLineOrder(poId, before, false));
       } catch (err) { alert(err.message); showDetail(poId); }
     }
     function replacePoLineItem(poId, lineId, itemId, anchor) {
@@ -1130,11 +1168,18 @@ Thank you.</textarea>
       }
       await loadOrders(); await showDetail(poId);
       if (failed.length) alert(`Some lines weren't removed: ${failed.join("; ")}`);
+      const n = ids.length - failed.length;
+      if (n) {
+        const entries = (await apiFetch("/api/recycle-bin").catch(() => [])).filter(e => !e.restored_at).slice(0, n);
+        Undo.push(`Removed ${n} line${n === 1 ? "" : "s"}`, async () => { for (const e of entries) await apiFetch(`/api/recycle-bin/${e.id}/restore`, { method: "POST" }); await loadOrders(); await showDetail(poId); });
+      }
     }
 
     async function autoSavePoLine(poId, tr) {
       const dot = tr.querySelector(".save-dot");
       const q = tr.querySelector(".e-line-qty");
+      const was = ((orders.find(o => o.id === poId) || { lines: [] }).lines.find(l => l.id === parseInt(tr.dataset.line))) || null;
+      const before = was && { quantity: was.quantity, unit_cost: was.unit_cost, vendor_item_code: was.vendor_item_code, vendor_description: was.vendor_description };
       dot.className = "save-dot saving"; dot.title = "Saving…";
       try {
         const saved = await apiFetch(`/api/purchase-orders/${poId}/lines/${tr.dataset.line}`, { method: "PUT", body: JSON.stringify({
@@ -1149,6 +1194,10 @@ Thank you.</textarea>
         renderOrders();
         const tiles = document.querySelector(".money-tiles");  // totals follow
         if (tiles) tiles.outerHTML = poMoneyTiles(saved);
+        if (before) Undo.push(`Changed ${tr.dataset.code || "a line"}`, async () => {
+          await apiFetch(`/api/purchase-orders/${poId}/lines/${tr.dataset.line}`, { method: "PUT", body: JSON.stringify(before) });
+          await loadOrders(); await showDetail(poId);
+        });
       } catch (err) {
         dot.className = "save-dot failed"; dot.title = err.message;
         alert(err.message);
@@ -1189,6 +1238,7 @@ It goes to the Recycle Bin, where it can be restored.`)) return;
         await apiFetch(`/api/purchase-orders/${poId}/lines/${lineId}`, { method: "DELETE" });
         loadOrders();
         showDetail(poId);
+        undoableDelete(`Removed ${row && row.dataset.code ? row.dataset.code : "a line"}`, async () => { await loadOrders(); await showDetail(poId); });
       } catch (err) {
         errorEl.textContent = err.message;
       }
@@ -1218,11 +1268,12 @@ It goes to the Recycle Bin, where it can be restored.`)) return;
 
     async function deletePo(poId) {
       const o = orders.find(x => x.id === poId);
-      if (!confirm(`Delete ${o ? o.code : "this PO"} for good? Its lines and attached files go too. This can't be undone.`)) return;
+      if (!confirm(`Delete ${o ? o.code : "this PO"}? Its lines and attached files go too.\n\nIt goes to the Recycle Bin, where it can be restored.`)) return;
       try {
         await apiFetch(`/api/purchase-orders/${poId}`, { method: "DELETE" });
         document.getElementById("detail-card").style.display = "none";
         await loadOrders();
+        undoableDelete(`Deleted ${o ? o.code : "the PO"}`, loadOrders);
       } catch (err) {
         alert(err.message);
       }

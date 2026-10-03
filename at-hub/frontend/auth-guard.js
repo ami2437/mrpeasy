@@ -480,6 +480,7 @@ async function renderAttachments(container, entityType, entityId, categories, op
       await apiFetch(`/api/attachments/${a.dataset.del}`, { method: "DELETE" });
       renderAttachments(el, entityType, entityId, categories, opts);
       if (opts.onChange) opts.onChange();
+      undoableDelete("Deleted a file", async () => { renderAttachments(el, entityType, entityId, categories, opts); if (opts.onChange) opts.onChange(); });
     } catch (err) {
       errorEl.textContent = err.message;
     }
@@ -846,6 +847,18 @@ const TableTools = {
     viewsMenu.className = "table-tools-menu";
     viewsMenu.style.display = "none";
     bar.prepend(viewsBtn, viewsMenu);
+    // Export: what you see -- shown columns, rows that pass the filters (incl. ones folded past the first 50)
+    const exportBtn = document.createElement("a");
+    exportBtn.className = "table-tools-btn";
+    exportBtn.textContent = "Export ▾";
+    const exportMenu = document.createElement("div");
+    exportMenu.className = "table-tools-menu";
+    exportMenu.style.display = "none";
+    exportMenu.innerHTML = `<a data-x="csv">CSV (.csv)</a><a data-x="xls">Excel (.xls)</a><a data-x="pdf">PDF / Print</a><a data-x="copy">Copy to clipboard</a>`;
+    bar.prepend(exportBtn, exportMenu);
+    exportBtn.onclick = () => { exportMenu.style.display = exportMenu.style.display === "none" ? "block" : "none"; };
+    exportMenu.onclick = e => { const k = e.target.dataset.x; if (!k) return; exportMenu.style.display = "none"; TableTools.exportTable(table, k); };
+    document.addEventListener("click", e => { if (!bar.contains(e.target)) exportMenu.style.display = "none"; });
     viewsBtn.onclick = () => {
       if (viewsMenu.style.display !== "none") { viewsMenu.style.display = "none"; return; }
       const views = loadViews();
@@ -953,6 +966,11 @@ const TableTools = {
       dataRows().forEach(r => {
         const ok = Object.entries(filters).every(([i, f]) => {
           const t = this.cellText(r.cells[colOf(+i)]);
+          if (f.range) {  // {range: "num"|"date", min, max}
+            const v = f.range === "num" ? TableTools.numOf(t) : TableTools.dateOf(t);
+            if (v == null) return false;
+            return (f.min == null || v >= f.min) && (f.max == null || v <= f.max);
+          }
           return f.values ? f.values.has(t) : t.toLowerCase().includes(f.text);
         });
         if (on) r.style.display = ok ? "" : "none";
@@ -982,12 +1000,21 @@ const TableTools = {
         const counts = new Map();
         dataRows().forEach(r => { const t = this.cellText(r.cells[colOf(i)]); counts.set(t, (counts.get(t) || 0) + 1); });
         const values = [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        const listMode = values.length <= 30;
         const f = filters[i];
+        const filled = values.filter(Boolean);
+        const rangeKind = ths[i].classList.contains("num") ? "num"
+          : ths[i].dataset.type === "date" || (filled.length && filled.every(v => TableTools.dateOf(v) != null)) ? "date" : null;
+        const listMode = !rangeKind && values.length <= 30;
         pop = document.createElement("div");
         pop.className = "th-filter-pop";
         pop.dataset.col = String(i);
-        pop.innerHTML = listMode
+        const iso = ms => ms == null ? "" : new Date(ms).toISOString().substring(0, 10);
+        pop.innerHTML = rangeKind
+          ? `<div class="th-filter-range">
+               <label>${rangeKind === "num" ? "Min" : "From"} <input type="${rangeKind === "num" ? "number" : "date"}" step="any" data-r="min" value="${f && f.range ? (rangeKind === "num" ? f.min ?? "" : iso(f.min)) : ""}"></label>
+               <label>${rangeKind === "num" ? "Max" : "To"} <input type="${rangeKind === "num" ? "number" : "date"}" step="any" data-r="max" value="${f && f.range ? (rangeKind === "num" ? f.max ?? "" : iso(f.max)) : ""}"></label></div>
+             <div class="th-filter-actions"><a data-a="clear">Clear filter</a></div>`
+          : listMode
           ? `<div class="th-filter-list">${values.map(v => `<label><input type="checkbox" value="${escapeHtml(v)}" ${!f || (f.values && f.values.has(v)) ? "checked" : ""}> ${escapeHtml(v || "(blank)")} <span class="muted">${counts.get(v)}</span></label>`).join("")}</div>
              <div class="th-filter-actions"><a data-a="all">All</a> · <a data-a="none">None</a> · <a data-a="clear">Clear filter</a></div>`
           : `<input type="text" placeholder="Contains…" value="${escapeHtml(f && f.text || "")}">
@@ -1003,6 +1030,17 @@ const TableTools = {
         };
         pop.addEventListener("click", e2 => e2.stopPropagation());
         pop.addEventListener("change", () => { if (listMode) readList(); });
+        if (rangeKind) {
+          const readRange = () => {
+            const get = k => { const v = pop.querySelector(`[data-r="${k}"]`).value; if (v === "") return null;
+              return rangeKind === "num" ? parseFloat(v) : new Date(v + "T00:00:00").getTime() + (k === "max" ? 86399999 : 0); };
+            const min = get("min"), max = get("max");
+            if (min == null && max == null) delete filters[i]; else filters[i] = { range: rangeKind, min, max };
+            apply();
+          };
+          pop.querySelectorAll("[data-r]").forEach(x => x.addEventListener("input", readRange));
+          pop.querySelector("[data-r]").focus();
+        }
         const text = pop.querySelector("input[type=text]");
         if (text) {
           text.focus();
@@ -1019,17 +1057,82 @@ const TableTools = {
     document.addEventListener("click", close);
     Array.from(table.tBodies).forEach(tb => new MutationObserver(() => { if (active() && !applying) apply(); }).observe(tb, { childList: true }));
     return {
-      get: () => Object.fromEntries(Object.entries(filters).map(([i, f]) => [ths[i].dataset.label, f.values ? { values: [...f.values] } : { text: f.text }])),
+      get: () => Object.fromEntries(Object.entries(filters).map(([i, f]) => [ths[i].dataset.label, f.range ? f : f.values ? { values: [...f.values] } : { text: f.text }])),
       set: saved => {
         Object.keys(filters).forEach(k => delete filters[k]);
         Object.entries(saved || {}).forEach(([label, f]) => {
           const i = ths.findIndex(th => th.dataset.label === label);
-          if (i >= 0) filters[i] = f.values ? { values: new Set(f.values) } : { text: f.text };
+          if (i >= 0) filters[i] = f.range ? f : f.values ? { values: new Set(f.values) } : { text: f.text };
         });
         apply();
       },
       active,
     };
+  },
+
+  // rows x columns as plain text, the way they're shown
+  tableData(table) {
+    const head = Array.from(table.tHead.rows[0].cells);
+    const cols = head.map((th, i) => [th, i]).filter(([th]) => getComputedStyle(th).display !== "none" && (th.dataset.label || "").trim()
+      && !th.classList.contains("sel-col"));
+    const rows = Array.from(table.tBodies).flatMap(tb => Array.from(tb.rows))
+      .filter(r => !r.querySelector("td[colspan]") && r.dataset.ttHid !== "1" && !r.classList.contains("completed-toggle"));
+    const text = td => td ? (td.querySelector("input:not([type=checkbox]), select")
+      ? (td.querySelector("select") ? td.querySelector("select").selectedOptions[0]?.textContent || "" : td.querySelector("input:not([type=checkbox])").value)
+      : (td.innerText || td.textContent || "")).replace(/\s*\n\s*/g, " · ").trim() : "";
+    return {
+      header: cols.map(([th]) => th.dataset.label.trim()),
+      num: cols.map(([th]) => th.classList.contains("num")),
+      rows: rows.map(r => cols.map(([th]) => text(r.cells[Array.from(th.parentNode.cells).indexOf(th)]))),
+    };
+  },
+  exportName() {
+    const page = (document.querySelector(".page-title") || {}).textContent || document.title.replace("AT-HUB — ", "") || "export";
+    return `${page.trim().replace(/[^\w-]+/g, "-")}-${new Date().toISOString().substring(0, 10)}`;
+  },
+  exportTable(table, kind) {
+    const d = this.tableData(table);
+    const download = (blob, ext) => saveBlob(blob, `${this.exportName()}.${ext}`);
+    const plain = (v, i) => d.num[i] && /^[-$\d,.()]+$/.test(v.replace(/\s/g, "")) ? v.replace(/[$,\s]/g, "").replace(/^\((.*)\)$/, "-$1") : v;
+    if (kind === "csv" || kind === "copy") {
+      const q = v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      const csv = [d.header, ...d.rows.map(r => r.map(plain))].map(r => r.map(q).join(kind === "copy" ? "\t" : ",")).join("\r\n");
+      if (kind === "copy") { navigator.clipboard.writeText(csv.replace(/"/g, "")); toast(`Copied ${d.rows.length} rows`); return; }
+      download(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), "csv");
+      toast(`Exported ${d.rows.length} rows to CSV`);
+    } else if (kind === "xls") {
+      const cell = (v, i) => `<td${d.num[i] ? ' style="mso-number-format:\'#,##0.00###\'"' : ""}>${escapeHtml(plain(v, i))}</td>`;
+      const html = `<html><head><meta charset="utf-8"></head><body><table border="1"><tr>${d.header.map(h => `<th>${escapeHtml(h)}</th>`).join("")}</tr>
+        ${d.rows.map(r => `<tr>${r.map(cell).join("")}</tr>`).join("")}</table></body></html>`;
+      download(new Blob([html], { type: "application/vnd.ms-excel" }), "xls");
+      toast(`Exported ${d.rows.length} rows to Excel`);
+    } else if (kind === "pdf") {
+      const w = window.open("", "_blank");
+      const company = (document.querySelector(".brand span") || {}).textContent || "AT-HUB";
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(this.exportName())}</title><style>
+        @page { size: landscape; margin: 12mm; } body { font: 11px "Segoe UI", Arial, sans-serif; color: #111; }
+        h1 { font-size: 16px; margin: 0 0 2px; } .sub { color: #666; margin-bottom: 10px; }
+        table { border-collapse: collapse; width: 100%; } th { background: #eef1f6; text-align: left; } th, td { border-bottom: 1px solid #ddd; padding: 4px 6px; vertical-align: top; }
+        td.n, th.n { text-align: right; white-space: nowrap; } tr:nth-child(even) td { background: #fafbfc; }</style></head><body>
+        <h1>${escapeHtml((document.querySelector(".page-title") || {}).textContent || "Report")}</h1>
+        <div class="sub">${escapeHtml(company)} · ${new Date().toLocaleString()} · ${d.rows.length} rows</div>
+        <table><thead><tr>${d.header.map((h, i) => `<th class="${d.num[i] ? "n" : ""}">${escapeHtml(h)}</th>`).join("")}</tr></thead>
+        <tbody>${d.rows.map(r => `<tr>${r.map((v, i) => `<td class="${d.num[i] ? "n" : ""}">${escapeHtml(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>
+        <script>window.onload = () => { window.print(); }<\/script></body></html>`);
+      w.document.close();
+    }
+  },
+
+  numOf(text) {
+    const m = (text || "").replace(/[$,\s]/g, "").replace(/^\((.*)\)$/, "-$1").match(/^[-+]?\d*\.?\d+/);
+    return m ? parseFloat(m[0]) : null;
+  },
+  dateOf(text) {
+    const t = (text || "").trim();
+    let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) return new Date(+m[3], +m[1] - 1, +m[2]).getTime();
+    m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : null;
   },
 
   // A cell's value is its data-value if set, else the number at the start of its text.
@@ -1848,4 +1951,120 @@ function printRecord() {
       }, 400);
     }, 50);
   };
+}
+
+// Show / hide a list table together with its Views / Columns bar.
+function showTable(table, show) {
+  if (!table) return;
+  table.style.display = show ? "" : "none";
+  const bar = table.previousElementSibling;
+  if (bar && bar.classList.contains("table-tools")) bar.style.display = show ? "" : "none";
+}
+
+
+// Small notice at the bottom of the screen ("Exported 52 rows", "Undid: ...") with an optional action link.
+function toast(message, action = null, ms = 4500) {
+  let host = document.getElementById("toast-host");
+  if (!host) { host = document.createElement("div"); host.id = "toast-host"; document.body.appendChild(host); }
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.innerHTML = `<span>${escapeHtml(message)}</span>${action ? `<a>${escapeHtml(action.label)}</a>` : ""}`;
+  if (action) t.querySelector("a").onclick = () => { t.remove(); action.run(); };
+  host.appendChild(t);
+  setTimeout(() => t.classList.add("out"), ms);
+  setTimeout(() => t.remove(), ms + 400);
+}
+
+// ---- Import CSV (items / customers / vendors): pick a file, see what will happen, then apply ----
+function openImport(kind, onDone) {
+  const nouns = { items: "stock items", customers: "customers", vendors: "vendors" };
+  document.querySelectorAll(".import-dialog").forEach(d => d.remove());
+  const dlg = document.createElement("div");
+  dlg.className = "qf-backdrop import-dialog";
+  dlg.innerHTML = `<div class="qf-box" style="padding:14px 16px; width:min(860px, calc(100vw - 32px));">
+    <h3 style="margin:0 0 4px;">Import ${nouns[kind]} from CSV</h3>
+    <p class="muted small" style="margin:0 0 10px;">Columns are matched by name (e.g. ${kind === "items" ? "Code, Title, Group, Price, Cost, Reorder point, Pack size" : "Name, Contact, Email, Phone, Address, Shipping address"}).
+      Rows update the ${kind === "items" ? "item with the same code" : "record with the same name"}, otherwise they're created. Nothing is saved until you click Import.</p>
+    <input type="file" accept=".csv,text/csv,.txt">
+    <div class="import-preview" style="margin-top:10px;"></div>
+    <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end;">
+      <button class="secondary" data-cancel>Close</button><button data-apply disabled>Import</button></div></div>`;
+  document.body.appendChild(dlg);
+  const file = dlg.querySelector("input[type=file]"), box = dlg.querySelector(".import-preview"), go = dlg.querySelector("[data-apply]");
+  dlg.querySelector("[data-cancel]").onclick = () => dlg.remove();
+  const send = async step => {
+    const form = new FormData();
+    form.append("file", file.files[0]);
+    const r = await fetch(`/api/import/${kind}/${step}`, { method: "POST", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form });
+    const data = await r.json();
+    if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Import failed");
+    return data;
+  };
+  file.onchange = async () => {
+    go.disabled = true;
+    box.innerHTML = `<p class="muted small">Reading…</p>`;
+    try {
+      const p = await send("preview");
+      const tag = a => ({ create: '<span class="tag confirmed">new</span>', update: '<span class="tag on_hold">update</span>', same: '<span class="tag draft">no change</span>', error: '<span class="tag cancelled">problem</span>' }[a]);
+      box.innerHTML = `<p class="small" style="margin:0 0 6px;"><strong>${p.counts.create}</strong> new · <strong>${p.counts.update}</strong> to update ·
+          ${p.counts.same} unchanged · <span class="${p.counts.error ? "neg" : ""}"><strong>${p.counts.error}</strong> with problems (skipped)</span>
+          <span class="muted"> — columns used: ${Object.entries(p.columns).map(([f, h]) => `${escapeHtml(h)}`).join(", ")}${p.ignored.length ? `; ignored: ${p.ignored.map(escapeHtml).join(", ")}` : ""}</span></p>
+        <div class="table-scroll" style="max-height:46vh;"><table class="compact-table no-table-tools"><thead><tr><th>Row</th><th></th><th>${kind === "items" ? "Code" : "Name"}</th><th>Changes / problems</th></tr></thead>
+        <tbody>${p.rows.map(r => `<tr><td>${r.row}</td><td>${tag(r.action)}</td><td><strong>${escapeHtml(r.key)}</strong></td>
+          <td class="small">${r.errors.length ? `<span class="neg">${escapeHtml(r.errors.join("; "))}</span>` : escapeHtml(Object.entries(r.changes).map(([f, v]) => `${f.replace(/_/g, " ")}: ${v}`).join(" · "))}</td></tr>`).join("")}</tbody></table></div>`;
+      go.disabled = !(p.counts.create + p.counts.update);
+    } catch (e) { box.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+  };
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const r = await send("apply");
+      dlg.remove();
+      toast(`Imported: ${r.created} new, ${r.updated} updated${r.skipped ? `, ${r.skipped} skipped` : ""}`);
+      if (onDone) onDone();
+    } catch (e) { box.insertAdjacentHTML("afterbegin", `<div class="error">${escapeHtml(e.message)}</div>`); go.disabled = false; }
+  };
+}
+
+// ---- Undo (Ctrl+Z): actions register how to reverse themselves; Ctrl+Z (outside a text box) reverses the last one ----
+const Undo = {
+  stack: [],
+  push(label, reverse) {
+    this.stack.push({ label, reverse });
+    if (this.stack.length > 30) this.stack.shift();
+    toast(label, { label: "Undo", run: () => this.run() });
+  },
+  async run() {
+    const last = this.stack.pop();
+    if (!last) { toast("Nothing to undo"); return; }
+    try { await last.reverse(); toast(`Undone: ${last.label}`); }
+    catch (e) { toast(`Couldn't undo: ${e.message}`); }
+  },
+};
+document.addEventListener("keydown", e => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
+  const t = e.target;
+  if (t && (t.matches("input, textarea, select") || t.isContentEditable)) return;  // let the box undo its own typing
+  if (!Undo.stack.length) return;
+  e.preventDefault();
+  Undo.run();
+});
+// After a delete / remove: undo = restore the newest recycle-bin entry (what this action just put there).
+async function undoableDelete(label, after) {
+  let entry = null;
+  try { entry = (await apiFetch("/api/recycle-bin")).find(e => !e.restored_at); } catch (e) { return; }
+  if (!entry) return;
+  Undo.push(label, async () => { await apiFetch(`/api/recycle-bin/${entry.id}/restore`, { method: "POST" }); if (after) await after(); });
+}
+
+
+// Save a file the browser made (exports): the link is attached to the page while clicked -- some browsers cancel otherwise.
+function saveBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
 }

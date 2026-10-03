@@ -245,6 +245,8 @@ app.include_router(ai_docs.router)
 app.include_router(mtrs.router)
 app.include_router(vendor_payments.router)
 app.include_router(reports.router)
+from app.routes import imports  # noqa: E402
+app.include_router(imports.router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():

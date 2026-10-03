@@ -69,6 +69,16 @@ const ContactCards = {
     return [rec.name, rec.code, ...d.tags, d.notes, ...this.SECTIONS.flatMap(s => d[s.key].map(r => `${r.label} ${r.value}`)),
       ...d.people.map(p => `${p.name} ${p.role} ${p.phone} ${p.email}`)].join(" ").toLowerCase();
   },
+  exportCsv() {
+    const head = ["Name", "Code", "Tags", "Main phone", "Main email", "People", "Billing address", "Shipping address", "Notes"];
+    const q = v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const rows = this.rows.map(r => [r.name, r.code || "", r.details.tags.join("; "), r.phone || "", r.email || "",
+      r.details.people.map(p => [p.name, p.role, p.phone, p.email].filter(Boolean).join(" / ")).join("; "),
+      r.address || "", r.shipping_address || "", r.details.notes || ""].map(v => q(String(v))));
+    const csv = [head, ...rows].map(r => r.join(",")).join("\r\n");
+    saveBlob(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }), `${document.title.replace("AT-HUB — ", "")}-${new Date().toISOString().substring(0, 10)}.csv`);
+    toast(`Exported ${rows.length} to CSV`);
+  },
   allTags() { return [...new Set(this.rows.flatMap(r => r.details.tags))].sort((a, b) => a.localeCompare(b)); },
 
   // ---- list ----

@@ -25,6 +25,7 @@
         <button class="secondary" onclick="toggleInsights()" data-icon="chart">Insights</button>
         <button class="secondary" onclick="toggleGroups()">Product Groups</button>
         <button class="secondary" onclick="toggleBulkPackSize()">Bulk Pack Sizes</button>
+        <button class="secondary" onclick="openImport('items', loadItems)">Import CSV</button>
         <button onclick="toggleForm()">+ New Item</button>
       </div>
     </div>
@@ -571,7 +572,12 @@
     document.getElementById("low-stock-only").addEventListener("change", () => loadItems());
     document.getElementById("category-filter").addEventListener("change", renderItems);
     document.getElementById("status-filter").addEventListener("change", renderItems);
-    loadGroups().then(loadItems);
+    loadGroups().then(loadItems).then(() => {
+      if (new URLSearchParams(location.search).get("deleted")) {  // came back from deleting an item on its page
+        history.replaceState(null, "", "stock-items.html");
+        undoableDelete("Deleted an item", loadItems);
+      }
+    });
   </script>
   </div>
 </body>

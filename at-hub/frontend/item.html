@@ -154,13 +154,18 @@
 
     async function setActive(active) {
       if (!active && !confirm(`Archive ${item.code}? It stays on past orders, shipments and invoices, but can't be picked for new ones. You can restore it any time.`)) return;
-      try { await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ is_active: active }) }); await load(); }
+      try {
+        await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ is_active: active }) });
+        await load();
+        Undo.push(active ? `Restored ${item.code}` : `Archived ${item.code}`, async () => {
+          await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ is_active: !active }) }); await load(); });
+      }
       catch (e) { document.getElementById("item-error").textContent = e.message; }
     }
 
     async function deleteItem() {
-      if (!confirm(`Delete ${item.code} for good? It isn't used anywhere. This can't be undone.`)) return;
-      try { await apiFetch(`/api/stock-items/${itemId}`, { method: "DELETE" }); location.href = "stock-items.html"; }
+      if (!confirm(`Delete ${item.code}? It isn't used anywhere.\n\nIt goes to the Recycle Bin, where it can be restored.`)) return;
+      try { await apiFetch(`/api/stock-items/${itemId}`, { method: "DELETE" }); location.href = "stock-items.html?deleted=1"; }
       catch (e) {
         document.getElementById("item-error").textContent = e.message.startsWith("USED|")
           ? `Can't delete: it's on ${e.message.slice(5)}. Archive it instead.` : e.message;
