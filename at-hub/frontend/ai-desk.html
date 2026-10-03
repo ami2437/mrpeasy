@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — AI Desk</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">AI Desk</h1>
+      <span class="muted small">Drop in any documents — customer POs, vendor invoices, vendor SOs, MTRs, signed delivery receipts — and say what to do.</span>
+    </div>
+
+    <div class="card">
+      <div id="drop" class="ai-drop" onclick="document.getElementById('files').click()">
+        <strong>Drop PDFs or photos here</strong> <span class="muted">or click to choose — one or many</span>
+        <input type="file" id="files" multiple accept=".pdf,image/*" style="display:none;" onchange="addFiles(this.files); this.value='';">
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div style="flex:4;"><label>What should I do? <span class="muted small">(optional — e.g. "these are vendor invoices, add them to their POs" or "create sales orders from these")</span></label>
+          <input type="text" id="instruction" placeholder="Leave blank and AT-HUB works out what each document is"></div>
+        <div style="flex:0 0 auto;"><button class="ai-btn" data-icon="sparkles" onclick="analyzeAll()">Read Documents</button></div>
+      </div>
+      <p class="muted small" style="margin:6px 0 0;">Read by the AI model on this PC (private). Nothing is saved until you click an action; each one is checked again before it's done.</p>
+    </div>
+
+    <div id="bar" class="btn-row" style="display:none; margin:0 0 10px;">
+      <button onclick="applyAllReady()" data-icon="check">Apply All Ready</button>
+      <button class="secondary" onclick="clearAll()">Clear</button>
+      <span id="bar-msg" class="small muted" style="align-self:center;"></span>
+    </div>
+    <div id="cards"></div>
+  </main>
+
+  <script>
+    AuthGuard.requireRole("manager");
+    document.getElementById("sidebar").innerHTML = renderSidebar("ai-desk.html");
+    const KINDS = { customer_po: "Customer PO", vendor_invoice: "Vendor invoice", vendor_order: "Vendor SO / quote", mtr: "MTR / test report", pod: "Proof of delivery", other: "Other" };
+    const TARGET_FOR = { customer_po: "customer_order", vendor_invoice: "purchase_order", vendor_order: "purchase_order", mtr: "purchase_order", pod: "shipment", other: "purchase_order" };
+    const PAGE = { customer_order: "customer-orders", purchase_order: "purchase-orders", shipment: "shipments" };
+    let docs = [];  // {file, state: queued|reading|read|done|error, r: analyze result, done}
+
+    const drop = document.getElementById("drop");
+    ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
+    drop.addEventListener("drop", ev => addFiles(ev.dataTransfer.files));
+
+    function addFiles(list) {
+      [...list].forEach(f => docs.push({ file: f, state: "queued" }));
+      render();
+    }
+    function clearAll() { docs = []; render(); }
+
+    function card(d, i) {
+      const r = d.r || {}, t = r.target;
+      const kindSel = `<select class="d-kind" onchange="reread(${i}, this.value)" ${d.state === "reading" ? "disabled" : ""}>
+        ${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${r.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+      const tType = t ? t.type : TARGET_FOR[r.kind] || "purchase_order";
+      const actions = (r.actions || []).map(a => `<button class="${a.ready ? "" : "secondary"} small-btn" onclick="applyOne(${i}, '${a.id}')"
+          ${d.state === "done" ? "disabled" : ""} title="${a.ready ? "Ready" : "Check the record / fields first"}">${escapeHtml(a.label)}</button>`).join(" ");
+      const bill = r.bill ? `<div class="d-bill">Invoice # <input class="b-num" value="${escapeHtml(r.bill.bill_number || "")}" style="width:120px;">
+          Total $<input class="b-amt" type="number" step="0.01" value="${r.bill.amount ?? ""}" style="width:110px;">
+          Date <input class="b-date" type="date" value="${(r.bill.bill_date || "").substring(0, 10)}" style="width:140px;">
+          Due <input class="b-due" type="date" value="${(r.bill.due_date || "").substring(0, 10)}" style="width:140px;"></div>` : "";
+      return `<div class="card ai-doc ${d.state}" data-i="${i}">
+        <div class="ai-doc-head"><strong>${escapeHtml(d.file.name)}</strong>
+          <span class="tag ${{ queued: "draft", reading: "confirmed", read: "draft", done: "shipped", error: "overdue" }[d.state]}">${d.state === "reading" ? "reading…" : d.state}</span>
+          ${d.r ? `${kindSel} <span class="muted small">${escapeHtml(r.kind_why ? `(${r.kind_why})` : "")}</span>` : ""}
+          <span style="margin-left:auto;">${trashBtn(`docs.splice(${i}, 1); render()`, "Remove from the list")}</span></div>
+        ${r.summary ? `<div class="small">${escapeHtml(r.summary)}</div>` : ""}
+        ${d.r && d.state !== "done" ? `<div class="ai-doc-target small">Goes to
+            <select class="d-ttype" style="width:auto;">${Object.keys(PAGE).map(k => `<option value="${k}" ${k === tType ? "selected" : ""}>${k.replace("_", " ")}</option>`).join("")}</select>
+            <input class="d-tcode" value="${escapeHtml(t ? t.code : "")}" placeholder="e.g. PO325370 / C89121 / SH215760" style="width:170px;">
+            ${t ? `<span class="muted">${escapeHtml(t.why)}</span>` : ""}</div>${bill}` : ""}
+        ${(r.problems || []).length ? `<div class="small neg">${r.problems.map(escapeHtml).join(" · ")}</div>` : ""}
+        ${d.state === "done" ? `<div class="small pos">${d.done}</div>` : d.r ? `<div class="btn-row" style="margin-top:6px;">${actions}</div>` : ""}
+        ${d.err ? `<div class="small neg">${escapeHtml(d.err)}</div>` : ""}</div>`;
+    }
+    function render() {
+      document.getElementById("cards").innerHTML = docs.map(card).join("");
+      document.getElementById("bar").style.display = docs.length ? "" : "none";
+      const ready = docs.filter(d => d.state === "read" && (d.r.actions || []).some(a => a.ready)).length;
+      document.getElementById("bar-msg").textContent = `${docs.length} document${docs.length === 1 ? "" : "s"} · ${ready} ready · ${docs.filter(d => d.state === "done").length} done`;
+    }
+
+    async function analyzeOne(i, kind = "") {
+      const d = docs[i];
+      d.state = "reading"; d.err = ""; render();
+      const fd = new FormData();
+      fd.append("file", d.file, d.file.name);
+      fd.append("instruction", document.getElementById("instruction").value);
+      fd.append("kind", kind);
+      try { d.r = await apiUpload("/api/ai-desk/analyze", fd); d.state = "read"; }
+      catch (e) { d.state = "error"; d.err = e.message; }
+      render();
+    }
+    async function analyzeAll() {  // one at a time: the local model reads one document well
+      for (let i = 0; i < docs.length; i++) if (["queued", "error"].includes(docs[i].state)) await analyzeOne(i);
+    }
+    function reread(i, kind) { analyzeOne(i, kind); }
+
+    async function applyOne(i, action) {
+      const d = docs[i], el = document.querySelector(`.ai-doc[data-i="${i}"]`);
+      const fd = new FormData();
+      fd.append("file", d.file, d.file.name);
+      fd.append("action", action);
+      fd.append("kind", el.querySelector(".d-kind")?.value || d.r.kind);
+      fd.append("target_type", el.querySelector(".d-ttype")?.value || "");
+      fd.append("target_code", el.querySelector(".d-tcode")?.value || "");
+      if (el.querySelector(".b-num")) fd.append("bill", JSON.stringify({ bill_number: el.querySelector(".b-num").value.trim(), amount: parseFloat(el.querySelector(".b-amt").value) || 0,
+        bill_date: el.querySelector(".b-date").value || null, due_date: el.querySelector(".b-due").value || null }));
+      try {
+        const r = await apiUpload("/api/ai-desk/apply", fd);
+        const type = r.record_id && (fd.get("target_type") || (action === "create_order" ? "customer_order" : "purchase_order"));
+        const link = r.record_id ? `<a class="link" href="${PAGE[type] || "customer-orders"}.html?id=${r.record_id}" target="_blank">${escapeHtml(r.record)}</a>` : "";
+        d.state = "done";
+        d.done = { attached: `Attached to ${link}`, bill: `Vendor invoice added to ${link}, PDF attached`, created: `Created draft ${link} with the PDF attached — check and confirm it` }[r.done] || "Done";
+      } catch (e) { d.err = e.message; }
+      render();
+    }
+    async function applyAllReady() {
+      for (let i = 0; i < docs.length; i++) {
+        const d = docs[i], a = d.state === "read" && (d.r.actions || []).find(a => a.ready);
+        if (a) await applyOne(i, a.id);
+      }
+    }
+  </script>
+</body>
+</html>

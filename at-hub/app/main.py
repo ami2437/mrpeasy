@@ -249,6 +249,8 @@ from app.routes import imports  # noqa: E402
 app.include_router(imports.router)
 from app.routes import file_matcher  # noqa: E402
 app.include_router(file_matcher.router)
+from app.routes import ai_desk  # noqa: E402
+app.include_router(ai_desk.router)
 from app.routes import quotes as quotes_routes  # noqa: E402
 app.include_router(quotes_routes.router)
 from app.routes import tasks as tasks_routes  # noqa: E402

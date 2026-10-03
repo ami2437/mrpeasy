@@ -1177,3 +1177,13 @@ table.list-fit > thead > tr > th { position: sticky; top: 0; z-index: 5; box-sha
 .task-row > input[type=checkbox] { width: 16px; height: 16px; margin-top: 3px; }
 .task-row.task-done .task-main > div:first-child { text-decoration: line-through; color: var(--muted); }
 .task-note { margin-top: 4px; font-size: 12px; padding: 3px 6px; max-width: 520px; background: transparent; }
+
+/* AI Desk */
+.ai-drop { border: 2px dashed var(--ai-border); background: var(--ai-soft); border-radius: 12px; padding: 22px; text-align: center; cursor: pointer; color: var(--ai); }
+.ai-drop.over { border-color: var(--ai); background: color-mix(in srgb, var(--ai) 14%, var(--surface)); }
+.ai-doc { padding: 12px 14px; margin-bottom: 10px; border-left: 4px solid var(--border-strong); }
+.ai-doc.read { border-left-color: var(--ai); } .ai-doc.done { border-left-color: var(--pos); } .ai-doc.error { border-left-color: var(--neg); }
+.ai-doc-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.ai-doc-head select { width: auto; padding: 2px 6px; }
+.ai-doc-target, .d-bill { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.d-bill input, .ai-doc-target input { padding: 3px 6px; }

@@ -642,7 +642,7 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
-  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"], ["tasks.html", "Tasks", "admin"]] },
+  { label: null, minRole: "manager", links: [["ai-desk.html", "AI Desk"], ["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"], ["tasks.html", "Tasks", "admin"]] },
   { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["file-matcher.html", "File Matcher"], ["backups.html", "Backups"]] },
 ];
 
@@ -1431,7 +1431,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "backups.html": "save",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "backups.html": "save",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [
