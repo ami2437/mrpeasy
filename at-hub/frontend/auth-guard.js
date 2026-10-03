@@ -1354,7 +1354,39 @@ const ICON_PATHS = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  notePen: '<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4M2 10h4M2 14h4M2 18h4"/><path d="M21.38 5.62a1 1 0 0 0-3-3L13 8l-1 4 4-1Z"/>',
 };
+
+// ---- Line-row icon buttons: one click does it, the hover tooltip says what ----
+// trashBtn("removeLine(3, 9)") -> a small bin icon; onclick is plain JS (use single quotes inside).
+function trashBtn(onclick, title = "Remove this line") {
+  return `<button type="button" class="icon-btn trash-btn no-print" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" onclick="${onclick}">${icon("trash")}</button>`;
+}
+// Line notes: a notepad button opens a small note box under the item. The note prints on packing
+// lists / invoices / POs unless "Print" is unticked. Pages read .ln-text and .ln-print.
+function lineNoteBtn(note) {
+  const has = !!(note || "").trim();
+  return `<button type="button" class="icon-btn note-btn no-print ${has ? "has-note" : ""}" title="${has ? "Edit this line's note" : "Add a note to this line (prints on packing list, invoice, PO)"}"
+    aria-label="Line note" onclick="toggleLineNote(this)">${icon("notePen")}</button>`;
+}
+function lineNoteBox(note, printNotes, editable = true) {
+  const text = (note || "").trim(), print = printNotes !== false;
+  if (!editable) return text ? `<div class="line-note-read ${print ? "" : "internal"}" title="${print ? "Prints on documents" : "Internal note: not printed"}">${icon("notePen")}<span>${escapeHtml(text)}</span>${print ? "" : ' <span class="muted small">(not printed)</span>'}</div>` : "";
+  return `<div class="line-note" ${text ? "" : 'style="display:none;"'}>
+    <textarea class="ln-text" rows="1" placeholder="Note for this line…" title="Shows on packing lists, invoices and printouts">${escapeHtml(text)}</textarea>
+    <label class="ln-print-label" title="Untick to keep this note internal (never printed)"><input type="checkbox" class="ln-print" ${print ? "checked" : ""}> Print</label></div>`;
+}
+function toggleLineNote(btn) {
+  const box = btn.closest("tr").querySelector(".line-note");
+  if (!box) return;
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  if (show) box.querySelector(".ln-text").focus();
+}
+function lineNoteValue(tr) {
+  const t = tr.querySelector(".ln-text"), pr = tr.querySelector(".ln-print");
+  return { notes: t ? t.value.trim() || null : null, print_notes: pr ? pr.checked : true };
+}
 function icon(name, cls = "") {
   return ICON_PATHS[name] ? `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name]}</svg>` : "";
 }
@@ -1913,6 +1945,7 @@ function printRecord() {
     <p class="muted small" style="margin:0 0 10px;">Sections with money start unticked.</p>
     <div class="print-opts">${groups.map((g, i) => `<label><input type="checkbox" data-g="${i}" ${g.money ? "" : "checked"}> ${escapeHtml(g.name)}${g.money ? ' <span class="muted small">($)</span>' : ""}</label>`).join("")}</div>
     <label style="display:block; margin-top:10px;"><input type="checkbox" id="print-prices"> Show prices and totals in the line table</label>
+    <label style="display:block; margin-top:4px;" title="Notes marked 'don't print' never print"><input type="checkbox" id="print-notes" checked> Show line notes</label>
     <div style="display:flex; gap:8px; margin-top:14px; justify-content:flex-end;">
       <button class="secondary" data-cancel>Cancel</button><button data-go>Print</button></div></div>`;
   document.body.appendChild(dlg);
@@ -1921,6 +1954,7 @@ function printRecord() {
   dlg.querySelector("[data-go]").onclick = () => {
     const keep = new Set([...dlg.querySelectorAll("[data-g]:checked")].map(c => +c.dataset.g));
     const prices = dlg.querySelector("#print-prices").checked;
+    document.body.classList.toggle("print-no-notes", !dlg.querySelector("#print-notes").checked);
     dlg.remove();
     const hidden = [], opened = [];
     groups.forEach((g, i) => g.els.forEach(el => {
@@ -1943,7 +1977,7 @@ function printRecord() {
     setTimeout(() => {
       window.print();
       setTimeout(() => {
-        document.body.classList.remove("printing-record");
+        document.body.classList.remove("printing-record", "print-no-notes");
         hidden.forEach(el => el.classList.remove("print-hide"));
         card.querySelectorAll(".print-hide").forEach(el => el.classList.remove("print-hide"));
         opened.forEach(d => { d.open = false; });

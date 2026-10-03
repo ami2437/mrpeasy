@@ -97,7 +97,7 @@
                 <td>${escapeHtml(m.vendor_description || "")}</td>
                 <td class="num">${m.last_unit_cost != null ? fmtPrice(m.last_unit_cost) : ""}</td>
                 <td>${m.last_ordered_at ? new Date(m.last_ordered_at).toLocaleDateString() : ""}</td>
-                <td><a class="link small" onclick="deleteXref(${vendorId}, ${m.id})">Remove</a></td>
+                <td class="line-actions">${trashBtn(`deleteXref(${vendorId}, ${m.id})`, "Remove this cross-reference")}</td>
               </tr>`;
             }).join("") || `<tr><td colspan="6" class="muted">No Part # Mappings Yet.</td></tr>`}
             <tr>

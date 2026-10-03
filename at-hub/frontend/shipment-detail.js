@@ -239,7 +239,7 @@ function boxRowHtmlList(boxes) {
       <td><input type="number" step="1" min="1" class="box-qty qty-input" value="${b.quantity_in_box}"></td>
       <td><input type="text" class="box-lot" value="${b.lot_code || ""}" style="width:110px;"></td>
       <td><input type="text" class="box-pallet" value="${b.pallet_number || ""}" style="width:90px;"></td>
-      <td><a class="link" onclick="this.closest('tr').remove(); refreshBoxSummary();">Remove</a></td>
+      <td class="line-actions">${trashBtn("this.closest('tr').remove(); refreshBoxSummary();", "Remove this box row")}</td>
     </tr>
   `).join("");
 }
@@ -507,6 +507,7 @@ async function showDetail(id) {
       <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
       <label class="inline-check"><input type="checkbox" id="pl-pallets" ${shipment.boxes.some(b => b.pallet_number) ? "checked" : ""}> Pallet info</label>
       <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
+      <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
     </div>
     <div id="packing-error" class="error"></div>
     ` : ""}
@@ -564,7 +565,7 @@ function addBoxRow() {
     <td><input type="number" step="1" min="1" class="box-qty qty-input" value="0"></td>
     <td><input type="text" class="box-lot" style="width:110px;"></td>
     <td><input type="text" class="box-pallet" style="width:90px;"></td>
-    <td><a class="link" onclick="this.closest('tr').remove(); refreshBoxSummary();">Remove</a></td>
+    <td class="line-actions">${trashBtn("this.closest('tr').remove(); refreshBoxSummary();", "Remove this box row")}</td>
   `;
   tbody.appendChild(tr);
   refreshBoxSummary();
@@ -620,7 +621,8 @@ function printPackingList(shipmentId) {
   const boxes = document.getElementById("pl-boxes")?.checked ?? true;
   const pallets = document.getElementById("pl-pallets")?.checked ?? false;
   const lots = document.getElementById("pl-lots")?.checked ?? false;
-  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}`);
+  const notes = document.getElementById("pl-notes")?.checked ?? true;
+  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}`);
 }
 
 async function createInvoice(shipmentId) {

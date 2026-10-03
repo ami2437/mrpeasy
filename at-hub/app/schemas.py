@@ -269,6 +269,8 @@ class CustomerOrderLineCreate(InputModel):
     quantity: float
     unit_price: float = 0
     delivery_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
 
 class CustomerOrderCreate(BaseModel):
@@ -312,6 +314,8 @@ class CustomerOrderLineResponse(BaseModel):
     line_status: str = "not_booked"  # not_booked | partially_booked | booked | partially_shipped | shipped
     shipments: List[LineShipmentAllocation] = []
     booking_sources: List[LineBookingSource] = []
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
     class Config:
         from_attributes = True
@@ -354,6 +358,8 @@ class CustomerOrderLineAdd(InputModel):
     quantity: float
     unit_price: float = 0
     delivery_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
 
 class CustomerOrderLineUpdate(InputModel):
@@ -361,6 +367,8 @@ class CustomerOrderLineUpdate(InputModel):
     quantity: Optional[float] = None
     unit_price: Optional[float] = None
     delivery_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = None
 
 
 class LineOrderRequest(BaseModel):
@@ -573,6 +581,8 @@ class InvoiceLineInput(InputModel):
     description: str
     quantity: float
     unit_price: float
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
 
 class InvoiceLineResponse(InvoiceLineInput):
@@ -692,6 +702,8 @@ class PurchaseOrderLineCreate(InputModel):
     unit_cost: float = 0
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -711,6 +723,8 @@ class PurchaseOrderLineResponse(BaseModel):
     landed_cost_per_unit: float = 0
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
     planned_lot_code: Optional[str] = None
 
     class Config:
@@ -863,6 +877,8 @@ class PurchaseOrderLineAdd(InputModel):
     unit_cost: float = 0
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = True
 
 
 class PurchaseOrderLineUpdate(InputModel):
@@ -871,6 +887,8 @@ class PurchaseOrderLineUpdate(InputModel):
     unit_cost: Optional[float] = None
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
+    notes: Optional[str] = None
+    print_notes: Optional[bool] = None
 
 
 class PurchaseOrderEmailLog(BaseModel):

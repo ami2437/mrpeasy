@@ -49,6 +49,7 @@
         <label class="inline-check"><input type="checkbox" id="pl-all-boxes" checked> Box details</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-pallets" checked> Pallet info</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-lots"> Lot #</label>
+        <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-all-notes" checked> Line notes</label>
       </div>
       <div id="bulk-error" class="error"></div>
       <div id="bulk-result" class="small"></div>
@@ -489,7 +490,7 @@
       } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
     }
     function plQuery() {
-      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}`;
+      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}&notes=${document.getElementById("pl-all-notes").checked}`;
     }
     function packingListOne(id) { openPdf(`/api/shipments/${id}/packing-list.pdf?${plQuery()}`); }
 

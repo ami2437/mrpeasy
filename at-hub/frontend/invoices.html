@@ -216,17 +216,17 @@
         <tr data-idx="${idx}" data-item-id="${l.item_id ?? ""}" data-order-line-id="${l.order_line_id ?? ""}" data-shipment-id="${l.shipment_id ?? ""}">
           <td class="line-no">${idx + 1}</td>
           <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
-          <td class="grow"><input type="text" class="line-desc" value="${escapeHtml(lineDescription(l))}"></td>
+          <td class="grow"><input type="text" class="line-desc" value="${escapeHtml(lineDescription(l))}">${lineNoteBox(l.notes, l.print_notes, true)}</td>
           <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="${l.quantity}"></td>
           <td class="num">${priceInput("line-price", l.unit_price)}</td>
           <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
-          <td><a class="link" onclick="this.closest('tr').remove(); recalcInvoice();">Remove</a></td>
+          <td class="line-actions">${lineNoteBtn(l.notes)}${trashBtn("this.closest('tr').remove(); recalcInvoice();", "Remove this line (saved when you Save the invoice)")}</td>
         </tr>
       ` : `
         <tr>
           <td class="line-no">${idx + 1}</td>
           <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
-          <td class="grow">${escapeHtml(lineDescription(l))}</td>
+          <td class="grow">${escapeHtml(lineDescription(l))}${lineNoteBox(l.notes, l.print_notes, false)}</td>
           <td class="num">${fmtQty(l.quantity)}</td>
           <td class="num">${fmtPrice(l.unit_price)}</td>
           <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
@@ -281,6 +281,8 @@
           <label class="check-label" title="$0 lines are left off the PDF unless this is ticked">
             <input type="checkbox" ${invoice.print_zero_lines ? "checked" : ""} onchange="setPrintZero(${invoice.id}, this.checked)">
             Print $0 Lines${zeroLines ? ` <span class="muted small">(${zeroLines} on this invoice)</span>` : ""}</label>
+          <label class="check-label" title="Line notes on the PDF (a note with Print unticked never prints)">
+            <input type="checkbox" id="inv-print-notes" checked> Print Line Notes</label>
           <span style="flex:1;"></span>
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
@@ -574,11 +576,11 @@
       tr.innerHTML = `
         <td class="line-no"></td>
         <td></td>
-        <td class="grow"><input type="text" class="line-desc" placeholder="e.g. Handling fee"></td>
+        <td class="grow"><input type="text" class="line-desc" placeholder="e.g. Handling fee">${lineNoteBox("", true)}</td>
         <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="1"></td>
         <td class="num">${priceInput("line-price", 0)}</td>
         <td class="num subtotal">$0.00</td>
-        <td><a class="link" onclick="this.closest('tr').remove(); recalcInvoice();">Remove</a></td>
+        <td class="line-actions">${lineNoteBtn("")}${trashBtn("this.closest('tr').remove(); recalcInvoice();", "Remove this line (saved when you Save the invoice)")}</td>
       `;
       tbody.appendChild(tr);
       recalcInvoice();
@@ -598,6 +600,7 @@
         item_id: tr.dataset.itemId ? parseInt(tr.dataset.itemId) : null,
         order_line_id: tr.dataset.orderLineId ? parseInt(tr.dataset.orderLineId) : null,
         shipment_id: tr.dataset.shipmentId ? parseInt(tr.dataset.shipmentId) : null,
+        ...lineNoteValue(tr),
       }));
       try {
         await apiFetch(`/api/invoices/${id}`, {
@@ -626,7 +629,7 @@
     }
 
     function printInvoice(id) {
-      openPdf(`/api/invoices/${id}/pdf`);
+      openPdf(`/api/invoices/${id}/pdf?notes=${document.getElementById("inv-print-notes")?.checked ?? true}`);
     }
 
     // ---- Email ----

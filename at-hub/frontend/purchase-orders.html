@@ -158,12 +158,12 @@
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="min-width:280px;"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></td>
+        <td style="min-width:280px;"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
         <td><input type="text" class="l-vcode" style="width:130px;" placeholder="Vendor Part #"><div class="vcode-hint small"></div></td>
         <td><input type="text" class="l-vdesc" style="min-width:200px;" placeholder="Vendor Description"></td>
         <td><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
         <td>${priceInput("l-cost", 0)}<div data-price-delta data-kind="purchase" data-price-input=".l-cost"></div></td>
-        <td><a class="link" onclick="this.closest('tr').remove()">Remove</a></td>
+        <td class="line-actions">${lineNoteBtn("")}${trashBtn("this.closest('tr').remove()")}</td>
       `;
       const delta = tr.querySelector("[data-price-delta]");
       const vendorId = () => parseInt(document.getElementById("f-vendor").value);
@@ -258,6 +258,7 @@
         unit_cost: parseFloat(tr.querySelector(".l-cost").value) || 0,
         vendor_item_code: tr.querySelector(".l-vcode").value.trim() || null,
         vendor_description: tr.querySelector(".l-vdesc").value.trim() || null,
+        ...lineNoteValue(tr),
       }));
       try {
         var created = await apiFetch("/api/purchase-orders/", {
@@ -313,12 +314,12 @@
       const rows = [];
       orders.filter(o => o.status !== "cancelled").sort((a, b) => b.id - a.id).forEach(o => o.lines.forEach(l => {
         const it = itemBy[l.item_id] || {};
-        const hay = `${o.code} ${vendorName(o.vendor_id)} ${o.vendor_so_number || ""} ${it.code || ""} ${it.title || ""} ${l.vendor_item_code || ""} ${l.vendor_description || ""}`.toLowerCase();
+        const hay = `${o.code} ${vendorName(o.vendor_id)} ${o.vendor_so_number || ""} ${it.code || ""} ${it.title || ""} ${l.vendor_item_code || ""} ${l.vendor_description || ""} ${l.notes || ""}`.toLowerCase();
         if (words.length && !words.every(w => hay.includes(w))) return;
         rows.push(`<tr>
           <td><a class="link" onclick="showDetail(${o.id})">${escapeHtml(o.code)}</a><div class="muted small">${escapeHtml(vendorName(o.vendor_id))}${o.vendor_so_number ? ` · SO ${escapeHtml(o.vendor_so_number)}` : ""}</div></td>
           <td><a class="link" href="item.html?id=${l.item_id}"><strong>${escapeHtml(it.code || "")}</strong></a> ${groupTag(it)}</td>
-          <td>${escapeHtml(l.vendor_item_code || "")}<div class="muted small">${escapeHtml(l.vendor_description || it.title || "")}</div></td>
+          <td>${escapeHtml(l.vendor_item_code || "")}<div class="muted small">${escapeHtml(l.vendor_description || it.title || "")}</div>${lineNoteBox(l.notes, l.print_notes, false)}</td>
           <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.received_quantity)}</td><td class="num">${fmtQty(Math.max(0, l.quantity - l.received_quantity))}</td>
           <td class="num">${fmtPrice(l.unit_cost)}</td><td class="num">${fmtMoney(lineAmount(l.quantity, l.unit_cost))}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
@@ -450,8 +451,9 @@
         <p class="muted" style="margin:0 0 4px;">${escapeHtml((vendors.find(v => v.id === order.vendor_id) || {}).name || "")}${order.order_date ? ` — ordered ${fmtDate(order.order_date)}` : ""}</p>
 
         <div class="action-bar">
-          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?vendor=true')" title="What the vendor sees: Vendor Part #s Only">PDF For Vendor</button>
-          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf')" title="Internal copy with our item #s">Internal PDF</button>
+          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?vendor=true&notes=' + document.getElementById('po-print-notes').checked)" title="What the vendor sees: Vendor Part #s Only">PDF For Vendor</button>
+          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?notes=' + document.getElementById('po-print-notes').checked)" title="Internal copy with our item #s">Internal PDF</button>
+          <label class="check-label" title="Line notes on the PDF (a note with Print unticked never prints)"><input type="checkbox" id="po-print-notes" checked> Line notes</label>
           ${order.status !== "cancelled" ? `<button class="secondary" onclick="toggleEmailForm(${order.id})">Email To Vendor</button>` : ""}
           ${order.status === "draft" ? `<button class="secondary" onclick="markOrdered(${order.id}).then(() => showDetail(${order.id}))">Mark Ordered</button>` : ""}
           <span style="flex:1;"></span>
@@ -480,10 +482,11 @@
           <tbody id="po-lines-body" oninput="recalcPoLines(); refreshPriceDeltas(this)">
             ${order.lines.map((l, idx) => `
               <tr data-line="${l.id}" data-code="${escapeHtml((items.find(i => i.id === l.item_id) || {}).code || "")}" data-qty="${l.quantity}" data-cost="${l.unit_cost}">
-                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderPoLineBulk(${order.id})">` : ""}${idx + 1}${editable && l.received_quantity === 0
-                  ? ` <a class="line-x" title="Remove this line" onclick="removeLine(${order.id}, ${l.id})">✕</a>` : ""}<span class="save-dot"></span></td>
+                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderPoLineBulk(${order.id})">` : ""}${idx + 1}<span class="save-dot"></span>${editable ? `<div class="line-actions no-print">${lineNoteBtn(l.notes)}${l.received_quantity === 0
+                  ? trashBtn(`removeLine(${order.id}, ${l.id})`, "Remove this line (Ctrl+Z / Recycle Bin brings it back)")
+                  : `<span class="icon-btn" style="opacity:.35; cursor:default;" title="Stock was received on this line, so it can't be removed">${icon("trash")}</span>`}</div>` : ""}</td>
                 <td class="grow">${(() => { const it = items.find(i => i.id === l.item_id) || {}; return `<strong>${escapeHtml(it.code || l.item_id)}</strong> ${groupTag(it)}${editable && l.received_quantity === 0
-                  ? `<a class="link item-replace" title="Pick a different item for this line" onclick="replacePoLineItem(${order.id}, ${l.id}, ${l.item_id}, this)">change</a>` : ""}${it.title ? `<div class="muted small">${escapeHtml(it.title)}</div>` : ""}`; })()}</td>
+                  ? `<a class="link item-replace" title="Pick a different item for this line" onclick="replacePoLineItem(${order.id}, ${l.id}, ${l.item_id}, this)">change</a>` : ""}${it.title ? `<div class="muted small">${escapeHtml(it.title)}</div>` : ""}`; })()}${lineNoteBox(l.notes, l.print_notes, editable)}</td>
                 <td class="vendor-cell">${editable
                   ? `<input type="text" class="e-line-vcode" value="${escapeHtml(l.vendor_item_code || "")}" placeholder="Vendor Part #">
                      <input type="text" class="e-line-vdesc" value="${escapeHtml(l.vendor_description || "")}" placeholder="Their description (optional)">`
@@ -505,9 +508,9 @@
           <tbody id="po-charges-body">
             ${order.charges.map(c => `
               <tr class="charge-row ${c.vendor_bill_id ? "locked" : ""}">
-                <td class="line-no">S&amp;H</td>
+                <td class="line-no">S&amp;H${editable && !c.vendor_bill_id ? `<div class="line-actions no-print">${trashBtn(`removeCharge(${order.id}, ${c.id})`, "Remove this charge")}</div>` : ""}</td>
                 <td class="grow"><span class="tag sh">${escapeHtml(c.charge_type)}</span> ${escapeHtml(c.description || "")}
-                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>` : `<div class="muted small">Added manually${editable ? ` · <a class="link" onclick="removeCharge(${order.id}, ${c.id})">Remove</a>` : ""}</div>`}</td>
+                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>` : `<div class="muted small">Added manually</div>`}</td>
                 <td colspan="4"></td>
                 <td class="num subtotal">${fmtMoney(c.amount)}</td>
                 <td></td>
@@ -525,15 +528,15 @@
         </table>
         </div>
         ${editable ? `
-          <div class="row" style="margin-top:8px; max-width:1100px;">
+          <div class="row add-line-row" style="margin-top:8px; max-width:1100px;">
             <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
                 onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
             <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>
-            <div style="flex:0;"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
-            <div style="flex:0;"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="${items.length ? items[0].cost_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
+            <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
+            <div class="fixed price-cell"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="${items.length ? items[0].cost_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
               <div data-price-delta data-kind="purchase" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-cost"></div></div>
-            <div style="flex:0;"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
+            <div class="fixed"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
           <div class="row" style="margin-top:6px; max-width:1100px;">
             <div style="flex:0 0 140px;"><label>Add S&amp;H</label><select id="chg-type"><option value="shipping">Shipping</option><option value="freight">Freight</option><option value="handling">Handling</option><option value="other">Other</option></select></div>
@@ -597,7 +600,7 @@
         enableLineDrag(document.getElementById("po-lines-body"), ids => savePoLineOrder(order.id, ids));
         document.getElementById("po-lines-body").addEventListener("change", e => {  // lines save themselves
           const tr = e.target.closest("tr[data-line]");
-          if (tr && e.target.matches(".e-line-qty, .e-line-cost, .e-line-vcode, .e-line-vdesc")) autoSavePoLine(order.id, tr);
+          if (tr && e.target.matches(".e-line-qty, .e-line-cost, .e-line-vcode, .e-line-vdesc, .ln-text, .ln-print")) autoSavePoLine(order.id, tr);
         });
       }
       renderAttachments("po-attachments", "purchase_order", order.id, ["purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"],
@@ -1179,14 +1182,16 @@ Thank you.</textarea>
       const dot = tr.querySelector(".save-dot");
       const q = tr.querySelector(".e-line-qty");
       const was = ((orders.find(o => o.id === poId) || { lines: [] }).lines.find(l => l.id === parseInt(tr.dataset.line))) || null;
-      const before = was && { quantity: was.quantity, unit_cost: was.unit_cost, vendor_item_code: was.vendor_item_code, vendor_description: was.vendor_description };
+      const before = was && { quantity: was.quantity, unit_cost: was.unit_cost, vendor_item_code: was.vendor_item_code, vendor_description: was.vendor_description,
+        notes: was.notes || null, print_notes: was.print_notes !== false };
       dot.className = "save-dot saving"; dot.title = "Saving…";
       try {
         const saved = await apiFetch(`/api/purchase-orders/${poId}/lines/${tr.dataset.line}`, { method: "PUT", body: JSON.stringify({
           quantity: q ? parseFloat(q.value) || 0 : undefined,
           unit_cost: parseFloat(tr.querySelector(".e-line-cost").value) || 0,
           vendor_item_code: tr.querySelector(".e-line-vcode") ? tr.querySelector(".e-line-vcode").value : undefined,
-          vendor_description: tr.querySelector(".e-line-vdesc") ? tr.querySelector(".e-line-vdesc").value : undefined }) });
+          vendor_description: tr.querySelector(".e-line-vdesc") ? tr.querySelector(".e-line-vdesc").value : undefined, ...lineNoteValue(tr) }) });
+        tr.querySelector(".note-btn")?.classList.toggle("has-note", !!lineNoteValue(tr).notes);
         const i = orders.findIndex(o => o.id === poId);
         if (i >= 0) orders[i] = saved;
         dot.className = "save-dot saved"; dot.title = "Saved";
@@ -1229,9 +1234,6 @@ Thank you.</textarea>
 
     async function removeLine(poId, lineId) {
       const row = document.querySelector(`#po-lines-body tr[data-line="${lineId}"]`);
-      if (!confirm(`Remove ${row && row.dataset.code ? row.dataset.code : "this line"} from the PO?
-
-It goes to the Recycle Bin, where it can be restored.`)) return;
       const errorEl = document.getElementById("lines-error");
       errorEl.textContent = "";
       try {

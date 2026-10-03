@@ -1097,3 +1097,43 @@ button:not(:disabled):active { transform: translateY(1px); }
 #items-table td.small { min-width: 160px; max-width: 260px; }
 #items-table td:first-child { white-space: normal; max-width: 150px; }
 #items-table td:first-child > a { white-space: nowrap; }
+
+/* ---- line-row icon buttons (trash, note): one click, tooltip says what ---- */
+.icon-btn { background: none !important; border: 0; padding: 3px; margin: 0 1px; color: var(--muted); border-radius: 5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; box-shadow: none !important; }
+.icon-btn .ico { margin: 0 !important; width: 15px; height: 15px; }
+.icon-btn:hover { color: var(--text); background: var(--surface-3) !important; }
+.trash-btn:hover { color: var(--neg); background: color-mix(in srgb, var(--neg) 12%, transparent) !important; }
+.note-btn.has-note { color: var(--accent); }
+.line-actions { white-space: nowrap; text-align: right; }
+.line-note { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
+.line-note .ln-text { flex: 1; min-height: 28px; font-size: 12.5px; resize: vertical; padding: 4px 6px; background: color-mix(in srgb, #fde68a 18%, var(--input-bg)); }
+.ln-print-label { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; margin: 5px 0 0; white-space: nowrap; color: var(--muted); }
+.ln-print-label input { width: auto; margin: 0; }
+.line-note-read { display: flex; gap: 5px; align-items: flex-start; margin-top: 3px; font-size: 12px; font-style: italic; color: var(--text-2); white-space: normal; }
+.line-note-read .ico { width: 13px; height: 13px; margin-top: 1px; color: var(--accent); }
+.line-note-read.internal .ico { color: var(--muted); }
+@media print {
+  body.printing-record .line-note:has(.ln-print:not(:checked)), body.printing-record .line-note-read.internal,
+  body.print-no-notes .line-note, body.print-no-notes .line-note-read { display: none !important; }
+  body.printing-record .line-note .ln-print-label { display: none !important; }
+}
+
+/* ---- contrast: faint column bands + dividers so values line up under their header ---- */
+:root { --col-band: rgba(30, 50, 90, .028); --col-rule: rgba(30, 50, 90, .07); }
+html[data-theme="dark"] { --col-band: rgba(255, 255, 255, .025); --col-rule: rgba(255, 255, 255, .06); }
+table:not(.no-col-bands) tbody td:nth-child(even) { background-image: linear-gradient(var(--col-band), var(--col-band)); }
+table:not(.no-col-bands) tbody td + td, table:not(.no-col-bands) thead th + th { box-shadow: inset 1px 0 0 var(--col-rule); }
+tbody tr:hover td { background-color: var(--row-hover); }
+th { color: var(--text); font-weight: 650; }
+td.num, th.num { font-variant-numeric: tabular-nums; }
+@media print { table tbody td { background-image: none !important; box-shadow: none !important; } }
+
+/* "Add item" row under a line table: every field's input sits on one baseline; the price hint floats below */
+.add-line-row { align-items: flex-end; }
+.add-line-row > .fixed { flex: 0 0 auto; min-width: 0; }
+.add-line-row > .price-cell { position: relative; }
+.add-line-row > .price-cell [data-price-delta] { position: absolute; left: 0; top: 100%; }
+.line-no .line-actions { display: flex; gap: 0; margin-top: 4px; text-align: left; }
+.line-no .line-actions .icon-btn { padding: 2px; }
+.fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 190px; }

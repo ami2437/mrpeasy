@@ -33,11 +33,11 @@ def get_order(po_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{po_id}/pdf")
-def po_pdf(po_id: int, vendor: bool = False, db: Session = Depends(get_db)):
+def po_pdf(po_id: int, vendor: bool = False, notes: bool = True, db: Session = Depends(get_db)):
     """?vendor=true: the copy for the vendor (their part #s only). Default: internal copy with our item #s."""
     po = PurchaseOrderService.get(db, po_id)
     suffix = "" if vendor else "-internal"
-    return Response(purchase_order_pdf(db, po, for_vendor=vendor), media_type="application/pdf",
+    return Response(purchase_order_pdf(db, po, for_vendor=vendor, show_notes=notes), media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{po.code}{suffix}.pdf"'})
 
 

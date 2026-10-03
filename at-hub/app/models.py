@@ -255,6 +255,8 @@ class CustomerOrderLine(Base):
     delivery_date = Column(DateTime, nullable=True)
     shipped_quantity = Column(Float, nullable=False, default=0)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    notes = Column(Text, nullable=True)  # free-text note for this line; carried to packing lists / invoices
+    print_notes = Column(Boolean, nullable=True, default=True)  # False = internal note, kept off printouts
 
     shipment_lines = relationship("ShipmentLine", backref="order_line")
 
@@ -428,6 +430,8 @@ class PurchaseOrderLine(Base):
     vendor_description = Column(String, nullable=True)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     planned_lot_code = Column(String, nullable=True)  # lot # already assigned before receipt (MRPeasy does this); used when it arrives
+    notes = Column(Text, nullable=True)  # free-text note for this line; carried to packing lists / invoices
+    print_notes = Column(Boolean, nullable=True, default=True)  # False = internal note, kept off printouts
 
     allocations = relationship("LandedCostAllocation", backref="po_line")
 
@@ -707,6 +711,8 @@ class InvoiceLine(Base):
     description = Column(String, nullable=False)
     quantity = Column(Float, nullable=False, default=1)
     unit_price = Column(Float, nullable=False, default=0)
+    notes = Column(Text, nullable=True)  # free-text note for this line; carried to packing lists / invoices
+    print_notes = Column(Boolean, nullable=True, default=True)  # False = internal note, kept off printouts
 
     @property
     def amount(self) -> float:

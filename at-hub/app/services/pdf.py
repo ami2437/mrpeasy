@@ -110,6 +110,16 @@ def p(text, style="body") -> Paragraph:
     return Paragraph(escape(str(text or "")).replace("\n", "<br/>"), S[style])
 
 
+def described(text, line, show_notes: bool = True) -> Paragraph:
+    """A line's description with its note (if any) in small italics underneath. A note marked
+    "don't print" -- or every note when the user unticked notes at print time -- stays off."""
+    html = escape(str(text or "")).replace(chr(10), "<br/>")
+    note = (getattr(line, "notes", None) or "").strip() if line is not None else ""
+    if note and show_notes and getattr(line, "print_notes", True) is not False:
+        html += f'<br/><font size="7.5" color="#4b5563"><i>Note: {escape(note).replace(chr(10), "<br/>")}</i></font>'
+    return Paragraph(html, S["td"])
+
+
 # ---- page furniture ----
 def _numbered_canvas(footer_text: str, watermark: str = None, watermark_color=None,
                      trace_text: str = None, signature: str = None):
@@ -344,7 +354,7 @@ def _notes_box(sections):
 INVOICE_STATUS_COLORS = {"draft": MUTED, "sent": ACCENT, "paid": GREEN, "void": RED}
 
 
-def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
+def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes:
     company = get_company_profile(db)
     customer = db.query(Customer).filter(Customer.id == invoice.customer_id).first()
     order = db.query(CustomerOrder).filter(CustomerOrder.id == invoice.order_id).first() if invoice.order_id else None
@@ -385,7 +395,7 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
     rows = []
     for i, l in enumerate(printed, 1):
         item = line_items.get(l.item_id)
-        row = [str(i), p(item.code if item else "", "td"), p(invoice_line_description(l, item), "td")]
+        row = [str(i), p(item.code if item else "", "td"), described(invoice_line_description(l, item), l, show_notes)]
         if combined:
             sh = by_id.get(l.shipment_id)
             row.append(p(f"{sh.code}\n{date(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
@@ -424,7 +434,7 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
 
 # ---- packing list ----
 def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True, include_pallets: bool = False,
-                     include_lots: bool = False) -> bytes:
+                     include_lots: bool = False, show_notes: bool = True) -> bytes:
     """include_boxes adds the per-line box breakdown; include_pallets adds a Pallet # column
     plus the pallet weight/dimensions section; include_lots adds the Lot # column -- all chosen
     by the user at print time."""
@@ -496,7 +506,7 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         boxes = "\n".join(f"{n} Box × {qty(q)}" for q, n in sorted(by_qty.items(), reverse=True)) or "—"
         line_pallets = ", ".join(dict.fromkeys(b.pallet_number for b in shipment.boxes
                                                if b.order_line_id == line_id and b.pallet_number)) or "—"
-        row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), p(item.title if item else "", "td")]
+        row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), described(item.title if item else "", ol, show_notes)]
         if include_lots:
             row.append(p(", ".join(dict.fromkeys(lots_by_line.get(line_id, []))) or "—", "td_muted"))
         if show_previous:
@@ -578,7 +588,7 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
 
 
 # ---- purchase order ----
-def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False) -> bytes:
+def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False, show_notes: bool = True) -> bytes:
     """for_vendor=True is the copy that goes out: lines show only the vendor's part # and
     description -- our own item numbers stay internal. The internal copy shows both."""
     company = get_company_profile(db)
@@ -613,10 +623,10 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False)
         amount = line_amount(l.quantity, l.unit_cost)
         total += amount
         if for_vendor:
-            rows.append([str(i), p(description, "td"), qty(l.quantity), price(l.unit_cost), money(amount)])
+            rows.append([str(i), described(description, l, show_notes), qty(l.quantity), price(l.unit_cost), money(amount)])
         else:
             rows.append([str(i), p(item.code if item else l.item_id, "td"), p(l.vendor_item_code or "—", "td"),
-                         p(description, "td"), qty(l.quantity), price(l.unit_cost), money(amount)])
+                         described(description, l, show_notes), qty(l.quantity), price(l.unit_cost), money(amount)])
     # Freight / shipping / handling charges billed on top of the lines.
     for c in po.charges:
         label = c.charge_type.capitalize() + (f" — invoice {c.bill_number}" if c.bill_number else "") + (f" ({c.description})" if c.description and not c.bill_number else "")

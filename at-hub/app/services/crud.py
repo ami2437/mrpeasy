@@ -730,6 +730,7 @@ class CustomerOrderService:
                 quantity=line.quantity,
                 unit_price=line.unit_price,
                 delivery_date=line.delivery_date or data.delivery_date,
+                notes=(line.notes or "").strip() or None, print_notes=line.print_notes is not False,
             ))
 
         db.commit()
@@ -800,6 +801,7 @@ class CustomerOrderService:
             quantity=data.quantity,
             unit_price=data.unit_price,
             delivery_date=data.delivery_date or order.delivery_date,
+            notes=(data.notes or "").strip() or None, print_notes=data.print_notes is not False,
         ))
         db.flush()
         db.refresh(order)
@@ -857,6 +859,10 @@ class CustomerOrderService:
                     detail=f"Cannot reduce quantity below {line.allocated_quantity}: {line.shipped_quantity} "
                            f"already shipped and {line.booked_quantity} booked into open shipments"
                 )
+        if "notes" in updates:
+            updates["notes"] = (updates["notes"] or "").strip() or None
+        if updates.get("print_notes", False) is None:
+            updates.pop("print_notes")
         for key, value in updates.items():
             setattr(line, key, value)
         db.flush()
@@ -1453,6 +1459,7 @@ class InvoiceService:
                     invoice_id=invoice.id, item_id=ol.item_id, order_line_id=ol.id, shipment_id=shipment.id,
                     description=item.title if item else f"Item {ol.item_id}",
                     quantity=qty_by_line[line_id], unit_price=ol.unit_price,
+                    notes=ol.notes, print_notes=ol.print_notes is not False,
                 ))
             shipment.status = "invoiced"
 
@@ -1592,6 +1599,8 @@ class InvoiceService:
                     description=line.description,
                     quantity=line.quantity,
                     unit_price=line.unit_price,
+                    notes=(line.notes or "").strip() or None,
+                    print_notes=line.print_notes is not False,
                 ))
 
         # A sent/paid invoice can be corrected; its paid status follows the new total.
@@ -1794,6 +1803,7 @@ class PurchaseOrderService:
                 unit_cost=line.unit_cost,
                 vendor_item_code=code,
                 vendor_description=desc,
+                notes=(line.notes or "").strip() or None, print_notes=line.print_notes is not False,
             ))
             VendorItemService.learn(db, po.vendor_id, item_id, code, desc, line.unit_cost)
 
@@ -1834,6 +1844,7 @@ class PurchaseOrderService:
         item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, data)
         db.add(PurchaseOrderLine(po_id=po.id, item_id=item_id, quantity=data.quantity, unit_cost=data.unit_cost,
                                  vendor_item_code=code, vendor_description=desc,
+                                 notes=(data.notes or "").strip() or None, print_notes=data.print_notes is not False,
                                  position=max((l.position if l.position is not None else i for i, l in enumerate(po.lines)), default=-1) + 1))
         VendorItemService.learn(db, po.vendor_id, item_id, code, desc, data.unit_cost)
         db.flush()
@@ -1872,9 +1883,11 @@ class PurchaseOrderService:
                     detail=f"Cannot reduce quantity below {line.received_quantity}, which has already been received"
                 )
         cost_changed = "unit_cost" in updates and updates["unit_cost"] is not None and abs(updates["unit_cost"] - line.unit_cost) > 1e-9
-        for key in ("vendor_item_code", "vendor_description"):
+        for key in ("vendor_item_code", "vendor_description", "notes"):
             if key in updates:
                 updates[key] = (updates[key] or "").strip() or None
+        if updates.get("print_notes", False) is None:
+            updates.pop("print_notes")
         for key, value in updates.items():
             setattr(line, key, value)
         if line.vendor_item_code:

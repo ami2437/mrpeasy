@@ -38,9 +38,10 @@ def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{invoice_id}/pdf")
-def get_invoice_pdf(invoice_id: int, db: Session = Depends(get_db)):
+def get_invoice_pdf(invoice_id: int, notes: bool = True, db: Session = Depends(get_db)):
+    """?notes=false leaves every line note off this print."""
     invoice = InvoiceService.get(db, invoice_id)
-    return Response(invoice_pdf(db, invoice), media_type="application/pdf",
+    return Response(invoice_pdf(db, invoice, show_notes=notes), media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{invoice.code}.pdf"'})
 
 
