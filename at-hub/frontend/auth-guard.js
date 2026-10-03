@@ -108,6 +108,16 @@ function fmtPrice(n) {
   return (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 5 });
 }
 // Money totals: always 2 decimals with a $ sign.
+// One rounding rule everywhere (same as the server's services/money.py): each line rounds to the cent,
+// half up, and totals add up the rounded lines -- so the screen, the PDF and the balance always agree.
+function lineAmount(qty, price) {
+  const v = Number(((qty || 0) * (price || 0)).toPrecision(12));  // drop float noise (2.675 is really 2.67499...)
+  return Math.sign(v) * Math.round(Math.abs(v) * 100 + 1e-7) / 100;
+}
+function sumLines(lines, priceKey = "unit_price") {
+  return Math.round(lines.reduce((s, l) => s + lineAmount(l.quantity, l[priceKey]), 0) * 100) / 100;
+}
+
 function fmtMoney(n) {
   if (hidesMoney()) return "";
   const v = n || 0;

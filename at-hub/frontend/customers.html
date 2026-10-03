@@ -26,7 +26,7 @@
     document.getElementById("contacts").innerHTML = contactCardShell("+ New Customer");
 
     let orders = [];
-    const orderTotal = o => o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+    const orderTotal = o => o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
     ContactCards.init({

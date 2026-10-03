@@ -380,7 +380,7 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
 
     line_items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in invoice.lines if l.item_id})).all()}
     # $0 lines (free samples, no-charge items) stay off the customer's copy unless asked for.
-    printed = [l for l in invoice.lines if invoice.print_zero_lines or abs(l.quantity * l.unit_price) >= 0.005]
+    printed = [l for l in invoice.lines if invoice.print_zero_lines or abs(l.amount) >= 0.005]
     by_id = {s.id: s for s in shipments}
     rows = []
     for i, l in enumerate(printed, 1):
@@ -389,7 +389,7 @@ def invoice_pdf(db: Session, invoice: Invoice) -> bytes:
         if combined:
             sh = by_id.get(l.shipment_id)
             row.append(p(f"{sh.code}\n{date(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
-        rows.append(row + [qty(l.quantity), price(l.unit_price), money(l.quantity * l.unit_price)])
+        rows.append(row + [qty(l.quantity), price(l.unit_price), money(l.amount)])
     code_w = fit_width([i.code for i in line_items.values()], 0.9 * inch)
     ship_w = 1.0 * inch if combined else 0
     story.append(_data_table(
@@ -609,7 +609,8 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False)
     for i, l in enumerate(po.lines, 1):
         item = items.get(l.item_id)
         description = l.vendor_description or (item.title if item else "")
-        amount = l.quantity * l.unit_cost
+        from app.services.money import line_amount
+        amount = line_amount(l.quantity, l.unit_cost)
         total += amount
         if for_vendor:
             rows.append([str(i), p(description, "td"), qty(l.quantity), price(l.unit_cost), money(amount)])

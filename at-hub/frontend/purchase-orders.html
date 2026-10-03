@@ -456,7 +456,7 @@
                 <td class="num">${fmtQty(l.received_quantity)}</td>
                 <td class="num">${editable ? priceInput("e-line-cost", l.unit_cost) : fmtPrice(l.unit_cost)}
                   <div data-price-delta data-kind="purchase" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_cost}" ${editable ? `data-price-input=".e-line-cost"` : ""}></div></td>
-                <td class="num subtotal">${fmtMoney(l.quantity * l.unit_cost)}</td>
+                <td class="num subtotal">${fmtMoney(lineAmount(l.quantity, l.unit_cost))}</td>
                 <td class="num"><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong>${l.landed_cost_per_unit ? `<div class="muted small">+${fmtPrice(l.landed_cost_per_unit)} landed</div>` : ""}</td>
 
                 ${canReceive ? `
@@ -480,7 +480,7 @@
           </tbody>
           <tfoot>
             <tr><td></td><td class="grow">Lines Total</td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
-              <td class="num" id="po-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0))}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
+              <td class="num" id="po-total">${fmtMoney(sumLines(order.lines, "unit_cost"))}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
             ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Shipping &amp; Handling</td><td colspan="4"></td>
               <td class="num">${fmtMoney(order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
             <tr class="grand-total"><td></td><td class="grow">PO Total</td><td colspan="4"></td>
@@ -763,7 +763,7 @@ Thank you.</textarea>
       let total = 0;
       document.querySelectorAll("#po-lines-body > tr").forEach(tr => {
         const qtyEl = tr.querySelector(".e-line-qty"), costEl = tr.querySelector(".e-line-cost");
-        const sub = (qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty)) * (costEl ? parseFloat(costEl.value) || 0 : parseFloat(tr.dataset.cost));
+        const sub = lineAmount(qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty), costEl ? parseFloat(costEl.value) || 0 : parseFloat(tr.dataset.cost));
         total += sub;
         tr.querySelector(".subtotal").textContent = fmtMoney(sub);
       });

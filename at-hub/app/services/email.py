@@ -142,7 +142,7 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
     rows = [("Purchase order", po.code), ("Order date", po.order_date.strftime("%b %d, %Y") if po.order_date else "")]
     if po.expected_date:
         rows.append(("Required by", po.expected_date.strftime("%b %d, %Y")))
-    rows.append(("Total", money(sum(l.quantity * l.unit_cost for l in po.lines))))
+    rows.append(("Total", money(po.lines_total)))
     attachment = (purchase_order_pdf(db, po, for_vendor=True), f"{po.code}.pdf") if attach_pdf else None
     to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment)
     log = PurchaseOrderEmail(po_id=po.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,

@@ -151,7 +151,7 @@
         <div class="mgroup"><div class="mgroup-title">Orders pipeline</div><div class="mfigs">
           ${fig("Ordered, not shipped yet", sum(notShipped, x => x.v), n(notShipped.length, "order"), "", "customer-orders.html")}
           ${fig("Not even booked yet", sum(notBooked, x => x.v), n(notBooked.length, "order"), notBooked.length ? "warn" : "", "customer-orders.html")}
-          ${fig("Draft orders", sum(draftOrders, o => sum(o.lines, l => l.quantity * l.unit_price)), `${n(draftOrders.length, "order")} not confirmed`, draftOrders.length ? "warn" : "", "customer-orders.html")}
+          ${fig("Draft orders", sum(draftOrders, o => sum(o.lines, l => lineAmount(l.quantity, l.unit_price))), `${n(draftOrders.length, "order")} not confirmed`, draftOrders.length ? "warn" : "", "customer-orders.html")}
         </div></div>
         <div class="mgroup"><div class="mgroup-title">Payables — what we owe vendors</div><div class="mfigs">
           ${fig("PO value", poTotal, n(livePOs.length, "PO"), "", "purchase-orders.html")}
@@ -239,7 +239,7 @@
       // ---- Sales by customer ----
       const byCustomer = {};
       customerOrders.forEach(o => {
-        const total = o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+        const total = o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
         byCustomer[o.customer_id] = byCustomer[o.customer_id] || { count: 0, total: 0 };
         byCustomer[o.customer_id].count += 1;
         byCustomer[o.customer_id].total += total;

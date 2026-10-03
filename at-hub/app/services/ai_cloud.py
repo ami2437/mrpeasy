@@ -71,7 +71,7 @@ def redact(text: str, db: Session) -> Tuple[str, List[str]]:
     text, n = CARD_MASKED.subn("[CARD]", text)
     pages, card_lines = [], 0
     for page in re.split(r"(?=\[Page \d+\])", text):
-        if CARD_WORDS.search(page):
+        if CARD_WORDS.search(page) or "[CARD]" in page:  # a masked card # alone is enough to treat it as a card block
             lines, inside = page.splitlines(), False
             for k, line in enumerate(lines):
                 if CARD_START.search(line):
@@ -109,7 +109,7 @@ def redact(text: str, db: Session) -> Tuple[str, List[str]]:
 
 CARD_MASKED = re.compile(r"[*Xx•]{2,}[\s-]*\d{4}\b")
 CARD_WORDS = re.compile(r"card issuer|merchant\s*id|authori[sz]ation\s*(number|amount|code)|\bcard\s*:", re.I)
-CARD_START = re.compile(r"accepted by|tran(saction)?\s*type|card\s*(holder|type)?\s*:|merchant|authori[sz]", re.I)
+CARD_START = re.compile(r"accepted by|tran(saction)?\s*type|card\s*(holder|type)?\s*:|merchant|authori[sz]|\[CARD\]", re.I)
 OUR_ACCOUNT = re.compile(r"^(\s*(?:customer|cust\.?|client)\s*(?:id|#|no\.?|number)\s*:?\s*)(\S.*)$", re.I | re.M)
 
 
@@ -118,9 +118,12 @@ CUSTOMER_ALIASES = {"Hudson Products": ["CHART INDUSTRIES", "CHARTINDUSTRIES", "
 PHONE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s*|\b\d{3}[\s.-])\d{3}[\s.-]\d{4}\b")
 URL = re.compile(r"(?:https?://|www\.)\S+", re.I)
 # "PO Issued By Andrew Stiles", "QUOTED VIA ANDY 9/17/26", "Buyer: ...", "Attn: ..." -> the person's name
+# "PO Issued By Andrew Stiles", "QUOTED VIA ANDY 9/17/26", "Attn: JANE DOE  Ordered By: JANE" -> the person's name.
+# Up to 3 words, single-spaced, and never a label word -- so "JANE DOE  Ordered" stops at JANE DOE.
+_NAME_WORD = r"(?!(?:by|ordered|attn|attention|phone|fax|email|date|ship|bill|to|customer)\b)[A-Za-z][A-Za-z.'-]*"
 PERSON = re.compile(r"((?:issued|ordered|approved|prepared)[ \t]+by[ \t]*:?[ \t]*|taken[ \t]+by[ \t]*:[ \t]*|quoted[ \t]+via[ \t]+"
                     r"|(?:buyer|attn|attention|requisitioner|contact)[ \t]*:[ \t]*)"
-                    r"([A-Za-z][A-Za-z.'-]*(?:[ \t]+[A-Za-z][A-Za-z.'-]*){0,2})", re.I)
+                    rf"({_NAME_WORD}(?: {_NAME_WORD}){{0,2}})", re.I)
 TERMS_HEADING = re.compile(r"^[^\n]{0,60}\bterms\s*(?:&|and)\s*conditions\b[^\n]{0,100}$", re.I | re.M)
 
 

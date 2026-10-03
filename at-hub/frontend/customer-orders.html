@@ -150,7 +150,7 @@
         const priceEl = tr.querySelector(".l-price, .e-line-price");
         const qty = qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty) || 0;
         const price = priceEl ? parseFloat(priceEl.value) || 0 : parseFloat(tr.dataset.price) || 0;
-        const sub = qty * price;
+        const sub = lineAmount(qty, price);
         total += sub;
         totalQty += qty;
         const subEl = tr.querySelector(".subtotal");
@@ -475,7 +475,7 @@
       const anyBooked = order.lines.some(l => l.booked_quantity > 0 || l.shipped_quantity > 0);
       const allShipped = order.lines.length && order.lines.every(l => l.shipped_quantity >= l.quantity - 1e-9);
       const shipDates = live.map(s => s.ship_date).filter(Boolean).sort();
-      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+      const total = order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
       const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
       const payDates = realInv.flatMap(i => i.payments.map(p => p.paid_date || p.created_at)).filter(Boolean).sort();
       const steps = [
@@ -495,7 +495,7 @@
     // The order's money at a glance (same look as a PO's)
     function orderMoneyTiles(order, invs) {
       if (hidesMoney()) return "";
-      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+      const total = order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
       const shipped = order.lines.reduce((s, l) => s + Math.min(l.shipped_quantity, l.quantity) * l.unit_price, 0);
       const realInv = invs.filter(i => !["draft", "void"].includes(i.status));
       const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
@@ -528,7 +528,7 @@
     function orderProgress(o) {
       const ordered = o.lines.reduce((sum, l) => sum + l.quantity, 0);
       const shippedQty = o.lines.reduce((sum, l) => sum + Math.min(l.shipped_quantity, l.quantity), 0);
-      const orderTotal = o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0);
+      const orderTotal = o.lines.reduce((sum, l) => sum + lineAmount(l.quantity, l.unit_price), 0);
       const liveInvoices = invoices.filter(i => i.order_id === o.id && i.status !== "void");
       const invoicedAmt = liveInvoices.reduce((sum, i) => sum + i.total, 0);
       const paidAmt = liveInvoices.reduce((sum, i) => sum + i.amount_paid, 0);
@@ -574,7 +574,7 @@
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td><td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
-          <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0))}</td>
+          <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td><span class="tag cancelled">cancelled</span></td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
           <td colspan="2"></td>
           <td>${AuthGuard.hasRole("manager") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
@@ -599,7 +599,7 @@
           <td>${escapeHtml(o.job_number || "")}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
-          <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0))}</td>
+          <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td><span class="tag ${o.status}">${o.status}</span></td>
           <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>
@@ -791,7 +791,7 @@
                 <td class="num">${editable && l.shipped_quantity === 0 ? `<input type="number" step="1" min="1" class="e-line-qty qty-input" value="${l.quantity}">` : fmtQty(l.quantity)}</td>
                 <td class="num">${editable ? priceInput("e-line-price", l.unit_price) : fmtPrice(l.unit_price)}
                   <div data-price-delta data-kind="sale" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_price}" ${editable ? `data-price-input=".e-line-price"` : ""}></div></td>
-                <td class="num subtotal">${fmtMoney(l.quantity * l.unit_price)}</td>
+                <td class="num subtotal">${fmtMoney(lineAmount(l.quantity, l.unit_price))}</td>
                 <td class="num">${fmtQty(l.booked_quantity)}</td>
                 <td>${bookingSourceHtml(l)}</td>
                 <td class="num">${fmtQty(l.shipped_quantity)}</td>
@@ -808,7 +808,7 @@
           </tbody>
           <tfoot><tr>
             <td></td><td class="grow">Order total</td><td class="num" id="order-qty">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td>
-            <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0))}</td>
+            <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
             <td colspan="${6 + (canBook ? 1 : 0)}"></td>
           </tr></tfoot>
         </table>

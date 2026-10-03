@@ -36,11 +36,22 @@ def generate_code(db: Session, model, prefix: str) -> str:
     """Sequential codes. A NumberSeries row (set by the MRPeasy import) continues that
     numbering, e.g. C89124; otherwise AT-HUB's own CO-0001 style."""
     series = db.query(NumberSeries).filter(NumberSeries.key == prefix).first()
+    binned = _binned_codes(db, model.__tablename__)  # a deleted record's number is never handed out again
     if series:
         codes = db.query(model.code).filter(model.code.like(f"{series.prefix}%")).all()
-        return _next_in_series([c for (c,) in codes], series.prefix, series.width)
+        return _next_in_series([c for (c,) in codes] + [c for c in binned if c.startswith(series.prefix)], series.prefix, series.width)
     codes = db.query(model.code).filter(model.code.like(f"{prefix}-%")).all()
-    return _next_in_series([c for (c,) in codes], f"{prefix}-", 4)
+    return _next_in_series([c for (c,) in codes] + [c for c in binned if c.startswith(f"{prefix}-")], f"{prefix}-", 4)
+
+
+def _binned_codes(db: Session, table: str) -> List[str]:
+    """Codes of records of this table sitting in the recycle bin."""
+    import json as _json
+    from app.models import DeletedRecord
+    out = []
+    for (rows,) in db.query(DeletedRecord.rows).filter(DeletedRecord.restored_at.is_(None), DeletedRecord.rows.like(f'%"table": "{table}"%')).all():
+        out += [r["cols"].get("code") for r in _json.loads(rows) if r["table"] == table and r["cols"].get("code")]
+    return out
 
 
 # ---- Lot numbering and costing ----
@@ -1533,7 +1544,8 @@ class InvoiceService:
                 if line.item_id is None and line.description == "Shipping":
                     existing = next((l for l in target.lines if l.item_id is None and l.description == "Shipping"), None)
                     if existing:  # one Shipping line, charges added together
-                        existing.unit_price = existing.quantity * existing.unit_price + line.quantity * line.unit_price
+                        from app.services.money import line_amount
+                        existing.unit_price = line_amount(existing.quantity, existing.unit_price) + line_amount(line.quantity, line.unit_price)
                         existing.quantity = 1
                         inv.lines.remove(line)
                         continue
@@ -1600,6 +1612,8 @@ class InvoiceService:
         invoice = InvoiceService.get(db, invoice_id)
         if status == "void" and invoice.payments:
             raise HTTPException(status_code=400, detail="Invoice has payments recorded against it, cannot void")
+        if status == "paid" and invoice.balance > 0.005:  # paid means the payments cover it -- record them first
+            raise HTTPException(status_code=400, detail=f"{invoice.balance:,.2f} is still open -- record the payment and it's marked paid automatically")
         if status == "void":
             # Its shipments become billable again (they can go on a new or combined invoice).
             for shipment in invoice.shipments:

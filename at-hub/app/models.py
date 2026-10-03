@@ -350,16 +350,19 @@ class PurchaseOrder(Base):
 
     @property
     def lines_total(self) -> float:
-        return round(sum(l.quantity * l.unit_cost for l in self.lines), 2)
+        from app.services.money import total
+        return total(self.lines, "unit_cost")
 
     @property
     def charges_total(self) -> float:
-        return round(sum(c.amount for c in self.charges), 2)
+        from app.services.money import cents
+        return cents(sum(c.amount for c in self.charges))
 
     @property
     def order_total(self) -> float:
         """What we owe the vendor: lines + freight/shipping/handling charges (+ pre-landed-cost legacy fees)."""
-        return round(self.lines_total + self.charges_total + (self.freight_cost or 0) + (self.tariff_cost or 0), 2)
+        from app.services.money import cents
+        return cents(self.lines_total + self.charges_total + (self.freight_cost or 0) + (self.tariff_cost or 0))
 
     @property
     def amount_paid(self) -> float:
@@ -660,11 +663,14 @@ class Invoice(Base):
 
     @property
     def total(self) -> float:
-        return sum(l.quantity * l.unit_price for l in self.lines)
+        """Sum of the lines, each rounded to the cent (services/money.py)."""
+        from app.services.money import total
+        return total(self.lines)
 
     @property
     def amount_paid(self) -> float:
-        return sum(p.amount for p in self.payments)
+        from app.services.money import cents
+        return cents(sum(p.amount for p in self.payments))
 
     @property
     def shipment_ids(self) -> list:
@@ -686,7 +692,8 @@ class Invoice(Base):
 
     @property
     def balance(self) -> float:
-        return self.total - self.amount_paid
+        from app.services.money import cents
+        return cents(self.total - self.amount_paid)
 
 
 class InvoiceLine(Base):
@@ -700,6 +707,11 @@ class InvoiceLine(Base):
     description = Column(String, nullable=False)
     quantity = Column(Float, nullable=False, default=1)
     unit_price = Column(Float, nullable=False, default=0)
+
+    @property
+    def amount(self) -> float:
+        from app.services.money import line_amount
+        return line_amount(self.quantity, self.unit_price)
 
 
 class InvoiceEmail(Base):

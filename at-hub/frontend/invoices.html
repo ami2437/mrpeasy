@@ -60,8 +60,8 @@
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
-    function lineTotal(l) { return (l.quantity * l.unit_price); }
-    function invoiceTotal(inv) { return inv.lines.reduce((sum, l) => sum + lineTotal(l), 0); }
+    function lineTotal(l) { return lineAmount(l.quantity, l.unit_price); }
+    function invoiceTotal(inv) { return sumLines(inv.lines); }
 
     function matchesSearch(inv, q) {
       if (!q) return true;
@@ -263,7 +263,7 @@
       card.style.display = "block";
       const editable = invoice.status !== "void";  // sent/paid invoices can be corrected too
 
-      const zeroLines = invoice.lines.filter(l => Math.abs(l.quantity * l.unit_price) < 0.005).length;
+      const zeroLines = invoice.lines.filter(l => Math.abs(lineAmount(l.quantity, l.unit_price)) < 0.005).length;
       // Other draft invoices of the same order that can be folded into this one.
       const mergeable = editable ? invoices.filter(i => i.id !== invoice.id && i.order_id && i.order_id === invoice.order_id
         && i.status === "draft" && !i.payments.length && !i.emails.length && i.funding_amount == null) : [];

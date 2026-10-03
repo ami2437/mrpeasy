@@ -579,6 +579,8 @@ class InvoiceLineResponse(InvoiceLineInput):
     id: int
 
 
+    amount: float = 0  # quantity x price, rounded to the cent
+
     class Config:
         from_attributes = True
 

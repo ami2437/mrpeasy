@@ -202,9 +202,20 @@ def activity(entity_type: str, entity_id: int, authorization: str = Header(None)
         raise HTTPException(status_code=401, detail="Not signed in")
     db = SessionLocal()
     try:
+        payload = AuthService.decode_token(authorization.split(" ")[-1]) or {}
+        user = AuthService.get_user_by_username(db, payload.get("sub"))
+        employee = not user or user.role == "employee"
         rows = (db.query(ActivityLog).filter(ActivityLog.entity_type == entity_type, ActivityLog.entity_id == entity_id)
                 .order_by(ActivityLog.at.desc()).limit(300).all())
-        return [{"method": r.method, "action": r.action, "detail": r.detail, "by": r.by, "at": r.at.isoformat() + "Z"} for r in rows]
+
+        def detail(text):
+            if not employee or not text:
+                return text
+            try:  # employees never see prices or costs, not even inside the history text
+                return json.dumps(_scrub(json.loads(text)))
+            except ValueError:
+                return None
+        return [{"method": r.method, "action": r.action, "detail": detail(r.detail), "by": r.by, "at": r.at.isoformat() + "Z"} for r in rows]
     finally:
         db.close()
 
