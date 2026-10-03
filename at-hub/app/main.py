@@ -247,6 +247,8 @@ app.include_router(vendor_payments.router)
 app.include_router(reports.router)
 from app.routes import imports  # noqa: E402
 app.include_router(imports.router)
+from app.routes import file_matcher  # noqa: E402
+app.include_router(file_matcher.router)
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():

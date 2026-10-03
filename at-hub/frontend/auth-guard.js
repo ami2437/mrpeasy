@@ -643,7 +643,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
   { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
-  { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"]] },
+  { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["file-matcher.html", "File Matcher"]] },
 ];
 
 // Where "Home" goes for this user (used by pages without the sidebar, like POD).
@@ -1376,6 +1376,15 @@ function lineNoteBox(note, printNotes, editable = true) {
     <textarea class="ln-text" rows="1" placeholder="Note for this line…" title="Shows on packing lists, invoices and printouts">${escapeHtml(text)}</textarea>
     <label class="ln-print-label" title="Untick to keep this note internal (never printed)"><input type="checkbox" class="ln-print" ${print ? "checked" : ""}> Print</label></div>`;
 }
+// Paperclip beside a record on list pages: loadAttachCounts("customer_order").then(render); clip(o.id)
+let ATTACH_COUNTS = {};
+async function loadAttachCounts(entityType) {
+  try { ATTACH_COUNTS = await apiFetch(`/api/attachments/counts?entity_type=${entityType}`); } catch (e) { ATTACH_COUNTS = {}; }
+}
+function clip(id) {
+  const n = ATTACH_COUNTS[id];
+  return n ? `<span class="list-clip" title="${n} file${n === 1 ? "" : "s"} attached">${icon("paperclip")}</span>` : "";
+}
 function toggleLineNote(btn) {
   const box = btn.closest("tr").querySelector(".line-note");
   if (!box) return;
@@ -1395,7 +1404,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [

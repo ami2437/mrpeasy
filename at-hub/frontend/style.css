@@ -1137,3 +1137,5 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
 .line-no .line-actions { display: flex; gap: 0; margin-top: 4px; text-align: left; }
 .line-no .line-actions .icon-btn { padding: 2px; }
 .fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 190px; }
+.list-clip { color: var(--muted); margin-left: 4px; display: inline-flex; vertical-align: -2px; }
+.list-clip .ico { width: 13px; height: 13px; }

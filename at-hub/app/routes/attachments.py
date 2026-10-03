@@ -46,6 +46,21 @@ def upload_root() -> Path:
     return root
 
 
+def store_file(db: Session, entity_type: str, entity_id: int, category: str, name: str, content_type: Optional[str],
+               data: bytes, note: Optional[str], username: str) -> Attachment:
+    """Write one file under uploads/<type>/<id>/ and add its Attachment row (caller commits)."""
+    folder = upload_root() / entity_type / str(entity_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[-80:]
+    stored = f"{uuid.uuid4().hex}_{safe}"
+    (folder / stored).write_bytes(data)
+    att = Attachment(entity_type=entity_type, entity_id=entity_id, category=category, filename=name,
+                     stored_name=f"{entity_type}/{entity_id}/{stored}", content_type=content_type or mimetypes.guess_type(name)[0],
+                     size=len(data), note=(note or "").strip() or None, uploaded_by=username)
+    db.add(att)
+    return att
+
+
 def _check_entity(db: Session, entity_type: str, entity_id: int) -> None:
     model = ENTITIES.get(entity_type)
     if not model:
@@ -68,6 +83,16 @@ def list_attachments(entity_type: str = Query(...), entity_id: int = Query(...),
     if _hides_money(user):
         q = q.filter(Attachment.category.notin_(MONEY_CATEGORIES))
     return q.order_by(Attachment.created_at.desc()).all()
+
+
+@router.get("/counts")
+def attachment_counts(entity_type: str = Query(...), db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """{record id: number of files} for one record type -- the list pages' paperclips."""
+    from sqlalchemy import func
+    q = db.query(Attachment.entity_id, func.count(Attachment.id)).filter(Attachment.entity_type == entity_type)
+    if _hides_money(user):
+        q = q.filter(Attachment.category.notin_(MONEY_CATEGORIES))
+    return {str(eid): n for eid, n in q.group_by(Attachment.entity_id).all()}
 
 
 @router.post("/", response_model=List[AttachmentResponse])
@@ -109,22 +134,8 @@ async def upload(entity_type: str = Form(...), entity_id: int = Form(...), categ
             raise HTTPException(status_code=400, detail=f"{name} is empty")
         blobs.append((name, f.content_type or mimetypes.guess_type(name)[0], data))
 
-    saved = []
-    for eid in entity_ids:
-        folder = upload_root() / entity_type / str(eid)
-        folder.mkdir(parents=True, exist_ok=True)
-        for name, content_type, data in blobs:
-            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[-80:]
-            stored = f"{uuid.uuid4().hex}_{safe}"
-            (folder / stored).write_bytes(data)
-            att = Attachment(
-                entity_type=entity_type, entity_id=eid, category=category,
-                filename=name, stored_name=f"{entity_type}/{eid}/{stored}",
-                content_type=content_type, size=len(data),
-                note=(note or "").strip() or None, uploaded_by=user.username,
-            )
-            db.add(att)
-            saved.append(att)
+    saved = [store_file(db, entity_type, eid, category, name, content_type, data, note, user.username)
+             for eid in entity_ids for name, content_type, data in blobs]
     for shipment in shipments:
         if not shipment.delivered_at:
             ShipmentService.mark_delivered(db, shipment, None, user.username, commit=False)

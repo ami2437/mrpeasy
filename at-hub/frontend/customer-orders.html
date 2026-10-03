@@ -617,7 +617,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td><td>${customerName(o.customer_id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td><td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td><span class="tag cancelled">cancelled</span></td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
@@ -638,7 +638,7 @@
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
         <tr class="${done ? "order-done" : ""}">
-          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td>
           <td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
@@ -1357,6 +1357,7 @@
     }
 
     async function loadOrders() {
+      loadAttachCounts("customer_order").then(renderOrders);
       [orders, shipments, items, invoices] = await Promise.all([
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/shipments/"),
@@ -1380,6 +1381,7 @@
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
+      loadAttachCounts("customer_order").then(renderOrders);  // paperclips fill in a moment later
       enableLineDrag(document.getElementById("lines-body"));  // new order: lines saved in the order shown
       renderOrders();
       const params = new URLSearchParams(window.location.search);

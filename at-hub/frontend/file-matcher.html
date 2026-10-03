@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — File Matcher</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">File Matcher</h1>
+      <div class="row toolbar-row">
+        <input type="text" id="fm-path" placeholder="Folder on this PC, e.g. C:\Users\...\ATIND Supplies\Purchase Orders - Hudson" style="flex:4;">
+        <select id="fm-kind" style="flex:0 0 190px;">
+          <option value="customer">Customer orders</option>
+          <option value="vendor">Purchase orders (vendor docs)</option>
+        </select>
+        <button style="flex:0 0 auto;" onclick="scan()" data-icon="search">Scan Folder</button>
+      </div>
+      <div id="fm-recent" class="small muted" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">Every PDF in the folder (and its subfolders) is checked against
+        <strong id="fm-what">customer orders' PO #</strong>. A file is attached <strong>only when certain</strong>: the number is a whole word of
+        the file name, it belongs to exactly one record, and only one file points at that record. Anything else is listed and left alone.
+        Files nothing matched can be <strong>read with the AI</strong> and turned into draft orders, several at once.</p>
+      <div id="fm-summary"></div>
+      <div class="tabs" id="fm-tabs" style="display:none;"></div>
+      <div id="fm-actions" class="btn-row" style="margin:8px 0;"></div>
+      <table class="list-fit" id="fm-table" style="display:none;">
+        <thead><tr><th style="width:28px;"><input type="checkbox" id="fm-all" onchange="tickAll(this.checked)"></th><th>File</th><th>Status</th><th>Record</th><th>Why</th></tr></thead>
+        <tbody id="fm-body"></tbody>
+      </table>
+      <div id="fm-msg" class="small" style="margin-top:8px;"></div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireRole("super_admin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("file-matcher.html");
+    const STATUS = {
+      match: ["Will attach", "shipped", "Certain match"], attached: ["Already attached", "draft", ""], has_one: ["Has one already", "draft", ""],
+      ambiguous: ["Not certain", "overdue", ""], no_match: ["No match", "cancelled", ""],
+      ready: ["AI: ready", "shipped", ""], unsure: ["AI: needs a person", "overdue", ""], created: ["Created", "confirmed", ""], failed: ["Failed", "overdue", ""],
+    };
+    let rows = [], folder = "", kind = "customer", view = "match";
+    const RECENT_KEY = "at_hub_fm_recent";
+    const recent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch (e) { return []; } };
+    function showRecent() {
+      const r = recent();
+      document.getElementById("fm-recent").innerHTML = r.length ? "Recent: " + r.map(x => `<a class="link" onclick='usePath(${JSON.stringify(x)})'>${escapeHtml(x.path.split(/[\\/]/).slice(-2).join("\\"))}</a> <span class="muted">(${x.kind})</span>`).join(" · ") : "";
+    }
+    function usePath(x) { document.getElementById("fm-path").value = x.path; document.getElementById("fm-kind").value = x.kind; scan(); }
+    showRecent();
+    document.getElementById("fm-kind").onchange = e => document.getElementById("fm-what").textContent = e.target.value === "customer" ? "customer orders' PO #" : "POs' vendor SO # and our PO #";
+
+    async function scan() {
+      const path = document.getElementById("fm-path").value.trim();
+      kind = document.getElementById("fm-kind").value;
+      const msg = document.getElementById("fm-msg");
+      msg.textContent = "Scanning…";
+      try {
+        const r = await apiFetch("/api/file-matcher/scan", { method: "POST", body: JSON.stringify({ path, kind }) });
+        rows = r.files; folder = r.folder; msg.textContent = "";
+        try { localStorage.setItem(RECENT_KEY, JSON.stringify([{ path: folder, kind }, ...recent().filter(x => x.path !== folder || x.kind !== kind)].slice(0, 5))); } catch (e) {}
+        showRecent();
+        view = rows.some(x => x.status === "match") ? "match" : "no_match";
+        render();
+      } catch (e) { msg.innerHTML = `<span class="neg">${escapeHtml(e.message)}</span>`; }
+    }
+
+    const count = s => rows.filter(r => (Array.isArray(s) ? s : [s]).includes(r.status)).length;
+    const recLink = r => r.record_id ? `<a class="link" href="${kind === "customer" ? "customer-orders" : "purchase-orders"}.html?id=${r.record_id}" target="_blank">${escapeHtml(r.record)}</a>` : "";
+    const TABS = [["match", "To attach", ["match"]], ["done", "Already done", ["attached", "has_one"]], ["ambiguous", "Not certain", ["ambiguous"]],
+                  ["no_match", "No match → AI", ["no_match", "ready", "unsure", "created", "failed"]]];
+    function render() {
+      document.getElementById("fm-summary").innerHTML = `<div class="money-tiles">
+        <div class="mtile t-total"><span>PDFs</span><strong>${rows.length}</strong><small style="overflow-wrap:anywhere;">${escapeHtml(folder)}</small></div>
+        <div class="mtile t-paid"><span>Certain matches</span><strong>${count("match")}</strong><small>ready to attach</small></div>
+        <div class="mtile t-zero"><span>Already done</span><strong>${count(["attached", "has_one"])}</strong><small>skipped</small></div>
+        <div class="mtile t-wait"><span>Not certain</span><strong>${count("ambiguous")}</strong><small>left alone</small></div>
+        <div class="mtile t-billed"><span>No match</span><strong>${count(["no_match", "ready", "unsure", "failed"])}</strong><small>can be read with AI</small></div></div>`;
+      const tabs = document.getElementById("fm-tabs");
+      tabs.style.display = "";
+      tabs.innerHTML = TABS.map(([k, label, st]) => `<div class="tab ${view === k ? "active" : ""}" onclick="view='${k}'; render()">${label} <span class="muted">(${count(st)})</span></div>`).join("");
+      const st = TABS.find(t => t[0] === view)[2];
+      const shown = rows.filter(r => st.includes(r.status));
+      const pickable = r => (view === "match" && r.status === "match") || (view === "no_match" && ["no_match", "ready", "unsure", "failed"].includes(r.status));
+      document.getElementById("fm-table").style.display = "";
+      document.getElementById("fm-all").checked = false;
+      document.getElementById("fm-body").innerHTML = shown.map(r => {
+        const i = rows.indexOf(r), [label, cls] = STATUS[r.status] || [r.status, "draft"];
+        return `<tr><td>${pickable(r) ? `<input type="checkbox" class="fm-pick" value="${i}" ${r.status === "match" || r.status === "ready" ? "checked" : ""}>` : ""}</td>
+          <td class="small">${escapeHtml(r.file)}</td><td><span class="tag ${cls}">${label}</span></td><td>${recLink(r)}</td>
+          <td class="small ${["unsure", "failed"].includes(r.status) ? "neg" : "muted"}">${escapeHtml(r.why || "")}</td></tr>`;
+      }).join("") || `<tr><td colspan="5" class="muted">Nothing here.</td></tr>`;
+      const acts = document.getElementById("fm-actions");
+      if (view === "match") acts.innerHTML = count("match") ? `<button onclick="attachPicked()" data-icon="paperclip">Attach Ticked Files</button>
+          ${kind === "vendor" ? `<select id="fm-cat" style="width:auto;"><option value="auto">Type: guess from file name</option><option value="vendor_invoice">Vendor invoice</option><option value="vendor_quote">Vendor quote / SO</option><option value="packing_list">Packing list</option><option value="mtr">MTR</option><option value="other">Other</option></select>` : `<span class="muted small">Saved as the order's Customer PO.</span>`}` : "";
+      else if (view === "no_match") acts.innerHTML = `<button class="ai-btn" data-icon="sparkles" onclick="readPicked()">Read Ticked With AI</button>
+          <button onclick="createReady()" ${count("ready") ? "" : "disabled"}>Create ${count("ready")} Draft ${kind === "customer" ? "Order" : "PO"}${count("ready") === 1 ? "" : "s"}</button>
+          <span class="muted small">Only complete reads are created (as drafts, PDF attached). The rest: use Import PO PDF on the ${kind === "customer" ? "Customer Orders" : "Purchase Orders"} page.</span>`;
+      else acts.innerHTML = "";
+    }
+    function tickAll(on) { document.querySelectorAll(".fm-pick").forEach(c => c.checked = on); }
+    const picked = () => [...document.querySelectorAll(".fm-pick:checked")].map(c => rows[+c.value]);
+
+    async function attachPicked() {
+      const files = picked().filter(r => r.status === "match").map(r => r.file);
+      if (!files.length) return;
+      if (!confirm(`Attach ${files.length} file${files.length === 1 ? "" : "s"} to the matching ${kind === "customer" ? "orders" : "POs"}?`)) return;
+      const msg = document.getElementById("fm-msg");
+      msg.textContent = "Attaching…";
+      try {
+        const r = await apiFetch("/api/file-matcher/attach", { method: "POST", body: JSON.stringify({ path: folder, kind, files, category: document.getElementById("fm-cat")?.value || null }) });
+        await scan();
+        msg.innerHTML = `<span class="pos">Attached ${r.attached.length}.</span>${r.skipped.length ? ` Skipped ${r.skipped.length} (no longer certain).` : ""}`;
+        toast(`Attached ${r.attached.length} file${r.attached.length === 1 ? "" : "s"}`);
+      } catch (e) { msg.innerHTML = `<span class="neg">${escapeHtml(e.message)}</span>`; }
+    }
+
+    // AI reads go one at a time (the local model handles one request well); the table updates as each finishes.
+    let busy = false;
+    async function readPicked() {
+      if (busy) return;
+      const todo = picked();
+      if (!todo.length) { document.getElementById("fm-msg").textContent = "Tick the files to read first."; return; }
+      busy = true;
+      for (const [n, r] of todo.entries()) {
+        document.getElementById("fm-msg").textContent = `Reading ${n + 1} of ${todo.length}: ${r.file}… (each can take a minute)`;
+        try {
+          const res = await apiFetch("/api/file-matcher/read", { method: "POST", body: JSON.stringify({ path: folder, kind, file: r.file }) });
+          const d = res.draft, who = kind === "customer" ? (d.customer?.suggested_name || d.customer_name) : (d.vendor?.suggested_name || d.vendor_name);
+          r.status = res.ready ? "ready" : "unsure";
+          r.why = `${who || "?"} · ${kind === "customer" ? "PO " + (d.po_number || "?") : "SO " + (d.document_number || "?")} · ${(d.lines || []).length} lines`
+            + (res.problems.length ? " — " + res.problems.join("; ") : " — complete");
+        } catch (e) { r.status = "failed"; r.why = e.message; }
+        render();
+      }
+      busy = false;
+      document.getElementById("fm-msg").textContent = `Read ${todo.length}. ${count("ready")} ready to create.`;
+    }
+
+    async function createReady() {
+      const todo = rows.filter(r => r.status === "ready");
+      if (!todo.length || !confirm(`Create ${todo.length} draft ${kind === "customer" ? "order" : "PO"}${todo.length === 1 ? "" : "s"}, each with its PDF attached?`)) return;
+      for (const [n, r] of todo.entries()) {
+        document.getElementById("fm-msg").textContent = `Creating ${n + 1} of ${todo.length}…`;
+        try {
+          const res = await apiFetch("/api/file-matcher/create", { method: "POST", body: JSON.stringify({ path: folder, kind, file: r.file }) });
+          r.status = "created"; r.record = res.record; r.record_id = res.record_id; r.why = "draft created, PDF attached — check and confirm it";
+        } catch (e) { r.status = "failed"; r.why = e.message; }
+        render();
+      }
+      document.getElementById("fm-msg").textContent = `Done: ${count("created")} created.`;
+    }
+  </script>
+</body>
+</html>
