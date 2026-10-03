@@ -246,9 +246,24 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         if f(o["discount_sum"]):
             po.charges.append(PurchaseOrderCharge(charge_type="other", amount=-round(f(o["discount_sum"]), 2),
                                        description="Discount (MRPeasy)", created_by=BY))
-        if clean(o["invoice_number"]):
-            po.bills.append(VendorBill(bill_number=o["invoice_number"], bill_date=dt(o["invoice_date"]), due_date=dt(o["due_date"]),
-                              amount=round(f(o["total_price"]), 2), note="Imported from MRPeasy", created_by=BY))
+        # Vendor invoices: MRPeasy lists them under "bills" (the old single invoice_number field is usually empty).
+        # The export carries no amount per bill: a PO with one bill is billed its full total; with several, the
+        # split isn't known, so each comes in at $0 for the user to fill in.
+        bills = [b for b in (o.get("bills") or []) if clean(b.get("invoice_number"))]
+        if not bills and clean(o["invoice_number"]):
+            bills = [{"invoice_number": o["invoice_number"], "invoice_date": o["invoice_date"], "due_date": o["due_date"]}]
+        seen_bills = set()
+        for b in bills:
+            num = clean(b["invoice_number"])
+            if num in seen_bills:
+                continue
+            seen_bills.add(num)
+            one = len(bills) == 1
+            po.bills.append(VendorBill(bill_number=num, bill_date=dt(b.get("invoice_date")), due_date=dt(b.get("due_date") or o["due_date"]),
+                                       amount=round(f(o["total_price"]), 2) if one else 0,
+                                       note="Imported from MRPeasy" if one else
+                                       f"Imported from MRPeasy -- one of {len(bills)} invoices on this PO; MRPeasy doesn't export the split, enter the amount",
+                                       created_by=BY))
         goods = [l for l in po.lines]
         if goods and all(l.received_quantity >= l.quantity - 1e-9 for l in goods):
             po.status = "received"

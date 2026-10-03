@@ -542,7 +542,7 @@
           <td class="small">${escapeHtml(it.title || "")}${lineNoteBox(l.notes, l.print_notes, false)}</td>
           <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.shipped_quantity)}</td><td class="num">${fmtQty(open)}</td>
           <td class="num">${fmtPrice(l.unit_price)}</td><td class="num">${fmtMoney(lineAmount(l.quantity, l.unit_price))}</td>
-          <td><span class="tag ${l.line_status}">${l.line_status.replace("_", " ")}</span></td>
+          <td>${statusIcon(l.line_status)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(l.delivery_date || o.delivery_date)}</td></tr>`);
       }));
       const tbody = document.getElementById("items-body");
@@ -620,7 +620,7 @@
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td><td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
-          <td><span class="tag cancelled">cancelled</span></td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
+          <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
           <td colspan="2"></td>
           <td>${AuthGuard.hasRole("manager") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
         return;
@@ -645,7 +645,7 @@
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
           <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + lineAmount(l.quantity, l.unit_price), 0))}</td>
-          <td><span class="tag ${o.status}">${o.status}</span></td>
+          <td>${statusIcon(o.status === "confirmed" && shippedQty > 0 && shippedQty < ordered - 1e-9 ? "partially_shipped" : o.status)}</td>
           <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>
             ${progressBar("Shipped", pct, "ship", `${fmtQty(shippedQty)} of ${fmtQty(ordered)} units shipped`)}
@@ -841,7 +841,7 @@
                 <td class="num">${fmtQty(l.booked_quantity)}</td>
                 <td>${bookingSourceHtml(l)}</td>
                 <td class="num">${fmtQty(l.shipped_quantity)}</td>
-                <td><span class="tag ${l.line_status}">${l.line_status.replace("_", " ")}</span></td>
+                <td>${statusIcon(l.line_status)}</td>
                 <td>${lineShipmentsHtml(l)}</td>
                 <td>${lineInvoicesHtml(l)}</td>
 

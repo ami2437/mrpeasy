@@ -1139,3 +1139,18 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
 .fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 190px; }
 .list-clip { color: var(--muted); margin-left: 4px; display: inline-flex; vertical-align: -2px; }
 .list-clip .ico { width: 13px; height: 13px; }
+
+/* status icons (statusIcon in auth-guard.js): timeline-style dots */
+.st-ico { position: relative; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; vertical-align: middle;
+  border: 2px solid var(--border-strong); background: var(--surface); color: var(--muted); }
+.st-ico .ico { width: 12px; height: 12px; margin: 0 !important; stroke-width: 2.4; }
+.st-draft { border-style: dashed; }
+.st-confirmed, .st-not_booked { border-color: #64748b; color: #475569; }
+.st-partially_booked { border-color: #2563eb; background: linear-gradient(90deg, #2563eb 50%, var(--surface) 50%); }
+.st-booked { border-color: #2563eb; background: #2563eb; color: #fff; }
+.st-partially_shipped { border-color: #d97706; background: linear-gradient(90deg, #d97706 50%, var(--surface) 50%); }
+.st-shipped, .st-delivered { border-color: var(--pos); background: var(--pos); color: #fff; }
+.st-invoiced, .st-paid { border-color: #15803d; background: #dcfce7; color: #15803d; }
+.st-cancelled { border-color: var(--border-strong); background: var(--surface-3); color: var(--muted); }
+html[data-theme="dark"] .st-invoiced, html[data-theme="dark"] .st-paid { background: #14532d; color: #86efac; border-color: #22c55e; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
