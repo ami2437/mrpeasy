@@ -479,7 +479,7 @@
               </tr>`).join("")}
           </tbody>
           <tfoot>
-            <tr><td></td><td class="grow">Lines Total</td><td></td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
+            <tr><td></td><td class="grow">Lines Total</td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
               <td class="num" id="po-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0))}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
             ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Shipping &amp; Handling</td><td colspan="4"></td>
               <td class="num">${fmtMoney(order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
@@ -1179,6 +1179,10 @@ Thank you.</textarea>
     }
 
     async function removeLine(poId, lineId) {
+      const row = document.querySelector(`#po-lines-body tr[data-line="${lineId}"]`);
+      if (!confirm(`Remove ${row && row.dataset.code ? row.dataset.code : "this line"} from the PO?
+
+It goes to the Recycle Bin, where it can be restored.`)) return;
       const errorEl = document.getElementById("lines-error");
       errorEl.textContent = "";
       try {

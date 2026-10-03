@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Recycle Bin</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">Recycle Bin</h1>
+      <div class="row toolbar-row">
+        <input type="text" id="search" placeholder="Search what was deleted, or who deleted it…">
+        <label class="check-label" style="flex:0 0 auto;"><input type="checkbox" id="show-restored"> Show restored</label>
+      </div>
+    </div>
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">Everything deleted or removed in AT-HUB lands here — orders, POs, lines, items, vendor invoices, payments, files —
+        with everything that went with it. <strong>Restore</strong> puts it back exactly as it was (a number someone has used since comes back with "-R").
+        <strong>Delete forever</strong> empties it for good.</p>
+      <table class="list-fit">
+        <thead><tr><th>Deleted</th><th>What</th><th>Name</th><th>Included</th><th>By</th><th></th></tr></thead>
+        <tbody id="bin-body"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+      <div id="bin-msg" class="small" style="margin-top:8px;"></div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireRole("manager");
+    document.getElementById("sidebar").innerHTML = renderSidebar("recycle-bin.html");
+    let entries = [];
+    const TABLE_NAMES = { customer_orders: "order", customer_order_lines: "order line", purchase_orders: "PO", purchase_order_lines: "PO line",
+      stock_items: "item", shipments: "shipment", shipment_lines: "shipment line", attachments: "file", mtr_links: "MTR link",
+      vendor_bills: "vendor invoice", purchase_order_payments: "payment", purchase_order_charges: "charge", pack_size_history: "pack size",
+      vendor_items: "vendor part # link", invoices: "invoice", invoice_lines: "invoice line", invoice_payments: "payment", mtr_emails: "MTR email" };
+
+    function render() {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const showRestored = document.getElementById("show-restored").checked;
+      const list = entries.filter(e => (showRestored || !e.restored_at) && (!q || `${e.kind} ${e.label} ${e.deleted_by || ""}`.toLowerCase().includes(q)));
+      const body = document.getElementById("bin-body");
+      if (!list.length) { body.innerHTML = `<tr><td colspan="6" class="muted">${entries.length ? "Nothing matches." : "The recycle bin is empty."}</td></tr>`; return; }
+      body.innerHTML = list.map(e => `<tr class="${e.restored_at ? "order-done" : ""}">
+        <td>${new Date(e.deleted_at).toLocaleString()}</td>
+        <td><span class="tag draft">${escapeHtml(e.kind)}</span></td>
+        <td><strong>${escapeHtml(e.label)}</strong>${e.restored_at ? `<div class="pos small">Restored ${new Date(e.restored_at).toLocaleString()} by ${escapeHtml(e.restored_by || "")}</div>` : ""}</td>
+        <td class="small muted">${Object.entries(e.contents).map(([t, n]) => `${n} ${escapeHtml(TABLE_NAMES[t] || t.replace(/_/g, " "))}${n === 1 ? "" : "s"}`).join(", ")}</td>
+        <td>${escapeHtml(e.deleted_by || "")}</td>
+        <td class="nowrap">${e.restored_at ? "" : `<button class="small-btn" onclick="restore(${e.id})">Restore</button>
+          <a class="link small neg" style="margin-left:6px;" onclick="purge(${e.id})">Delete forever</a>`}</td></tr>`).join("");
+    }
+    async function load() {
+      try { entries = await apiFetch("/api/recycle-bin"); render(); }
+      catch (e) { document.getElementById("bin-body").innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`; }
+    }
+    async function restore(id) {
+      const e = entries.find(x => x.id === id);
+      if (!confirm(`Restore ${e.kind.toLowerCase()} ${e.label}?`)) return;
+      const msg = document.getElementById("bin-msg");
+      try {
+        const r = await apiFetch(`/api/recycle-bin/${id}/restore`, { method: "POST" });
+        msg.className = "small pos";
+        msg.textContent = `Restored ${r.restored}.${r.renumbered && r.renumbered.length ? ` Its number was taken meanwhile, so it came back as: ${r.renumbered.join(", ")}.` : ""}`;
+        load();
+      } catch (err) { msg.className = "small neg"; msg.textContent = err.message; }
+    }
+    async function purge(id) {
+      const e = entries.find(x => x.id === id);
+      if (!confirm(`Delete ${e.kind.toLowerCase()} ${e.label} forever?\n\nThis can't be undone — it won't be restorable any more.`)) return;
+      try { await apiFetch(`/api/recycle-bin/${id}`, { method: "DELETE" }); load(); }
+      catch (err) { document.getElementById("bin-msg").textContent = err.message; }
+    }
+    document.getElementById("search").addEventListener("input", render);
+    document.getElementById("show-restored").addEventListener("change", render);
+    load();
+  </script>
+  </div>
+</body>
+</html>

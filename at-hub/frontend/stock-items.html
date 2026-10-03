@@ -170,6 +170,8 @@
     }
 
     async function deleteGroup(id) {
+      const g = groups.find(x => x.id === id);
+      if (!confirm(`Delete the product group ${g ? g.name : ""}? (It has no items.)`)) return;
       const errorEl = document.getElementById("group-error");
       errorEl.textContent = "";
       try {

@@ -1083,6 +1083,10 @@
     }
 
     async function removeLine(orderId, lineId) {
+      const row = document.querySelector(`tr[data-line="${lineId}"]`);
+      if (!confirm(`Remove ${row && row.dataset.code ? row.dataset.code : "this line"} from the order?
+
+It goes to the Recycle Bin, where it can be restored.`)) return;
       const errorEl = document.getElementById("lines-error");
       errorEl.textContent = "";
       try {

@@ -631,7 +631,7 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
-  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"]] },
+  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
   { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"]] },
 ];
 
@@ -1200,6 +1200,7 @@ Thank you.</textarea>
 const ICON_PATHS = {
   dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/>',
   truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
@@ -1249,7 +1250,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [
@@ -1766,4 +1767,75 @@ function skeletonizeLoading(root = document) {
 document.addEventListener("DOMContentLoaded", () => skeletonizeLoading());
 
 // ---- print the record on screen (order / PO / invoice): the browser's print, laid out for paper ----
-function printRecord() { document.body.classList.add("printing-record"); window.print(); setTimeout(() => document.body.classList.remove("printing-record"), 500); }
+// Print asks what to include: every section of the record on screen, money ones unticked by default.
+function printSections(card) {
+  const groups = [];
+  let cur = null;
+  Array.from(card.children).forEach(el => {
+    if (el.matches("h3.detail-head, #ai-validate-panel, .btn-row, script, style")) return;
+    const own = h => h ? Array.from(h.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim() || h.textContent : "";
+    const title = el.matches("h4") ? own(el)
+      : el.matches(".dsec") ? (el.querySelector(".dsec-title, h4") || {}).textContent
+      : el.matches(".timeline") ? "Progress timeline"
+      : el.matches(".money-tiles") ? "Money summary"
+      : el.matches("details.fold-section") ? (el.querySelector("summary h4") || el.querySelector("summary") || {}).textContent
+      : null;
+    if (title) {
+      const name = title.replace(/\(\d+\)/, "").replace(/—.*$/, "").trim();
+      cur = { name, els: [el], money: el.matches(".money-tiles") || /money|invoice|payment|profit|landed|cost/i.test(name) };
+      groups.push(cur);
+    } else if (cur) cur.els.push(el);
+  });
+  return groups;
+}
+function printRecord() {
+  const card = document.getElementById("detail-card");
+  if (!card) { window.print(); return; }
+  const groups = printSections(card);
+  document.querySelectorAll(".print-dialog").forEach(d => d.remove());
+  const dlg = document.createElement("div");
+  dlg.className = "qf-backdrop print-dialog";
+  dlg.innerHTML = `<div class="qf-box" style="padding:14px 16px;">
+    <h3 style="margin:0 0 4px;">Print — what to include?</h3>
+    <p class="muted small" style="margin:0 0 10px;">Sections with money start unticked.</p>
+    <div class="print-opts">${groups.map((g, i) => `<label><input type="checkbox" data-g="${i}" ${g.money ? "" : "checked"}> ${escapeHtml(g.name)}${g.money ? ' <span class="muted small">($)</span>' : ""}</label>`).join("")}</div>
+    <label style="display:block; margin-top:10px;"><input type="checkbox" id="print-prices"> Show prices and totals in the line table</label>
+    <div style="display:flex; gap:8px; margin-top:14px; justify-content:flex-end;">
+      <button class="secondary" data-cancel>Cancel</button><button data-go>Print</button></div></div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector("[data-cancel]").onclick = () => dlg.remove();
+  dlg.addEventListener("mousedown", e => { if (e.target === dlg) dlg.remove(); });
+  dlg.querySelector("[data-go]").onclick = () => {
+    const keep = new Set([...dlg.querySelectorAll("[data-g]:checked")].map(c => +c.dataset.g));
+    const prices = dlg.querySelector("#print-prices").checked;
+    dlg.remove();
+    const hidden = [], opened = [];
+    groups.forEach((g, i) => g.els.forEach(el => {
+      if (!keep.has(i)) { el.classList.add("print-hide"); hidden.push(el); }
+      el.querySelectorAll ? [el, ...el.querySelectorAll("details")].forEach(d => { if (d.tagName === "DETAILS" && !d.open) { d.open = true; opened.push(d); } }) : null;
+    }));
+    let style = null;
+    if (!prices) {  // money columns of the line tables
+      style = document.createElement("style");
+      const rules = [];
+      card.querySelectorAll("table.lines-table").forEach((t, n) => {
+        t.dataset.printT = n;
+        Array.from(t.tHead.rows[0].cells).forEach((th, i) => { if (MONEY_HEADER.test(th.textContent)) rules.push(`table[data-print-t="${n}"] tr > :nth-child(${i + 1}) { display: none !important; }`); });
+        t.querySelectorAll("tfoot, [data-price-delta]").forEach(x => x.classList.add("print-hide"));
+      });
+      style.textContent = `@media print { ${rules.join(" ")} }`;
+      document.head.appendChild(style);
+    }
+    document.body.classList.add("printing-record");
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        document.body.classList.remove("printing-record");
+        hidden.forEach(el => el.classList.remove("print-hide"));
+        card.querySelectorAll(".print-hide").forEach(el => el.classList.remove("print-hide"));
+        opened.forEach(d => { d.open = false; });
+        if (style) style.remove();
+      }, 400);
+    }, 50);
+  };
+}

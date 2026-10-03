@@ -92,6 +92,78 @@ async def hide_money_from_employees(request, call_next):
     return Response(content=body, status_code=response.status_code, headers=headers, media_type=response.media_type)
 
 
+# ---- recycle bin: every delete is kept and can be restored ----
+from app.services import recycle_bin  # noqa: E402
+recycle_bin.install()
+
+
+@app.middleware("http")
+async def who_is_asking(request, call_next):
+    """The signed-in user, for the recycle bin's 'deleted by'."""
+    auth = request.headers.get("authorization", "")
+    token = recycle_bin.current_user.set((AuthService.decode_token(auth[7:]) or {}).get("sub") if auth.lower().startswith("bearer ") else None)
+    try:
+        return await call_next(request)
+    finally:
+        recycle_bin.current_user.reset(token)
+
+
+def _bin_user(authorization: str):
+    from app.dependencies import ROLE_RANK
+    payload = AuthService.decode_token((authorization or "").split(" ")[-1]) if authorization else None
+    db = SessionLocal()
+    try:
+        user = AuthService.get_user_by_username(db, payload.get("sub")) if payload else None
+    finally:
+        db.close()
+    if not user or ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="The recycle bin needs the manager role")
+    recycle_bin.current_user.set(user.username)
+    return user
+
+
+@app.get("/api/recycle-bin")
+def recycle_bin_list(authorization: str = Header(None)):
+    import json as _json
+    from app.models import DeletedRecord
+    _bin_user(authorization)
+    db = SessionLocal()
+    try:
+        out = []
+        for e in db.query(DeletedRecord).order_by(DeletedRecord.deleted_at.desc()).limit(500).all():
+            rows = _json.loads(e.rows)
+            counts = {}
+            for r in rows:
+                counts[r["table"]] = counts.get(r["table"], 0) + 1
+            out.append({"id": e.id, "kind": e.kind, "label": e.label, "deleted_by": e.deleted_by,
+                        "deleted_at": e.deleted_at.isoformat() + "Z", "restored_at": e.restored_at.isoformat() + "Z" if e.restored_at else None,
+                        "restored_by": e.restored_by, "contents": counts})
+        return out
+    finally:
+        db.close()
+
+
+@app.post("/api/recycle-bin/{entry_id}/restore")
+def recycle_bin_restore(entry_id: int, authorization: str = Header(None)):
+    _bin_user(authorization)
+    db = SessionLocal()
+    try:
+        return recycle_bin.restore(db, entry_id)
+    finally:
+        db.close()
+
+
+@app.delete("/api/recycle-bin/{entry_id}", status_code=204)
+def recycle_bin_purge(entry_id: int, authorization: str = Header(None)):
+    _bin_user(authorization)
+    db = SessionLocal()
+    try:
+        recycle_bin.purge(db, entry_id)
+    finally:
+        db.close()
+    return Response(status_code=204)
+
+
 # ---- activity history: every successful change to an order or PO, with who and what ----
 ACTIVITY_PATH = re.compile(r"^/api/(customer-orders|purchase-orders)/(\d+)(?:/(.*))?$")
 

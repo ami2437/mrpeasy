@@ -206,11 +206,11 @@ def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depen
     att = _get(db, attachment_id)
     if att.uploaded_by != user.username and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Only the uploader or a manager can delete this file")
-    path = (upload_root() / att.stored_name).resolve()
-    if upload_root() in path.parents and path.exists():
-        path.unlink()
+    from app.services.recycle_bin import move_to_trash
+    move_to_trash(att.stored_name)  # kept until the recycle bin entry is emptied
     (upload_root() / ".thumbs" / f"{att.id}.png").unlink(missing_ok=True)
-    db.query(MtrLink).filter(MtrLink.attachment_id == att.id).delete()
+    for link in db.query(MtrLink).filter(MtrLink.attachment_id == att.id).all():
+        db.delete(link)
     db.delete(att)
     db.commit()
     return Response(status_code=204)

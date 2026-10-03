@@ -870,3 +870,17 @@ class ActivityLog(Base):
     detail = Column(Text, nullable=True)  # the request's JSON body (what was sent), trimmed
     by = Column(String, nullable=True)
     at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class DeletedRecord(Base):
+    """Recycle bin: one entry per delete action, holding every row it removed (see services/recycle_bin.py)."""
+    __tablename__ = "recycle_bin"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String, nullable=False)  # Customer order, PO line, File...
+    label = Column(String, nullable=False)  # C89126, 15423, Birmingham 2605425.pdf...
+    rows = Column(Text, nullable=False)  # JSON [{table, cols}] -- everything that went in that one action
+    deleted_by = Column(String, nullable=True)
+    deleted_at = Column(DateTime, default=datetime.utcnow, index=True)
+    restored_at = Column(DateTime, nullable=True)
+    restored_by = Column(String, nullable=True)

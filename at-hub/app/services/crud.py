@@ -342,8 +342,9 @@ class StockItemService:
         used = _item_references(db, item.id)
         if used:
             raise HTTPException(status_code=409, detail="USED|" + _usage_text(used))
-        db.query(PackSizeHistory).filter(PackSizeHistory.item_id == item.id).delete()
-        db.query(VendorItem).filter(VendorItem.item_id == item.id).delete()
+        for row in (db.query(PackSizeHistory).filter(PackSizeHistory.item_id == item.id).all()
+                    + db.query(VendorItem).filter(VendorItem.item_id == item.id).all()):
+            db.delete(row)  # one by one, so the recycle bin keeps them with the item
         db.delete(item)
         db.commit()
 
@@ -562,11 +563,11 @@ def _remove_attachments(db: Session, entity_type: str, entity_id: int) -> None:
     from app.config.settings import settings
     from app.models import Attachment, MtrLink
     root = Path(settings.upload_dir).resolve()
+    from app.services.recycle_bin import move_to_trash
     for att in db.query(Attachment).filter(Attachment.entity_type == entity_type, Attachment.entity_id == entity_id).all():
-        path = (root / att.stored_name).resolve()
-        if root in path.parents and path.exists():
-            path.unlink()
-        db.query(MtrLink).filter(MtrLink.attachment_id == att.id).delete()
+        move_to_trash(att.stored_name)  # kept in uploads/.trash until the recycle bin entry is emptied
+        for link in db.query(MtrLink).filter(MtrLink.attachment_id == att.id).all():
+            db.delete(link)
         db.delete(att)
 
 
@@ -903,7 +904,8 @@ class CustomerOrderService:
         for s in shipments:
             _remove_attachments(db, "shipment", s.id)
             db.delete(s)
-        db.query(MtrEmail).filter(MtrEmail.order_id == order.id).delete()
+        for row in db.query(MtrEmail).filter(MtrEmail.order_id == order.id).all():
+            db.delete(row)
         _remove_attachments(db, "customer_order", order.id)
         db.flush()
         db.delete(order)
@@ -1547,7 +1549,10 @@ class InvoiceService:
             for shipment in moved:
                 target.shipments.append(shipment)
             db.flush()
+            db.info["no_bin"] = True  # merging drafts isn't a delete anyone would want to undo
             db.delete(inv)
+            db.flush()
+            db.info.pop("no_bin", None)
         db.commit()
         db.refresh(target)
         return target
