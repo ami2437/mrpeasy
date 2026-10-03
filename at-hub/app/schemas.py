@@ -269,6 +269,8 @@ class CustomerOrderLineCreate(InputModel):
     quantity: float
     unit_price: float = 0
     delivery_date: Optional[datetime] = None
+    source_code: Optional[str] = None  # the customer's item # / description as scanned -- learned, not stored on the line
+    source_description: Optional[str] = None
     notes: Optional[str] = None
     print_notes: Optional[bool] = True
 

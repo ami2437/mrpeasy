@@ -313,6 +313,9 @@
         const select = tr.querySelector(".l-item");
         select.id = `ai-co-item-${n}`;
         if (!l.item_id) tr.classList.add("ai-unmatched");
+        // remembered on save: what their PO said -> the item picked here (fixes the next scan)
+        tr.dataset.srcCode = l.customer_item_code || l.item_code || "";
+        tr.dataset.srcDesc = l.description || "";
         const said = [l.item_code, l.customer_item_code, l.description].filter(Boolean).join(" · ");
         if (l.item_id) {
           select.value = l.item_id;
@@ -332,8 +335,8 @@
           return;
         }
         tr.querySelector(".grow").insertAdjacentHTML("beforeend",
-          `<div class="small ${l.item_id && l.match === "code" ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
-            !l.item_id ? " — not sure which item: pick one below" : l.match === "description" ? " — matched by description, check it" : ""}</div>`
+          `<div class="small ${l.item_id && ["code", "learned"].includes(l.match) ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
+            !l.item_id ? " — not sure which item: pick one below (your pick is remembered)" : l.match === "description" ? " — matched by description, check it" : l.match === "learned" ? " — remembered from your earlier pick" : ""}</div>`
           + aiCandidateChips(l.candidates, select.id, l.item_id));
         refreshPriceDeltas(tr);
       });
@@ -356,6 +359,8 @@
         unit_price: parseFloat(tr.querySelector(".l-price").value) || 0,
         delivery_date: tr.querySelector(".l-delivery").value || null,
         ...lineNoteValue(tr),
+        source_code: tr.dataset.srcCode || null,
+        source_description: tr.dataset.srcDesc || null,
       }));
       try {
         const created = await apiFetch("/api/customer-orders/", {

@@ -198,7 +198,8 @@ def _vendor_lines(db: Session, vendor_id: Optional[int], raw_lines: Any) -> List
     xref = {}
     if vendor_id:
         xref = {m.vendor_item_code: m.item_id for m in db.query(VendorItem).filter(VendorItem.vendor_id == vendor_id).all()}
-    matcher = ItemMatcher(items, xref)
+    from app.services import item_alias
+    matcher = ItemMatcher(items, xref, item_alias.for_party(db, "vendor", vendor_id))
     lines = []
     for raw in raw_lines or []:
         if not isinstance(raw, dict):

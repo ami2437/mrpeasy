@@ -902,3 +902,22 @@ class DeletedRecord(Base):
     deleted_at = Column(DateTime, default=datetime.utcnow, index=True)
     restored_at = Column(DateTime, nullable=True)
     restored_by = Column(String, nullable=True)
+
+
+class ItemAlias(Base):
+    """What a vendor or customer called one of our items on their document ("SS 316 HEX BOLT 3/4 X 10",
+    "CRB063") -> the item the user picked. Learned every time an order/PO is saved, so the next scan of
+    the same wording is matched without asking; picking a different item later re-points it."""
+    __tablename__ = "item_aliases"
+    __table_args__ = (UniqueConstraint("party_type", "party_id", "kind", "key", name="uq_item_alias"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    party_type = Column(String, nullable=False)  # vendor | customer
+    party_id = Column(Integer, nullable=False, index=True)
+    kind = Column(String, nullable=False)  # code | desc
+    key = Column(String, nullable=False)  # normalised: lowercase letters + digits only
+    text = Column(String, nullable=False)  # as it was printed
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
+    hits = Column(Integer, nullable=False, default=1)  # times saved with this item
+    last_used_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)

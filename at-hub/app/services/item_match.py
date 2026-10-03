@@ -95,7 +95,7 @@ def _norm(s: Optional[str]) -> str:
 class ItemMatcher:
     """Build once per request (features of every item are precomputed)."""
 
-    def __init__(self, items, vendor_codes: Optional[Dict[str, int]] = None):
+    def __init__(self, items, vendor_codes: Optional[Dict[str, int]] = None, learned: Optional[Dict[str, dict]] = None):
         self.items = list(items)
         self.by_id = {i.id: i for i in self.items}
         self.feats = {i.id: features(f"{i.title} {i.code}") for i in self.items}
@@ -105,13 +105,25 @@ class ItemMatcher:
                 if _norm(c):
                     self.codes[_norm(c)] = i.id
         self.vendor_codes = {_norm(k): v for k, v in (vendor_codes or {}).items()}
+        # learned from earlier saves (item_alias.for_party): {"code"/"desc": {key: (item_id, hits)}}
+        self.learned = {k: {key: v for key, v in d.items() if v[0] in self.by_id} for k, d in (learned or {}).items()}
 
     def rank(self, codes: List[Optional[str]], description: Optional[str], top: int = 5, only_ids=None) -> List[dict]:
         """Best candidates first: [{item_id, code, title, score, why}]. A known vendor part # or
         our own code is a certain match; otherwise attributes from the description decide."""
         out = {}
+        def remembered(kind, text, what):
+            hit = self.learned.get(kind, {}).get(_norm(text)) if text else None
+            if hit:  # picked by the user before: certain after 2 saves, near-certain after 1
+                iid, hits = hit
+                out[iid] = max(out.get(iid, (0, "")), (1.0 if hits >= 2 else 0.97, f"learned: you picked this for that {what} before ({hits}x)"))
+        for c in codes:
+            remembered("code", c, "part #")
+        remembered("desc", description, "description")
         for c in codes:
             key = _norm(c)
+            if key in self.learned.get("code", {}):
+                continue
             if key and key in self.vendor_codes:
                 out[self.vendor_codes[key]] = (1.0, "vendor part #")
             elif key and key in self.codes:

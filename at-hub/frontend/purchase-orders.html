@@ -132,8 +132,9 @@
           sel.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (l.vendor_item_code || l.description) {
           tr.classList.add("ai-unmatched");
-          tr.querySelector(".vcode-hint").innerHTML = `<span class="neg">Not sure: pick our item</span>`;
+          tr.querySelector(".vcode-hint").innerHTML = `<span class="neg">Not sure: pick our item (your pick is remembered)</span>`;
         }
+        if (l.item_id && (l.match || "").startsWith("learned")) setTimeout(() => { tr.querySelector(".vcode-hint").innerHTML = `<span class="muted">Remembered from your earlier pick</span>`; }, 450);
         if (l.candidates) tr.querySelector("td").insertAdjacentHTML("beforeend", aiCandidateChips(l.candidates, `ai-po-item-${n}`, l.item_id));
         // after the item's own defaults, so the quoted values win
         setTimeout(() => {

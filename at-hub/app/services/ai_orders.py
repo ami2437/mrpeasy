@@ -203,6 +203,8 @@ def _match_item(items: List[StockItem], codes: List[Optional[str]], description:
     candidates = (matcher or ItemMatcher(items)).rank(codes, description)
     wanted = {(c or "").strip().lower() for c in codes if c}
     exact = next((i.id for i in items if (i.code or "").strip().lower() in wanted), None)
+    if candidates and candidates[0]["why"].startswith("learned") and candidates[0]["score"] >= 0.97:
+        return {"item_id": candidates[0]["item_id"], "match": "learned", "confidence": candidates[0]["score"], "candidates": candidates}
     if exact:
         return {"item_id": exact, "match": "code", "confidence": 1.0, "candidates": candidates}
     item_id = None if (codes_are_ours and wanted) else pick(candidates)
@@ -347,7 +349,9 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
     if not data:
         data = _ask_model(text)
     items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
-    matcher = ItemMatcher(items)
+    from app.services import item_alias
+    customer = _match_customer(db, data.get("customer_name"))
+    matcher = ItemMatcher(items, learned=item_alias.for_party(db, "customer", customer.get("customer_id")))
 
     lines = []
     for raw in data.get("lines") or []:
@@ -378,7 +382,7 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
         "model": source,
         "template": data.get("template"),
         "customer_name": data.get("customer_name"),
-        "customer": _match_customer(db, data.get("customer_name")),
+        "customer": customer,
         "po_number": data.get("po_number"),
         "order_date": _date(data.get("order_date")),
         "delivery_date": _date(data.get("delivery_date")),

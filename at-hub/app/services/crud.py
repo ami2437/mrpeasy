@@ -732,6 +732,9 @@ class CustomerOrderService:
                 delivery_date=line.delivery_date or data.delivery_date,
                 notes=(line.notes or "").strip() or None, print_notes=line.print_notes is not False,
             ))
+            # what the customer's PO called it (scanned orders) -> the item the user settled on
+            from app.services import item_alias
+            item_alias.learn(db, "customer", data.customer_id, line.item_id, line.source_code, line.source_description)
 
         db.commit()
         db.refresh(order)
@@ -1751,6 +1754,8 @@ class VendorItemService:
 
     @staticmethod
     def learn(db: Session, vendor_id: int, item_id: int, code: Optional[str], desc: Optional[str], unit_cost: float) -> None:
+        from app.services import item_alias
+        item_alias.learn(db, "vendor", vendor_id, item_id, code, desc)  # descriptions too: some vendors print no part #
         if code:
             VendorItemService.upsert(db, vendor_id, item_id, code, desc, unit_cost, ordered=True)
 
@@ -1890,8 +1895,7 @@ class PurchaseOrderService:
             updates.pop("print_notes")
         for key, value in updates.items():
             setattr(line, key, value)
-        if line.vendor_item_code:
-            VendorItemService.learn(db, po.vendor_id, line.item_id, line.vendor_item_code, line.vendor_description, line.unit_cost)
+        VendorItemService.learn(db, po.vendor_id, line.item_id, line.vendor_item_code, line.vendor_description, line.unit_cost)
         if cost_changed:
             # A corrected PO price flows into lots already received on this line.
             for lot in db.query(Lot).filter(Lot.po_line_id == line.id).all():
