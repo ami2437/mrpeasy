@@ -4,6 +4,7 @@ rollback_backups/
 at-hub/.env
 at-hub/*.db
 at-hub/uploads/
+at-hub/backups/
 at-hub/*.log
 at-hub/venv/
 at-hub/__pycache__/

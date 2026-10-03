@@ -1169,3 +1169,11 @@ table.list-fit > thead > tr > th { position: sticky; top: 0; z-index: 5; box-sha
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .legend-slot { position: sticky; top: 0; z-index: 6; background: var(--surface); }
 .legend-slot > .status-legend { position: static; }
+
+/* Tasks page */
+.task-group { border: 1px solid var(--border); border-radius: 10px; margin: 10px 0; background: var(--surface); }
+.task-group > summary { padding: 8px 12px; cursor: pointer; background: var(--surface-2); border-radius: 10px; }
+.task-row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: start; padding: 8px 12px; border-top: 1px solid var(--border); }
+.task-row > input[type=checkbox] { width: 16px; height: 16px; margin-top: 3px; }
+.task-row.task-done .task-main > div:first-child { text-decoration: line-through; color: var(--muted); }
+.task-note { margin-top: 4px; font-size: 12px; padding: 3px 6px; max-width: 520px; background: transparent; }

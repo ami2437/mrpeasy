@@ -249,6 +249,12 @@ from app.routes import imports  # noqa: E402
 app.include_router(imports.router)
 from app.routes import file_matcher  # noqa: E402
 app.include_router(file_matcher.router)
+from app.routes import tasks as tasks_routes  # noqa: E402
+app.include_router(tasks_routes.router)
+from app.routes import backups as backups_routes  # noqa: E402
+app.include_router(backups_routes.router)
+from app.services.backups import start_scheduler  # noqa: E402
+start_scheduler()
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():

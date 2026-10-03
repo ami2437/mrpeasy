@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     # Where uploaded attachments (PDFs, photos) are stored.
     upload_dir: str = "./uploads"
+    backup_dir: str = "./backups"
+    backup_every_hours: float = 6  # automatic database backups; 0 turns them off
+    backup_keep: int = 30  # automatic backups kept (manual and pre-restore ones are kept until deleted)
 
     # Private AI for reading customer PO PDFs into draft orders. Runs on a local Ollama
     # server (https://ollama.com) -- documents never leave this machine / network.

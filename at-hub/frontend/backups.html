@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Backups</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">Database Backups</h1>
+      <div class="row toolbar-row">
+        <span id="b-info" class="muted small" style="flex:1; align-self:center;"></span>
+        <button style="flex:0 0 auto;" onclick="backupNow()" data-icon="save">Back Up Now</button>
+      </div>
+    </div>
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">A full copy of the AT-HUB database — orders, POs, stock, invoices, users, everything — taken while it runs.
+        <strong>Restore</strong> puts AT-HUB back exactly as it was at that moment; the current state is saved first as a <em>pre-restore</em> backup,
+        so a restore can itself be undone. Attached files live in the uploads folder (not in the database) and aren't affected.</p>
+      <table class="list-fit">
+        <thead><tr><th>Taken</th><th>Kind</th><th class="num">Size</th><th>File</th><th></th></tr></thead>
+        <tbody id="b-body"><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table>
+      <div id="b-msg" class="small" style="margin-top:8px;"></div>
+    </div>
+  </main>
+  <script>
+    AuthGuard.requireRole("super_admin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("backups.html");
+    const KIND = { auto: ["Automatic", "draft"], manual: ["Manual", "confirmed"], "pre-restore": ["Before a restore", "overdue"], "pre-import": ["Before an import", "overdue"] };
+    async function load() {
+      const r = await apiFetch("/api/backups/");
+      document.getElementById("b-info").innerHTML = r.every_hours > 0
+        ? `Automatic backup every <strong>${r.every_hours} h</strong>, newest ${r.keep} kept · folder <code>${escapeHtml(r.folder)}</code>` : "Automatic backups are off.";
+      document.getElementById("b-body").innerHTML = r.backups.map(b => {
+        const [label, cls] = KIND[b.kind] || [b.kind, "draft"];
+        return `<tr><td>${new Date(b.created).toLocaleString()}</td><td><span class="tag ${cls}">${label}</span></td>
+          <td class="num">${(b.size / 1048576).toFixed(1)} MB</td><td class="small muted">${escapeHtml(b.name)}</td>
+          <td class="nowrap"><a class="link small" onclick="download('${b.name}')">Download</a> &nbsp;
+            <a class="link small" onclick="restore('${b.name}')">Restore</a> ${trashBtn(`del('${b.name}')`, "Delete this backup")}</td></tr>`;
+      }).join("") || `<tr><td colspan="5" class="muted">No backups yet — click Back Up Now.</td></tr>`;
+    }
+    const msg = (html) => document.getElementById("b-msg").innerHTML = html;
+    async function backupNow() { try { const r = await apiFetch("/api/backups/", { method: "POST" }); msg(`<span class="pos">Saved ${escapeHtml(r.name)}.</span>`); load(); } catch (e) { msg(`<span class="neg">${escapeHtml(e.message)}</span>`); } }
+    async function download(name) {
+      const res = await fetch(`/api/backups/${encodeURIComponent(name)}/file`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(await res.blob()); a.download = name; a.click();
+    }
+    async function restore(name) {
+      if (!confirm(`Restore AT-HUB to ${name}?\n\nEverything entered after that backup is replaced (the current state is backed up first, so this can be undone).`)) return;
+      try { const r = await apiFetch(`/api/backups/${encodeURIComponent(name)}/restore`, { method: "POST" });
+        msg(`<span class="pos">Restored ${escapeHtml(r.restored)}.</span> The state before it is saved as ${escapeHtml(r.safety_copy)}. Reload other open pages.`); load();
+      } catch (e) { msg(`<span class="neg">${escapeHtml(e.message)}</span>`); }
+    }
+    async function del(name) { if (!confirm(`Delete ${name}? This can't be undone.`)) return; await apiFetch(`/api/backups/${encodeURIComponent(name)}`, { method: "DELETE" }); load(); }
+    load();
+  </script>
+</body>
+</html>

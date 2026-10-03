@@ -921,3 +921,23 @@ class ItemAlias(Base):
     hits = Column(Integer, nullable=False, default=1)  # times saved with this item
     last_used_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Task(Base):
+    """A to-do for an admin. Manual ones are typed in; suggested ones (key set) are raised by
+    TaskService.refresh() from the data -- e.g. "record the payments on PO325370" -- and close
+    themselves once the data shows the work is done."""
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, nullable=True, unique=True)  # suggested tasks: what raised it (never duplicated)
+    category = Column(String, nullable=False, default="General")
+    title = Column(String, nullable=False)
+    detail = Column(Text, nullable=True)
+    link = Column(String, nullable=True)  # page to open, e.g. purchase-orders.html?id=7
+    status = Column(String, nullable=False, default="open")  # open | done | dismissed
+    note = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    done_by = Column(String, nullable=True)
+    done_at = Column(DateTime, nullable=True)

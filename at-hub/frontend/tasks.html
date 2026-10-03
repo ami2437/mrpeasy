@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Tasks</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">Tasks</h1>
+      <div class="row toolbar-row">
+        <input type="text" id="search" placeholder="Search tasks…">
+        <button style="flex:0 0 auto;" class="secondary" onclick="document.getElementById('add-card').style.display = ''; document.getElementById('t-title').focus()">+ Add Task</button>
+      </div>
+    </div>
+
+    <div class="card" id="add-card" style="display:none;">
+      <div class="row">
+        <div style="flex:3;"><label>Task</label><input type="text" id="t-title" placeholder="What needs doing"></div>
+        <div style="flex:1;"><label>Group</label><input type="text" id="t-cat" placeholder="General" list="t-cats"><datalist id="t-cats"></datalist></div>
+      </div>
+      <label>Details</label><textarea id="t-detail" rows="2"></textarea>
+      <div class="btn-row"><button onclick="addTask()">Add Task</button><button class="secondary" onclick="document.getElementById('add-card').style.display='none'">Cancel</button></div>
+      <div id="t-error" class="error"></div>
+    </div>
+
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">Things to do by hand. AT-HUB adds tasks it can see from the data (payments to record, vendor invoices
+        without an amount, missing customer POs) and ticks them off itself once the data shows they're done. Add your own with <strong>+ Add Task</strong>.</p>
+      <div class="tabs" id="t-tabs"></div>
+      <div id="t-body"></div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireRole("admin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("tasks.html");
+    let tasks = [], view = "open", openGroups = new Set();
+    async function load() {
+      tasks = await apiFetch("/api/tasks/");
+      document.getElementById("t-cats").innerHTML = [...new Set(tasks.map(t => t.category))].map(c => `<option>${escapeHtml(c)}</option>`).join("");
+      render();
+    }
+    function render() {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const match = t => !q || `${t.title} ${t.detail || ""} ${t.category} ${t.note || ""}`.toLowerCase().includes(q);
+      const counts = { open: tasks.filter(t => t.status === "open").length, done: tasks.filter(t => t.status !== "open").length };
+      document.getElementById("t-tabs").innerHTML = [["open", "To do"], ["done", "Done"]].map(([k, l]) =>
+        `<div class="tab ${view === k ? "active" : ""}" onclick="view='${k}'; render()">${l} <span class="muted">(${counts[k]})</span></div>`).join("");
+      const shown = tasks.filter(t => (view === "open" ? t.status === "open" : t.status !== "open") && match(t));
+      const groups = {};
+      shown.forEach(t => (groups[t.category] = groups[t.category] || []).push(t));
+      document.getElementById("t-body").innerHTML = Object.entries(groups).map(([cat, ts]) => {
+        const open = openGroups.has(cat) || q || ts.length <= 8;
+        return `<details class="task-group" ${open ? "open" : ""} ontoggle="this.open ? openGroups.add(${escapeHtml(JSON.stringify(cat))}) : openGroups.delete(${escapeHtml(JSON.stringify(cat))})">
+          <summary><strong>${escapeHtml(cat)}</strong> <span class="muted">(${ts.length})</span></summary>
+          ${ts.map(t => `<div class="task-row ${t.status !== "open" ? "task-done" : ""}">
+            <input type="checkbox" ${t.status !== "open" ? "checked" : ""} title="${t.status === "open" ? "Mark done" : "Reopen"}" onchange="setStatus(${t.id}, this.checked ? 'done' : 'open')">
+            <div class="task-main"><div>${t.link ? `<a class="link" href="${escapeHtml(t.link)}" target="_blank">${escapeHtml(t.title)}</a>` : escapeHtml(t.title)}
+              ${t.key ? '<span class="tag draft" title="Raised by AT-HUB from the data">auto</span>' : ""}</div>
+              ${t.detail ? `<div class="small muted">${escapeHtml(t.detail)}</div>` : ""}
+              ${t.status !== "open" ? `<div class="small muted">${t.status === "dismissed" ? "Dismissed" : "Done"} by ${escapeHtml(t.done_by || "")} ${t.done_at ? fmtDateTime(t.done_at) : ""}</div>` : ""}
+              <input type="text" class="task-note" placeholder="Note…" value="${escapeHtml(t.note || "")}" onchange="saveNote(${t.id}, this.value)"></div>
+            <div class="nowrap">${t.status === "open" ? `<a class="link small" onclick="setStatus(${t.id}, 'dismissed')" title="Not needed">Dismiss</a>` : ""}
+              ${!t.key ? trashBtn(`delTask(${t.id})`, "Delete this task") : ""}</div>
+          </div>`).join("")}</details>`;
+      }).join("") || `<p class="muted">${view === "open" ? "Nothing to do." : "Nothing done yet."}</p>`;
+    }
+    const fmtDateTime = d => new Date(d + (d.endsWith("Z") ? "" : "Z")).toLocaleString();
+    async function setStatus(id, status) { await apiFetch(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ status }) }); await load(); }
+    async function saveNote(id, note) { await apiFetch(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ note }) }); toast("Note saved"); }
+    async function delTask(id) { if (!confirm("Delete this task?")) return; await apiFetch(`/api/tasks/${id}`, { method: "DELETE" }); await load(); }
+    async function addTask() {
+      const err = document.getElementById("t-error"); err.textContent = "";
+      try {
+        await apiFetch("/api/tasks/", { method: "POST", body: JSON.stringify({ title: document.getElementById("t-title").value,
+          category: document.getElementById("t-cat").value, detail: document.getElementById("t-detail").value }) });
+        ["t-title", "t-cat", "t-detail"].forEach(id => document.getElementById(id).value = "");
+        document.getElementById("add-card").style.display = "none";
+        view = "open"; await load();
+      } catch (e) { err.textContent = e.message; }
+    }
+    document.getElementById("search").addEventListener("input", render);
+    load();
+  </script>
+</body>
+</html>

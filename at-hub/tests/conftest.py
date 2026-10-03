@@ -29,6 +29,8 @@ os.environ.update({
     "AI_OLLAMA_URL": "http://127.0.0.1:9",  # no local AI
     "SMTP_HOST": "",                    # no email
     "TEST_DATA_ENABLED": "false",
+    "BACKUP_DIR": str(_TMP / "backups"),
+    "BACKUP_EVERY_HOURS": "0",          # no background backups in tests
 })
 
 from fastapi.testclient import TestClient  # noqa: E402
