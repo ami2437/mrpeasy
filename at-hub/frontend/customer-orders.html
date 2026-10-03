@@ -5,6 +5,7 @@
   <title>AT-HUB — Customer Orders</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="quotes.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -15,6 +16,7 @@
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
         <button class="manager-only" onclick="toggleForm()">+ New Order</button>
+        <button class="manager-only secondary" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
         <button class="ai-btn manager-only" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
     </div>
@@ -65,6 +67,13 @@
     <div class="card has-legend" id="list-card">
       <div class="tabs" id="list-tabs"></div>
       <div id="status-legend" class="legend-slot"></div>
+      <div id="quotes-view" style="display:none;">
+        <table class="list-fit" id="quotes-table">
+          <thead><tr><th>Quote</th><th>Customer</th><th>Their ref</th><th data-type="date">Date</th><th data-type="date">Valid until</th>
+            <th class="num">Lines</th><th class="num sum">Total</th><th>Status</th><th>Order</th></tr></thead>
+          <tbody id="quotes-body"></tbody>
+        </table>
+      </div>
       <div id="items-view" style="display:none;">
         <table class="list-fit" id="items-table">
           <thead><tr><th>Order</th><th>Customer PO / Job</th><th>Item</th><th>Description</th>
@@ -599,7 +608,8 @@
       document.getElementById("list-tabs").innerHTML = `
         <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
         <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>
-        <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every order, searchable and filterable">Items</div>`;
+        <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every order, searchable and filterable">Items</div>
+        ${AuthGuard.hasRole("manager") ? `<div class="tab ${listView === "quotes" ? "active" : ""}" onclick="listView = 'quotes'; renderOrders()" title="Quotations sent to customers">Quotes <span class="muted">(${quotes.filter(q => !["converted", "declined"].includes(q.status)).length})</span></div>` : ""}`;
     }
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
@@ -608,13 +618,16 @@
       const cancelledOnes = searched.filter(o => o.status === "cancelled");
       listTabs(searched.length - cancelledOnes.length, cancelledOnes.length, "Orders");
       showTable(document.getElementById("items-table"), listView === "items");
-      showTable(document.getElementById("orders-table"), listView !== "items");
+      showTable(document.getElementById("quotes-table"), listView === "quotes");
+      showTable(document.getElementById("orders-table"), !["items", "quotes"].includes(listView));
+      document.getElementById("quotes-view").style.display = listView === "quotes" ? "" : "none";
       document.getElementById("items-view").style.display = listView === "items" ? "" : "none";
       const legend = document.getElementById("status-legend");
-      legend.innerHTML = listView === "cancelled" ? "" : statusLegend(listView === "items"
+      legend.innerHTML = ["cancelled", "quotes"].includes(listView) ? "" : statusLegend(listView === "items"
         ? ["not_booked", "partially_booked", "booked", "partially_shipped", "shipped"] : ["draft", "confirmed", "partially_shipped", "shipped", "invoiced"], "renderOrders");
       document.getElementById("list-card").style.setProperty("--legend-h", `${legend.offsetHeight}px`);
       if (listView === "items") { renderItemLines(q); return; }
+      if (listView === "quotes") { renderQuotes(q); return; }
       const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
         tbody.innerHTML = `<tr><td colspan="12" class="muted">${listView === "cancelled" ? "No cancelled orders." : orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
@@ -1390,6 +1403,7 @@
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
       loadAttachCounts("customer_order").then(renderOrders);  // paperclips fill in a moment later
+      if (AuthGuard.hasRole("manager")) loadQuotes().then(renderOrders);
       enableLineDrag(document.getElementById("lines-body"));  // new order: lines saved in the order shown
       renderOrders();
       const params = new URLSearchParams(window.location.search);

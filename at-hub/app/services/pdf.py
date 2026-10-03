@@ -655,3 +655,36 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False,
                                    f"and include material test reports where applicable.", "body")]
     return _build(story, _footer_text(company), f"Purchase order {po.code}",
                   "CANCELLED" if po.status == "cancelled" else None, RED)
+
+
+# ---- quotation ----
+def quote_pdf(db: Session, q) -> bytes:
+    from app.services.money import line_amount
+    company = get_company_profile(db)
+    customer = db.query(Customer).filter(Customer.id == q.customer_id).first()
+    story = _header(company, "QUOTATION", q.code)
+    to = _party_box("QUOTE FOR", customer.name if customer else "", [
+        f"Attn: {customer.contact_name}" if customer and customer.contact_name else None,
+        *address_lines(customer.address if customer else None),
+        customer.phone if customer else None, customer.email if customer else None])
+    meta = _meta_table([("Quote date", date(q.quote_date)), ("Valid until", date(q.valid_until)), ("Your reference", q.customer_ref)])
+    story += [_two_boxes(to, meta), Spacer(1, 18)]
+    items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in q.lines if l.item_id})).all()}
+    rows, total = [], 0
+    for n, l in enumerate(q.lines, 1):
+        it = items.get(l.item_id)
+        amt = line_amount(l.quantity, l.unit_price)
+        total += amt
+        rows.append([str(n), p(it.code if it else "", "td"), described(l.description or (it.title if it else ""), l),
+                     qty(l.quantity), price(l.unit_price), money(amt)])
+    code_w = fit_width([i.code for i in items.values()], 0.9 * inch)
+    story.append(_data_table(["#", "Item #", "Description", "Qty", "Unit price", "Amount"], rows,
+                             [0.35 * inch, code_w, 7.3 * inch - 0.35 * inch - code_w - 3.1 * inch, 0.9 * inch, 1.05 * inch, 1.15 * inch],
+                             right_cols=(3, 4, 5)))
+    totals = Table([[p("Quote total", "grand_k"), p(money(total), "grand_v")]], colWidths=[1.5 * inch, 1.4 * inch])
+    totals.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ACCENT), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
+    totals.hAlign = "RIGHT"
+    story += [Spacer(1, 10), KeepTogether(totals)]
+    story += _notes_box([("NOTES", q.notes), ("TERMS", f"Prices valid until {date(q.valid_until)}." if q.valid_until else None)])
+    story += [Spacer(1, 18), p("Thank you for the opportunity to quote.", "thanks")]
+    return _build(story, _footer_text(company), f"Quote {q.code}")

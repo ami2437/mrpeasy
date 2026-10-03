@@ -941,3 +941,37 @@ class Task(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     done_by = Column(String, nullable=True)
     done_at = Column(DateTime, nullable=True)
+
+
+class Quote(Base):
+    """A quotation to a customer. Kept apart from orders so a quote never shows up in shipping,
+    invoicing or reports; Convert to Order turns an accepted one into a customer order."""
+    __tablename__ = "quotes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="draft")  # draft | sent | accepted | declined | converted
+    quote_date = Column(DateTime, default=datetime.utcnow)
+    valid_until = Column(DateTime, nullable=True)
+    customer_ref = Column(String, nullable=True)  # their RFQ # / email subject
+    notes = Column(Text, nullable=True)  # printed on the quote
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)  # once converted
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lines = relationship("QuoteLine", backref="quote", cascade="all, delete-orphan", order_by="QuoteLine.position")
+
+
+class QuoteLine(Base):
+    __tablename__ = "quote_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quote_id = Column(Integer, ForeignKey("quotes.id"), nullable=False, index=True)
+    position = Column(Integer, nullable=False, default=0)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True)  # may be blank: quoted before the item exists
+    description = Column(String, nullable=True)  # printed; defaults to the item's title
+    quantity = Column(Float, nullable=False, default=1)
+    unit_price = Column(Float, nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    source_text = Column(String, nullable=True)  # the pasted line it came from (taught to learned matches)

@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 from app.models import (Attachment, Customer, CustomerOrder, CustomerOrderLine, Invoice, InvoiceLine, ItemAlias, MtrLink,
-                        PurchaseOrder, PurchaseOrderLine, Shipment, StockItem, Vendor, VendorItem)
+                        PurchaseOrder, PurchaseOrderLine, Quote, QuoteLine, Shipment, StockItem, Task, Vendor, VendorItem)
 
 ENTITY_MODELS = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
 
@@ -155,6 +155,35 @@ def carry_over(db, live_path, rep) -> None:
             cands[0].notes, cands[0].print_notes, n = r["notes"], r["print_notes"] != 0, n + 1
     if n:
         rep.add("carry-over", f"line notes: {n} {S}")
+
+    # ---- 6. quotes (AT-HUB only; a quote converted to an order that no longer exists loses that link) ----
+    n = 0
+    for q in _rows(live, "select * from quotes"):
+        cust = cust_by_name.get(live_cust.get(q["customer_id"], ""))
+        if not cust:
+            continue
+        order_code = live_code["customer_order"].get(q["order_id"])
+        new = Quote(code=q["code"], customer_id=cust, status=q["status"], quote_date=_dt(q["quote_date"]), valid_until=_dt(q["valid_until"]),
+                    customer_ref=q["customer_ref"], notes=q["notes"], order_id=code_to_new["customer_order"].get(order_code),
+                    created_by=q["created_by"], created_at=_dt(q["created_at"]))
+        for l in _rows(live, "select * from quote_lines where quote_id=? order by position", q["id"]):
+            new.lines.append(QuoteLine(position=l["position"], item_id=item_by_code.get(live_item.get(l["item_id"])), description=l["description"],
+                                       quantity=l["quantity"], unit_price=l["unit_price"], notes=l["notes"], source_text=l["source_text"]))
+        db.add(new)
+        n += 1
+    if n:
+        rep.add("carry-over", f"quotes: {n} {S}")
+
+    # ---- 7. tasks (manual ones, and what was done / dismissed on suggested ones) ----
+    n = 0
+    for t in _rows(live, "select * from tasks"):
+        if t["key"] and t["status"] == "open":
+            continue  # suggested + still open: raised again from the new data
+        db.add(Task(key=t["key"], category=t["category"], title=t["title"], detail=t["detail"], link=t["link"], status=t["status"],
+                    note=t["note"], created_by=t["created_by"], created_at=_dt(t["created_at"]), done_by=t["done_by"], done_at=_dt(t["done_at"])))
+        n += 1
+    if n:
+        rep.add("carry-over", f"tasks: {n} {S}")
 
     live.close()
     db.flush()
