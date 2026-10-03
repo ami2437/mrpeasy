@@ -1136,21 +1136,36 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
 .add-line-row > .price-cell [data-price-delta] { position: absolute; left: 0; top: 100%; }
 .line-no .line-actions { display: flex; gap: 0; margin-top: 4px; text-align: left; }
 .line-no .line-actions .icon-btn { padding: 2px; }
-.fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 190px; }
+.fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 172px; }
 .list-clip { color: var(--muted); margin-left: 4px; display: inline-flex; vertical-align: -2px; }
 .list-clip .ico { width: 13px; height: 13px; }
 
-/* status icons (statusIcon in auth-guard.js): timeline-style dots */
-.st-ico { position: relative; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; vertical-align: middle;
+/* status icons (statusIcon in auth-guard.js): timeline-style dots -- scoped to .st-ico so the
+   shipment chips (.ship-chip.st-shipped ...) keep their own look */
+.st-ico { position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; vertical-align: middle;
   border: 2px solid var(--border-strong); background: var(--surface); color: var(--muted); }
-.st-ico .ico { width: 12px; height: 12px; margin: 0 !important; stroke-width: 2.4; }
-.st-draft { border-style: dashed; }
-.st-confirmed, .st-not_booked { border-color: #64748b; color: #475569; }
-.st-partially_booked { border-color: #2563eb; background: linear-gradient(90deg, #2563eb 50%, var(--surface) 50%); }
-.st-booked { border-color: #2563eb; background: #2563eb; color: #fff; }
-.st-partially_shipped { border-color: #d97706; background: linear-gradient(90deg, #d97706 50%, var(--surface) 50%); }
-.st-shipped, .st-delivered { border-color: var(--pos); background: var(--pos); color: #fff; }
-.st-invoiced, .st-paid { border-color: #15803d; background: #dcfce7; color: #15803d; }
-.st-cancelled { border-color: var(--border-strong); background: var(--surface-3); color: var(--muted); }
-html[data-theme="dark"] .st-invoiced, html[data-theme="dark"] .st-paid { background: #14532d; color: #86efac; border-color: #22c55e; }
+.st-ico .ico { width: 13px; height: 13px; margin: 0 !important; stroke-width: 2.5; }
+.st-ico.st-draft { border-color: #d97706; background: #fef3c7; color: #b45309; }
+.st-ico.st-confirmed, .st-ico.st-not_booked { border-color: #2563eb; background: #dbeafe; color: #1d4ed8; }
+.st-ico.st-partially_booked { border-color: #2563eb; background: linear-gradient(90deg, #2563eb 50%, #dbeafe 50%); }
+.st-ico.st-booked { border-color: #2563eb; background: #2563eb; color: #fff; }
+.st-ico.st-partially_shipped { border-color: #d97706; background: linear-gradient(90deg, #d97706 50%, #fef3c7 50%); }
+.st-ico.st-shipped, .st-ico.st-delivered { border-color: #16a34a; background: #16a34a; color: #fff; }
+.st-ico.st-invoiced, .st-ico.st-paid { border-color: #7c3aed; background: #ede9fe; color: #6d28d9; }
+.st-ico.st-cancelled { border-color: #94a3b8; background: var(--surface-3); color: #64748b; }
+html[data-theme="dark"] .st-ico.st-draft { background: #451a03; color: #fbbf24; }
+html[data-theme="dark"] .st-ico.st-confirmed, html[data-theme="dark"] .st-ico.st-not_booked { background: #172554; color: #93c5fd; border-color: #3b82f6; }
+html[data-theme="dark"] .st-ico.st-invoiced, html[data-theme="dark"] .st-ico.st-paid { background: #2e1065; color: #c4b5fd; border-color: #8b5cf6; }
+/* the legend: a quiet strip that stays in view with the frozen header */
+.status-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 11.5px; color: var(--muted);
+  padding: 4px 6px; background: var(--surface); position: sticky; top: 0; z-index: 6; border-bottom: 1px solid var(--border); }
+.status-legend > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.status-legend .st-ico { width: 16px; height: 16px; border-width: 1.5px; }
+.status-legend .st-ico .ico { width: 10px; height: 10px; }
+.status-legend > a { margin-left: auto; }
+/* frozen header row on list tables (the window scrolls); below the legend when there is one */
+table.list-fit > thead > tr > th { position: sticky; top: 0; z-index: 5; box-shadow: inset 0 -1px 0 var(--border-strong); }
+.has-legend table.list-fit > thead > tr > th { top: var(--legend-h, 27px); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.legend-slot { position: sticky; top: 0; z-index: 6; background: var(--surface); }
+.legend-slot > .status-legend { position: static; }

@@ -1361,14 +1361,26 @@ const ICON_PATHS = {
 // ---- Status as a small icon (same look as the order timeline); the word stays in the tooltip and as
 // hidden text, so search, header filters and exports still see it. statusIcon("partially_shipped")
 const STATUS_ICONS = {
-  draft: ["pencil", "Draft"], confirmed: ["gear", "Confirmed — in progress"], not_booked: ["gear", "Not booked yet"],
+  draft: ["pencil", "Draft"], confirmed: ["clock", "Confirmed — in progress"], not_booked: ["clock", "Not booked yet"],
   partially_booked: ["half", "Partly booked"], booked: ["package", "Booked into a shipment"],
   partially_shipped: ["half", "Partly shipped"], shipped: ["check", "Shipped"], delivered: ["checkCircle", "Delivered"],
   invoiced: ["receipt", "Invoiced"], paid: ["dollar", "Paid"], cancelled: ["x", "Cancelled"],
 };
+// Icons or words: a per-user switch (the legend's "Show words" / "Show icons" link)
+function statusAsText() { try { return localStorage.getItem("at_hub_status_view") === "text"; } catch (e) { return false; } }
+function toggleStatusView(rerender) {
+  try { localStorage.setItem("at_hub_status_view", statusAsText() ? "icons" : "text"); } catch (e) {}
+  if (typeof window[rerender] === "function") window[rerender]();
+}
+// A subtle key for the icons in use, with the switch. statusLegend(["draft", "confirmed", ...], "renderOrders")
+function statusLegend(keys, rerender) {
+  const sw = `<a class="link" onclick="toggleStatusView('${rerender}')">${statusAsText() ? "Show icons" : "Show words"}</a>`;
+  if (statusAsText()) return `<div class="status-legend">${sw}</div>`;
+  return `<div class="status-legend">${keys.map(k => `<span>${statusIcon(k)} ${escapeHtml((STATUS_ICONS[k] || [, k])[1].replace(/ — .*/, ""))}</span>`).join("")}${sw}</div>`;
+}
 function statusIcon(status) {
   const [ico, label] = STATUS_ICONS[status] || [null, (status || "").replace(/_/g, " ")];
-  if (!ico) return `<span class="tag ${escapeHtml(status || "")}">${escapeHtml(label)}</span>`;
+  if (!ico || statusAsText()) return `<span class="tag ${escapeHtml(status || "")}">${escapeHtml(label)}</span>`;
   return `<span class="st-ico st-${escapeHtml(status)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ico === "half" ? "" : icon(ico)}<span class="sr-only">${escapeHtml((status || "").replace(/_/g, " "))}</span></span>`;
 }
 

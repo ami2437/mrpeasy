@@ -448,6 +448,9 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     _packing_from_old_backend(db, shipments, items, rep)
     _stock_ledger(db, items, lots, inventory, rep)
     _number_series(db, rep)
+    if LIVE_DB.exists():  # files, learned matches, notes... made in AT-HUB since the last import
+        from .carry_over import carry_over
+        carry_over(db, LIVE_DB, rep)
     db.commit()
     (snapshot / "load-notes.json").write_text(json.dumps(rep.dump(), indent=1), encoding="utf-8")
     print(f"Loaded into {target}")

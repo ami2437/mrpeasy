@@ -62,8 +62,9 @@
       <div id="form-error" class="error"></div>
     </div>
 
-    <div class="card">
+    <div class="card has-legend" id="list-card">
       <div class="tabs" id="list-tabs"></div>
+      <div id="status-legend" class="legend-slot"></div>
       <div id="items-view" style="display:none;">
         <table class="list-fit" id="items-table">
           <thead><tr><th>Order</th><th>Customer PO / Job</th><th>Item</th><th>Description</th>
@@ -609,6 +610,10 @@
       showTable(document.getElementById("items-table"), listView === "items");
       showTable(document.getElementById("orders-table"), listView !== "items");
       document.getElementById("items-view").style.display = listView === "items" ? "" : "none";
+      const legend = document.getElementById("status-legend");
+      legend.innerHTML = listView === "cancelled" ? "" : statusLegend(listView === "items"
+        ? ["not_booked", "partially_booked", "booked", "partially_shipped", "shipped"] : ["draft", "confirmed", "partially_shipped", "shipped", "invoiced"], "renderOrders");
+      document.getElementById("list-card").style.setProperty("--legend-h", `${legend.offsetHeight}px`);
       if (listView === "items") { renderItemLines(q); return; }
       const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
@@ -818,7 +823,7 @@
           <thead><tr>
             <th title="Line number — identifies this line even when the same item is on the order more than once">#</th>
             <th class="grow">Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>
-            <th class="num">Booked</th><th title="Lot each booked unit comes from: a purchase order receipt or a manual stock adjustment">Booking source</th><th class="num">Shipped</th><th>Status</th>
+            <th class="num">Booked</th><th title="Lot each booked unit comes from: a purchase order receipt or a manual stock adjustment">Booking source</th><th class="num">Shipped</th><th class="num" title="Ordered minus shipped: still to ship">Remaining</th><th>Status</th>
             <th>Shipments</th><th>Invoices</th>
             ${canBook ? `<th title="Quantity to book into a new shipment">Book</th>` : ""}
           </tr></thead>
@@ -841,6 +846,7 @@
                 <td class="num">${fmtQty(l.booked_quantity)}</td>
                 <td>${bookingSourceHtml(l)}</td>
                 <td class="num">${fmtQty(l.shipped_quantity)}</td>
+                <td class="num ${l.quantity - l.shipped_quantity > 1e-9 ? "" : "muted"}"><strong>${fmtQty(Math.max(0, l.quantity - l.shipped_quantity))}</strong></td>
                 <td>${statusIcon(l.line_status)}</td>
                 <td>${lineShipmentsHtml(l)}</td>
                 <td>${lineInvoicesHtml(l)}</td>
@@ -855,7 +861,9 @@
           <tfoot><tr>
             <td></td><td class="grow">Order total</td><td class="num" id="order-qty">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td>
             <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
-            <td colspan="${6 + (canBook ? 1 : 0)}"></td>
+            <td colspan="2"></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.shipped_quantity, 0))}</td>
+            <td class="num">${fmtQty(order.lines.reduce((s, l) => s + Math.max(0, l.quantity - l.shipped_quantity), 0))}</td>
+            <td colspan="${3 + (canBook ? 1 : 0)}"></td>
           </tr></tfoot>
         </table>
         </div>
