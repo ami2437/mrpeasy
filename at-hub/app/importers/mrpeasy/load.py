@@ -193,6 +193,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         po = PurchaseOrder(
             mrp_id=o["pur_ord_id"], code=o["code"], vendor_id=vendors[o["vendor_id"]].id,
             order_date=dt(o["order_date"]) or dt(o["created"]), expected_date=dt(o["expected_date"]),
+            vendor_so_number=clean(o.get("order_number")),
             notes=clean(o["free_text"]), custom_fields=custom_fields(o), created_by=BY, created_at=dt(o["created"]))
         db.add(po)
         pos[o["pur_ord_id"]] = po
@@ -346,7 +347,9 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
             for oid in ([s["customer_order_id"]] if s["customer_order_id"] else [x["customer_order_id"] for x in s["orders"]]):
                 sh_by_co[oid].append(s)
     claimed = set()
-    for i in sorted(inv_raw, key=lambda i: (int(i["created"] or 0), i["invoice_id"])):
+    portal_links = _portal_invoice_shipments()
+    # Dummy (draft) invoices last, so a real invoice always gets first claim on its shipment
+    for i in sorted(inv_raw, key=lambda i: (str(i["status"]) == INV_DUMMY, int(i["created"] or 0), i["invoice_id"])):
         status = {INV_PAID: "paid", INV_UNPAID: "sent"}.get(str(i["status"]), "draft")
         inv = Invoice(mrp_id=i["invoice_id"], code=i["code"], customer_id=customers[i["customer_id"]].id,
                       order_id=cos[i["cust_ord_id"]].id if i["cust_ord_id"] in cos else None,
@@ -358,7 +361,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         db.flush()
         invoices[i["invoice_id"]] = inv
         if str(i["status"]) == INV_DUMMY:
-            rep.add("invoices", f"{i['code']} is a Dummy invoice in MRPeasy ({f(i['total_price']):,.2f}): imported as draft, not linked to shipments")
+            rep.add("invoices", f"{i['code']} is a Dummy invoice in MRPeasy ({f(i['total_price']):,.2f}): imported as draft")
         # pair with shipments of the same order whose items/quantities add up to this invoice
         pool = [s for s in sh_by_co.get(i["cust_ord_id"], []) if (s["shipment_id"], i["cust_ord_id"]) not in claimed]
         shippable = {p["article_id"] for s in sh_by_co.get(i["cust_ord_id"], []) for p in s["products"]}
@@ -367,9 +370,20 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
             if p["article_id"] in shippable:  # a "Shipping" or service line never ships
                 want[p["article_id"]] += f(p["quantity"])
         dates = [int(p["delivery_date"]) for p in i["products"] if p["delivery_date"]]
-        match = [] if str(i["status"]) == INV_DUMMY or not want else _match_shipments(want, pool, max(dates) if dates else None)
+        match = [] if not want else _match_shipments(want, pool, max(dates) if dates else None)
         co_code = cos[i["cust_ord_id"]].code if i["cust_ord_id"] in cos else "?"
-        if match is None:
+        recorded = portal_links.get(i["invoice_id"])
+        if recorded:
+            # our old portal created this invoice in MRPeasy (POST /invoices can't carry a shipment) and wrote
+            # down which shipment(s) it billed: that record is the link, no matching needed
+            match = [s for s in sh_by_co.get(i["cust_ord_id"], []) if s["code"] in recorded]
+            rep.add("invoice links", f"{i['code']} ({co_code}): linked to {', '.join(sorted(recorded))} from the portal's record of sending it")
+        elif str(i["status"]) == INV_DUMMY:
+            # a draft is linked only to a shipment no real invoice took, and only when the quantities match exactly
+            rep.add("invoice links", f"{i['code']} ({co_code}, Dummy): " + (f"linked to {', '.join(s['code'] for s in match)} (exact quantities)"
+                                                                          if match else "not linked -- no unclaimed shipment matches its quantities"))
+            match = match or []
+        elif match is None:
             # Quantities don't add up (billed more/less than picked): fall back to the shipment(s) delivered
             # on the invoice lines' delivery dates, then to the only unclaimed shipment of the order.
             match = [s for s in pool if s["delivery_date"] and int(s["delivery_date"]) in dates] or (pool if len(pool) == 1 else [])
@@ -442,6 +456,26 @@ def _ship_line(db, sh, line, lot, qty, picked, shipped):
                         picked_quantity=qty if shipped else min(qty, f(picked)), unit_price=line.unit_price))
     if shipped:
         line.shipped_quantity += qty
+
+
+def _portal_invoice_shipments() -> dict:
+    """{MRPeasy invoice id: {shipment codes}} for invoices our old portal (backend-fastapi) sent to MRPeasy.
+    MRPeasy's POST /invoices has no shipment field, so the portal's own submission lines are the only record."""
+    if not OLD_BACKEND_DB.exists():
+        return {}
+    old = sqlite3.connect(f"file:{OLD_BACKEND_DB}?mode=ro", uri=True)
+    try:
+        rows = old.execute("""SELECT s.mrp_invoice_id, l.shipment_code FROM pending_invoice_submissions s
+                              JOIN pending_invoice_submission_lines l ON l.submission_id = s.id
+                              WHERE s.status = 'approved' AND s.mrp_invoice_id IS NOT NULL AND l.shipment_code IS NOT NULL""").fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        old.close()
+    links = {}
+    for inv_id, code in rows:
+        links.setdefault(int(inv_id), set()).add(code)
+    return links
 
 
 def _match_shipments(want: Counter, pool: list, date=None):

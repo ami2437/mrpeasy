@@ -223,6 +223,16 @@ async function showPriceHistory(itemId) {
 // (hidden) and keeps its value and change events, so existing code reading .value or
 // .selectedOptions keeps working. Matches every typed word against the option text plus
 // its data-search keywords (product group, barcode).
+// Item pickers: archived items and AI-created ones nobody has verified yet can't be picked for new lines.
+// They stay in the list (greyed, with the reason) so a line that already has one still shows it.
+function itemPickBlock(i) {
+  if (i.is_active === false) return "archived";
+  if (i.created_via === "ai-scan" && !i.verified_by) return "needs verifying (Stock Items)";
+  return "";
+}
+function itemPickAttr(i) { return itemPickBlock(i) ? `disabled data-blocked="${escapeHtml(itemPickBlock(i))}"` : ""; }
+function itemPickNote(i) { return itemPickBlock(i) ? ` — ${itemPickBlock(i)}` : ""; }
+
 function makeSearchable(select) {
   if (select.dataset.searchReady) return;
   select.dataset.searchReady = "1";
@@ -254,7 +264,7 @@ function makeSearchable(select) {
     active = 0;
     const shown = matches.slice(0, 50);
     list.innerHTML = shown.length
-      ? shown.map((o, i) => `<div class="search-select-option${i === 0 ? " active" : ""}" data-i="${i}">${escapeHtml(o.textContent)}${o.dataset.search ? ` <span class="muted small">${escapeHtml(o.dataset.search)}</span>` : ""}</div>`).join("")
+      ? shown.map((o, i) => `<div class="search-select-option${i === 0 ? " active" : ""}${o.disabled ? " blocked" : ""}" data-i="${i}">${escapeHtml(o.textContent)}${o.dataset.search ? ` <span class="muted small">${escapeHtml(o.dataset.search)}</span>` : ""}</div>`).join("")
         + (matches.length > 50 ? `<div class="muted small" style="padding:6px 10px;">${matches.length - 50} More — Keep Typing To Narrow Down</div>` : "")
       : `<div class="muted small" style="padding:6px 10px;">No Items Match "${escapeHtml(input.value)}"</div>`;
     list.style.display = "block";
@@ -262,6 +272,10 @@ function makeSearchable(select) {
   const choose = i => {
     const o = matches[i];
     if (!o) return;
+    if (o.disabled) {  // archived / not verified: say why instead of picking it
+      list.innerHTML = `<div class="small neg" style="padding:6px 10px;">${escapeHtml(o.textContent.split(" — ")[0])} can't be picked: ${escapeHtml(o.dataset.blocked || "not available")}.</div>`;
+      return;
+    }
     select.value = o.value;
     input.value = label();
     list.style.display = "none";
@@ -307,8 +321,41 @@ function formatBoxCounts(byQty) {
 // ---- Attachments: files on orders, purchase orders and shipments ----
 const ATTACHMENT_LABELS = {
   customer_po: "Customer PO", vendor_invoice: "Vendor Invoice", mtr: "Material Test Report (MTR)",
-  vendor_quote: "Vendor Quote", pod: "Proof Of Delivery", bol: "Bill Of Lading", other: "Other",
+  vendor_quote: "Vendor Quote / Confirmation", pod: "Proof Of Delivery", bol: "Bill Of Lading", other: "Other",
+  purchase_order: "Purchase Order", invoice: "Our Invoice", packing_list: "Packing List",
 };
+// Short tag names for the small chips on files and thumbnails
+const ATTACHMENT_TAGS = {
+  customer_po: "Customer PO", vendor_invoice: "Vendor Invoice", mtr: "MTR", vendor_quote: "Vendor Quote", pod: "POD",
+  bol: "BOL", other: "Other", purchase_order: "Purchase Order", invoice: "Our Invoice", packing_list: "Packing List",
+};
+const MONEY_ATTACHMENTS = ["customer_po", "vendor_invoice", "vendor_quote", "purchase_order", "invoice"];
+function attachmentTag(cat) { return `<span class="file-tag ft-${escapeHtml(cat)}">${escapeHtml(ATTACHMENT_TAGS[cat] || cat)}</span>`; }
+
+// Thumbnail strip for the top right of an order / PO: every file on it, newest first, with its tag.
+const attachmentThumbUrls = {};
+async function renderFileStrip(container, entityType, entityId) {
+  const el = typeof container === "string" ? document.getElementById(container) : container;
+  if (!el) return;
+  let files = [];
+  try { files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${entityId}`); } catch (e) { return; }
+  files.sort((a, b) => b.id - a.id);
+  el.innerHTML = files.map(f => `<a class="file-thumb" title="${escapeHtml(`${ATTACHMENT_LABELS[f.category] || f.category}: ${f.filename}`)}" onclick="openAttachment(${f.id})">
+      <span class="file-thumb-img" data-thumb="${f.id}">${escapeHtml((f.filename.split(".").pop() || "file").slice(0, 4).toUpperCase())}</span>
+      ${attachmentTag(f.category)}</a>`).join("")
+    + (files.length ? "" : "");
+  el.querySelectorAll("[data-thumb]").forEach(async box => {
+    const id = box.dataset.thumb;
+    try {
+      if (!attachmentThumbUrls[id]) {
+        const r = await fetch(`/api/attachments/${id}/thumb`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+        if (!r.ok) return;  // no preview (spreadsheet, email...): the file-type label stays
+        attachmentThumbUrls[id] = URL.createObjectURL(await r.blob());
+      }
+      box.innerHTML = `<img src="${attachmentThumbUrls[id]}" alt="">`;
+    } catch (e) { /* keep the label */ }
+  });
+}
 
 function fmtFileSize(n) {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -341,7 +388,7 @@ async function openAttachment(id) {
 async function renderAttachments(container, entityType, entityId, categories, opts = {}) {
   const el = typeof container === "string" ? document.getElementById(container) : container;
   if (!el) return;
-  if (hidesMoney()) categories = categories.filter(c => !["customer_po", "vendor_invoice", "vendor_quote"].includes(c));
+  if (hidesMoney()) categories = categories.filter(c => !MONEY_ATTACHMENTS.includes(c));
   const key = `${entityType}-${entityId}`;
   el.innerHTML = `<p class="muted small">Loading Files…</p>`;
   let files = [];
@@ -370,7 +417,8 @@ async function renderAttachments(container, entityType, entityId, categories, op
           <div class="attach-row">
             ${isImage(f) ? `<img class="attach-thumb" data-att="${f.id}" alt="" onclick="openAttachment(${f.id})">` : `<span class="attach-icon">${(f.filename.split(".").pop() || "file").slice(0, 4).toUpperCase()}</span>`}
             <div class="attach-info">
-              <a class="link" onclick="openAttachment(${f.id})">${escapeHtml(f.filename)}</a>
+              ${attachmentTag(f.category)} <a class="link" onclick="openAttachment(${f.id})">${escapeHtml(f.filename)}</a>
+              ${canDelete(f) ? `<select class="att-retag" data-retag="${f.id}" title="What kind of document this is">${categories.map(c => `<option value="${c}" ${c === f.category ? "selected" : ""}>${ATTACHMENT_LABELS[c] || c}</option>`).join("")}</select>` : ""}
               <div class="muted small">${fmtFileSize(f.size)} · ${escapeHtml(f.uploaded_by || "")} · ${new Date(f.created_at + (f.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()}${f.note ? ` · <span style="color:#1a1a1a;">${escapeHtml(f.note)}</span>` : ""}</div>
             </div>
             ${canDelete(f) ? `<a class="link small" data-del="${f.id}">Delete</a>` : ""}
@@ -406,6 +454,16 @@ async function renderAttachments(container, entityType, entityId, categories, op
       btn.textContent = "Upload";
     }
   };
+  el.querySelectorAll("[data-retag]").forEach(sel => sel.onchange = async () => {
+    const form = new FormData();
+    form.append("category", sel.value);
+    try {
+      const r = await fetch(`/api/attachments/${sel.dataset.retag}`, { method: "PUT", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form });
+      if (!r.ok) throw new Error((await r.json()).detail || "Couldn't change the tag");
+      renderAttachments(el, entityType, entityId, categories, opts);
+      if (opts.onChange) opts.onChange();
+    } catch (err) { errorEl.textContent = err.message; }
+  });
   el.querySelectorAll("[data-del]").forEach(a => a.onclick = async () => {
     if (!confirm("Delete this file?")) return;
     try {
@@ -420,7 +478,12 @@ async function renderAttachments(container, entityType, entityId, categories, op
 
 // Small grey product-group chip shown next to item codes.
 function groupTag(item) {
-  return item && item.category ? `<span class="group-tag">${escapeHtml(item.category)}</span>` : "";
+  return (item && item.category ? `<span class="group-tag">${escapeHtml(item.category)}</span>` : "") + aiMadeTag(item);
+}
+// Items created from a scanned PO carry a small tag until someone has checked them.
+function aiMadeTag(item) {
+  return item && item.created_via === "ai-scan"
+    ? `<span class="ai-made-tag" title="Created from a scanned customer PO${item.created_at ? " on " + new Date(item.created_at).toLocaleDateString() : ""} — check the title, group and price">AI</span>` : "";
 }
 
 // ---- 4x6 labels: same layout and fields as the main portal's labels, plus our logo ----
@@ -594,6 +657,7 @@ function renderSidebar(activePage) {
   return `
     <nav class="sidebar">
       <div class="brand"><img src="/api/company/logo" alt="" class="brand-logo" onerror="this.remove()"><span>AT-HUB</span></div>
+      <a class="sidebar-find" onclick="QuickFind.open()" title="Find anything (Ctrl+K)">${icon("search") || "⌕"}<span>Search</span><kbd>Ctrl K</kbd></a>
       ${groups}
       <div class="sidebar-footer">
         ${user ? `<div class="user-line">${escapeHtml(user.full_name || user.username)}<div class="small">${ROLE_LABELS[user.role] || user.role}</div></div>` : ""}
@@ -762,6 +826,37 @@ const TableTools = {
     applyHidden();
     applyWidths();
     this.enableSort(table, ths);
+    const filterApi = this.enableFilter(table, ths);
+    const viewsKey = `${key}:views`;
+    const loadViews = () => { try { return JSON.parse(localStorage.getItem(viewsKey)) || {}; } catch { return {}; } };
+    const viewsBtn = document.createElement("a");
+    viewsBtn.className = "table-tools-btn";
+    viewsBtn.textContent = "Views ▾";
+    const viewsMenu = document.createElement("div");
+    viewsMenu.className = "table-tools-menu";
+    viewsMenu.style.display = "none";
+    bar.prepend(viewsBtn, viewsMenu);
+    viewsBtn.onclick = () => {
+      if (viewsMenu.style.display !== "none") { viewsMenu.style.display = "none"; return; }
+      const views = loadViews();
+      viewsMenu.innerHTML = (Object.keys(views).length
+          ? Object.keys(views).map(name => `<div class="view-row"><a data-view="${escapeHtml(name)}">${escapeHtml(name)}</a><a class="muted" data-del="${escapeHtml(name)}" title="Delete this view">✕</a></div>`).join("")
+          : `<div class="table-tools-hint">No saved views yet. Filter the columns (▾ on a header), then save it here.</div>`)
+        + `<div class="table-tools-actions">${filterApi.active() ? `<a data-save="1">Save current filters…</a> · ` : ""}<a data-clear="1">Show everything</a></div>`;
+      viewsMenu.style.display = "block";
+    };
+    viewsMenu.onclick = e => {
+      const t = e.target, views = loadViews();
+      if (t.dataset.view) { filterApi.set(views[t.dataset.view]); viewsMenu.style.display = "none"; }
+      if (t.dataset.del) { delete views[t.dataset.del]; try { localStorage.setItem(viewsKey, JSON.stringify(views)); } catch {} viewsBtn.onclick(); viewsBtn.onclick(); }
+      if (t.dataset.clear) { filterApi.set({}); viewsMenu.style.display = "none"; }
+      if (t.dataset.save) {
+        const name = prompt("Name this view (e.g. \"Unpaid Hudson invoices\"):");
+        if (name && name.trim()) { views[name.trim()] = filterApi.get(); try { localStorage.setItem(viewsKey, JSON.stringify(views)); } catch {} }
+        viewsMenu.style.display = "none";
+      }
+    };
+    document.addEventListener("click", e => { if (!bar.contains(e.target)) viewsMenu.style.display = "none"; });
 
     if (ths.some(th => th.classList.contains("sum"))) {
       table.createTFoot().className = "totals-row";
@@ -828,6 +923,103 @@ const TableTools = {
       });
     });
     Array.from(table.tBodies).forEach(tb => new MutationObserver(() => { if (dir && !sorting) apply(); }).observe(tb, { childList: true }));
+  },
+
+  // Header filters: a small ▾ on each header. Few distinct values (Status, Customer, Group...) -> tick boxes
+  // with counts; many -> a "contains" box. Rows that don't match are hidden; totals follow. Filters
+  // re-apply whenever the page re-renders its rows.
+  cellText(td) { return td ? ((td.innerText || td.textContent || "").split("\n")[0] || "").trim() : ""; },
+  enableFilter(table, ths) {
+    const filters = {};  // header index -> {values: Set} | {text: "..."}
+    const dataRows = () => Array.from(table.tBodies).flatMap(tb => Array.from(tb.rows)).filter(r => !r.querySelector("td[colspan]"));
+    const colOf = i => Array.from(ths[i].parentNode.cells).indexOf(ths[i]);  // columns may have been moved
+    const active = () => Object.keys(filters).length > 0;
+    let applying = false;
+    const apply = () => {
+      if (applying) return;
+      applying = true;
+      const on = active();
+      table.classList.toggle("tt-filtering", on);
+      dataRows().forEach(r => {
+        const ok = Object.entries(filters).every(([i, f]) => {
+          const t = this.cellText(r.cells[colOf(+i)]);
+          return f.values ? f.values.has(t) : t.toLowerCase().includes(f.text);
+        });
+        if (on) r.style.display = ok ? "" : "none";
+        else if (r.dataset.ttHid) r.style.display = "";
+        r.dataset.ttHid = on && !ok ? "1" : "";
+      });
+      // "show the other N" / folded-group rows don't make sense while filtering
+      Array.from(table.tBodies).forEach(tb => Array.from(tb.rows).forEach(r => {
+        if (r.classList.contains("completed-toggle")) r.style.display = on ? "none" : "";
+      }));
+      ths.forEach((th, i) => th.classList.toggle("filtered", !!filters[i]));
+      if (table.tFoot && table.tFoot.className === "totals-row") this.refreshTotals(table);
+      applying = false;
+    };
+    let pop = null;
+    const close = () => { if (pop) { pop.remove(); pop = null; } };
+    ths.forEach((th, i) => {
+      if (!th.dataset.label || th.querySelector("input")) return;
+      const btn = document.createElement("span");
+      btn.className = "th-filter";
+      btn.title = "Filter this column";
+      btn.textContent = "▾";
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        if (pop && pop.dataset.col === String(i)) { close(); return; }
+        close();
+        const counts = new Map();
+        dataRows().forEach(r => { const t = this.cellText(r.cells[colOf(i)]); counts.set(t, (counts.get(t) || 0) + 1); });
+        const values = [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        const listMode = values.length <= 30;
+        const f = filters[i];
+        pop = document.createElement("div");
+        pop.className = "th-filter-pop";
+        pop.dataset.col = String(i);
+        pop.innerHTML = listMode
+          ? `<div class="th-filter-list">${values.map(v => `<label><input type="checkbox" value="${escapeHtml(v)}" ${!f || (f.values && f.values.has(v)) ? "checked" : ""}> ${escapeHtml(v || "(blank)")} <span class="muted">${counts.get(v)}</span></label>`).join("")}</div>
+             <div class="th-filter-actions"><a data-a="all">All</a> · <a data-a="none">None</a> · <a data-a="clear">Clear filter</a></div>`
+          : `<input type="text" placeholder="Contains…" value="${escapeHtml(f && f.text || "")}">
+             <div class="th-filter-actions"><a data-a="clear">Clear filter</a></div>`;
+        document.body.appendChild(pop);
+        const r = th.getBoundingClientRect();
+        pop.style.top = `${window.scrollY + r.bottom + 2}px`;
+        pop.style.left = `${Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 8))}px`;
+        const readList = () => {
+          const picked = new Set([...pop.querySelectorAll("input[type=checkbox]:checked")].map(c => c.value));
+          if (picked.size === values.length) delete filters[i]; else filters[i] = { values: picked };
+          apply();
+        };
+        pop.addEventListener("click", e2 => e2.stopPropagation());
+        pop.addEventListener("change", () => { if (listMode) readList(); });
+        const text = pop.querySelector("input[type=text]");
+        if (text) {
+          text.focus();
+          text.addEventListener("input", () => { const v = text.value.trim().toLowerCase(); if (v) filters[i] = { text: v }; else delete filters[i]; apply(); });
+        }
+        pop.querySelectorAll("[data-a]").forEach(a => a.addEventListener("click", () => {
+          if (a.dataset.a === "clear") { delete filters[i]; apply(); close(); return; }
+          pop.querySelectorAll("input[type=checkbox]").forEach(c => { c.checked = a.dataset.a === "all"; });
+          readList();
+        }));
+      });
+      th.appendChild(btn);
+    });
+    document.addEventListener("click", close);
+    Array.from(table.tBodies).forEach(tb => new MutationObserver(() => { if (active() && !applying) apply(); }).observe(tb, { childList: true }));
+    return {
+      get: () => Object.fromEntries(Object.entries(filters).map(([i, f]) => [ths[i].dataset.label, f.values ? { values: [...f.values] } : { text: f.text }])),
+      set: saved => {
+        Object.keys(filters).forEach(k => delete filters[k]);
+        Object.entries(saved || {}).forEach(([label, f]) => {
+          const i = ths.findIndex(th => th.dataset.label === label);
+          if (i >= 0) filters[i] = f.values ? { values: new Set(f.values) } : { text: f.text };
+        });
+        apply();
+      },
+      active,
+    };
   },
 
   // A cell's value is its data-value if set, else the number at the start of its text.
@@ -1007,6 +1199,7 @@ Thank you.</textarea>
 // ---- Icons: a small inline SVG set (Lucide-style strokes), no external library ----
 const ICON_PATHS = {
   dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/>',
   truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
@@ -1104,6 +1297,12 @@ const ACTION_COLUMNS = {
   bills_due: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => r.vendor], ["Invoice #", r => r.bill_number], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => r.days]],
   unapplied_payments: [["Payment", r => r.code], ["Vendor", r => r.vendor], ["Paid", r => actDate(r.paid_date)], ["Amount", r => fmtMoney(r.amount)], ["Unapplied", r => fmtMoney(r.unapplied)], ["Days", r => r.days]],
   mtr_unlinked: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["File", r => r.filename], ["Uploaded (Days Ago)", r => r.days]],
+  items_verify: [["Item", r => actLink("item.html", r.id, r.code)], ["Title", r => escapeHtml(r.title || "")], ["Group", r => escapeHtml(r.group || "")], ["Days Waiting", r => r.days]],
+  no_invoice: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Shipped", r => actDate(r.ship_date)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
+  draft_invoices: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
+  invoices_overdue: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Customer", r => r.customer], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => r.days]],
+  not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
+  draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
 };
 function actLink(page, id, text) { return id ? `<a class="link" href="${page}?id=${id}">${escapeHtml(text || "")}</a>` : escapeHtml(text || ""); }
 function actDate(v) { return v ? new Date(v).toLocaleDateString() : ""; }
@@ -1286,3 +1485,285 @@ function aiVendorChips(cands, selectId) {
     sync();
   });
 })();
+
+// Long lists: show the first 50 rows, then a "show the other N" row. Call after a list's tbody is (re)rendered:
+// limitRows(tbody, "lots", renderLots). Rows past the limit are only hidden, so searching still finds them all.
+const ROW_LIMIT = 50;
+const rowsExpanded = {};
+function limitRows(tbody, key, rerender) {
+  const rows = Array.from(tbody.children).filter(tr => !tr.classList.contains("completed-toggle") && !tr.querySelector("td[colspan]:only-child.muted"));
+  if (rows.length <= ROW_LIMIT + 10) return;  // a few over isn't worth a click
+  const cols = (tbody.closest("table").querySelector("thead tr") || {}).children?.length || 1;
+  const open = !!rowsExpanded[key];
+  if (!open) rows.slice(ROW_LIMIT).forEach(tr => { tr.style.display = "none"; });
+  const toggle = document.createElement("tr");
+  toggle.className = "completed-toggle";
+  toggle.innerHTML = `<td colspan="${cols}"><span class="caret">${open ? "▾" : "▸"}</span> ${open
+    ? `Showing all ${rows.length} <span class="muted">· click to show only the first ${ROW_LIMIT}</span>`
+    : `Show the other ${rows.length - ROW_LIMIT} <span class="muted">(${rows.length} in all · showing the first ${ROW_LIMIT})</span>`}</td>`;
+  toggle.onclick = () => { rowsExpanded[key] = !open; rerender(); };
+  rows[Math.min(rows.length, open ? rows.length : ROW_LIMIT) - 1].after(toggle);
+}
+
+// ---- order lines: drag to reorder, replace an item, tick several ----
+// Drag a line by its ⠿ handle (in the first cell). onReorder(ids) gets every row's data-line in the new order;
+// leave it out for a form that isn't saved yet (the rows are simply read in their new order on save).
+function enableLineDrag(tbody, onReorder) {
+  if (!tbody || tbody.dataset.dragReady) return;
+  tbody.dataset.dragReady = "1";
+  const rows = () => Array.from(tbody.children).filter(tr => tr.tagName === "TR" && !tr.querySelector("td[colspan]"));
+  const addHandles = () => rows().forEach(tr => {
+    if (tr.querySelector(".drag-handle")) return;
+    const h = document.createElement("span");
+    h.className = "drag-handle";
+    h.title = "Drag to move this line";
+    h.textContent = "⠿";
+    h.addEventListener("mousedown", () => { tr.draggable = true; });
+    tr.cells[0] && tr.cells[0].prepend(h);
+  });
+  addHandles();
+  new MutationObserver(addHandles).observe(tbody, { childList: true });
+  let dragging = null;
+  tbody.addEventListener("dragstart", e => {
+    dragging = e.target.closest("tr");
+    if (!dragging) return;
+    dragging.classList.add("row-dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", "line");
+  });
+  tbody.addEventListener("dragover", e => {
+    if (!dragging) return;
+    e.preventDefault();
+    const over = e.target.closest("tr");
+    if (!over || over === dragging || over.parentNode !== tbody) return;
+    const after = e.clientY > over.getBoundingClientRect().top + over.offsetHeight / 2;
+    if (after) over.after(dragging); else over.before(dragging);
+  });
+  tbody.addEventListener("dragend", () => {
+    if (!dragging) return;
+    dragging.classList.remove("row-dragging");
+    dragging.draggable = false;
+    dragging = null;
+    const ids = rows().map(tr => parseInt(tr.dataset.line)).filter(n => !isNaN(n));
+    if (onReorder && ids.length) onReorder(ids);
+  });
+}
+
+// Pop-up next to a line's item: pick another item (search like everywhere else), then onPick(itemId).
+function openItemReplace(anchor, currentItemId, onPick) {
+  document.querySelectorAll(".replace-pop").forEach(p => p.remove());
+  const pop = document.createElement("div");
+  pop.className = "replace-pop";
+  const id = `replace-sel-${Date.now()}`;
+  pop.innerHTML = `<div class="small muted" style="margin-bottom:4px;">Replace this line's item with:</div>
+    <select id="${id}" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} ${i.id === currentItemId ? "selected" : ""} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select>
+    <div style="margin-top:6px; display:flex; gap:6px;"><button class="small-btn" data-ok>Replace</button><button class="secondary small-btn" data-cancel>Cancel</button></div>
+    <div class="error small" data-err></div>`;
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${window.scrollY + r.bottom + 4}px`;
+  pop.style.left = `${Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - 440))}px`;
+  makeSearchable(document.getElementById(id));
+  setTimeout(() => pop.querySelector(".search-select input") && pop.querySelector(".search-select input").focus(), 0);
+  pop.querySelector("[data-cancel]").onclick = () => pop.remove();
+  pop.querySelector("[data-ok]").onclick = async () => {
+    const v = parseInt(document.getElementById(id).value);
+    if (!v || v === currentItemId) { pop.remove(); return; }
+    try { await onPick(v); pop.remove(); } catch (e) { pop.querySelector("[data-err]").textContent = e.message; }
+  };
+  setTimeout(() => document.addEventListener("mousedown", function away(e) {
+    if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("mousedown", away); }
+  }), 0);
+}
+
+// ---- "Validate with AI": check a saved order / PO against its attached document with several readers ----
+function aiValidateButton(kind, id) {
+  if (!AuthGuard.hasRole("manager")) return "";
+  return `<button class="ai-validate-btn" onclick="runAiValidate('${kind}', ${id}, this)" title="Read the attached ${kind === "po" ? "vendor quote / confirmation" : "customer PO"} with the exact reader, the local AI and Claude, and compare every line with this ${kind === "po" ? "PO" : "order"}">
+    <span class="ai-spark">✦</span> Validate with AI</button>`;
+}
+async function runAiValidate(kind, id, btn) {
+  const panel = document.getElementById("ai-validate-panel");
+  if (!panel) return;
+  const what = kind === "po" ? "PO" : "order";
+  const body = document.getElementById(kind === "po" ? "po-lines-body" : "order-lines-body");
+  body && body.querySelectorAll(".ai-line-mark").forEach(m => m.remove());
+  btn.disabled = true;
+  btn.classList.add("running");
+  panel.innerHTML = `<div class="ai-validate-panel"><div class="ai-validate-head"><span class="ai-spark spin">✦</span>
+    <strong>Reading the attached document with every reader…</strong> <span class="muted small">then each line of this ${what} is marked below — up to a minute</span></div></div>`;
+  try {
+    const r = await apiFetch(kind === "po" ? `/api/ai-docs/validate-po/${id}` : `/api/ai-orders/validate/${id}`, { method: "POST" });
+    const key = c => { c = (c || "").trim().toUpperCase(); return c.endsWith("-HPC") ? c.slice(0, -4) : c; };
+    const val = (field, v) => v == null ? "—" : field === "price" ? fmtPrice(v) : field === "quantity" ? fmtQty(v) : escapeHtml(String(v));
+    const ran = r.readers.filter(x => x.ok).map(x => x.name);
+    const lineFindings = new Map();
+    r.findings.filter(f => f.line && f.kind !== "missing").forEach(f => {
+      const k = key(f.line);
+      lineFindings.set(k, [...(lineFindings.get(k) || []), f]);
+    });
+    // one verdict per line, on the line itself
+    let ok = 0, bad = 0, check = 0;
+    if (body) body.querySelectorAll("tr[data-line]").forEach(tr => {
+      const fs = lineFindings.get(key(tr.dataset.code)) || [];
+      const cell = tr.querySelector("td.grow") || tr.cells[1];
+      const mark = document.createElement("div");
+      if (!fs.length && kind !== "po" && parseFloat(tr.dataset.price) === 0) {
+        mark.className = "ai-line-mark muted-mark";
+        mark.innerHTML = "✦ $0 nut — not on the customer's PO (expected)";
+      } else if (!fs.length) {
+        ok++;
+        mark.className = "ai-line-mark ok";
+        mark.innerHTML = `✦ ✓ ${ran.length > 1 ? `all ${ran.length} readers agree` : `${escapeHtml(ran[0] || "reader")} agrees`}`;
+      } else {
+        const sure = fs.some(f => f.severity === "confirmed");
+        sure ? bad++ : check++;
+        mark.className = `ai-line-mark ${sure ? "bad" : "check"}`;
+        mark.innerHTML = fs.map(f => f.kind === "extra"
+          ? `✦ ${sure ? "✕" : "?"} <strong>Not on the document</strong> <span class="muted">— ${f.flagged_by.map(escapeHtml).join(", ")} didn't find this line${f.agrees_with_order.length ? `; ${f.agrees_with_order.map(escapeHtml).join(", ")} did` : ""}</span>`
+          : `✦ ${sure ? "✕" : "?"} <strong>${escapeHtml(f.field === "quantity" ? "Qty" : f.field === "price" ? "Price" : f.field)}:</strong> ${what} ${val(f.field, f.saved)}
+             · ${Object.entries(f.seen).map(([n, v]) => `${escapeHtml(n)} <strong>${val(f.field, v)}</strong>`).join(" · ")}
+             ${f.agrees_with_order.length ? `· <span class="pos">${f.agrees_with_order.map(escapeHtml).join(", ")} ${val(f.field, f.saved)}</span>` : ""}
+             <span class="muted">${sure ? "" : "(likely a misread — check)"}</span>`).join("<br>");
+      }
+      cell.appendChild(mark);
+    });
+    const missing = r.findings.filter(f => f.kind === "missing");
+    const header = r.findings.filter(f => !f.line);
+    const readerChips = r.readers.map(x => `<span class="ai-reader ${x.ok ? "ok" : "bad"}" title="${escapeHtml(x.error || `${x.lines} lines read in ${x.seconds}s`)}">${x.ok ? "✓" : "✕"} ${escapeHtml(x.name)}</span>`).join("");
+    const state = bad || missing.some(f => f.severity === "confirmed") || header.some(f => f.severity === "confirmed") ? "bad" : check || missing.length || header.length ? "warn" : "clean";
+    panel.innerHTML = `<div class="ai-validate-panel ${state}">
+      <div class="ai-validate-head"><span class="ai-spark">✦</span>
+        <strong>${state === "clean" ? `Every line matches ${escapeHtml(r.document)}` : `Checked against ${escapeHtml(r.document)}`}</strong>
+        <span class="small">${ok ? `<span class="pos">${ok} line${ok === 1 ? "" : "s"} ✓</span>` : ""}${bad ? ` · <span class="neg">${bad} to fix</span>` : ""}${check ? ` · <span class="warn-text">${check} to check</span>` : ""}</span>
+        <span class="ai-readers" style="margin:0;">${readerChips}</span>
+        ${body ? `<a class="link small" onclick="document.getElementById('${body.id}').scrollIntoView({behavior:'smooth', block:'center'})">See the lines ↓</a>` : ""}
+        <a class="link small" style="margin-left:auto;" onclick="document.getElementById('ai-validate-panel').innerHTML=''; document.querySelectorAll('.ai-line-mark').forEach(m => m.remove())">Clear</a></div>
+      ${header.map(f => `<div class="small ${f.severity === "confirmed" ? "neg" : ""}" style="margin-top:4px;">✦ <strong>${escapeHtml(f.field)}:</strong> ${what} ${val("", f.saved)} · ${Object.entries(f.seen).map(([n, v]) => `${escapeHtml(n)} ${val("", v)}`).join(" · ")}</div>`).join("")}
+      ${missing.length ? `<div class="small" style="margin-top:6px;"><strong class="neg">On the document but not on this ${what}:</strong>
+        ${missing.map(f => `<div>✦ <strong>${escapeHtml(f.line)}</strong> — ${Object.entries(f.seen).map(([n, v]) => `${escapeHtml(n)}: ${escapeHtml(String(v))}`).join(" · ")}${f.severity === "confirmed" ? "" : " <span class='muted'>(one reader only)</span>"}</div>`).join("")}</div>` : ""}
+    </div>`;
+  } catch (e) {
+    panel.innerHTML = `<div class="ai-validate-panel bad"><div class="ai-validate-head"><span class="ai-spark">✦</span> <strong>Couldn't validate:</strong> ${escapeHtml(e.message)}
+      <a class="link small" style="margin-left:auto;" onclick="document.getElementById('ai-validate-panel').innerHTML=''">Close</a></div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("running");
+  }
+}
+
+// ---- Ctrl+K: find any order, PO, item, customer, vendor, shipment or invoice from anywhere ----
+const QuickFind = {
+  data: null, loadedAt: 0, el: null, results: [], active: 0,
+  async load() {
+    if (this.data && Date.now() - this.loadedAt < 60000) return this.data;
+    const mgr = AuthGuard.hasRole("manager");
+    const get = (url, ok = true) => ok ? apiFetch(url).catch(() => []) : Promise.resolve([]);
+    const [orders, pos, items, customers, vendors, shipments, invoices] = await Promise.all([
+      get("/api/customer-orders/"), get("/api/purchase-orders/", mgr), get("/api/stock-items/"), get("/api/customers/", mgr),
+      get("/api/vendors/", mgr), get("/api/shipments/"), get("/api/invoices/", mgr)]);
+    const cname = Object.fromEntries(customers.map(c => [c.id, c.name])), vname = Object.fromEntries(vendors.map(v => [v.id, v.name]));
+    this.data = [
+      ...orders.map(o => ({ kind: "Order", label: o.code, sub: [cname[o.customer_id], o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`, o.status].filter(Boolean).join(" · "), href: `customer-orders.html?id=${o.id}`, hay: `${o.code} ${o.po_number || ""} ${o.job_number || ""} ${cname[o.customer_id] || ""}` })),
+      ...pos.map(p => ({ kind: "PO", label: p.code, sub: [vname[p.vendor_id], p.vendor_so_number && `SO ${p.vendor_so_number}`, p.status].filter(Boolean).join(" · "), href: `purchase-orders.html?id=${p.id}`, hay: `${p.code} ${p.vendor_so_number || ""} ${vname[p.vendor_id] || ""}` })),
+      ...shipments.map(s => ({ kind: "Shipment", label: s.code, sub: [s.status, s.tracking_number].filter(Boolean).join(" · "), href: `shipments.html?id=${s.id}`, hay: `${s.code} ${s.tracking_number || ""}` })),
+      ...invoices.map(i => ({ kind: "Invoice", label: i.code, sub: [cname[i.customer_id], i.status, fmtMoney(i.total)].filter(Boolean).join(" · "), href: `invoices.html?id=${i.id}`, hay: `${i.code} ${cname[i.customer_id] || ""}` })),
+      ...items.map(i => ({ kind: "Item", label: i.code, sub: i.title, href: `item.html?id=${i.id}`, hay: `${i.code} ${i.title} ${i.category || ""}` })),
+      ...customers.map(c => ({ kind: "Customer", label: c.name, sub: c.contact_name || "", href: `customers.html?id=${c.id}`, hay: `${c.name} ${c.contact_name || ""}` })),
+      ...vendors.map(v => ({ kind: "Vendor", label: v.name, sub: v.code || "", href: `vendors.html?id=${v.id}`, hay: `${v.name} ${v.code || ""}` })),
+    ];
+    this.loadedAt = Date.now();
+    return this.data;
+  },
+  open() {
+    if (this.el) { this.el.querySelector("input").focus(); return; }
+    this.el = document.createElement("div");
+    this.el.className = "qf-backdrop";
+    this.el.innerHTML = `<div class="qf-box"><input type="text" placeholder="Find an order, PO, item, customer, vendor, shipment, invoice…" autocomplete="off">
+      <div class="qf-list"><div class="qf-empty muted small">Type a code, customer PO #, job #, name or item…</div></div>
+      <div class="qf-foot muted small">↑ ↓ to move · Enter to open · Esc to close</div></div>`;
+    document.body.appendChild(this.el);
+    const input = this.el.querySelector("input");
+    this.el.addEventListener("mousedown", e => { if (e.target === this.el) this.close(); });
+    input.addEventListener("input", () => this.search(input.value));
+    input.addEventListener("keydown", e => {
+      if (e.key === "Escape") this.close();
+      else if (e.key === "ArrowDown") { this.active = Math.min(this.active + 1, this.results.length - 1); this.paint(); e.preventDefault(); }
+      else if (e.key === "ArrowUp") { this.active = Math.max(this.active - 1, 0); this.paint(); e.preventDefault(); }
+      else if (e.key === "Enter" && this.results[this.active]) location.href = this.results[this.active].href;
+    });
+    input.focus();
+    this.load();
+  },
+  close() { if (this.el) { this.el.remove(); this.el = null; } },
+  async search(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) { this.results = []; this.paint(); return; }
+    const data = await this.load();
+    const score = r => {
+      const label = r.label.toLowerCase(), hay = r.hay.toLowerCase();
+      if (!words.every(w => hay.includes(w))) return -1;
+      return (label === words.join(" ") ? 100 : 0) + (label.startsWith(words[0]) ? 20 : 0) + (label.includes(words[0]) ? 10 : 0);
+    };
+    this.results = data.map(r => [score(r), r]).filter(([s]) => s >= 0).sort((a, b) => b[0] - a[0]).slice(0, 12).map(([, r]) => r);
+    this.active = 0;
+    this.paint();
+  },
+  paint() {
+    const list = this.el && this.el.querySelector(".qf-list");
+    if (!list) return;
+    list.innerHTML = this.results.length ? this.results.map((r, i) => `<a class="qf-row ${i === this.active ? "active" : ""}" href="${r.href}">
+        <span class="qf-kind">${r.kind}</span><strong>${escapeHtml(r.label)}</strong><span class="muted small">${escapeHtml(r.sub || "")}</span></a>`).join("")
+      : `<div class="qf-empty muted small">${this.el.querySelector("input").value ? "Nothing found." : "Type a code, customer PO #, job #, name or item…"}</div>`;
+  },
+};
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && AuthGuard.getToken()) { e.preventDefault(); QuickFind.open(); }
+});
+
+// ---- activity history on an order / PO: "admin changed line #2: qty 110 → 111" ----
+async function renderActivity(container, entityType, entityId, lineNo = {}) {
+  const el = typeof container === "string" ? document.getElementById(container) : container;
+  if (!el) return;
+  let rows = [];
+  try { rows = await apiFetch(`/api/activity/${entityType}/${entityId}`); } catch (e) { el.innerHTML = `<span class="muted small">${escapeHtml(e.message)}</span>`; return; }
+  const itemCode = id => { const list = typeof items !== "undefined" ? items : []; const it = list.find(i => i.id === id); return it ? it.code : `item ${id}`; };
+  const nice = k => ({ po_number: "PO #", customer_po_date: "PO date", job_number: "job #", delivery_date: "delivery date", ship_to_address: "ship-to",
+    unit_price: "price", unit_cost: "cost", vendor_item_code: "vendor part #", vendor_description: "vendor description", vendor_so_number: "vendor SO #",
+    expected_date: "expected date", item_id: "item", customer_id: "customer", vendor_id: "vendor" }[k] || k.replace(/_/g, " "));
+  const val = (k, v) => v == null || v === "" ? "blank" : k === "item_id" ? itemCode(v) : /date/.test(k) ? String(v).substring(0, 10) : String(v).length > 40 ? String(v).slice(0, 40) + "…" : String(v);
+  const fields = d => Object.entries(d || {}).filter(([k]) => !["allow_duplicate", "lines", "line_ids"].includes(k)).map(([k, v]) => `${nice(k)} → <strong>${escapeHtml(val(k, v))}</strong>`).join(", ");
+  const say = r => {
+    let d = null; try { d = r.detail ? JSON.parse(r.detail) : null; } catch {}
+    const [what, sub] = r.action.split("/");
+    const ln = sub ? (lineNo[sub] != null ? `line #${lineNo[sub]}` : "a line") : "";
+    if (!what && r.method === "PUT") return `edited the details: ${fields(d) || "saved"}`;
+    if (what === "lines" && r.method === "POST") return d ? `added a line: <strong>${escapeHtml(itemCode(d.item_id))}</strong> × ${fmtQty(d.quantity)}${d.unit_price != null ? ` @ ${fmtPrice(d.unit_price)}` : d.unit_cost != null ? ` @ ${fmtPrice(d.unit_cost)}` : ""}` : "added a line";
+    if (what === "lines" && r.method === "PUT") return `changed ${ln}: ${fields(d)}`;
+    if (what === "lines" && r.method === "DELETE") return `removed ${ln}`;
+    if (what === "line-order") return "reordered the lines";
+    return ({ confirm: "confirmed the order", cancel: "cancelled it", "duplicate-po-ok": "OK'd the duplicate customer PO #", shipments: "created a shipment",
+      receive: "received stock", "mark-ordered": "marked it ordered", bills: r.method === "DELETE" ? "deleted a vendor invoice" : "added a vendor invoice",
+      charges: r.method === "DELETE" ? "removed a charge" : "added a charge", payments: "recorded a payment" }[what]) || `${r.method.toLowerCase()} ${escapeHtml(r.action)}`;
+  };
+  el.innerHTML = rows.length ? `<ul class="activity-list">${rows.map(r => `<li><span class="muted small">${new Date(r.at).toLocaleString()}</span>
+      <strong>${escapeHtml(r.by || "someone")}</strong> ${say(r)}</li>`).join("")}</ul>`
+    : `<p class="muted small" style="margin:0;">No changes recorded yet (history starts from today's update).</p>`;
+}
+
+
+// ---- placeholder rows while a list loads (instead of a bare "Loading...") ----
+function skeletonizeLoading(root = document) {
+  root.querySelectorAll("tbody").forEach(tb => {
+    const only = tb.rows.length === 1 ? tb.rows[0] : null;
+    const td = only && only.cells.length === 1 ? only.cells[0] : null;
+    if (!td || !/^\s*loading/i.test(td.textContent)) return;
+    const cols = parseInt(td.getAttribute("colspan")) || (tb.closest("table").tHead ? tb.closest("table").tHead.rows[0].cells.length : 1);
+    tb.innerHTML = Array.from({ length: 6 }, (_, r) => `<tr class="skeleton-row">${Array.from({ length: cols }, (_, c) =>
+      `<td><span class="skel" style="width:${[60, 80, 45, 70, 55, 90][(r + c) % 6]}%"></span></td>`).join("")}</tr>`).join("");
+  });
+}
+document.addEventListener("DOMContentLoaded", () => skeletonizeLoading());
+
+// ---- print the record on screen (order / PO / invoice): the browser's print, laid out for paper ----
+function printRecord() { document.body.classList.add("printing-record"); window.print(); setTimeout(() => document.body.classList.remove("printing-record"), 500); }

@@ -26,3 +26,12 @@ async def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engi
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=400, detail="File is larger than 15 MB")
     return ai_docs.extract(db, kind, data, file.filename or "", po_id, engine="claude" if engine == "claude" else "local")
+
+
+@router.post("/validate-po/{po_id}")
+def validate_po(po_id: int, claude: bool = True, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Check a PO against the vendor's attached quote / order confirmation (or invoice) with the local AI and Claude."""
+    if ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Validating purchase orders needs the manager role")
+    from app.services import ai_validate
+    return ai_validate.validate_po(db, po_id, use_claude=claude)

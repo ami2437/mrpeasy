@@ -24,15 +24,16 @@ router = APIRouter(prefix="/api/attachments", tags=["attachments"])
 ENTITIES = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
 # Which kinds of document belong on which record.
 CATEGORIES = {
-    "customer_order": {"customer_po", "other"},
-    "purchase_order": {"vendor_invoice", "mtr", "vendor_quote", "other"},
-    "shipment": {"pod", "bol", "other"},
+    "customer_order": {"customer_po", "invoice", "packing_list", "bol", "mtr", "other"},
+    "purchase_order": {"purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"},
+    "shipment": {"pod", "bol", "packing_list", "other"},
 }
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif",
                       ".xlsx", ".xls", ".csv", ".doc", ".docx", ".txt", ".eml", ".msg"}
 MAX_BYTES = 25 * 1024 * 1024
 # Documents that carry prices; employees never list, open or upload them.
-MONEY_CATEGORIES = {"customer_po", "vendor_invoice", "vendor_quote"}
+MONEY_CATEGORIES = {"customer_po", "vendor_invoice", "vendor_quote", "purchase_order", "invoice"}
+THUMB_WIDTH = 160
 
 
 def _hides_money(user: User) -> bool:
@@ -146,6 +147,59 @@ def download(attachment_id: int, download: bool = False, db: Session = Depends(g
                         content_disposition_type="attachment" if download else "inline")
 
 
+@router.put("/{attachment_id}", response_model=AttachmentResponse)
+def retag(attachment_id: int, category: Optional[str] = Form(None), note: Optional[str] = Form(None),
+          db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Change what kind of document a file is (its tag), or its note."""
+    att = _get(db, attachment_id)
+    if att.uploaded_by != user.username and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Only the uploader or a manager can change this file")
+    if category is not None:
+        if category not in CATEGORIES.get(att.entity_type, set()):
+            raise HTTPException(status_code=400, detail=f"'{category}' isn't a kind of file for this record")
+        if category in MONEY_CATEGORIES and _hides_money(user):
+            raise HTTPException(status_code=403, detail="That kind of document needs the manager role")
+        att.category = category
+    if note is not None:
+        att.note = note.strip() or None
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+@router.get("/{attachment_id}/thumb")
+def thumbnail(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """A small PNG of the file's first page (PDF) or the picture itself, made once and kept beside the uploads."""
+    att = _get(db, attachment_id)
+    if att.category in MONEY_CATEGORIES and _hides_money(user):
+        raise HTTPException(status_code=403, detail="This document needs the manager role")
+    path = (upload_root() / att.stored_name).resolve()
+    if upload_root() not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="The file is missing from the server")
+    cache = upload_root() / ".thumbs" / f"{att.id}.png"
+    if not cache.exists():
+        from PIL import Image
+        try:
+            if path.suffix.lower() == ".pdf":
+                import pypdfium2 as pdfium
+                pdf = pdfium.PdfDocument(str(path))
+                page = pdf[0]
+                img = page.render(scale=THUMB_WIDTH / max(page.get_width(), 1)).to_pil()
+                pdf.close()
+            elif (att.content_type or "").startswith("image/"):
+                img = Image.open(path)
+                img.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 2))
+            else:
+                raise HTTPException(status_code=404, detail="No preview for this kind of file")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=404, detail="Couldn't make a preview of this file")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        img.convert("RGB").save(cache, "PNG", optimize=True)
+    return FileResponse(cache, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.delete("/{attachment_id}", status_code=204)
 def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Uploaders can remove their own files; managers and above can remove any."""
@@ -155,6 +209,7 @@ def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depen
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() in path.parents and path.exists():
         path.unlink()
+    (upload_root() / ".thumbs" / f"{att.id}.png").unlink(missing_ok=True)
     db.query(MtrLink).filter(MtrLink.attachment_id == att.id).delete()
     db.delete(att)
     db.commit()

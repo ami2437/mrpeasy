@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.schemas import PartyCreate, PartyUpdate, PartyResponse, VendorItemInput, VendorItemResponse
+from app.schemas import VendorCreate, VendorUpdate, PartyResponse, VendorItemInput, VendorItemResponse
 from app.services.crud import vendor_service, VendorItemService
 from app.dependencies import require_role, get_current_active_user
 
@@ -14,7 +14,7 @@ def list_vendors(db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=PartyResponse)
-def create_vendor(data: PartyCreate, db: Session = Depends(get_db)):
+def create_vendor(data: VendorCreate, db: Session = Depends(get_db)):
     return vendor_service.create(db, data)
 
 
@@ -24,7 +24,7 @@ def get_vendor(party_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{party_id}", response_model=PartyResponse)
-def update_vendor(party_id: int, data: PartyUpdate, db: Session = Depends(get_db)):
+def update_vendor(party_id: int, data: VendorUpdate, db: Session = Depends(get_db)):
     return vendor_service.update(db, party_id, data)
 
 

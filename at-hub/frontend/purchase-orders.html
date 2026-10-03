@@ -43,6 +43,7 @@
       <div id="po-ai-note"></div>
       <div class="field-grid">
         <div class="wide"><label>Vendor</label><select id="f-vendor"></select></div>
+        <div><label>Vendor SO #</label><input type="text" id="f-vendor-so" placeholder="Their sales order / confirmation #"></div>
         <div><label>Expected date</label><input type="date" id="f-expected"></div>
         <div class="wide"><label>Notes</label><textarea id="f-notes" rows="2"></textarea></div>
       </div>
@@ -60,9 +61,10 @@
     </div>
 
     <div class="card">
+      <div class="tabs" id="list-tabs"></div>
       <table class="list-fit">
-        <thead><tr><th>Code</th><th>Vendor</th><th>Order date</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="11">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Vendor</th><th title="The vendor's sales order / confirmation #">Vendor SO #</th><th title="When the PO was entered">Created</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -83,6 +85,10 @@
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
       if (show) {
+        // start clean: nothing left over from the last order, copy or scan
+        document.querySelectorAll("#form-card input:not([type=file]):not([type=checkbox]), #form-card textarea").forEach(el => { el.value = ""; });
+        document.querySelectorAll("#form-card .error").forEach(el => { el.textContent = ""; });
+        document.getElementById("f-vendor").value = "";  // a new PO starts with no vendor -- pick one (or scan)
         document.getElementById("lines-body").innerHTML = "";
         document.getElementById("po-ai-note").innerHTML = "";
         document.getElementById("po-ai-slot").innerHTML = aiScanButton("vendor_order", "applyOrderScan",
@@ -104,20 +110,14 @@
       }
       await vendorItems(parseInt(document.getElementById("f-vendor").value)).catch(() => []);  // warm the cache so line fills settle fast
       if (r.expected_date) document.getElementById("f-expected").value = r.expected_date;
-      const notes = [r.document_number && `Vendor ref ${r.document_number}`, r.notes].filter(Boolean).join(" — ");
-      if (notes) document.getElementById("f-notes").value = notes;
+      if (r.document_number) document.getElementById("f-vendor-so").value = r.document_number;
+      if (r.notes) document.getElementById("f-notes").value = r.notes;
       const body = document.getElementById("lines-body");
       body.innerHTML = "";
       (r.lines.length ? r.lines : [{}]).forEach((l, n) => {
         addLine();
         const tr = body.lastElementChild;
         tr.querySelector(".l-item").id = `ai-po-item-${n}`;
-        tr.aiAfterPick = () => setTimeout(() => {  // keep the quoted part #, description and price
-          if (l.vendor_item_code) tr.querySelector(".l-vcode").value = l.vendor_item_code;
-          if (l.description) tr.querySelector(".l-vdesc").value = l.description;
-          if (l.unit_price != null) tr.querySelector(".l-cost").value = l.unit_price;
-          refreshPriceDeltas(tr);
-        }, 300);
         if (l.item_id) {
           const sel = tr.querySelector(".l-item");
           sel.value = l.item_id;
@@ -133,6 +133,7 @@
           if (l.description) tr.querySelector(".l-vdesc").value = l.description;
           if (l.quantity) tr.querySelector(".l-qty").value = l.quantity;
           if (l.unit_price != null) tr.querySelector(".l-cost").value = l.unit_price;
+          tr.keepOnPick = true;  // from now on, picking another item keeps these (and any corrections)
           refreshPriceDeltas(tr);
         }, 400);
       });
@@ -149,7 +150,7 @@
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="min-width:280px;"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}</option>`).join("")}</select></td>
+        <td style="min-width:280px;"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></td>
         <td><input type="text" class="l-vcode" style="width:130px;" placeholder="Vendor Part #"><div class="vcode-hint small"></div></td>
         <td><input type="text" class="l-vdesc" style="min-width:200px;" placeholder="Vendor Description"></td>
         <td><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
@@ -159,10 +160,13 @@
       const delta = tr.querySelector("[data-price-delta]");
       const vendorId = () => parseInt(document.getElementById("f-vendor").value);
       tr.querySelector(".l-vcode").addEventListener("change", e => matchVendorCode(e.target, tr.querySelector(".l-item"), vendorId()));
-      tr.querySelector(".l-item").addEventListener("change", (e) => {
+      tr.querySelector(".l-item").addEventListener("change", async (e) => {
+        // a line filled from a scanned document keeps what's in its fields (scanned or since corrected): only the item changes
+        const keep = tr.keepOnPick ? [".l-vcode", ".l-vdesc", ".l-cost"].map(c => [c, tr.querySelector(c).value]) : null;
         tr.querySelector(".l-cost").value = e.target.selectedOptions[0].dataset.cost;
-        fillVendorCode(e.target, tr.querySelector(".l-vcode"), vendorId(), tr.querySelector(".l-vdesc"), tr.querySelector(".l-cost"));
         delta.dataset.item = e.target.value;
+        await fillVendorCode(e.target, tr.querySelector(".l-vcode"), vendorId(), tr.querySelector(".l-vdesc"), tr.querySelector(".l-cost"));
+        if (keep) keep.forEach(([c, v]) => { if (v !== "") tr.querySelector(c).value = v; });
         refreshPriceDeltas(tr);
       });
       tr.querySelector(".l-cost").addEventListener("input", () => refreshPriceDeltas(tr));
@@ -204,6 +208,7 @@
     // Picking our item fills in what THIS vendor calls it (part #, description, last cost) when
     // we've bought it from them before. Values the user typed are kept; earlier auto-fills are replaced.
     async function fillVendorCode(select, codeInput, vendorId, descInput = null, costInput = null) {
+      if (!vendorId) return;  // no vendor picked yet
       const hint = codeInput.parentElement.querySelector(".vcode-hint");
       const auto = el => el && (!el.value.trim() || el.dataset.auto === "1");
       const set = (el, v) => { if (el && auto(el)) { el.value = v ?? ""; el.dataset.auto = "1"; } };
@@ -231,6 +236,12 @@
     }
 
     async function saveOrder() {
+      if (!document.getElementById("f-vendor").value) {
+        const err = document.getElementById("form-error");
+        if (err) err.textContent = "Pick the vendor first.";
+        document.getElementById("f-vendor").focus();
+        return;
+      }
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
       const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
@@ -246,6 +257,7 @@
           body: JSON.stringify({
             vendor_id: parseInt(document.getElementById("f-vendor").value),
             expected_date: document.getElementById("f-expected").value || null,
+            vendor_so_number: document.getElementById("f-vendor-so").value.trim() || null,
             notes: document.getElementById("f-notes").value,
             lines,
           }),
@@ -291,30 +303,63 @@
       q = q.toLowerCase();
       if (o.code.toLowerCase().includes(q)) return true;
       if (vendorName(o.vendor_id).toLowerCase().includes(q)) return true;
+      if ((o.vendor_so_number || "").toLowerCase().includes(q) || (o.notes || "").toLowerCase().includes(q)) return true;
       return o.lines.some(l => {
         const item = items.find(i => i.id === l.item_id);
         return item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q));
       });
     }
 
+
+    // Cancelled orders live on their own tab (where they can be deleted), out of the working list.
+    let listView = "active";
+    function listTabs(active, cancelled, noun) {
+      document.getElementById("list-tabs").innerHTML = `
+        <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
+        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>`;
+    }
+    // Open POs first (newest entered first); finished ones -- everything received, or cancelled -- fold away at the
+    // bottom. Paid isn't part of it (MRPeasy payment history isn't imported yet): the Balance column still shows it.
+    let showCompleted = false;
+    function poDone(o) {
+      return o.status !== "draft" && o.lines.length > 0 && o.lines.every(l => l.received_quantity >= l.quantity - 1e-9);
+    }
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
       const q = document.getElementById("search").value.trim();
-      const filtered = orders.filter(o => matchesSearch(o, q));
+      const searched = orders.filter(o => matchesSearch(o, q));
+      const cancelledOnes = searched.filter(o => o.status === "cancelled");
+      listTabs(searched.length - cancelledOnes.length, cancelledOnes.length, "Purchase Orders");
+      const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="11" class="muted">${orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="muted">${listView === "cancelled" ? "No cancelled purchase orders." : orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = filtered.map(o => {
+      if (listView === "cancelled") {
+        tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
+          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td><td>${vendorName(o.vendor_id)}</td>
+          <td>${escapeHtml(o.vendor_so_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
+          <td class="num">${fmtMoney(o.order_total)}</td><td class="num">${fmtMoney(o.amount_paid)}</td><td class="num">${fmtMoney(o.order_total - o.amount_paid)}</td>
+          <td></td><td><span class="tag cancelled">cancelled</span></td>
+          <td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
+          <td><a class="link neg" onclick="deletePo(${o.id})">Delete</a></td></tr>`).join("");
+        return;
+      }
+      const newest = (a, b) => new Date(b.created_at || b.order_date) - new Date(a.created_at || a.order_date) || b.id - a.id;
+      const open = filtered.filter(o => !poDone(o)).sort(newest);
+      const finished = filtered.filter(poDone).sort(newest);
+      const expanded = showCompleted || (q && !open.length);
+      const row = o => {
         const total = o.order_total;
         const paid = o.amount_paid;
         const qty = o.lines.reduce((sum, l) => sum + l.quantity, 0);
         const received = o.lines.reduce((sum, l) => sum + Math.min(l.received_quantity, l.quantity), 0);
         return `
-        <tr>
+        <tr class="${poDone(o) ? "order-done" : ""}">
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${vendorName(o.vendor_id)}</td>
-          <td>${fmtDate(o.order_date)}</td>
+          <td>${escapeHtml(o.vendor_so_number || "")}</td>
+          <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(total)}</td>
           <td class="num">${fmtMoney(paid)}</td>
@@ -324,12 +369,17 @@
             ${progressBar("Paid", total ? paid / total * 100 : 0, "paid", `${fmtMoney(paid)} of ${fmtMoney(total)} paid`)}
           </td>
           <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
-          <td class="muted" title="${escapeHtml(o.notes || "")}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(o.notes || "")}</td>
+          <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>${o.status === "draft" ? `<a class="link" onclick="markOrdered(${o.id})">Mark ordered</a>` : ""}</td>
         </tr>
       `;
-      }).join("");
+      };
+      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="12" class="muted">No purchase orders in progress${q ? " match your search" : ""}.</td></tr>`)
+        + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
+            <td colspan="12"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed purchase orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — fully received${expanded ? "" : " · click to show"}</span></td></tr>`
+          + (expanded ? finished.map(row).join("") : "") : "");
     }
+
 
     async function markOrdered(id) {
       try {
@@ -354,7 +404,13 @@
       const canCancel = order.status !== "cancelled" && order.lines.every(l => l.received_quantity === 0);
 
       card.innerHTML = `
-        <h3 style="margin-top:0;">${order.code} <span class="tag ${order.status}">${order.status.replace('_',' ')}</span></h3>
+        <h3 class="detail-head" style="margin-top:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status.replace('_',' ')}</span>
+          ${order.vendor_so_number ? `<span class="muted small" style="font-weight:400;">Vendor SO # ${escapeHtml(order.vendor_so_number)}</span>` : ""}
+          <span class="file-strip" id="po-file-strip" style="margin-left:auto;"></span>
+          ${order.status !== "cancelled" ? aiValidateButton("po", order.id) : ""}
+          <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this PO (internal view)">Print</button></h3>
+        <div id="ai-validate-panel"></div>
+        ${poMoneyTiles(order)}
         <p class="muted" style="margin:0 0 4px;">${escapeHtml((vendors.find(v => v.id === order.vendor_id) || {}).name || "")}${order.order_date ? ` — ordered ${fmtDate(order.order_date)}` : ""}</p>
 
         <div class="action-bar">
@@ -364,6 +420,7 @@
           ${order.status === "draft" ? `<button class="secondary" onclick="markOrdered(${order.id}).then(() => showDetail(${order.id}))">Mark Ordered</button>` : ""}
           <span style="flex:1;"></span>
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
+          ${order.status === "cancelled" ? `<button class="danger" onclick="deletePo(${order.id})">Delete PO</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
         <div id="po-email-form" style="display:none;"></div>
@@ -373,6 +430,7 @@
           <div class="wide"><label>Vendor</label><select id="e-vendor" ${editable ? "" : "disabled"}>
             ${vendors.map(v => `<option value="${v.id}" ${v.id === order.vendor_id ? "selected" : ""}>${escapeHtml(v.name)}</option>`).join("")}
           </select></div>
+          <div><label>Vendor SO #</label><input type="text" id="e-vendor-so" value="${escapeHtml(order.vendor_so_number || '')}" ${editable ? "" : "disabled"}></div>
           <div><label>Expected date</label><input type="date" id="e-expected" value="${order.expected_date ? order.expected_date.substring(0,10) : ''}" ${editable ? "" : "disabled"}></div>
           <div class="wide"><label>Notes</label><textarea id="e-notes" rows="2" ${editable ? "" : "disabled"}>${escapeHtml(order.notes || '')}</textarea></div>
         </div>
@@ -381,33 +439,29 @@
 
         <section class="dsec"><h4 class="dsec-title">Lines</h4>
         <div class="table-scroll">
-        <table class="lines-table fit-table">
-          <thead><tr><th>#</th><th class="grow">Item</th><th title="What this vendor calls the item — remembered for this vendor">Vendor Part #</th><th>Vendor Description</th><th class="num">Qty</th><th class="num">Received</th><th class="num">Unit cost</th><th class="num">Subtotal</th><th class="num" title="Landed costs spread onto this line, per unit">+ Landed/unit</th><th class="num">Landed unit cost</th>${editable ? "<th></th>" : ""}${canReceive ? "<th>Receive now</th><th>Lot #</th>" : ""}</tr></thead>
+        <table class="lines-table fit-table wrap-cells">
+          <thead><tr><th>#</th><th class="grow">Item</th><th title="What this vendor calls the item, and their description — remembered for this vendor">Vendor Part # / Description</th><th class="num">Qty</th><th class="num">Received</th><th class="num">Unit cost</th><th class="num">Subtotal</th><th class="num" title="Unit cost with landed costs (freight, tariffs...) spread onto it">Landed unit</th>${canReceive ? `<th title="Quantity to receive now, and the lot # (blank = next lot #)">Receive now / Lot #</th>` : ""}</tr></thead>
           <tbody id="po-lines-body" oninput="recalcPoLines(); refreshPriceDeltas(this)">
             ${order.lines.map((l, idx) => `
-              <tr data-line="${l.id}" data-qty="${l.quantity}" data-cost="${l.unit_cost}">
-                <td class="line-no">${idx + 1}</td>
-                <td class="grow">${(() => { const it = items.find(i => i.id === l.item_id) || {}; return `<strong>${escapeHtml(it.code || l.item_id)}</strong> ${groupTag(it)}${it.title ? `<div class="muted small">${escapeHtml(it.title)}</div>` : ""}`; })()}</td>
-                <td>${editable
-                  ? `<input type="text" class="e-line-vcode" style="width:120px;" value="${escapeHtml(l.vendor_item_code || "")}" placeholder="Vendor Part #">`
-                  : escapeHtml(l.vendor_item_code || "—")}</td>
-                <td>${editable
-                  ? `<input type="text" class="e-line-vdesc" style="min-width:160px;" value="${escapeHtml(l.vendor_description || "")}" placeholder="Optional">`
-                  : escapeHtml(l.vendor_description || "")}</td>
+              <tr data-line="${l.id}" data-code="${escapeHtml((items.find(i => i.id === l.item_id) || {}).code || "")}" data-qty="${l.quantity}" data-cost="${l.unit_cost}">
+                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderPoLineBulk(${order.id})">` : ""}${idx + 1}${editable && l.received_quantity === 0
+                  ? ` <a class="line-x" title="Remove this line" onclick="removeLine(${order.id}, ${l.id})">✕</a>` : ""}<span class="save-dot"></span></td>
+                <td class="grow">${(() => { const it = items.find(i => i.id === l.item_id) || {}; return `<strong>${escapeHtml(it.code || l.item_id)}</strong> ${groupTag(it)}${editable && l.received_quantity === 0
+                  ? `<a class="link item-replace" title="Pick a different item for this line" onclick="replacePoLineItem(${order.id}, ${l.id}, ${l.item_id}, this)">change</a>` : ""}${it.title ? `<div class="muted small">${escapeHtml(it.title)}</div>` : ""}`; })()}</td>
+                <td class="vendor-cell">${editable
+                  ? `<input type="text" class="e-line-vcode" value="${escapeHtml(l.vendor_item_code || "")}" placeholder="Vendor Part #">
+                     <input type="text" class="e-line-vdesc" value="${escapeHtml(l.vendor_description || "")}" placeholder="Their description (optional)">`
+                  : `<strong>${escapeHtml(l.vendor_item_code || "—")}</strong><div class="muted small">${escapeHtml(l.vendor_description || "")}</div>`}</td>
                 <td class="num">${editable && l.received_quantity === 0 ? `<input type="number" step="1" min="1" class="e-line-qty qty-input" value="${l.quantity}">` : fmtQty(l.quantity)}</td>
                 <td class="num">${fmtQty(l.received_quantity)}</td>
                 <td class="num">${editable ? priceInput("e-line-cost", l.unit_cost) : fmtPrice(l.unit_cost)}
                   <div data-price-delta data-kind="purchase" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_cost}" ${editable ? `data-price-input=".e-line-cost"` : ""}></div></td>
                 <td class="num subtotal">${fmtMoney(l.quantity * l.unit_cost)}</td>
-                <td class="num muted">${l.landed_cost_per_unit ? fmtPrice(l.landed_cost_per_unit) : "—"}</td>
-                <td class="num"><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong></td>
-                ${editable ? `<td>
-                  <a class="link" onclick="saveLine(${order.id}, ${l.id})">Save</a>
-                  ${l.received_quantity === 0 ? ` &nbsp; <a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
-                </td>` : ""}
+                <td class="num"><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong>${l.landed_cost_per_unit ? `<div class="muted small">+${fmtPrice(l.landed_cost_per_unit)} landed</div>` : ""}</td>
+
                 ${canReceive ? `
-                  <td><input type="number" step="1" min="0" class="recv-qty qty-input" data-line="${l.id}" value="${Math.max(0, Math.round(l.quantity - l.received_quantity))}"></td>
-                  <td><input type="text" class="recv-lot" data-line="${l.id}" placeholder="${l.planned_lot_code && !l.received_quantity ? escapeHtml(l.planned_lot_code) : "Auto"}" title="${l.planned_lot_code ? `Lot ${escapeHtml(l.planned_lot_code)} was assigned when this was ordered and is used unless you type another` : "Leave blank for the next lot #, or type the supplier's lot code"}" style="width:120px;"></td>
+                  <td class="recv-cell"><input type="number" step="1" min="0" class="recv-qty qty-input" data-line="${l.id}" value="${Math.max(0, Math.round(l.quantity - l.received_quantity))}">
+                  <input type="text" class="recv-lot" data-line="${l.id}" placeholder="${l.planned_lot_code && !l.received_quantity ? escapeHtml(l.planned_lot_code) : "Auto"}" title="${l.planned_lot_code ? `Lot ${escapeHtml(l.planned_lot_code)} was assigned when this was ordered and is used unless you type another` : "Leave blank for the next lot #, or type the supplier's lot code"}"></td>
                 ` : ""}
               </tr>
             `).join("")}
@@ -417,27 +471,26 @@
               <tr class="charge-row ${c.vendor_bill_id ? "locked" : ""}">
                 <td class="line-no">S&amp;H</td>
                 <td class="grow"><span class="tag sh">${escapeHtml(c.charge_type)}</span> ${escapeHtml(c.description || "")}
-                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>` : `<div class="muted small">Added manually</div>`}</td>
-                <td colspan="5"></td>
+                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>` : `<div class="muted small">Added manually${editable ? ` · <a class="link" onclick="removeCharge(${order.id}, ${c.id})">Remove</a>` : ""}</div>`}</td>
+                <td colspan="4"></td>
                 <td class="num subtotal">${fmtMoney(c.amount)}</td>
-                <td colspan="2"></td>
-                ${editable ? `<td>${c.vendor_bill_id ? "" : `<a class="link" onclick="removeCharge(${order.id}, ${c.id})">Remove</a>`}</td>` : ""}
-                ${canReceive ? `<td colspan="2"></td>` : ""}
+                <td></td>
+                ${canReceive ? `<td></td>` : ""}
               </tr>`).join("")}
           </tbody>
           <tfoot>
             <tr><td></td><td class="grow">Lines Total</td><td></td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
-              <td class="num" id="po-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0))}</td><td colspan="${2 + (editable ? 1 : 0) + (canReceive ? 2 : 0)}"></td></tr>
-            ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Shipping &amp; Handling</td><td colspan="5"></td>
-              <td class="num">${fmtMoney(order.charges_total)}</td><td colspan="${2 + (editable ? 1 : 0) + (canReceive ? 2 : 0)}"></td></tr>
-            <tr class="grand-total"><td></td><td class="grow">PO Total</td><td colspan="5"></td>
-              <td class="num" id="po-grand-total">${fmtMoney(order.lines_total + order.charges_total)}</td><td colspan="${2 + (editable ? 1 : 0) + (canReceive ? 2 : 0)}"></td></tr>` : ""}
+              <td class="num" id="po-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_cost, 0))}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
+            ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Shipping &amp; Handling</td><td colspan="4"></td>
+              <td class="num">${fmtMoney(order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
+            <tr class="grand-total"><td></td><td class="grow">PO Total</td><td colspan="4"></td>
+              <td class="num" id="po-grand-total">${fmtMoney(order.lines_total + order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>` : ""}
           </tfoot>
         </table>
         </div>
         ${editable ? `
           <div class="row" style="margin-top:8px; max-width:1100px;">
-            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
                 onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
             <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>
@@ -489,10 +542,13 @@
         <div id="po-attachments"></div>
         </section>
 
-        <section class="dsec"><h4 class="dsec-title">Material Test Reports (MTRs)</h4>
-        <p class="muted small" style="margin-top:0;">Upload MTRs under Attachments, then tick which lines each one covers. Links are remembered per item, so every past MTR can be looked up in the <a class="link" href="mtrs.html">MTR Library</a> and traced to the customer orders it shipped on.</p>
+        <section class="dsec"><details class="fold-section"><summary><h4 class="dsec-title" style="display:inline;">Material Test Reports (MTRs)</h4> <span class="muted small">— click to show</span></summary>
+        <p class="muted small" style="margin-top:6px;">Upload MTRs under Attachments, then tick which lines each one covers. Links are remembered per item, so every past MTR can be looked up in the <a class="link" href="mtrs.html">MTR Library</a> and traced to the customer orders it shipped on.</p>
         <div id="po-mtrs"></div>
-        </section>
+        </details></section>
+        <section class="dsec"><details class="fold-section" ontoggle="if (this.open) renderActivity('po-activity', 'purchase_order', ${order.id}, ${escapeHtml(JSON.stringify(Object.fromEntries(order.lines.map((l, i) => [l.id, i + 1]))))})">
+          <summary><h4 class="dsec-title" style="display:inline;">History</h4> <span class="muted small">— who changed what, click to show</span></summary>
+          <div id="po-activity"></div></details></section>
 
         <section class="dsec"><h4 class="dsec-title">Vendor Invoices &amp; Payments</h4>
         ${renderPayments(order)}
@@ -501,8 +557,16 @@
       refreshPriceDeltas(card);
       renderPoMtrs(order);
       renderVendorPaymentOffer(order);
-      renderAttachments("po-attachments", "purchase_order", order.id, ["vendor_invoice", "mtr", "vendor_quote", "other"],
-        { notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => renderPoMtrs(order) });
+      if (order.status !== "cancelled") {
+        enableLineDrag(document.getElementById("po-lines-body"), ids => savePoLineOrder(order.id, ids));
+        document.getElementById("po-lines-body").addEventListener("change", e => {  // lines save themselves
+          const tr = e.target.closest("tr[data-line]");
+          if (tr && e.target.matches(".e-line-qty, .e-line-cost, .e-line-vcode, .e-line-vdesc")) autoSavePoLine(order.id, tr);
+        });
+      }
+      renderAttachments("po-attachments", "purchase_order", order.id, ["purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"],
+        { notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => { renderPoMtrs(order); renderFileStrip("po-file-strip", "purchase_order", order.id); } });
+      renderFileStrip("po-file-strip", "purchase_order", order.id);
     }
 
     // MTR linking grid: one card per uploaded MTR, a checkbox per PO line. Nothing is
@@ -653,7 +717,7 @@
       el.innerHTML = `
         <div class="panel" style="max-width:640px;">
           <div class="row">
-            <div><label>To</label><input type="text" id="po-email-to" value="${escapeHtml(vendor.email || "")}" placeholder="vendor@example.com"></div>
+            <div><label>To</label><input type="text" id="po-email-to" value="${escapeHtml(vendor.po_email || vendor.email || "")}" placeholder="vendor@example.com"></div>
             <div><label>CC</label><input type="text" id="po-email-cc"></div>
           </div>
           <label>Subject</label><input type="text" id="po-email-subject" value="Purchase Order ${escapeHtml(order.code)}">
@@ -718,6 +782,22 @@ Thank you.</textarea>
         : `<span class="tag draft">Unpaid</span>`;
     }
 
+    // The PO's money at a glance, in color, at the top of the PO.
+    function poMoneyTiles(order) {
+      if (hidesMoney()) return "";
+      const legacy = (order.freight_cost || 0) + (order.tariff_cost || 0);
+      const total = order.order_total, paid = order.amount_paid;
+      const billed = order.bills.reduce((s, b) => s + b.amount, 0);
+      const owed = Math.max(0, billed - paid), notBilled = Math.max(0, total - billed);
+      return `<div class="money-tiles">
+        <div class="mtile t-total"><span>PO total</span><strong>${fmtMoney(total)}</strong><small>${fmtMoney(order.lines_total)} lines${order.charges_total ? ` + ${fmtMoney(order.charges_total)} charges` : ""}${legacy ? " + legacy freight/tariff" : ""}</small></div>
+        <div class="mtile t-billed"><span>Billed by vendor</span><strong>${fmtMoney(billed)}</strong><small>${order.bills.length} invoice${order.bills.length === 1 ? "" : "s"}</small></div>
+        <div class="mtile t-paid"><span>Paid</span><strong>${fmtMoney(paid)}</strong><small>${total ? Math.round(paid / total * 100) : 0}% of the PO</small></div>
+        <div class="mtile ${owed > 0.005 ? "t-owed" : "t-zero"}"><span>Owed on invoices</span><strong>${fmtMoney(owed)}</strong><small>${owed > 0.005 ? "to pay" : "nothing owed"}</small></div>
+        <div class="mtile ${notBilled > 0.005 ? "t-wait" : "t-zero"}"><span>Not billed yet</span><strong>${fmtMoney(notBilled)}</strong><small>${notBilled > 0.005 ? "still to be invoiced" : "fully billed"}</small></div>
+      </div>`;
+    }
+
     function renderPayments(order) {
       // Landed costs are usually billed by someone else (carrier, broker), so they're not part of what the vendor is owed.
       // freight_cost/tariff_cost are only set on POs received before Landed Costs existed.
@@ -730,19 +810,13 @@ Thank you.</textarea>
       const today = new Date().toISOString().substring(0, 10);
       const canDelete = AuthGuard.hasRole("manager");
       return `
-        <div class="stat-row">
-          <div class="stat"><div class="stat-label">PO Total</div><div class="stat-value">${fmtMoney(total)}</div><div class="stat-sub">${fmtMoney(order.lines_total)} Lines${order.charges_total ? ` + ${fmtMoney(order.charges_total)} Charges` : ""}${legacy ? " + Legacy Freight/Tariff" : ""}</div></div>
-          <div class="stat"><div class="stat-label">Billed by vendor</div><div class="stat-value">${fmtMoney(billed)}</div><div class="stat-sub">${order.bills.length} invoice${order.bills.length === 1 ? "" : "s"}</div></div>
-          <div class="stat"><div class="stat-label">Paid</div><div class="stat-value">${fmtMoney(paid)}</div></div>
-          <div class="stat"><div class="stat-label">Owed on invoices</div><div class="stat-value ${billed - paid > 0.005 ? "neg" : ""}">${fmtMoney(Math.max(0, billed - paid))}</div></div>
-          <div class="stat"><div class="stat-label">Not billed yet</div><div class="stat-value" style="font-size:16px;">${fmtMoney(Math.max(0, total - billed))}</div></div>
-        </div>
+        <div class="money-line"><span class="ml t-total">PO ${fmtMoney(total)}</span><span class="ml t-billed">billed ${fmtMoney(billed)}</span><span class="ml t-paid">paid ${fmtMoney(paid)}</span><span class="ml ${billed - paid > 0.005 ? "t-owed" : "t-zero"}">owed ${fmtMoney(Math.max(0, billed - paid))}</span><span class="ml ${total - billed > 0.005 ? "t-wait" : "t-zero"}">not billed yet ${fmtMoney(Math.max(0, total - billed))}</span></div>
 
         <div id="vp-apply-${order.id}"></div>
 
         <h4 style="margin-top:14px; display:flex; align-items:center; gap:10px;">Vendor Invoices ${aiScanButton("vendor_invoice", "applyInvoiceScan", { poId: order.id, title: "Scan the vendor's invoice: fills the row below and checks it against this PO's lines" })}</h4>
         <p class="muted small" style="margin:0 0 6px;">Goods + S&amp;H must add up to the invoice total. The S&amp;H is added to the PO lines automatically, linked to its invoice.</p>
-        <table class="compact-table no-table-tools" style="max-width:1080px;">
+        <table class="compact-table no-table-tools bill-table">
           <thead><tr><th>Vendor Invoice #</th><th>Date</th><th>Due</th><th class="num">Invoice Total</th><th class="num">Goods</th><th class="num" title="Shipping &amp; handling on this invoice">S&amp;H</th><th class="num" title="Goods + S&amp;H, must match the invoice total">Goods + S&amp;H</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th><th>File</th><th></th></tr></thead>
           <tbody>
             ${order.bills.map(b => `
@@ -825,24 +899,58 @@ Thank you.</textarea>
     }
 
     // AI: the vendor's invoice fills the new-invoice row; the review lists each line against the PO.
+    // A scanned file can hold several invoices (one per shipment). They're listed; "Fill row" puts one in the
+    // Add-invoice row. The list stays through "Add invoice" so the next one is a click away.
+    let invoiceScan = null;  // { poId, file, invoices, pick }
     function applyInvoiceScan(r, file) {
+      invoiceScan = { poId: currentOrder.id, file, cloud: r.cloud, redacted: r.redacted, scanned: r.scanned_image,
+                      invoices: r.invoices && r.invoices.length ? r.invoices : [r], pick: null };
+      const recorded = recordedBills();
+      const first = invoiceScan.invoices.findIndex(i => !recorded.has(norm(i.invoice_number)));
+      fillBillFromScan(first >= 0 ? first : 0);
+    }
+    const norm = v => (v || "").toString().replace(/[^a-z0-9]/gi, "").toLowerCase();
+    function recordedBills() { return new Set((currentOrder.bills || []).map(b => norm(b.bill_number))); }
+
+    function fillBillFromScan(k) {
+      const r = invoiceScan.invoices[k];
+      invoiceScan.pick = k;
       const set = (id, val) => { const el = document.getElementById(id); if (el && val !== null && val !== undefined && val !== "") el.value = val; };
       set("bill-number", r.invoice_number);
       set("bill-date", r.invoice_date);
       set("bill-due", r.due_date);
       set("bill-amount", r.total != null ? r.total.toFixed(2) : null);
-      set("bill-shipping", r.shipping_handling ? r.shipping_handling.toFixed(2) : "");
+      const sh = document.getElementById("bill-shipping");
+      if (sh) sh.value = r.shipping_handling ? r.shipping_handling.toFixed(2) : "";
       const goods = r.subtotal != null ? r.subtotal : (r.total != null ? r.total - (r.shipping_handling || 0) - (r.tax || 0) : r.lines_sum);
       set("bill-goods", goods != null ? goods.toFixed(2) : null);
-      setFileInput(document.getElementById("bill-file"), file);
+      setFileInput(document.getElementById("bill-file"), invoiceScan.file);
       checkBillSum();
+      renderInvoiceScan();
+    }
+
+    function renderInvoiceScan() {
+      const el = document.getElementById("bill-ai-review");
+      if (!el || !invoiceScan || !currentOrder || invoiceScan.poId !== currentOrder.id) return;
+      const { file, invoices, pick } = invoiceScan;
+      const r = invoices[pick];
+      const recorded = recordedBills();
       const it = id => items.find(i => i.id === id) || {};
       const bad = r.lines.filter(l => l.issues && l.issues.length);
-      document.getElementById("bill-ai-review").innerHTML = `
+      el.innerHTML = `
         <div class="ai-review">
-          <div class="ai-review-head">${icon("sparkles")} <strong>${r.cloud ? "Claude" : "AI"} read ${escapeHtml(file.name)}</strong>${r.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((r.redacted || []).join("; ") || "nothing needed")}">☁ cloud, redacted</span>` : ""}
-            <span class="muted small">Review the row above, then “Add invoice”.${r.scanned_image ? " Scanned image: double-check the numbers." : ""}</span>
-            <a class="link small" style="margin-left:auto;" onclick="document.getElementById('bill-ai-review').innerHTML=''">Dismiss</a></div>
+          <div class="ai-review-head">${icon("sparkles")} <strong>${invoiceScan.cloud ? "Claude" : "AI"} read ${escapeHtml(file.name)}${invoices.length > 1 ? `: ${invoices.length} invoices` : ""}</strong>${invoiceScan.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((invoiceScan.redacted || []).join("; ") || "nothing needed")}">☁ cloud, redacted</span>` : ""}
+            <span class="muted small">Review the row above, then “Add invoice”.${invoiceScan.scanned ? " Scanned image: double-check the numbers." : ""}</span>
+            <a class="link small" style="margin-left:auto;" onclick="invoiceScan = null; document.getElementById('bill-ai-review').innerHTML=''">Dismiss</a></div>
+          ${invoices.length > 1 ? `<table class="compact-table no-table-tools" style="margin-top:6px;">
+            <thead><tr><th>Invoice #</th><th>Date</th><th class="num">Goods</th><th class="num">S&amp;H</th><th class="num">Total</th><th></th></tr></thead>
+            <tbody>${invoices.map((v, k) => `<tr class="${k === pick ? "row-selected" : ""}">
+              <td><strong>${escapeHtml(v.invoice_number || "?")}</strong></td><td>${escapeHtml(v.invoice_date || "")}</td>
+              <td class="num">${v.subtotal != null ? fmtMoney(v.subtotal) : ""}</td><td class="num">${v.shipping_handling ? fmtMoney(v.shipping_handling) : "—"}</td>
+              <td class="num">${v.total != null ? fmtMoney(v.total) : ""}</td>
+              <td>${recorded.has(norm(v.invoice_number)) ? `<span class="pos small">✓ Added</span>`
+                : k === pick ? `<span class="muted small">In the row above</span>` : `<a class="link small" onclick="fillBillFromScan(${k})">Fill row</a>`}</td></tr>`).join("")}</tbody>
+          </table>` : ""}
           ${(r.warnings || []).map(w => `<div class="notice">${escapeHtml(w)}</div>`).join("")}
           ${r.lines.length ? `<table class="compact-table no-table-tools" style="margin-top:6px;">
             <thead><tr><th>Vendor Part #</th><th>Description</th><th>Our Item</th><th class="num">Qty</th><th class="num">Unit Price</th><th>Check Vs PO</th></tr></thead>
@@ -902,7 +1010,12 @@ Thank you.</textarea>
           }),
         });
         await loadOrders();
-        showDetail(poId);
+        await showDetail(poId);
+        if (invoiceScan && invoiceScan.poId === poId) {
+          const recorded = recordedBills();
+          const next = invoiceScan.invoices.findIndex(v => !recorded.has(norm(v.invoice_number)));
+          if (next >= 0) fillBillFromScan(next); else renderInvoiceScan();
+        }
       } catch (err) {
         errorEl.textContent = err.message;
       }
@@ -955,6 +1068,7 @@ Thank you.</textarea>
           body: JSON.stringify({
             vendor_id: parseInt(document.getElementById("e-vendor").value),
             expected_date: document.getElementById("e-expected").value || null,
+            vendor_so_number: document.getElementById("e-vendor-so").value.trim() || null,
             notes: document.getElementById("e-notes").value,
           }),
         });
@@ -962,6 +1076,82 @@ Thank you.</textarea>
         showDetail(poId);
       } catch (err) {
         errorEl.textContent = err.message;
+      }
+    }
+
+    // ---- line tools on a saved PO: drag order, replace item, act on several ticked lines ----
+    async function savePoLineOrder(poId, ids) {
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/line-order`, { method: "PUT", body: JSON.stringify({ line_ids: ids }) });
+        await loadOrders();
+        showDetail(poId);  // the # column follows the new order
+      } catch (err) { alert(err.message); showDetail(poId); }
+    }
+    function replacePoLineItem(poId, lineId, itemId, anchor) {
+      openItemReplace(anchor, itemId, async newId => {
+        const it = items.find(i => i.id === newId) || {};
+        const row = document.querySelector(`#po-lines-body tr[data-line="${lineId}"]`);
+        const keepCost = row && row.querySelector(".e-line-cost") ? parseFloat(row.querySelector(".e-line-cost").value) : null;
+        const useCost = keepCost != null && confirm(`Keep this line's cost (${fmtPrice(keepCost)})?\nCancel = use ${it.code}'s cost (${fmtPrice(it.cost_price || 0)}).`);
+        await apiFetch(`/api/purchase-orders/${poId}/lines/${lineId}`, { method: "PUT",
+          body: JSON.stringify({ item_id: newId, unit_cost: useCost ? keepCost : (it.cost_price || 0) }) });
+        await loadOrders();
+        showDetail(poId);
+      });
+    }
+    function pickedPoLines() { return [...document.querySelectorAll("#po-lines-body .line-pick:checked")].map(c => parseInt(c.value)); }
+    function renderPoLineBulk(poId) {
+      const ids = pickedPoLines();
+      let el = document.getElementById("po-line-bulk");
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "po-line-bulk";
+        document.getElementById("po-lines-body").closest(".table-scroll").after(el);
+      }
+      el.innerHTML = ids.length ? `<div class="line-bulk"><strong>${ids.length} line${ids.length === 1 ? "" : "s"} ticked</strong>
+          <button class="secondary small-btn" onclick="bulkPoLineMove(${poId}, 'top')">Move to top</button>
+          <button class="secondary small-btn" onclick="bulkPoLineMove(${poId}, 'bottom')">Move to bottom</button>
+          <button class="danger small-btn" onclick="bulkPoLineRemove(${poId})">Remove</button>
+          <a class="link small" onclick="document.querySelectorAll('#po-lines-body .line-pick').forEach(c => c.checked = false); renderPoLineBulk(${poId})">Clear</a></div>` : "";
+    }
+    async function bulkPoLineMove(poId, where) {
+      const picked = new Set(pickedPoLines());
+      const all = [...document.querySelectorAll("#po-lines-body tr[data-line]")].map(tr => parseInt(tr.dataset.line));
+      const rest = all.filter(id => !picked.has(id)), moved = all.filter(id => picked.has(id));
+      await savePoLineOrder(poId, where === "top" ? [...moved, ...rest] : [...rest, ...moved]);
+    }
+    async function bulkPoLineRemove(poId) {
+      const ids = pickedPoLines();
+      if (!confirm(`Remove ${ids.length} line${ids.length === 1 ? "" : "s"} from this PO?`)) return;
+      const failed = [];
+      for (const id of ids) {
+        try { await apiFetch(`/api/purchase-orders/${poId}/lines/${id}`, { method: "DELETE" }); }
+        catch (e) { failed.push(e.message); }
+      }
+      await loadOrders(); await showDetail(poId);
+      if (failed.length) alert(`Some lines weren't removed: ${failed.join("; ")}`);
+    }
+
+    async function autoSavePoLine(poId, tr) {
+      const dot = tr.querySelector(".save-dot");
+      const q = tr.querySelector(".e-line-qty");
+      dot.className = "save-dot saving"; dot.title = "Saving…";
+      try {
+        const saved = await apiFetch(`/api/purchase-orders/${poId}/lines/${tr.dataset.line}`, { method: "PUT", body: JSON.stringify({
+          quantity: q ? parseFloat(q.value) || 0 : undefined,
+          unit_cost: parseFloat(tr.querySelector(".e-line-cost").value) || 0,
+          vendor_item_code: tr.querySelector(".e-line-vcode") ? tr.querySelector(".e-line-vcode").value : undefined,
+          vendor_description: tr.querySelector(".e-line-vdesc") ? tr.querySelector(".e-line-vdesc").value : undefined }) });
+        const i = orders.findIndex(o => o.id === poId);
+        if (i >= 0) orders[i] = saved;
+        dot.className = "save-dot saved"; dot.title = "Saved";
+        setTimeout(() => { if (dot.className === "save-dot saved") dot.className = "save-dot"; }, 2500);
+        renderOrders();
+        const tiles = document.querySelector(".money-tiles");  // totals follow
+        if (tiles) tiles.outerHTML = poMoneyTiles(saved);
+      } catch (err) {
+        dot.className = "save-dot failed"; dot.title = err.message;
+        alert(err.message);
       }
     }
 
@@ -1022,6 +1212,18 @@ Thank you.</textarea>
       }
     }
 
+    async function deletePo(poId) {
+      const o = orders.find(x => x.id === poId);
+      if (!confirm(`Delete ${o ? o.code : "this PO"} for good? Its lines and attached files go too. This can't be undone.`)) return;
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}`, { method: "DELETE" });
+        document.getElementById("detail-card").style.display = "none";
+        await loadOrders();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
     async function cancelOrder(poId) {
       if (!confirm("Cancel this purchase order? This cannot be undone.")) return;
       try {
@@ -1065,22 +1267,31 @@ Thank you.</textarea>
     }
 
     async function init() {
-      [vendors, items] = await Promise.all([
+      [vendors, items, orders] = await Promise.all([  // one round trip; loadOrders() is for refreshes
         apiFetch("/api/vendors/"),
         apiFetch("/api/stock-items/"),
+        apiFetch("/api/purchase-orders/"),
       ]);
       const vendorOptions = vendors.map(v => `<option value="${v.id}">${escapeHtml(v.name)}${v.code ? ` (${escapeHtml(v.code)})` : ""}</option>`).join("");
-      document.getElementById("f-vendor").innerHTML = vendorOptions;
+      document.getElementById("f-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
       document.getElementById("vp-vendor").innerHTML = vendorOptions;
       document.getElementById("vp-date").value = new Date().toISOString().substring(0, 10);
       document.getElementById("f-vendor").addEventListener("change", refillAllLines);
+      enableLineDrag(document.getElementById("lines-body"));  // new PO: lines saved in the order shown
       loadVendorPayments();
       document.getElementById("search").addEventListener("input", renderOrders);
-      await loadOrders();
+      renderOrders();
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");
       const vendorId = params.get("vendor_id");
       if (id) showDetail(parseInt(id));
+      const newFor = parseInt(params.get("new"));  // "+ PO" on a vendor's card
+      if (newFor) {
+        toggleForm(true);
+        const sel = document.getElementById("f-vendor");
+        sel.value = newFor;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       if (vendorId) {
         document.getElementById("search").value = vendorName(parseInt(vendorId));
         renderOrders();

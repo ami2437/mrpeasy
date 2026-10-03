@@ -23,7 +23,9 @@ def with_pods(db: Session, shipments):
         by_id.setdefault(att.entity_id, []).append(att)
     from app.models import Invoice, InvoiceShipment
     live = {}
+    from sqlalchemy.orm import selectinload
     for link, inv in (db.query(InvoiceShipment, Invoice).join(Invoice, Invoice.id == InvoiceShipment.invoice_id)
+                      .options(selectinload(Invoice.shipments))
                       .filter(InvoiceShipment.shipment_id.in_([s.id for s in items]), Invoice.status != "void").all()):
         live[link.shipment_id] = inv
     for s in items:

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
     CustomerOrderCreate, CustomerOrderResponse, CreateShipmentRequest, ShipmentResponse,
-    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse,
+    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse, LineOrderRequest,
 )
 from app.services.crud import CustomerOrderService, OrderProfitService
 from app.dependencies import get_current_active_user, require_role
@@ -40,6 +40,22 @@ def update_order(order_id: int, data: CustomerOrderUpdate, db: Session = Depends
     return CustomerOrderService.update(db, order_id, data)
 
 
+@router.post("/{order_id}/duplicate-po-ok", response_model=CustomerOrderResponse, dependencies=manager)
+def accept_duplicate_po(order_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Clear the possible-duplicate banner: this order is separate from the earlier one with the same customer PO #."""
+    return CustomerOrderService.accept_duplicate_po(db, order_id, current_user.username)
+
+
+@router.put("/{order_id}/line-order", response_model=CustomerOrderResponse, dependencies=manager)
+def reorder_lines(order_id: int, data: LineOrderRequest, db: Session = Depends(get_db)):
+    """Drag-to-reorder: the order's lines in their new display order."""
+    from app.services.crud import reorder_lines as save_order
+    order = CustomerOrderService.get(db, order_id)
+    save_order(db, order.lines, data.line_ids)
+    db.refresh(order)
+    return order
+
+
 @router.post("/{order_id}/lines", response_model=CustomerOrderResponse, dependencies=manager)
 def add_line(order_id: int, data: CustomerOrderLineAdd, db: Session = Depends(get_db)):
     return CustomerOrderService.add_line(db, order_id, data)
@@ -58,6 +74,14 @@ def remove_line(order_id: int, line_id: int, db: Session = Depends(get_db)):
 @router.post("/{order_id}/confirm", response_model=CustomerOrderResponse, dependencies=manager)
 def confirm_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.confirm(db, order_id)
+
+
+@router.delete("/{order_id}", status_code=204, dependencies=manager)
+def delete_order(order_id: int, db: Session = Depends(get_db)):
+    """Cancelled orders only."""
+    from fastapi import Response
+    CustomerOrderService.delete(db, order_id)
+    return Response(status_code=204)
 
 
 @router.post("/{order_id}/cancel", response_model=CustomerOrderResponse, dependencies=manager)

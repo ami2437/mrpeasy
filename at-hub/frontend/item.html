@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Item</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <div class="row toolbar-row" style="align-items:center;">
+        <a class="link" href="stock-items.html">← Stock Items</a>
+        <h1 class="page-title" id="page-title" style="margin:0 0 0 8px;">Item</h1>
+        <span id="status-tags"></span>
+        <span style="flex:1;"></span>
+        <span id="actions"></span>
+      </div>
+    </div>
+    <div id="verify-banner"></div>
+
+    <div class="card" id="item-card"><p class="muted">Loading…</p></div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Where it's used</h3>
+      <div id="usage" class="muted">Loading…</div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Stock movements</h3>
+      <div id="movements" class="muted">Loading…</div>
+    </div>
+  </main>
+
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("stock-items.html");
+    const itemId = parseInt(new URLSearchParams(location.search).get("id"));
+    const isManager = AuthGuard.hasRole("manager");
+    let item = null;
+
+    async function load() {
+      try {
+        const [it, groups] = await Promise.all([apiFetch(`/api/stock-items/${itemId}`), apiFetch("/api/stock-items/groups/list")]);
+        item = it;
+        render(groups);
+        loadUsage();
+        loadMovements();
+      } catch (err) {
+        document.getElementById("item-card").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function render(groups) {
+      document.title = `AT-HUB — ${item.code}`;
+      document.getElementById("page-title").textContent = item.code;
+      const needsVerify = item.created_via === "ai-scan" && !item.verified_by;
+      document.getElementById("status-tags").innerHTML = [
+        groupTag(item),
+        item.is_active === false ? `<span class="tag cancelled">archived</span>` : "",
+        needsVerify ? `<span class="tag on_hold">needs verifying</span>` : "",
+      ].join(" ");
+      document.getElementById("actions").innerHTML = isManager ? [
+        needsVerify ? `<button onclick="verify()">✓ Verify item</button>` : "",
+        item.is_active === false ? `<button class="secondary" onclick="setActive(true)">Restore</button>` : `<button class="secondary" onclick="setActive(false)">Archive</button>`,
+        `<button class="danger" id="delete-btn" onclick="deleteItem()" style="display:none;">Delete</button>`,
+      ].join(" ") : "";
+      document.getElementById("verify-banner").innerHTML = needsVerify ? `<div class="card notice">
+        <strong>Created by the AI scan</strong>${item.created_at ? ` on ${new Date(item.created_at).toLocaleDateString()}` : ""} from a customer PO.
+        Check the code, title, group and price below, then <strong>Verify</strong>. Until then it can't be picked on new orders.</div>`
+        : item.verified_by ? `<p class="muted small" style="margin:0 0 8px;">AI-created item, verified by ${escapeHtml(item.verified_by)}.</p>` : "";
+
+      const v = x => escapeHtml(x ?? "");
+      const ro = isManager ? "" : "disabled";
+      document.getElementById("item-card").innerHTML = `
+        <div class="field-grid">
+          <div><label>Code</label><input type="text" value="${v(item.code)}" disabled></div>
+          <div class="wide"><label>Title</label><input type="text" id="f-title" value="${v(item.title)}" ${ro}></div>
+          <div><label>Product group</label><select id="f-category" ${ro}><option value="">— pick a group —</option>${groups.map(g => `<option ${g.name === item.category ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}</select></div>
+          <div><label>Unit</label><input type="text" id="f-unit" value="${v(item.unit)}" placeholder="Ea, Kg, ..." ${ro}></div>
+          <div><label>Barcode</label><input type="text" id="f-barcode" value="${v(item.barcode)}" ${ro}></div>
+          ${hidesMoney() ? "" : `<div><label>Cost price <span class="muted">(avg. of lots on hand)</span></label><input type="number" step="${PRICE_STEP}" id="f-cost" value="${v(item.cost_price)}" ${ro}></div>
+          <div><label>Selling price</label><input type="number" step="${PRICE_STEP}" id="f-sell" value="${v(item.selling_price)}" ${ro}></div>`}
+          <div><label>Reorder point</label><input type="number" step="1" min="0" id="f-reorder" value="${v(item.reorder_point)}" ${ro}></div>
+          <div><label>Default pack size <a class="link small" onclick="showPackSizeHistory(${item.id})">history</a></label><input type="number" step="1" id="f-pack-size" value="${v(item.default_pack_size)}" ${ro}></div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;">
+          <div class="stat"><div class="stat-label">On hand</div><div class="stat-value">${fmtQty(item.on_hand)}</div></div>
+          <div class="stat"><div class="stat-label">Booked</div><div class="stat-value">${fmtQty(item.booked)}</div></div>
+          <div class="stat"><div class="stat-label">Available</div><div class="stat-value ${item.reorder_point && item.available <= item.reorder_point ? "neg" : ""}">${fmtQty(item.available)}</div></div>
+        </div>
+        ${isManager ? `
+        <div class="row" style="margin-top:12px; max-width:360px;">
+          <div><label>On hand (manual correction)</label><input type="number" step="1" id="f-on-hand" value="${item.on_hand}" oninput="refreshAdjustment()">
+            <div class="muted small">Logs an "adjustment" in the item's ledger — it doesn't silently overwrite the number.</div></div>
+        </div>
+        <div class="panel" id="adjust-up" style="display:none;">
+          <strong>Adding <span id="adjust-qty"></span> to stock.</strong> <span class="muted">This creates a new lot so the stock can be booked and its cost tracked.</span>
+          <div class="row">
+            <div><label>Unit cost it was acquired at <span class="neg">*</span></label><input type="number" step="${PRICE_STEP}" min="0" id="f-adj-cost" placeholder="Required"></div>
+            <div><label>Lot # <span class="muted">(optional)</span></label><input type="text" id="f-adj-lot" placeholder="Auto LOT-#####"></div>
+            <div style="flex:2;"><label>Reason</label><input type="text" id="f-adj-note" placeholder="E.g. Found In Cycle Count"></div>
+          </div>
+        </div>
+        <div class="notice info" id="adjust-down" style="display:none;">Removing <span id="adjust-down-qty"></span>: taken from unbooked lots first (oldest first).</div>
+        <div style="margin-top:14px;"><button onclick="save()">Save changes</button>
+          ${hidesMoney() ? "" : ` <a class="link small" onclick="showPriceHistory(${item.id})">Price history</a>`}
+          <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a></div>` : ""}
+        <div id="item-error" class="error"></div>`;
+    }
+
+    function refreshAdjustment() {
+      const value = parseFloat(document.getElementById("f-on-hand").value);
+      const delta = !isNaN(value) ? value - item.on_hand : 0;
+      document.getElementById("adjust-up").style.display = delta > 1e-9 ? "block" : "none";
+      document.getElementById("adjust-down").style.display = delta < -1e-9 ? "block" : "none";
+      document.getElementById("adjust-qty").textContent = `${fmtQty(delta)} ${item.unit || ""}`;
+      document.getElementById("adjust-down-qty").textContent = `${fmtQty(-delta)} ${item.unit || ""}`;
+      document.getElementById("f-adj-cost").placeholder = `required — current avg. ${fmtPrice(item.cost_price || 0)}`;
+    }
+
+    async function save() {
+      const err = document.getElementById("item-error");
+      err.textContent = "";
+      const val = id => document.getElementById(id) ? document.getElementById(id).value : null;
+      const newOnHand = parseFloat(val("f-on-hand"));
+      const adjCost = val("f-adj-cost") || "";
+      if (newOnHand > item.on_hand + 1e-9 && (adjCost === "" || parseFloat(adjCost) < 0)) {
+        err.textContent = "Enter the unit cost the added stock was acquired at.";
+        return;
+      }
+      const body = {
+        title: val("f-title"), unit: val("f-unit"), category: val("f-category") || null, barcode: val("f-barcode") || null,
+        reorder_point: parseFloat(val("f-reorder")) || 0,
+        default_pack_size: val("f-pack-size") ? parseInt(val("f-pack-size")) : null,
+        on_hand: newOnHand,
+        adjustment_unit_cost: adjCost === "" ? null : parseFloat(adjCost),
+        adjustment_lot_code: (val("f-adj-lot") || "").trim() || null,
+        adjustment_note: (val("f-adj-note") || "").trim() || null,
+      };
+      if (!hidesMoney()) { body.cost_price = parseFloat(val("f-cost")) || 0; body.selling_price = parseFloat(val("f-sell")) || 0; }
+      try {
+        await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify(body) });
+        await load();
+      } catch (e) { err.textContent = e.message; }
+    }
+
+    async function verify() {
+      try { await apiFetch(`/api/stock-items/${itemId}/verify`, { method: "POST" }); await load(); }
+      catch (e) { document.getElementById("item-error").textContent = e.message; }
+    }
+
+    async function setActive(active) {
+      if (!active && !confirm(`Archive ${item.code}? It stays on past orders, shipments and invoices, but can't be picked for new ones. You can restore it any time.`)) return;
+      try { await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ is_active: active }) }); await load(); }
+      catch (e) { document.getElementById("item-error").textContent = e.message; }
+    }
+
+    async function deleteItem() {
+      if (!confirm(`Delete ${item.code} for good? It isn't used anywhere. This can't be undone.`)) return;
+      try { await apiFetch(`/api/stock-items/${itemId}`, { method: "DELETE" }); location.href = "stock-items.html"; }
+      catch (e) {
+        document.getElementById("item-error").textContent = e.message.startsWith("USED|")
+          ? `Can't delete: it's on ${e.message.slice(5)}. Archive it instead.` : e.message;
+      }
+    }
+
+    // Orders and POs with this item, and whether it can be deleted (only if used nowhere).
+    async function loadUsage() {
+      const el = document.getElementById("usage");
+      try {
+        const [orders, pos, used] = await Promise.all([
+          apiFetch("/api/customer-orders/"),
+          isManager ? apiFetch("/api/purchase-orders/").catch(() => []) : [],
+          isManager ? apiFetch(`/api/stock-items/${itemId}/usage`).catch(() => ({})) : {},
+        ]);
+        const btn = document.getElementById("delete-btn");
+        if (btn) btn.style.display = Object.keys(used).length ? "none" : "";
+        const co = orders.filter(o => o.lines.some(l => l.item_id === itemId)).sort((a, b) => b.id - a.id);
+        const po = pos.filter(o => o.lines.some(l => l.item_id === itemId)).sort((a, b) => b.id - a.id);
+        const qty = (o, f) => o.lines.filter(l => l.item_id === itemId).reduce((s, l) => s + l[f], 0);
+        el.className = "";
+        el.innerHTML = (Object.keys(used).length
+            ? `<p class="small" style="margin-top:0;">Used on ${Object.entries(used).map(([k, names]) => `<strong>${escapeHtml(k)}</strong> ${escapeHtml(names.slice(0, 8).join(", "))}${names.length > 8 ? ` and ${names.length - 8} more` : ""}`).join("; ")}
+                — so it can be archived, not deleted. <span class="muted">(Delete a cancelled order first and the item can be deleted.)</span></p>`
+            : isManager ? `<p class="muted small" style="margin-top:0;">Not used anywhere yet — it can be deleted.</p>` : "")
+          + `<div class="row" style="align-items:flex-start; gap:20px;">
+            <div style="flex:1; min-width:300px;"><h4 style="margin:0 0 6px;">Customer orders (${co.length})</h4>
+              ${co.length ? `<table class="compact-table no-table-tools"><thead><tr><th>Order</th><th>Customer PO</th><th class="num">Qty</th><th>Status</th></tr></thead>
+                <tbody>${co.slice(0, 50).map(o => `<tr><td><a class="link" href="customer-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${escapeHtml(o.po_number || "")}</td>
+                  <td class="num">${fmtQty(qty(o, "quantity"))}</td><td><span class="tag ${o.status}">${o.status}</span></td></tr>`).join("")}</tbody></table>
+                ${co.length > 50 ? `<p class="muted small">…and ${co.length - 50} older.</p>` : ""}` : `<p class="muted">None.</p>`}</div>
+            ${isManager ? `<div style="flex:1; min-width:300px;"><h4 style="margin:0 0 6px;">Purchase orders (${po.length})</h4>
+              ${po.length ? `<table class="compact-table no-table-tools"><thead><tr><th>PO</th><th class="num">Qty</th><th class="num">Received</th><th>Status</th></tr></thead>
+                <tbody>${po.slice(0, 50).map(o => `<tr><td><a class="link" href="purchase-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td>
+                  <td class="num">${fmtQty(qty(o, "quantity"))}</td><td class="num">${fmtQty(qty(o, "received_quantity"))}</td><td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td></tr>`).join("")}</tbody></table>
+                ${po.length > 50 ? `<p class="muted small">…and ${po.length - 50} older.</p>` : ""}` : `<p class="muted">None.</p>`}</div>` : ""}
+          </div>`;
+      } catch (err) { el.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`; }
+    }
+
+    async function loadMovements() {
+      const el = document.getElementById("movements");
+      try {
+        const m = await apiFetch(`/api/stock-items/${itemId}/movements`);
+        const typeTag = t => `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : "draft"}">${escapeHtml(t)}</span>`;
+        el.className = "";
+        el.innerHTML = `<div class="stat-row">
+            <div class="stat"><div class="stat-label">Total in</div><div class="stat-value pos">+${fmtQty(m.total_in)}</div></div>
+            <div class="stat"><div class="stat-label">Total out</div><div class="stat-value neg">−${fmtQty(m.total_out)}</div></div>
+            <div class="stat"><div class="stat-label">Movements</div><div class="stat-value">${m.movements.length}</div></div>
+          </div>
+          <div class="table-scroll" style="max-height:60vh;"><table class="compact-table">
+            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
+            <tbody>${m.movements.map(t => `<tr>
+              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${typeTag(t.type)}</td>
+              <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
+              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td>${escapeHtml(t.reference || "")}</td>
+              <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")
+              || `<tr><td colspan="8" class="muted">No movements yet.</td></tr>`}</tbody>
+          </table></div>`;
+      } catch (err) { el.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`; }
+    }
+
+    if (!itemId) document.getElementById("item-card").innerHTML = `<div class="error">No item given.</div>`;
+    else load();
+  </script>
+  </div>
+</body>
+</html>

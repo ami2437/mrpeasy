@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from fastapi import FastAPI, Response
+from fastapi import Header, HTTPException, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config.settings import settings
@@ -90,6 +90,51 @@ async def hide_money_from_employees(request, call_next):
             pass
     headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
     return Response(content=body, status_code=response.status_code, headers=headers, media_type=response.media_type)
+
+
+# ---- activity history: every successful change to an order or PO, with who and what ----
+ACTIVITY_PATH = re.compile(r"^/api/(customer-orders|purchase-orders)/(\d+)(?:/(.*))?$")
+
+
+@app.middleware("http")
+async def record_activity(request, call_next):
+    m = ACTIVITY_PATH.match(request.url.path) if request.method in ("POST", "PUT", "DELETE") else None
+    body = b""
+    if m and "application/json" in request.headers.get("content-type", ""):
+        body = await request.body()
+    response = await call_next(request)
+    if m and response.status_code < 400:
+        from app.models import ActivityLog
+        auth = request.headers.get("authorization", "")
+        who = (AuthService.decode_token(auth[7:]) or {}).get("sub") if auth.lower().startswith("bearer ") else None
+        kind, rec_id, rest = m.group(1), int(m.group(2)), (m.group(3) or "")
+        if rest.startswith("profit") or rest.endswith(".pdf") or rest.startswith("email"):
+            return response
+        db = SessionLocal()
+        try:
+            db.add(ActivityLog(entity_type="customer_order" if kind == "customer-orders" else "purchase_order", entity_id=rec_id,
+                               method=request.method, action=rest, detail=body.decode("utf-8", "replace")[:2000] or None, by=who))
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+    return response
+
+
+@app.get("/api/activity/{entity_type}/{entity_id}")
+def activity(entity_type: str, entity_id: int, authorization: str = Header(None)):
+    """The change history of one order / PO, newest first."""
+    from app.models import ActivityLog
+    if not authorization or not AuthService.decode_token(authorization.split(" ")[-1]):
+        raise HTTPException(status_code=401, detail="Not signed in")
+    db = SessionLocal()
+    try:
+        rows = (db.query(ActivityLog).filter(ActivityLog.entity_type == entity_type, ActivityLog.entity_id == entity_id)
+                .order_by(ActivityLog.at.desc()).limit(300).all())
+        return [{"method": r.method, "action": r.action, "detail": r.detail, "by": r.by, "at": r.at.isoformat() + "Z"} for r in rows]
+    finally:
+        db.close()
 
 
 @app.get("/api/health")

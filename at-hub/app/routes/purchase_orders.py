@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
+    LineOrderRequest,
     PurchaseOrderCreate, PurchaseOrderResponse, ReceiveOrderRequest,
     PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
     PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput,
@@ -75,9 +76,26 @@ def mark_ordered(po_id: int, db: Session = Depends(get_db)):
     return PurchaseOrderService.mark_ordered(db, po_id)
 
 
+@router.put("/{po_id}/line-order", response_model=PurchaseOrderResponse)
+def reorder_lines(po_id: int, data: LineOrderRequest, db: Session = Depends(get_db)):
+    """Drag-to-reorder: the PO's lines in their new display order."""
+    from app.services.crud import reorder_lines as save_order
+    po = PurchaseOrderService.get(db, po_id)
+    save_order(db, po.lines, data.line_ids)
+    db.refresh(po)
+    return po
+
+
 @router.post("/{po_id}/cancel", response_model=PurchaseOrderResponse)
 def cancel_order(po_id: int, db: Session = Depends(get_db)):
     return PurchaseOrderService.cancel(db, po_id)
+
+
+@router.delete("/{po_id}", status_code=204)
+def delete_order(po_id: int, db: Session = Depends(get_db)):
+    """Cancelled POs only, and only when nothing was received, billed or paid on them."""
+    PurchaseOrderService.delete(db, po_id)
+    return Response(status_code=204)
 
 
 @router.post("/{po_id}/receive", response_model=PurchaseOrderResponse)

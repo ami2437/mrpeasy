@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
+from typing import Optional
 
 Base = declarative_base()
 
@@ -39,6 +40,8 @@ class StockItem(Base):
     title = Column(String, nullable=False)
     unit = Column(String, nullable=True)
     category = Column(String, nullable=True, index=True)  # product group name (see ProductGroup)
+    created_via = Column(String, nullable=True)  # "ai-scan": made from a scanned customer PO -- worth a second look
+    verified_by = Column(String, nullable=True)  # "who, when" a person checked an ai-scan item; until then it can't be picked
     barcode = Column(String, nullable=True, index=True)
     cost_price = Column(Float, nullable=True, default=0)
     selling_price = Column(Float, nullable=True, default=0)
@@ -112,7 +115,78 @@ class InventoryTransaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
-class Customer(Base):
+class ContactCardMixin:
+    """iOS-style contact card shared by customers and vendors: any number of labelled phones, emails,
+    addresses, websites and people, plus tags and notes. The single fields (phone, email, contact_name,
+    address, shipping_address) stay as the card's "main" values, since documents and emails read them."""
+    details_json = Column(Text, nullable=True)  # JSON: tags, labelled phones/emails/addresses/websites, people, notes
+
+    DETAIL_LISTS = ("phones", "emails", "addresses", "websites", "people")
+
+    @property
+    def details(self) -> dict:
+        """The contact card. Records saved before it existed get one built from their single fields."""
+        import json
+        if self.details_json:
+            d = json.loads(self.details_json)
+        else:
+            d = {"phones": [{"label": "work", "value": self.phone}] if self.phone else [],
+                 "emails": [{"label": "work", "value": self.email}] if self.email else [],
+                 "addresses": ([{"label": "billing", "value": self.address}] if self.address else [])
+                              + ([{"label": "shipping", "value": self.shipping_address}] if self.shipping_address else []),
+                 "people": [{"name": self.contact_name, "role": "", "phone": "", "email": ""}] if self.contact_name else []}
+        for key in self.DETAIL_LISTS:
+            d.setdefault(key, [])
+        d.setdefault("tags", [])
+        d.setdefault("notes", "")
+        return d
+
+    @details.setter
+    def details(self, d: dict) -> None:
+        """Save the card and keep the single fields the rest of the app reads (PDFs, ship-to, emails) in step:
+        the first phone / email / person, the billing address and the shipping address."""
+        import json
+        d = dict(d or {})
+        clean = lambda rows: [r for r in (rows or []) if any(str(v or "").strip() for k, v in r.items() if k != "label" and k != "role")]
+        for key in self.DETAIL_LISTS:
+            d[key] = clean(d.get(key))
+        tags = {}
+        for t in d.get("tags") or []:
+            if t and t.strip():
+                tags.setdefault(t.strip().lower(), t.strip())  # "Net 30" and "net 30" are one tag
+        d["tags"] = sorted(tags.values(), key=str.lower)
+        self.details_json = json.dumps(d)
+        by_label = lambda rows, word: next((r["value"] for r in rows if word in (r.get("label") or "").lower()), None)
+        self.phone = d["phones"][0]["value"] if d["phones"] else None
+        self.email = d["emails"][0]["value"] if d["emails"] else None
+        self.contact_name = d["people"][0].get("name") if d["people"] else None
+        self.address = by_label(d["addresses"], "bill") or (d["addresses"][0]["value"] if d["addresses"] else None)
+        self.shipping_address = by_label(d["addresses"], "ship") or by_label(d["addresses"], "pickup")
+
+    def email_for(self, purpose: str) -> Optional[str]:
+        """The email labelled for this purpose ("invoice", "mtr"), else the main one."""
+        words = {"invoice": ("invoice", "ap", "accounts payable", "billing"), "mtr": ("mtr", "quality", "qa", "cert"),
+                 "po": ("purchasing", "orders", "order", "po"), "remit": ("remit", "accounts receivable", "ar", "payments")}[purpose]
+        for r in self.details["emails"]:
+            label = (r.get("label") or "").lower()
+            if any(w == label or w in label.replace("/", " ").split() or (len(w) > 3 and w in label) for w in words):
+                return r["value"]
+        return self.email
+
+    @property
+    def po_email(self) -> Optional[str]:
+        return self.email_for("po")
+
+    @property
+    def invoice_email(self) -> Optional[str]:
+        return self.email_for("invoice")
+
+    @property
+    def mtr_email(self) -> Optional[str]:
+        return self.email_for("mtr")
+
+
+class Customer(ContactCardMixin, Base):
     __tablename__ = "customers"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -127,7 +201,7 @@ class Customer(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class Vendor(Base):
+class Vendor(ContactCardMixin, Base):
     __tablename__ = "vendors"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -159,17 +233,20 @@ class CustomerOrder(Base):
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
+    duplicate_po_ok = Column(String, nullable=True)  # "who, when" a manager OK'd sharing this customer PO # with an earlier order
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    lines = relationship("CustomerOrderLine", backref="order", cascade="all, delete-orphan")
+    lines = relationship("CustomerOrderLine", backref="order", cascade="all, delete-orphan",
+                         order_by="[CustomerOrderLine.position, CustomerOrderLine.id]")
 
 
 class CustomerOrderLine(Base):
     __tablename__ = "customer_order_lines"
 
     id = Column(Integer, primary_key=True, index=True)
+    position = Column(Integer, nullable=True)  # display order on the order (drag to reorder); the line # never changes
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=False, index=True)
     line_no = Column(Integer, nullable=True)  # 1, 2, 3... within the order; never reused, so "#2" always means the same line
     item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
@@ -254,12 +331,14 @@ class PurchaseOrder(Base):
     tariff_cost = Column(Float, nullable=True, default=0)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
+    vendor_so_number = Column(String, nullable=True, index=True)  # the vendor's sales order / confirmation # (MRPeasy "order_number")
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    lines = relationship("PurchaseOrderLine", backref="po", cascade="all, delete-orphan")
+    lines = relationship("PurchaseOrderLine", backref="po", cascade="all, delete-orphan",
+                         order_by="[PurchaseOrderLine.position, PurchaseOrderLine.id]")
     payments = relationship("PurchaseOrderPayment", backref="po", cascade="all, delete-orphan")
     emails = relationship("PurchaseOrderEmail", cascade="all, delete-orphan", order_by="PurchaseOrderEmail.sent_at.desc()")
     bills = relationship("VendorBill", cascade="all, delete-orphan", order_by="VendorBill.bill_date")
@@ -336,6 +415,7 @@ class PurchaseOrderLine(Base):
     __tablename__ = "purchase_order_lines"
 
     id = Column(Integer, primary_key=True, index=True)
+    position = Column(Integer, nullable=True)  # display order on the order (drag to reorder); the line # never changes
     po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False, index=True)
     item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=False)
     quantity = Column(Float, nullable=False)
@@ -775,3 +855,18 @@ class NumberSeries(Base):
     key = Column(String, primary_key=True)  # CO | PO | SH | INV | LOT | V
     prefix = Column(String, nullable=False)  # e.g. "C", "PO", "Inv-"
     width = Column(Integer, nullable=False)  # digits, zero-padded
+
+
+class ActivityLog(Base):
+    """Who changed what on an order / PO, and when: one row per successful change request
+    (edit, add / change / remove / reorder a line, confirm, cancel...). Written by a middleware in main.py."""
+    __tablename__ = "activity_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)  # customer_order | purchase_order
+    entity_id = Column(Integer, nullable=False, index=True)
+    method = Column(String, nullable=False)  # PUT / POST / DELETE
+    action = Column(String, nullable=False)  # the path after the record id: "", "lines", "lines/1411", "line-order", "cancel"...
+    detail = Column(Text, nullable=True)  # the request's JSON body (what was sent), trimmed
+    by = Column(String, nullable=True)
+    at = Column(DateTime, default=datetime.utcnow, index=True)

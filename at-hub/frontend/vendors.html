@@ -5,6 +5,7 @@
   <title>AT-HUB — Vendors</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="contact-card.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -13,149 +14,70 @@
     <div class="card page-toolbar">
       <h1 class="page-title">Vendors</h1>
       <div class="row toolbar-row">
-        <input type="text" id="search" placeholder="Search vendors...">
-        <button onclick="toggleForm()">+ New Vendor</button>
+        <button onclick="ContactCards.create()">+ New Vendor</button>
       </div>
     </div>
-
-    <div class="card" id="form-card" style="display:none;">
-      <h3>New Vendor</h3>
-      <div class="row">
-        <div><label>Name</label><input type="text" id="f-name"></div>
-        <div><label>Contact name</label><input type="text" id="f-contact"></div>
-      </div>
-      <div class="row">
-        <div><label>Email</label><input type="text" id="f-email"></div>
-        <div><label>Phone</label><input type="text" id="f-phone"></div>
-      </div>
-      <div class="row">
-        <div><label>Billing address</label><textarea id="f-address" rows="3"></textarea></div>
-        <div><label>Ship-from / pickup address <span class="muted small">(blank = same as billing)</span></label><textarea id="f-shipping-address" rows="3"></textarea></div>
-      </div>
-      <div style="margin-top:14px;">
-        <button onclick="save()">Save</button>
-        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
-      </div>
-      <div id="form-error" class="error"></div>
-    </div>
-
-    <div class="card">
-      <table>
-        <thead><tr><th>Vendor ID</th><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
-        <tbody id="body"><tr><td colspan="5">Loading...</td></tr></tbody>
-      </table>
-    </div>
-
-    <div class="card" id="detail-card" style="display:none;"></div>
+    <div id="contacts"></div>
   </main>
 
   <script>
     AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("vendors.html");
-    const ENDPOINT = "/api/vendors/";
+    document.getElementById("contacts").innerHTML = contactCardShell("+ New Vendor");
 
-    let rows = [];
     let orders = [];
-
-    function toggleForm(show = true) {
-      document.getElementById("form-card").style.display = show ? "block" : "none";
-      if (!show) ["name", "contact", "email", "phone", "address", "shipping-address"].forEach(f => document.getElementById(`f-${f}`).value = "");
-    }
-
-    async function save() {
-      const errorEl = document.getElementById("form-error");
-      errorEl.textContent = "";
-      try {
-        await apiFetch(ENDPOINT, {
-          method: "POST",
-          body: JSON.stringify({
-            name: document.getElementById("f-name").value,
-            contact_name: document.getElementById("f-contact").value,
-            email: document.getElementById("f-email").value,
-            phone: document.getElementById("f-phone").value,
-            address: document.getElementById("f-address").value,
-            shipping_address: document.getElementById("f-shipping-address").value || null,
-          }),
-        });
-        toggleForm(false);
-        load();
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    }
-
-    function render() {
-      const tbody = document.getElementById("body");
-      const q = document.getElementById("search").value.trim().toLowerCase();
-      const filtered = rows.filter(r => !q || r.name.toLowerCase().includes(q) || (r.code || "").toLowerCase().includes(q) || (r.contact_name || "").toLowerCase().includes(q));
-      if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">${rows.length ? "No vendors match your search." : "None yet."}</td></tr>`;
-        return;
-      }
-      tbody.innerHTML = filtered.map(r => {
-        const orderCount = orders.filter(o => o.vendor_id === r.id).length;
-        return `
-        <tr>
-          <td><strong>${escapeHtml(r.code || "")}</strong></td>
-          <td><a class="link" onclick="showDetail(${r.id})">${escapeHtml(r.name)}</a></td>
-          <td>${r.contact_name || ""}</td>
-          <td>${r.email || ""}</td>
-          <td>${r.phone || ""}</td>
-          <td class="muted">${orderCount}</td>
-        </tr>
-      `;
-      }).join("");
-    }
-
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
-    async function showDetail(id) {
-      const vendor = rows.find(r => r.id === id);
-      const card = document.getElementById("detail-card");
-      card.style.display = "block";
-      const vendorOrders = orders.filter(o => o.vendor_id === id);
-      const totalSpend = vendorOrders.reduce((sum, o) => sum + o.order_total, 0);
-
-      card.innerHTML = `
-        <h3>${escapeHtml(vendor.name)} <span class="tag draft">${escapeHtml(vendor.code || "")}</span></h3>
-        <div class="row">
-          <div><label>Name</label><input type="text" id="e-name" value="${vendor.name}"></div>
-          <div><label>Contact name</label><input type="text" id="e-contact" value="${vendor.contact_name || ''}"></div>
-        </div>
-        <div class="row">
-          <div><label>Email</label><input type="text" id="e-email" value="${vendor.email || ''}"></div>
-          <div><label>Phone</label><input type="text" id="e-phone" value="${vendor.phone || ''}"></div>
-        </div>
-        <div class="row">
-          <div><label>Billing address</label><textarea id="e-address" rows="3">${vendor.address || ''}</textarea></div>
-          <div><label>Ship-from / pickup address <span class="muted small">(blank = same as billing)</span></label><textarea id="e-shipping-address" rows="3">${vendor.shipping_address || ''}</textarea></div>
-        </div>
-        <button onclick="saveDetail(${vendor.id})" style="margin-top:8px;">Save Changes</button>
-        <div id="detail-error" class="error"></div>
-
-        <h4 style="margin-top:20px;">Part # Mapping (Our Item ↔ Vendor Part #)</h4>
-        <p class="muted small" style="margin-top:0;">What ${escapeHtml(vendor.name)} (${escapeHtml(vendor.code || "")}) calls our items. Learned automatically from every PO line with a vendor part #.
-          On a new PO for this vendor, picking our item fills in their part #, description and last cost; typing their part # picks our item.</p>
-        <div id="xref"></div>
-
-        <h4 style="margin-top:20px;">Purchase history (${vendorOrders.length} orders, $${totalSpend.toFixed(2)} total)</h4>
-        ${vendorOrders.length ? `
-          <table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="sum">Total</th></tr></thead>
-            <tbody>${vendorOrders.map(o => `
-              <tr>
-                <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
-                <td>${fmtDate(o.order_date)}</td>
-                <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
-                <td>${fmtMoney(o.order_total)}</td>
-              </tr>
-            `).join("")}</tbody>
-          </table>
-        ` : `<p class="muted">No purchase orders yet.</p>`}
-        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
-      `;
-      renderXref(vendor.id);
-    }
+    ContactCards.init({
+      endpoint: "/api/vendors/",
+      labels: {
+        phones: ["work", "main", "sales", "mobile", "shipping", "accounts receivable", "fax", "other"],
+        emails: ["work", "purchasing / orders", "sales", "accounts receivable", "quality / MTRs", "shipping", "other"],
+        addresses: ["billing", "remit to", "ship from", "pickup", "warehouse", "other"],
+        websites: ["website", "customer portal", "other"],
+        roles: ["sales rep", "inside sales", "accounts receivable", "shipping", "quality", "owner"],
+      },
+      hints: {
+        emails: 'label one "purchasing / orders" to send our POs there',
+        addresses: '"billing" is printed on POs; "ship from" / "pickup" = where goods leave from',
+        phones: "the first one is printed on POs",
+      },
+      newDraft: () => ({ tags: [], phones: [{ label: "work", value: "" }], emails: [{ label: "purchasing / orders", value: "" }],
+        addresses: [{ label: "billing", value: "" }], websites: [], people: [{ name: "", role: "sales rep", phone: "", email: "" }], notes: "" }),
+      usedFor(v, key, r, i) {
+        const n = [];
+        if (key === "emails" && r.value === v.po_email) n.push("POs go here");
+        if (key === "addresses" && r.value === v.address) n.push("on POs");
+        if (key === "addresses" && r.value === v.shipping_address) n.push("ship-from");
+        if ((key === "phones" || key === "emails") && i === 0) n.push("main");
+        return n;
+      },
+      loadExtra: async () => { orders = await apiFetch("/api/purchase-orders/"); },
+      headExtra: v => v.code ? `<div style="margin-bottom:8px;"><span class="tag draft">${escapeHtml(v.code)}</span></div>` : "",
+      quickExtra: v => `<a href="purchase-orders.html?new=${v.id}"><b>＋</b>PO</a>`,
+      body(v) {
+        const mine = orders.filter(o => o.vendor_id === v.id).sort((a, b) => b.id - a.id);
+        const open = mine.filter(o => !["received", "cancelled"].includes(o.status));
+        return `
+          <div class="stats">
+            <div><strong>${mine.length}</strong><span>purchase orders</span></div>
+            <div><strong>${open.length}</strong><span>open now</span></div>
+            <div><strong>${fmtMoney(mine.filter(o => o.status !== "cancelled").reduce((s, o) => s + o.order_total, 0))}</strong><span>total spend</span></div>
+            <div><strong>${mine[0] ? fmtDate(mine[0].order_date) : "—"}</strong><span>last PO</span></div>
+          </div>
+          <h4 style="margin-top:20px;">Part # Mapping (Our Item ↔ Vendor Part #)</h4>
+          <p class="muted small" style="margin-top:0;">What ${escapeHtml(v.name)} calls our items. Learned automatically from every PO line with a vendor part #.
+            On a new PO for this vendor, picking our item fills in their part #, description and last cost; typing their part # picks our item.</p>
+          <div id="xref"></div>
+          <h4 style="margin-top:20px;">Purchase orders</h4>
+          ${mine.length ? `<div class="table-scroll"><table>
+            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="num sum">Total</th></tr></thead>
+            <tbody>${mine.map(o => `<tr><td><a class="link" href="purchase-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${fmtDate(o.order_date)}</td>
+              <td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td><td class="num">${fmtMoney(o.order_total)}</td></tr>`).join("")}</tbody>
+          </table></div>` : `<p class="muted">No purchase orders yet.</p>`}`;
+      },
+      afterRender: v => renderXref(v.id),
+    });
 
     async function renderXref(vendorId) {
       const el = document.getElementById("xref");
@@ -177,7 +99,7 @@
               </tr>`;
             }).join("") || `<tr><td colspan="6" class="muted">No Part # Mappings Yet.</td></tr>`}
             <tr>
-              <td style="min-width:240px;"><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select></td>
+              <td style="min-width:240px;"><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
               <td><input type="text" id="xref-code" placeholder="Vendor Part #" style="width:120px;"></td>
               <td><input type="text" id="xref-desc" placeholder="Optional"></td>
               <td colspan="3"><button class="secondary small-btn" onclick="addXref(${vendorId})">+ Add</button></td>
@@ -220,42 +142,6 @@
         document.getElementById("xref-error").textContent = err.message;
       }
     }
-
-    async function saveDetail(id) {
-      const errorEl = document.getElementById("detail-error");
-      errorEl.textContent = "";
-      try {
-        await apiFetch(`${ENDPOINT}${id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            name: document.getElementById("e-name").value,
-            contact_name: document.getElementById("e-contact").value,
-            email: document.getElementById("e-email").value,
-            phone: document.getElementById("e-phone").value,
-            address: document.getElementById("e-address").value,
-            shipping_address: document.getElementById("e-shipping-address").value || null,
-          }),
-        });
-        await load();
-        showDetail(id);
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    }
-
-    async function load() {
-      try {
-        [rows, orders] = await Promise.all([
-          apiFetch(ENDPOINT),
-          apiFetch("/api/purchase-orders/"),
-        ]);
-        render();
-      } catch (err) {
-        document.getElementById("body").innerHTML = `<tr><td colspan="5" class="error">${err.message}</td></tr>`;
-      }
-    }
-    document.getElementById("search").addEventListener("input", render);
-    load();
   </script>
   </div>
 </body>

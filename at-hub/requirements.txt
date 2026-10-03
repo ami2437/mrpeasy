@@ -10,6 +10,7 @@ bcrypt==4.0.1
 python-multipart==0.0.6
 reportlab==5.0.1
 pypdf>=4
+pypdfium2>=4  # PDF thumbnails for attached files
 openpyxl>=3.1
 httpx>=0.25
 anyio>=4.10,<5

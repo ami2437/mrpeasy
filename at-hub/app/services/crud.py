@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 
 from app.models import (
@@ -153,38 +153,109 @@ def backfill_lot_costing(db: Session) -> None:
 
 
 # ---- Stock Items ----
-DEFAULT_PRODUCT_GROUPS = ["ANCHOR", "BOLT", "NUT", "PIN", "RIVET", "SCREW", "STUD", "WASHER", "MISC"]
+DEFAULT_PRODUCT_GROUPS = ["Anchor", "Bolt", "Nut", "Pin", "Rivet", "Screw", "Stud", "Washer", "Misc"]
+
+
+def _group_key(name: str) -> str:
+    """'NUT', 'Nut', ' nuts ' -> 'nut': names that differ only in capitals, spaces or a plural s are one group."""
+    k = " ".join((name or "").lower().split())
+    return k[:-1] if len(k) > 3 and k.endswith("s") and not k.endswith("ss") else k
 
 
 class ProductGroupService:
+    """A fixed list of groups to pick from. Nothing creates a group on the fly: items must use one of these,
+    and a new one ('+ Add Group') is refused if it only differs from an existing one in capitals or a plural."""
+
     @staticmethod
     def ensure_defaults(db: Session) -> None:
-        """Seed the predefined groups, plus any category already typed on an item."""
-        existing = {g.name for g in db.query(ProductGroup).all()}
-        used = {c for (c,) in db.query(StockItem.category).distinct().all() if c}
-        for name in sorted(set(DEFAULT_PRODUCT_GROUPS) | used):
-            if name not in existing:
+        """At start-up: merge groups that are really the same ('NUT' into 'Nut', 'Studs' into 'Stud' -- the one
+        holding the items wins), then add any predefined group that has no match yet."""
+        ProductGroupService.merge_duplicates(db)
+        counts = dict(db.query(StockItem.category, func.count(StockItem.id)).group_by(StockItem.category).all())
+        spelling = {_group_key(n): n for n in DEFAULT_PRODUCT_GROUPS}
+        for g in db.query(ProductGroup).all():  # empty predefined groups seeded in capitals before: "PIN" -> "Pin"
+            if g.name.isupper() and not counts.get(g.name) and _group_key(g.name) in spelling:
+                g.name = spelling[_group_key(g.name)]
+        keys = {_group_key(g.name) for g in db.query(ProductGroup).all()}
+        for name in DEFAULT_PRODUCT_GROUPS:
+            if _group_key(name) not in keys:
                 db.add(ProductGroup(name=name))
+                keys.add(_group_key(name))
+        # an item whose group isn't on the list (typed in long ago) gets its group added, under the existing spelling if any
+        for (c,) in db.query(StockItem.category).distinct().all():
+            if c and _group_key(c) not in keys:
+                db.add(ProductGroup(name=c))
+                keys.add(_group_key(c))
         db.commit()
+        ProductGroupService.merge_duplicates(db)
+
+    @staticmethod
+    def merge_duplicates(db: Session) -> list:
+        counts = dict(db.query(StockItem.category, func.count(StockItem.id)).group_by(StockItem.category).all())
+        by_key = {}
+        for g in db.query(ProductGroup).order_by(ProductGroup.id).all():
+            by_key.setdefault(_group_key(g.name), []).append(g)
+        merged = []
+        for same in by_key.values():
+            if len(same) < 2:
+                continue
+            # keep the one with the most items; on a tie the mixed-case (MRPeasy) spelling, then the oldest
+            keep = max(same, key=lambda g: (counts.get(g.name, 0), g.name != g.name.upper(), -g.id))
+            for g in same:
+                if g is not keep:
+                    merged.append((g.name, keep.name, ProductGroupService._move_items(db, g.name, keep.name)))
+                    db.delete(g)
+        # items spelled differently from their group ('BOLT' when the group is 'Bolt')
+        names = {_group_key(g.name): g.name for g in db.query(ProductGroup).all()}
+        for (c,) in db.query(StockItem.category).distinct().all():
+            if c and names.get(_group_key(c)) and names[_group_key(c)] != c:
+                ProductGroupService._move_items(db, c, names[_group_key(c)])
+        db.commit()
+        return merged
+
+    @staticmethod
+    def _move_items(db: Session, from_name: str, to_name: str) -> int:
+        return db.query(StockItem).filter(StockItem.category == from_name).update({StockItem.category: to_name}, synchronize_session=False)
 
     @staticmethod
     def list(db: Session) -> list:
         counts = dict(db.query(StockItem.category, func.count(StockItem.id)).group_by(StockItem.category).all())
         return [{"id": g.id, "name": g.name, "item_count": counts.get(g.name, 0)}
-                for g in db.query(ProductGroup).order_by(ProductGroup.name).all()]
+                for g in sorted(db.query(ProductGroup).all(), key=lambda g: g.name.lower())]
+
+    @staticmethod
+    def canonical(db: Session, name: Optional[str]) -> Optional[str]:
+        """The group's name as it's on the list ('BOLT' -> 'Bolt'), or None when there's no such group."""
+        key = _group_key(name or "")
+        return next((g.name for g in db.query(ProductGroup).all() if _group_key(g.name) == key), None) if key else None
 
     @staticmethod
     def create(db: Session, name: str) -> ProductGroup:
-        name = (name or "").strip().upper()
+        name = " ".join((name or "").split())
         if not name:
             raise HTTPException(status_code=400, detail="Group name is required")
-        if db.query(ProductGroup).filter(ProductGroup.name == name).first():
-            raise HTTPException(status_code=400, detail=f"Group {name} already exists")
+        same = ProductGroupService.canonical(db, name)
+        if same:
+            raise HTTPException(status_code=400, detail=f"That's the existing group '{same}' -- use it instead")
         group = ProductGroup(name=name)
         db.add(group)
         db.commit()
         db.refresh(group)
         return group
+
+    @staticmethod
+    def merge(db: Session, group_id: int, into_id: int) -> dict:
+        """Move every item of one group into another and remove the first."""
+        group = db.query(ProductGroup).filter(ProductGroup.id == group_id).first()
+        into = db.query(ProductGroup).filter(ProductGroup.id == into_id).first()
+        if not group or not into:
+            raise HTTPException(status_code=404, detail="Group not found")
+        if group.id == into.id:
+            raise HTTPException(status_code=400, detail="Pick a different group to merge into")
+        moved = ProductGroupService._move_items(db, group.name, into.name)
+        db.delete(group)
+        db.commit()
+        return {"moved": moved, "into": into.name}
 
     @staticmethod
     def delete(db: Session, group_id: int) -> None:
@@ -193,16 +264,19 @@ class ProductGroupService:
             raise HTTPException(status_code=404, detail="Group not found")
         in_use = db.query(StockItem).filter(StockItem.category == group.name).count()
         if in_use:
-            raise HTTPException(status_code=400, detail=f"{in_use} item(s) are in {group.name} -- move them to another group first")
+            raise HTTPException(status_code=400, detail=f"{in_use} item(s) are in {group.name} -- merge it into another group instead")
         db.delete(group)
         db.commit()
 
     @staticmethod
-    def require(db: Session, name: Optional[str]) -> None:
+    def require(db: Session, name: Optional[str]) -> str:
+        """The group an item may use: one on the list, returned in its listed spelling. Never creates one."""
         if not name:
             raise HTTPException(status_code=400, detail="Pick a product group for the item")
-        if not db.query(ProductGroup).filter(ProductGroup.name == name).first():
-            raise HTTPException(status_code=400, detail=f"Unknown product group '{name}'")
+        found = ProductGroupService.canonical(db, name)
+        if not found:
+            raise HTTPException(status_code=400, detail=f"'{name}' isn't one of the product groups -- pick one from the list")
+        return found
 
 
 def price_history(db: Session, item_id: int) -> list:
@@ -252,9 +326,32 @@ class StockItemService:
     def create(db: Session, data) -> StockItem:
         if db.query(StockItem).filter(StockItem.code == data.code).first():
             raise HTTPException(status_code=400, detail=f"Item code '{data.code}' already exists")
-        ProductGroupService.require(db, data.category)
-        item = StockItem(**data.dict())
+        fields = data.dict()
+        fields["category"] = ProductGroupService.require(db, data.category)
+        item = StockItem(**fields)
         db.add(item)
+        db.commit()
+        db.refresh(item)
+        return item
+
+    @staticmethod
+    def delete(db: Session, item_id: int) -> None:
+        """Only an item that was never used. One on any order, shipment, invoice, lot or movement is archived
+        instead (is_active = False): it stays on those records but can't be picked for new ones."""
+        item = StockItemService.get(db, item_id)
+        used = _item_references(db, item.id)
+        if used:
+            raise HTTPException(status_code=409, detail="USED|" + _usage_text(used))
+        db.query(PackSizeHistory).filter(PackSizeHistory.item_id == item.id).delete()
+        db.query(VendorItem).filter(VendorItem.item_id == item.id).delete()
+        db.delete(item)
+        db.commit()
+
+    @staticmethod
+    def verify(db: Session, item_id: int, username: str) -> StockItem:
+        """A person has checked an item that was created from a scanned PO: it can be picked like any other now."""
+        item = StockItemService.get(db, item_id)
+        item.verified_by = f"{username}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC"
         db.commit()
         db.refresh(item)
         return item
@@ -264,7 +361,7 @@ class StockItemService:
         item = StockItemService.get(db, item_id)
         updates = data.dict(exclude_unset=True)
         if "category" in updates:
-            ProductGroupService.require(db, updates["category"])
+            updates["category"] = ProductGroupService.require(db, updates["category"])
 
         new_on_hand = updates.pop("on_hand", None)
         adj_cost = updates.pop("adjustment_unit_cost", None)
@@ -420,7 +517,11 @@ class PartyService:
         return party
 
     def create(self, db: Session, data):
-        party = self.model(**data.dict())
+        fields = data.dict()
+        details = fields.pop("details", None)
+        party = self.model(**fields)
+        if details is not None:
+            party.details = details
         if self.model is Vendor:
             party.code = generate_code(db, Vendor, "V")
         db.add(party)
@@ -430,8 +531,12 @@ class PartyService:
 
     def update(self, db: Session, party_id: int, data):
         party = self.get(db, party_id)
-        for key, value in data.dict(exclude_unset=True).items():
+        updates = data.dict(exclude_unset=True)
+        details = updates.pop("details", None)
+        for key, value in updates.items():
             setattr(party, key, value)
+        if details is not None:
+            party.details = details  # after the single fields: the card decides them
         db.commit()
         db.refresh(party)
         return party
@@ -439,6 +544,61 @@ class PartyService:
 
 customer_service = PartyService(Customer)
 vendor_service = PartyService(Vendor)
+
+
+def reorder_lines(db: Session, lines: list, line_ids: List[int]) -> None:
+    """Save a new display order: line_ids must be exactly the order's lines."""
+    by_id = {l.id: l for l in lines}
+    if sorted(line_ids) != sorted(by_id):
+        raise HTTPException(status_code=400, detail="The list of lines doesn't match this order -- reload and try again")
+    for pos, lid in enumerate(line_ids):
+        by_id[lid].position = pos
+    db.commit()
+
+
+def _remove_attachments(db: Session, entity_type: str, entity_id: int) -> None:
+    """Files attached to a record that's being deleted: the rows, their MTR links and the files on disk."""
+    from pathlib import Path
+    from app.config.settings import settings
+    from app.models import Attachment, MtrLink
+    root = Path(settings.upload_dir).resolve()
+    for att in db.query(Attachment).filter(Attachment.entity_type == entity_type, Attachment.entity_id == entity_id).all():
+        path = (root / att.stored_name).resolve()
+        if root in path.parents and path.exists():
+            path.unlink()
+        db.query(MtrLink).filter(MtrLink.attachment_id == att.id).delete()
+        db.delete(att)
+
+
+def _item_references(db: Session, item_id: int) -> dict:
+    """Where an item is used, by record -- {"customer orders": ["C89126 (cancelled)", ...], ...}.
+    Anything here means it can be archived but not deleted."""
+    from app.models import MtrLink
+    def named(rows):
+        return sorted({f"{code} ({status})" if status else code for code, status in rows})
+    checks = {
+        "customer orders": named(db.query(CustomerOrder.code, CustomerOrder.status).join(CustomerOrderLine, CustomerOrderLine.order_id == CustomerOrder.id)
+                                 .filter(CustomerOrderLine.item_id == item_id).all()),
+        "purchase orders": named(db.query(PurchaseOrder.code, PurchaseOrder.status).join(PurchaseOrderLine, PurchaseOrderLine.po_id == PurchaseOrder.id)
+                                 .filter(PurchaseOrderLine.item_id == item_id).all()),
+        "shipments": named(db.query(Shipment.code, Shipment.status).join(ShipmentLine, ShipmentLine.shipment_id == Shipment.id)
+                           .filter(ShipmentLine.item_id == item_id).all()),
+        "invoices": named(db.query(Invoice.code, Invoice.status).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+                          .filter(InvoiceLine.item_id == item_id).all()),
+        "lots": named((l, None) for (l,) in db.query(Lot.lot_code).filter(Lot.item_id == item_id).all()),
+        "stock movements": [f"{n} movement(s)"] if (n := db.query(InventoryTransaction).filter(InventoryTransaction.item_id == item_id).count()) else [],
+        "MTRs": [f"{n} MTR link(s)"] if (n := db.query(MtrLink).filter(MtrLink.item_id == item_id).count()) else [],
+    }
+    return {k: v for k, v in checks.items() if v}
+
+
+def _usage_text(used: dict, limit: int = 6) -> str:
+    """'customer orders C89126 (cancelled); lots LOT-00012' -- short enough for a message."""
+    parts = []
+    for kind, names in used.items():
+        shown = ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "")
+        parts.append(shown if kind in ("stock movements", "MTRs") else f"{kind} {shown}")
+    return "; ".join(parts)
 
 
 # ---- Lots ----
@@ -499,7 +659,9 @@ class InventoryTransactionService:
 class CustomerOrderService:
     @staticmethod
     def list(db: Session, status: Optional[str] = None) -> List[CustomerOrder]:
-        query = db.query(CustomerOrder)
+        # load lines -> shipment lines -> shipment/lot in a few queries, not a few per line
+        query = db.query(CustomerOrder).options(selectinload(CustomerOrder.lines).selectinload(CustomerOrderLine.shipment_lines)
+                                                .options(selectinload(ShipmentLine.shipment).selectinload(Shipment.boxes), selectinload(ShipmentLine.lot)))
         if status:
             query = query.filter(CustomerOrder.status == status)
         return query.order_by(CustomerOrder.id.desc()).all()
@@ -537,6 +699,8 @@ class CustomerOrderService:
             notes=data.notes,
             status="draft",
             created_by=created_by,
+            # "create anyway" on the duplicate-PO prompt is the manager's OK
+            duplicate_po_ok=f"{created_by}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC (at creation)" if po and getattr(data, "allow_duplicate", False) else None,
         )
         db.add(order)
         db.flush()
@@ -549,6 +713,7 @@ class CustomerOrderService:
             db.add(CustomerOrderLine(
                 order_id=order.id,
                 line_no=line_no,
+                position=line_no,
                 item_id=line.item_id,
                 quantity=line.quantity,
                 unit_price=line.unit_price,
@@ -581,8 +746,19 @@ class CustomerOrderService:
         if "customer_id" in updates and updates["customer_id"] is not None:
             if not db.query(Customer).filter(Customer.id == updates["customer_id"]).first():
                 raise HTTPException(status_code=400, detail="Customer not found")
+        if "po_number" in updates and (updates["po_number"] or "").strip().lower() != (order.po_number or "").strip().lower():
+            order.duplicate_po_ok = None  # a different PO # needs its own check
         for key, value in updates.items():
             setattr(order, key, value)
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
+    def accept_duplicate_po(db: Session, order_id: int, username: str) -> CustomerOrder:
+        """A manager confirms this order really is separate from the earlier one with the same customer PO #."""
+        order = CustomerOrderService.get(db, order_id)
+        order.duplicate_po_ok = f"{username}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC"
         db.commit()
         db.refresh(order)
         return order
@@ -607,6 +783,7 @@ class CustomerOrderService:
         db.add(CustomerOrderLine(
             order_id=order.id,
             line_no=max((l.line_no or 0 for l in order.lines), default=0) + 1,
+            position=max((l.position if l.position is not None else i for i, l in enumerate(order.lines)), default=-1) + 1,
             item_id=data.item_id,
             quantity=data.quantity,
             unit_price=data.unit_price,
@@ -614,10 +791,30 @@ class CustomerOrderService:
         ))
         db.flush()
         db.refresh(order)
+        CustomerOrderService._place_nut_under_bolt(db, order, data.item_id)
         CustomerOrderService._recompute_status(order)
         db.commit()
         db.refresh(order)
         return order
+
+    @staticmethod
+    def _place_nut_under_bolt(db: Session, order: CustomerOrder, item_id: int) -> None:
+        """A '15439-NUT' line added to an order that has bolt 15439 goes straight under that bolt."""
+        import re
+        added = db.query(StockItem).filter(StockItem.id == item_id).first()
+        m = re.match(r"(.+?)[\s-]*nuts?$", (added.code or "").strip(), re.I) if added else None
+        if not m:
+            return
+        codes = {l.id: (db.query(StockItem.code).filter(StockItem.id == l.item_id).scalar() or "").strip().lower() for l in order.lines}
+        lines = list(order.lines)
+        new = max(lines, key=lambda l: l.id)
+        bolt = next((l for l in lines if l is not new and codes[l.id] == m.group(1).strip().lower()), None)
+        if not bolt:
+            return
+        lines.remove(new)
+        lines.insert(lines.index(bolt) + 1, new)
+        for pos, l in enumerate(lines):
+            l.position = pos
 
     @staticmethod
     def update_line(db: Session, order_id: int, line_id: int, data) -> CustomerOrder:
@@ -631,6 +828,16 @@ class CustomerOrderService:
             raise HTTPException(status_code=404, detail="Order line not found")
 
         updates = data.dict(exclude_unset=True)
+        if updates.get("item_id") is not None and updates["item_id"] != line.item_id:
+            if line.allocated_quantity > 1e-9:
+                raise HTTPException(status_code=400, detail="This line is already booked or shipped -- its item can't be changed. Add a new line instead.")
+            new_item = db.query(StockItem).filter(StockItem.id == updates["item_id"]).first()
+            if not new_item:
+                raise HTTPException(status_code=400, detail="Item not found")
+            if new_item.is_active is False:
+                raise HTTPException(status_code=400, detail=f"{new_item.code} is archived")
+        else:
+            updates.pop("item_id", None)
         if "quantity" in updates and updates["quantity"] is not None:
             if updates["quantity"] < line.allocated_quantity - 1e-9:
                 raise HTTPException(
@@ -679,6 +886,28 @@ class CustomerOrderService:
         db.commit()
         db.refresh(order)
         return order
+
+    @staticmethod
+    def delete(db: Session, order_id: int) -> None:
+        """Delete a cancelled order for good, with its cancelled shipments and attached files.
+        Not when anything was shipped or invoiced against it."""
+        from app.models import MtrEmail
+        order = CustomerOrderService.get(db, order_id)
+        if order.status != "cancelled":
+            raise HTTPException(status_code=400, detail="Cancel the order first -- only cancelled orders can be deleted")
+        shipments = db.query(Shipment).filter(Shipment.order_id == order.id).all()
+        if any(s.status != "cancelled" for s in shipments):
+            raise HTTPException(status_code=400, detail="This order has shipments that weren't cancelled, so it can't be deleted")
+        if db.query(Invoice).filter(Invoice.order_id == order.id).first():
+            raise HTTPException(status_code=400, detail="An invoice was made for this order, so it can't be deleted")
+        for s in shipments:
+            _remove_attachments(db, "shipment", s.id)
+            db.delete(s)
+        db.query(MtrEmail).filter(MtrEmail.order_id == order.id).delete()
+        _remove_attachments(db, "customer_order", order.id)
+        db.flush()
+        db.delete(order)
+        db.commit()
 
     @staticmethod
     def create_shipment(db: Session, order_id: int, data, created_by: str) -> Shipment:
@@ -763,7 +992,10 @@ class ShipmentService:
 
     @staticmethod
     def list(db: Session) -> List[Shipment]:
-        return db.query(Shipment).order_by(Shipment.id.desc()).all()
+        return (db.query(Shipment).options(selectinload(Shipment.lines).selectinload(ShipmentLine.lot),
+                                           selectinload(Shipment.lines).selectinload(ShipmentLine.order_line),
+                                           selectinload(Shipment.boxes), selectinload(Shipment.pallets))
+                .order_by(Shipment.id.desc()).all())
 
     @staticmethod
     def get(db: Session, shipment_id: int) -> Shipment:
@@ -1144,7 +1376,9 @@ class ShipmentService:
 class InvoiceService:
     @staticmethod
     def list(db: Session) -> List[Invoice]:
-        return db.query(Invoice).order_by(Invoice.id.desc()).all()
+        return (db.query(Invoice).options(selectinload(Invoice.shipments), selectinload(Invoice.lines),
+                                          selectinload(Invoice.payments), selectinload(Invoice.emails))
+                .order_by(Invoice.id.desc()).all())
 
     @staticmethod
     def get(db: Session, invoice_id: int) -> Invoice:
@@ -1496,7 +1730,11 @@ class VendorItemService:
 class PurchaseOrderService:
     @staticmethod
     def list(db: Session, status: Optional[str] = None) -> List[PurchaseOrder]:
-        query = db.query(PurchaseOrder)
+        # everything the list shows, in a few queries rather than a few per PO
+        query = db.query(PurchaseOrder).options(
+            selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.allocations),
+            selectinload(PurchaseOrder.payments), selectinload(PurchaseOrder.emails), selectinload(PurchaseOrder.charges),
+            selectinload(PurchaseOrder.bills).selectinload(VendorBill.payments))
         if status:
             query = query.filter(PurchaseOrder.status == status)
         return query.order_by(PurchaseOrder.id.desc()).all()
@@ -1519,6 +1757,7 @@ class PurchaseOrderService:
             code=generate_code(db, PurchaseOrder, "PO"),
             vendor_id=data.vendor_id,
             expected_date=data.expected_date,
+            vendor_so_number=(data.vendor_so_number or "").strip() or None,
             notes=data.notes,
             status="draft",
             created_by=created_by,
@@ -1526,10 +1765,11 @@ class PurchaseOrderService:
         db.add(po)
         db.flush()
 
-        for line in data.lines:
+        for pos, line in enumerate(data.lines):
             item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, line)
             db.add(PurchaseOrderLine(
                 po_id=po.id,
+                position=pos,
                 item_id=item_id,
                 quantity=line.quantity,
                 unit_cost=line.unit_cost,
@@ -1574,7 +1814,8 @@ class PurchaseOrderService:
             raise HTTPException(status_code=400, detail="Order is cancelled")
         item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, data)
         db.add(PurchaseOrderLine(po_id=po.id, item_id=item_id, quantity=data.quantity, unit_cost=data.unit_cost,
-                                 vendor_item_code=code, vendor_description=desc))
+                                 vendor_item_code=code, vendor_description=desc,
+                                 position=max((l.position if l.position is not None else i for i, l in enumerate(po.lines)), default=-1) + 1))
         VendorItemService.learn(db, po.vendor_id, item_id, code, desc, data.unit_cost)
         db.flush()
         db.refresh(po)
@@ -1595,6 +1836,16 @@ class PurchaseOrderService:
             raise HTTPException(status_code=404, detail="PO line not found")
 
         updates = data.dict(exclude_unset=True)
+        if updates.get("item_id") is not None and updates["item_id"] != line.item_id:
+            if line.received_quantity > 1e-9 or db.query(Lot).filter(Lot.po_line_id == line.id).first():
+                raise HTTPException(status_code=400, detail="Stock was received on this line -- its item can't be changed. Add a new line instead.")
+            new_item = db.query(StockItem).filter(StockItem.id == updates["item_id"]).first()
+            if not new_item:
+                raise HTTPException(status_code=400, detail="Item not found")
+            if new_item.is_active is False:
+                raise HTTPException(status_code=400, detail=f"{new_item.code} is archived")
+        else:
+            updates.pop("item_id", None)
         if "quantity" in updates and updates["quantity"] is not None:
             if updates["quantity"] < line.received_quantity - 1e-9:
                 raise HTTPException(
@@ -1669,6 +1920,25 @@ class PurchaseOrderService:
         db.commit()
         db.refresh(po)
         return po
+
+    @staticmethod
+    def delete(db: Session, po_id: int) -> None:
+        """Delete a cancelled PO for good, with its attached files. Not when stock was received,
+        or a bill, payment or landed cost is recorded against it."""
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status != "cancelled":
+            raise HTTPException(status_code=400, detail="Cancel the PO first -- only cancelled POs can be deleted")
+        line_ids = [l.id for l in po.lines]
+        if any(l.received_quantity > 0 for l in po.lines) or (line_ids and db.query(Lot).filter(Lot.po_line_id.in_(line_ids)).first()):
+            raise HTTPException(status_code=400, detail="Stock was received on this PO, so it can't be deleted")
+        if po.bills or po.payments:
+            raise HTTPException(status_code=400, detail="Vendor invoices or payments are recorded on this PO -- delete those first")
+        if any(l.allocations for l in po.lines):
+            raise HTTPException(status_code=400, detail="A landed cost is applied to this PO, so it can't be deleted")
+        _remove_attachments(db, "purchase_order", po.id)
+        db.flush()
+        db.delete(po)
+        db.commit()
 
     @staticmethod
     def receive(db: Session, po_id: int, data, created_by: str) -> PurchaseOrder:

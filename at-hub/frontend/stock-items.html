@@ -15,6 +15,12 @@
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search code, title, barcode, or product group...">
         <select id="category-filter" style="max-width:200px;"><option value="">All product groups</option></select>
+        <select id="status-filter" style="max-width:220px;" title="Archived items are kept on old records but can't be picked">
+          <option value="active">Active items</option>
+          <option value="verify">Needs verifying (AI-created)</option>
+          <option value="archived">Archived</option>
+          <option value="all">All items</option>
+        </select>
         <label style="margin:0;"><input type="checkbox" id="low-stock-only" style="width:auto;display:inline-block;"> Low stock only</label>
         <button class="secondary" onclick="toggleInsights()" data-icon="chart">Insights</button>
         <button class="secondary" onclick="toggleGroups()">Product Groups</button>
@@ -36,7 +42,7 @@
       <h3 style="margin-top:0;">Product Groups</h3>
       <p class="muted">Every item belongs to one group (like MRPeasy's product groups). The group shows next to the item on customer and purchase orders.</p>
       <div class="row" style="max-width:420px;">
-        <input type="text" id="new-group" placeholder="e.g. HEX BOLT" onkeydown="if (event.key === 'Enter') addGroup()">
+        <input type="text" id="new-group" placeholder="e.g. Hex Bolt" onkeydown="if (event.key === 'Enter') addGroup()">
         <button style="flex:0;white-space:nowrap;" onclick="addGroup()">+ Add Group</button>
       </div>
       <div id="group-error" class="error"></div>
@@ -102,9 +108,11 @@
       <div id="form-error" class="error"></div>
     </div>
 
+    <div id="verify-notice"></div>
+    <div id="bulk-bar" class="card bulk-bar" style="display:none;"></div>
     <div class="card">
-      <table>
-        <thead><tr><th>Code</th><th>Title</th><th>Group</th><th>Unit</th><th class="sum">On hand</th><th class="sum">Booked</th><th class="sum">Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th><th></th></tr></thead>
+      <table class="list-fit">
+        <thead><tr><th class="sel-col"><input type="checkbox" id="sel-all" title="Tick every item in this list" onchange="selectAll(this.checked)"></th><th>Code</th><th>Title</th><th>Group</th><th>Unit</th><th class="sum">On hand</th><th class="sum">Booked</th><th class="sum">Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th></tr></thead>
         <tbody id="items-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -130,7 +138,9 @@
       const canManage = AuthGuard.hasRole("manager");
       document.getElementById("groups-body").innerHTML = groups.map(g => `
         <tr><td>${groupTag({ category: g.name })}</td><td class="num">${g.item_count}</td>
-          <td>${canManage && !g.item_count ? `<a class="link" onclick="deleteGroup(${g.id})">Delete</a>` : ""}</td></tr>`).join("");
+          <td class="nowrap">${canManage ? `<select onchange="if (this.value) mergeGroup(${g.id}, parseInt(this.value), this)" style="width:auto; padding:1px 4px; font-size:12px;">
+              <option value="">Merge into…</option>${groups.filter(o => o.id !== g.id).map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("")}</select>` : ""}
+            ${canManage && !g.item_count ? ` <a class="link" onclick="deleteGroup(${g.id})">Delete</a>` : ""}</td></tr>`).join("");
     }
 
     function toggleGroups(show = true) {
@@ -147,6 +157,16 @@
       } catch (err) {
         errorEl.textContent = err.message;
       }
+    }
+
+    async function mergeGroup(id, intoId, sel) {
+      const g = groups.find(x => x.id === id), into = groups.find(x => x.id === intoId);
+      if (!confirm(`Move all ${g.item_count} item(s) in ${g.name} into ${into.name}, and remove ${g.name}?`)) { sel.value = ""; return; }
+      try {
+        await apiFetch(`/api/stock-items/groups/${id}/merge?into_id=${intoId}`, { method: "POST" });
+        await loadGroups();
+        loadItems();
+      } catch (err) { document.getElementById("group-error").textContent = err.message; }
     }
 
     async function deleteGroup(id) {
@@ -308,17 +328,133 @@
       select.value = current;
     }
 
+    // ---- multi-select: tick items, then quick-edit / verify / archive / delete them together ----
+    const selected = new Set();
+    let quickEdit = false;
+    let shownItems = [];
+    function toggleSelect(id, on) {
+      on ? selected.add(id) : selected.delete(id);
+      if (!selected.size) quickEdit = false;
+      renderItems();
+    }
+    function selectAll(on) {
+      shownItems.forEach(i => on ? selected.add(i.id) : selected.delete(i.id));
+      if (!selected.size) quickEdit = false;
+      renderItems();
+    }
+    function clearSelection() { selected.clear(); quickEdit = false; renderItems(); }
+    function renderBulkBar() {
+      const bar = document.getElementById("bulk-bar");
+      const manager = AuthGuard.hasRole("manager");
+      if (!selected.size || !manager) { bar.style.display = "none"; return; }
+      const chosen = items.filter(i => selected.has(i.id));
+      const unverified = chosen.filter(i => i.created_via === "ai-scan" && !i.verified_by).length;
+      bar.style.display = "flex";
+      bar.innerHTML = quickEdit
+        ? `<strong>Editing ${selected.size} item${selected.size === 1 ? "" : "s"}</strong>
+           <button onclick="saveQuickEdit(false)">Save</button>
+           ${unverified ? `<button onclick="saveQuickEdit(true)">Save &amp; verify</button>` : ""}
+           <button class="secondary" onclick="quickEdit = false; renderItems()">Cancel</button>
+           <span id="bulk-msg" class="small"></span>`
+        : `<strong>${selected.size} selected</strong>
+           <button class="secondary" onclick="quickEdit = true; renderItems()">Quick edit</button>
+           ${unverified ? `<button onclick="bulkVerify()">✓ Verify ${unverified}</button>` : ""}
+           <button class="secondary" onclick="bulkArchive(true)">Archive</button>
+           ${chosen.some(i => i.is_active === false) ? `<button class="secondary" onclick="bulkArchive(false)">Restore</button>` : ""}
+           <button class="danger" onclick="bulkDelete()">Delete</button>
+           <a class="link small" onclick="clearSelection()">Clear</a>
+           <span id="bulk-msg" class="small"></span>`;
+    }
+    const bulkMsg = (text, cls = "") => { const el = document.getElementById("bulk-msg"); if (el) { el.className = `small ${cls}`; el.innerHTML = text; } };
+
+    async function saveQuickEdit(verify) {
+      const failed = [];
+      let saved = 0;
+      for (const tr of document.querySelectorAll("#items-body tr[data-item]")) {
+        const id = parseInt(tr.dataset.item);
+        if (!selected.has(id) || !tr.querySelector("[data-f]")) continue;
+        const item = items.find(i => i.id === id);
+        const body = {};
+        tr.querySelectorAll("[data-f]").forEach(el => {
+          const f = el.dataset.f;
+          let v = el.value.trim();
+          if (["selling_price", "reorder_point"].includes(f)) v = parseFloat(v) || 0;
+          else if (f === "default_pack_size") v = v ? parseInt(v) : null;
+          if ((item[f] ?? (typeof v === "number" ? 0 : "")) !== v) body[f] = v;
+        });
+        try {
+          if (Object.keys(body).length) await apiFetch(`/api/stock-items/${id}`, { method: "PUT", body: JSON.stringify(body) });
+          if (verify && item.created_via === "ai-scan" && !item.verified_by) await apiFetch(`/api/stock-items/${id}/verify`, { method: "POST" });
+          saved++;
+        } catch (e) { failed.push(`${item.code}: ${e.message}`); }
+      }
+      quickEdit = failed.length > 0;
+      await loadItems();
+      bulkMsg(failed.length ? `Saved ${saved}. Not saved — ${escapeHtml(failed.join("; "))}` : `Saved ${saved}${verify ? " and verified" : ""}.`, failed.length ? "neg" : "pos");
+    }
+
+    async function bulkVerify() {
+      const list = items.filter(i => selected.has(i.id) && i.created_via === "ai-scan" && !i.verified_by);
+      if (!confirm(`Verify ${list.length} item${list.length === 1 ? "" : "s"}? Check their titles, groups and prices first — after this they can be picked on orders.`)) return;
+      for (const i of list) { try { await apiFetch(`/api/stock-items/${i.id}/verify`, { method: "POST" }); } catch (e) { /* shown below */ } }
+      await loadItems();
+      bulkMsg(`Verified ${list.length}.`, "pos");
+    }
+
+    async function bulkArchive(archive) {
+      const list = items.filter(i => selected.has(i.id) && (i.is_active !== false) === archive);
+      if (archive && !confirm(`Archive ${list.length} item${list.length === 1 ? "" : "s"}? They stay on old records but can't be picked for new ones.`)) return;
+      for (const i of list) { try { await apiFetch(`/api/stock-items/${i.id}`, { method: "PUT", body: JSON.stringify({ is_active: !archive }) }); } catch (e) { /* ignore */ } }
+      await loadItems();
+      bulkMsg(`${archive ? "Archived" : "Restored"} ${list.length}.`, "pos");
+    }
+
+    async function bulkDelete() {
+      const list = items.filter(i => selected.has(i.id));
+      if (!confirm(`Delete ${list.length} item${list.length === 1 ? "" : "s"}? Only items never used anywhere are deleted; used ones are left (you can archive them).`)) return;
+      const used = [];
+      let deleted = 0;
+      for (const i of list) {
+        try { await apiFetch(`/api/stock-items/${i.id}`, { method: "DELETE" }); selected.delete(i.id); deleted++; }
+        catch (e) { used.push(`<strong>${escapeHtml(i.code)}</strong> is on ${escapeHtml(e.message.replace(/^USED\|/, ""))}`); }
+      }
+      await loadItems();
+      bulkMsg(`Deleted ${deleted}.${used.length ? ` Kept ${used.length} — still in use:<br>${used.join("<br>")}<br><a class="link" onclick="bulkArchive(true)">Archive ${used.length === 1 ? "it" : "them"} instead</a>, or delete those (cancelled) orders first.` : ""}`, used.length ? "" : "pos");
+    }
+
     function renderItems() {
       const tbody = document.getElementById("items-body");
       const category = document.getElementById("category-filter").value;
-      const filtered = category ? items.filter(i => i.category === category) : items;
+      const status = document.getElementById("status-filter").value;
+      const needsVerify = i => i.created_via === "ai-scan" && !i.verified_by;
+      const byStatus = { active: i => i.is_active !== false, verify: needsVerify, archived: i => i.is_active === false, all: () => true }[status];
+      const filtered = items.filter(i => (!category || i.category === category) && byStatus(i));
+      const waiting = items.filter(needsVerify).length;
+      document.getElementById("verify-notice").innerHTML = waiting && status !== "verify"
+        ? `<div class="card notice" style="cursor:pointer;" onclick="document.getElementById('status-filter').value = 'verify'; renderItems();">
+            <strong>${waiting} item${waiting === 1 ? "" : "s"} created by the AI scan need${waiting === 1 ? "s" : ""} verifying</strong> before ${waiting === 1 ? "it" : "they"} can be picked on orders. Click to see them.</div>` : "";
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="12" class="muted">${items.length ? "No items in this category." : "No stock items yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="muted">${items.length ? "No items match these filters." : "No stock items yet."}</td></tr>`;
         return;
       }
-      tbody.innerHTML = filtered.map(item => `
-        <tr>
-          <td><strong>${escapeHtml(item.code)}</strong></td>
+      shownItems = filtered;
+      const editRow = item => `
+        <tr class="row-selected" data-item="${item.id}">
+          <td class="sel-col"><input type="checkbox" checked onchange="toggleSelect(${item.id}, this.checked)"></td>
+          <td><a class="link" href="item.html?id=${item.id}"><strong>${escapeHtml(item.code)}</strong></a>${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
+          <td><input type="text" data-f="title" value="${escapeHtml(item.title)}" style="min-width:260px;"></td>
+          <td><select data-f="category">${groups.map(g => `<option ${g.name === item.category ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}</select></td>
+          <td><input type="text" data-f="unit" value="${escapeHtml(item.unit || "")}" style="width:60px;"></td>
+          <td class="num">${fmtQty(item.on_hand)}</td><td class="num muted">${fmtQty(item.booked)}</td><td class="num">${fmtQty(item.available)}</td>
+          <td class="num">${fmtPrice(item.cost_price)}</td>
+          <td class="num">${hidesMoney() ? "" : `<input type="number" data-f="selling_price" step="${PRICE_STEP}" min="0" value="${item.selling_price ?? 0}" style="width:90px;">`}</td>
+          <td><input type="number" data-f="reorder_point" step="1" min="0" value="${item.reorder_point ?? 0}" style="width:70px;"></td>
+          <td><input type="number" data-f="default_pack_size" step="1" min="1" value="${item.default_pack_size ?? ""}" style="width:70px;"></td>
+        </tr>`;
+      const viewRow = item => `
+        <tr class="${item.is_active === false ? "order-done" : ""} ${selected.has(item.id) ? "row-selected" : ""}" data-item="${item.id}">
+          <td class="sel-col"><input type="checkbox" ${selected.has(item.id) ? "checked" : ""} onchange="toggleSelect(${item.id}, this.checked)"></td>
+          <td><a class="link" href="item.html?id=${item.id}"><strong>${escapeHtml(item.code)}</strong></a>${item.is_active === false ? ' <span class="tag cancelled">archived</span>' : ""}${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
           <td>${escapeHtml(item.title)} ${hidesMoney() ? "" : `<a class="link small" onclick="showPriceHistory(${item.id})">Prices</a>`} <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a> <a class="link small" onclick="showMovements(${item.id})">Movement</a></td>
           <td>${groupTag(item)}</td>
           <td>${item.unit || ""}</td>
@@ -329,9 +465,12 @@
           <td class="num">${fmtPrice(item.selling_price)}</td>
           <td>${item.reorder_point ?? 0}</td>
           <td class="nowrap">${item.default_pack_size ?? ""} <a class="link small" onclick="showPackSizeHistory(${item.id})" title="Earlier pack sizes">History</a></td>
-          <td><a class="link" onclick="editItem(${item.id})">Edit</a></td>
         </tr>
-      `).join("");
+      `;
+      tbody.innerHTML = filtered.map(item => quickEdit && selected.has(item.id) ? editRow(item) : viewRow(item)).join("");
+      document.getElementById("sel-all").checked = filtered.length > 0 && filtered.every(i => selected.has(i.id));
+      renderBulkBar();
+      limitRows(tbody, "stock-items", renderItems);
     }
 
     async function loadItems() {
@@ -429,6 +568,7 @@
     document.getElementById("search").addEventListener("input", () => loadItems());
     document.getElementById("low-stock-only").addEventListener("change", () => loadItems());
     document.getElementById("category-filter").addEventListener("change", renderItems);
+    document.getElementById("status-filter").addEventListener("change", renderItems);
     loadGroups().then(loadItems);
   </script>
   </div>

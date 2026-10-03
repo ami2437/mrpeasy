@@ -58,6 +58,12 @@ def create_group(data: ProductGroupCreate, db: Session = Depends(get_db)):
     return ProductGroupService.create(db, data.name)
 
 
+@router.post("/groups/{group_id}/merge", dependencies=[Depends(require_role("manager"))])
+def merge_group(group_id: int, into_id: int = Query(...), db: Session = Depends(get_db)):
+    """Move all of a group's items into another group and remove it."""
+    return ProductGroupService.merge(db, group_id, into_id)
+
+
 @router.delete("/groups/{group_id}", status_code=204, dependencies=[Depends(require_role("manager"))])
 def delete_group(group_id: int, db: Session = Depends(get_db)):
     ProductGroupService.delete(db, group_id)
@@ -69,6 +75,26 @@ def item_price_history(item_id: int, db: Session = Depends(get_db)):
     """All sale and purchase prices for this item, newest first."""
     StockItemService.get(db, item_id)
     return price_history(db, item_id)
+
+
+@router.delete("/{item_id}", status_code=204, dependencies=[Depends(require_role("manager"))])
+def delete_item(item_id: int, db: Session = Depends(get_db)):
+    """Only for an item that was never used; a used one gets 409 'USED|...' and should be archived instead."""
+    StockItemService.delete(db, item_id)
+    return Response(status_code=204)
+
+
+@router.post("/{item_id}/verify", response_model=StockItemResponse, dependencies=[Depends(require_role("manager"))])
+def verify_item(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    return StockItemService.verify(db, item_id, current_user.username)
+
+
+@router.get("/{item_id}/usage", dependencies=[Depends(require_role("manager"))])
+def item_usage(item_id: int, db: Session = Depends(get_db)):
+    """Where the item is used (decides delete vs archive)."""
+    from app.services.crud import _item_references
+    StockItemService.get(db, item_id)
+    return _item_references(db, item_id)
 
 
 @router.get("/{item_id}", response_model=StockItemResponse)

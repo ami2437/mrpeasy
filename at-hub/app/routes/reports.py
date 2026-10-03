@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.config.database import get_db
 from app.dependencies import ROLE_RANK, get_current_active_user
-from app.models import (Attachment, Customer, CustomerOrder, MtrLink, PurchaseOrder, Shipment, User, Vendor,
-                        VendorBill, VendorPayment)
+from app.models import (Attachment, Customer, CustomerOrder, Invoice, InvoiceShipment, MtrLink, PurchaseOrder, Shipment,
+                        StockItem, User, Vendor, VendorBill, VendorPayment)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -94,6 +94,43 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
                          "help": "Money sent to a vendor that isn't tied to a purchase order yet.",
                          "rows": [{"id": vp.id, "code": vp.code, "vendor": vendors.get(vp.vendor_id), "amount": vp.amount, "unapplied": vp.unapplied,
                                    "paid_date": vp.paid_date.isoformat() if vp.paid_date else None, "days": _days(vp.paid_date)} for vp in open_vp]})
+        # ---- sales money and data waiting on someone ----
+        invoices = db.query(Invoice).filter(Invoice.status != "void").all()
+        on_invoice = {sid for (sid,) in db.query(InvoiceShipment.shipment_id).join(Invoice).filter(Invoice.status != "void").all()}
+        line_price = {l.id: l.unit_price for o in orders.values() for l in o.lines}
+        value = lambda s: round(sum(l.quantity * line_price.get(l.order_line_id, 0) for l in s.lines), 2)
+        sections += [
+            {"key": "items_verify", "title": "AI-Created Items To Verify", "page": "stock-items.html",
+             "help": "Made from a scanned PO; they can't be picked on orders until someone checks and verifies them.",
+             "rows": [{"id": i.id, "code": i.code, "title": i.title, "group": i.category, "days": _days(i.created_at)}
+                      for i in db.query(StockItem).filter(StockItem.created_via == "ai-scan", StockItem.verified_by.is_(None)).all()]},
+            {"key": "no_invoice", "title": "Shipped With No Invoice At All", "page": "invoices.html",
+             "help": "Shipped or delivered and not on any invoice -- not even a draft.",
+             "rows": sorted([ship_row(s, {"amount": value(s)}) for s in shipped if s.id not in on_invoice and s.status in SHIPPED],
+                            key=lambda r: -(r["days"] or 0))},
+            {"key": "draft_invoices", "title": "Draft Invoices Not Sent", "page": "invoices.html",
+             "help": "Drafts (including MRPeasy Dummy invoices) -- send them or delete them.",
+             "rows": [{"id": i.id, "code": i.code, "order_id": i.order_id, "order_code": orders[i.order_id].code if i.order_id in orders else None,
+                       "customer": customers.get(i.customer_id), "amount": i.total, "days": _days(i.invoice_date)}
+                      for i in invoices if i.status == "draft"]},
+            {"key": "invoices_overdue", "title": "Customer Invoices Overdue", "page": "invoices.html",
+             "help": "Sent, not fully paid, and past the due date.",
+             "rows": [{"id": i.id, "code": i.code, "customer": customers.get(i.customer_id), "balance": i.balance,
+                       "due": i.due_date.isoformat(), "days": _days(i.due_date)}
+                      for i in invoices if i.status != "draft" and i.balance > 0.005 and i.due_date and i.due_date < now]},
+            {"key": "not_booked", "title": "Confirmed Orders Not Fully Booked", "page": "customer-orders.html",
+             "help": "Quantity still to book into a shipment.",
+             "rows": sorted([{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
+                              "amount": round(sum(max(0, l.quantity - l.shipped_quantity - l.booked_quantity) * l.unit_price for l in o.lines), 2),
+                              "days": _days(o.created_at)}
+                             for o in orders.values() if o.status == "confirmed"
+                             and any(l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9 for l in o.lines)], key=lambda r: -r["amount"])},
+            {"key": "draft_orders", "title": "Draft Orders Not Confirmed", "page": "customer-orders.html",
+             "help": "Entered but never confirmed.",
+             "rows": [{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
+                       "amount": round(sum(l.quantity * l.unit_price for l in o.lines), 2), "days": _days(o.created_at)}
+                      for o in orders.values() if o.status == "draft"]},
+        ]
         linked = {a for (a,) in db.query(MtrLink.attachment_id).distinct()}
         mtrs = db.query(Attachment).filter(Attachment.category == "mtr", Attachment.entity_type == "purchase_order").all()
         sections.append({"key": "mtr_unlinked", "title": "MTRs Not Linked To PO Lines", "page": "purchase-orders.html",

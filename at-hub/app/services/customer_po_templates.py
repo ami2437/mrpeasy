@@ -16,6 +16,7 @@ MONTH_DATE = r"[A-Z][a-z]{2} \d{1,2}, \d{4}"
 # "1.000 31181" ... "Oct 8, 2026 EA 3.8500 192.5050.00"
 CHART_LINE = re.compile(
     r"^(\d+)\.000 (\S+)\n(.*?)\n(" + MONTH_DATE + r") (\S+) ([\d,]*\.\d{4}) ([\d,.]+)\n", re.M | re.S)
+JOB_TAIL = re.compile(r"(?:^|\s)((?:SO|WO)\s?#?\s?\d{5,}|HUB\s?SHOP|HUB|STOCK|REBUY|\d{6}(?:-[A-Z0-9]+)?|[A-Z]\d{2,4}-[A-Z0-9-]+)\s*$", re.I)
 JOB_RE = re.compile(r"^[A-Z0-9][A-Z0-9/.-]{2,24}$")
 
 
@@ -55,7 +56,8 @@ def parse_chart(text: str) -> Optional[Dict[str, Any]]:
     header = re.search(r"\d+ of \d+\n(" + MONTH_DATE + r")\n(\d+)\n(\d+)\n", body)
     ship = re.search(r"SHIP TO:\n(.*?)\n\d+ of \d+\n", body, re.S)
     lines, problems, skipped = [], [], []
-    for m in CHART_LINE.finditer(body):
+    matches = list(CHART_LINE.finditer(body))
+    for k, m in enumerate(matches):
         line_no, item, middle, dock, uom, unit_s, glued = m.groups()
         unit = _num(unit_s)
         split = _split_ext_qty(glued, unit)
@@ -67,11 +69,36 @@ def parse_chart(text: str) -> Optional[Dict[str, Any]]:
             problems.append(f"line {line_no}: unit x qty ({unit} x {qty:g}) doesn't equal extended {ext}")
         mid = [x.strip() for x in middle.split("\n") if x.strip()]
         job = mid.pop() if len(mid) > 1 and JOB_RE.match(mid[-1]) and "_" not in mid[-1] else None
+        # A short description puts the "Project/Job #" column on its own last line: "..._HRDN M246-30A-TF",
+        # "..._HDG_ 223000-30A", "...MONEL HUBSHOP", "... REBUY", "... SO 1875625". It's not part of the item.
+        refs = []
+        while mid:
+            tail = JOB_TAIL.search(mid[-1])
+            if not tail:
+                break
+            refs.insert(0, tail.group(1).strip())
+            mid[-1] = mid[-1][:tail.start()].rstrip()
+            if not mid[-1]:
+                mid.pop()
+        if refs and not job:
+            job = next((r for r in refs if not re.match(r"(SO|WO)|REBUY$|STOCK$", r)), None)
+        # a note printed under the line ("NUT SHALL BE WAXED DIP"): after the taxable flag, before the next line
+        after = body[m.end():matches[k + 1].start() if k + 1 < len(matches) else len(body)]
+        after = re.split(r"\nContinued|\n\[Page|\nSubtotal|\n\"Unless", "\n" + after)[0].splitlines()
+        note = " ".join(x.strip() for x in after if x.strip() and not re.fullmatch(r"[YN]\d*", x.strip()))
         lines.append({"line_no": int(line_no), "item_code": item, "customer_item_code": item,
-                      "description": " ".join(mid), "quantity": qty, "unit": uom, "unit_price": unit,
+                      "description": " ".join(mid), "line_note": note or None, "refs": refs, "quantity": qty, "unit": uom, "unit_price": unit,
                       "extended": ext, "delivery_date": _date(dock), "job_number": job})
     if not lines:
         return None
+    # this PO's own job #s ("ASSEMBLY", "1966624") stuck on the end of other lines' descriptions
+    po_jobs = sorted({l["job_number"] for l in lines if l["job_number"]}, key=len, reverse=True)
+    for l in lines:
+        for j in po_jobs:
+            if l["description"].endswith(" " + j) and len(l["description"]) > len(j) + 1:
+                l["description"] = l["description"][:-len(j) - 1].rstrip()
+                l["job_number"] = l["job_number"] or j
+                break
     # A kit header line uses the job # as its item # (e.g. "M170-30C FIELD ERECTION BOLT KIT", 1 x $0.01):
     # it isn't a product, so it's left off the order.
     job_codes = {l["job_number"] for l in lines if l["job_number"]}

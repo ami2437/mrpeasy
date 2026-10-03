@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.schemas import PartyCreate, PartyUpdate, PartyResponse
+from app.schemas import CustomerCreate, CustomerUpdate, PartyResponse
 from app.services.crud import customer_service
 from app.dependencies import get_current_active_user, require_role
 
@@ -14,7 +14,7 @@ def list_customers(db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=PartyResponse, dependencies=[Depends(require_role("manager"))])
-def create_customer(data: PartyCreate, db: Session = Depends(get_db)):
+def create_customer(data: CustomerCreate, db: Session = Depends(get_db)):
     return customer_service.create(db, data)
 
 
@@ -24,5 +24,5 @@ def get_customer(party_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{party_id}", response_model=PartyResponse, dependencies=[Depends(require_role("manager"))])
-def update_customer(party_id: int, data: PartyUpdate, db: Session = Depends(get_db)):
+def update_customer(party_id: int, data: CustomerUpdate, db: Session = Depends(get_db)):
     return customer_service.update(db, party_id, data)

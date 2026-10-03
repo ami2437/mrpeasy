@@ -11,8 +11,8 @@
   <div id="sidebar"></div>
   <main>
     <div class="card">
-      <h2 style="margin-top:0;">Welcome to AT-HUB</h2>
-      <p class="muted">Stock Items, Lot Tracking, Customer Orders And Purchase Orders.</p>
+      <h2 style="margin:0;" id="greeting">Welcome</h2>
+      <p class="muted" style="margin:4px 0 0;">What needs attention today. <span class="kbd-hint">Press <kbd>Ctrl</kbd>+<kbd>K</kbd> to find any order, PO, item, customer or vendor.</span></p>
     </div>
     <div class="card" id="summary">Loading summary...</div>
 
@@ -68,6 +68,8 @@
         document.getElementById("summary").innerHTML = `<div class="error">${err.message}</div>`;
       }
     }
+    const hr = new Date().getHours();
+    document.getElementById("greeting").textContent = `Good ${hr < 12 ? "morning" : hr < 18 ? "afternoon" : "evening"}${(AuthGuard.getUser() || {}).full_name ? `, ${AuthGuard.getUser().full_name.split(" ")[0]}` : ""}`;
     loadSummary();
     renderActionItems("dash-actions");
   </script>

@@ -5,6 +5,7 @@
   <title>AT-HUB — Customers</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="contact-card.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -13,178 +14,68 @@
     <div class="card page-toolbar">
       <h1 class="page-title">Customers</h1>
       <div class="row toolbar-row">
-        <input type="text" id="search" placeholder="Search customers...">
-        <button onclick="toggleForm()">+ New Customer</button>
+        <button onclick="ContactCards.create()">+ New Customer</button>
       </div>
     </div>
-
-    <div class="card" id="form-card" style="display:none;">
-      <h3>New Customer</h3>
-      <div class="row">
-        <div><label>Name</label><input type="text" id="f-name"></div>
-        <div><label>Contact name</label><input type="text" id="f-contact"></div>
-      </div>
-      <div class="row">
-        <div><label>Email</label><input type="text" id="f-email"></div>
-        <div><label>Phone</label><input type="text" id="f-phone"></div>
-      </div>
-      <div class="row">
-        <div><label>Billing address</label><textarea id="f-address" rows="3"></textarea></div>
-        <div><label>Shipping address <span class="muted small">(blank = same as billing)</span></label><textarea id="f-shipping-address" rows="3"></textarea></div>
-      </div>
-      <div style="margin-top:14px;">
-        <button onclick="save()">Save</button>
-        <button class="secondary" onclick="toggleForm(false)">Cancel</button>
-      </div>
-      <div id="form-error" class="error"></div>
-    </div>
-
-    <div class="card">
-      <table>
-        <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
-        <tbody id="body"><tr><td colspan="5">Loading...</td></tr></tbody>
-      </table>
-    </div>
-
-    <div class="card" id="detail-card" style="display:none;"></div>
+    <div id="contacts"></div>
   </main>
 
   <script>
     AuthGuard.requireRole("manager");
     document.getElementById("sidebar").innerHTML = renderSidebar("customers.html");
-    const ENDPOINT = "/api/customers/";
+    document.getElementById("contacts").innerHTML = contactCardShell("+ New Customer");
 
-    let rows = [];
     let orders = [];
-
-    function toggleForm(show = true) {
-      document.getElementById("form-card").style.display = show ? "block" : "none";
-      if (!show) ["name", "contact", "email", "phone", "address", "shipping-address"].forEach(f => document.getElementById(`f-${f}`).value = "");
-    }
-
-    async function save() {
-      const errorEl = document.getElementById("form-error");
-      errorEl.textContent = "";
-      try {
-        await apiFetch(ENDPOINT, {
-          method: "POST",
-          body: JSON.stringify({
-            name: document.getElementById("f-name").value,
-            contact_name: document.getElementById("f-contact").value,
-            email: document.getElementById("f-email").value,
-            phone: document.getElementById("f-phone").value,
-            address: document.getElementById("f-address").value,
-            shipping_address: document.getElementById("f-shipping-address").value || null,
-          }),
-        });
-        toggleForm(false);
-        load();
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    }
-
-    function render() {
-      const tbody = document.getElementById("body");
-      const q = document.getElementById("search").value.trim().toLowerCase();
-      const filtered = rows.filter(r => !q || r.name.toLowerCase().includes(q) || (r.contact_name || "").toLowerCase().includes(q));
-      if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">${rows.length ? "No customers match your search." : "None yet."}</td></tr>`;
-        return;
-      }
-      tbody.innerHTML = filtered.map(r => {
-        const orderCount = orders.filter(o => o.customer_id === r.id).length;
-        return `
-        <tr>
-          <td><a class="link" onclick="showDetail(${r.id})">${r.name}</a></td>
-          <td>${r.contact_name || ""}</td>
-          <td>${r.email || ""}</td>
-          <td>${r.phone || ""}</td>
-          <td class="muted">${orderCount}</td>
-        </tr>
-      `;
-      }).join("");
-    }
-
+    const orderTotal = o => o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
-    async function showDetail(id) {
-      const customer = rows.find(r => r.id === id);
-      const card = document.getElementById("detail-card");
-      card.style.display = "block";
-      const customerOrders = orders.filter(o => o.customer_id === id);
-      const totalSales = customerOrders.reduce((sum, o) => sum + o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0), 0);
-
-      card.innerHTML = `
-        <h3>${customer.name}</h3>
-        <div class="row">
-          <div><label>Name</label><input type="text" id="e-name" value="${customer.name}"></div>
-          <div><label>Contact name</label><input type="text" id="e-contact" value="${customer.contact_name || ''}"></div>
-        </div>
-        <div class="row">
-          <div><label>Email</label><input type="text" id="e-email" value="${customer.email || ''}"></div>
-          <div><label>Phone</label><input type="text" id="e-phone" value="${customer.phone || ''}"></div>
-        </div>
-        <div class="row">
-          <div><label>Billing address</label><textarea id="e-address" rows="3">${customer.address || ''}</textarea></div>
-          <div><label>Shipping address <span class="muted small">(blank = same as billing)</span></label><textarea id="e-shipping-address" rows="3">${customer.shipping_address || ''}</textarea></div>
-        </div>
-        <button onclick="saveDetail(${customer.id})" style="margin-top:8px;">Save Changes</button>
-        <div id="detail-error" class="error"></div>
-
-        <h4 style="margin-top:20px;">Order history (${customerOrders.length} orders, $${totalSales.toFixed(2)} total)</h4>
-        ${customerOrders.length ? `
-          <table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="sum">Total</th></tr></thead>
-            <tbody>${customerOrders.map(o => `
-              <tr>
-                <td><a class="link" href="customer-orders.html?id=${o.id}">${o.code}</a></td>
-                <td>${fmtDate(o.order_date)}</td>
-                <td><span class="tag ${o.status}">${o.status}</span></td>
-                <td>$${o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0).toFixed(2)}</td>
-              </tr>
-            `).join("")}</tbody>
-          </table>
-        ` : `<p class="muted">No orders yet.</p>`}
-        <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';" style="margin-top:12px;">Close</button>
-      `;
-    }
-
-    async function saveDetail(id) {
-      const errorEl = document.getElementById("detail-error");
-      errorEl.textContent = "";
-      try {
-        await apiFetch(`${ENDPOINT}${id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            name: document.getElementById("e-name").value,
-            contact_name: document.getElementById("e-contact").value,
-            email: document.getElementById("e-email").value,
-            phone: document.getElementById("e-phone").value,
-            address: document.getElementById("e-address").value,
-            shipping_address: document.getElementById("e-shipping-address").value || null,
-          }),
-        });
-        await load();
-        showDetail(id);
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    }
-
-    async function load() {
-      try {
-        [rows, orders] = await Promise.all([
-          apiFetch(ENDPOINT),
-          apiFetch("/api/customer-orders/"),
-        ]);
-        render();
-      } catch (err) {
-        document.getElementById("body").innerHTML = `<tr><td colspan="5" class="error">${err.message}</td></tr>`;
-      }
-    }
-    document.getElementById("search").addEventListener("input", render);
-    load();
+    ContactCards.init({
+      endpoint: "/api/customers/",
+      labels: {
+        phones: ["work", "main", "mobile", "receiving", "accounts payable", "fax", "other"],
+        emails: ["work", "invoices / AP", "purchasing", "quality / MTRs", "receiving", "other"],
+        addresses: ["billing", "shipping", "plant", "other"],
+        websites: ["website", "supplier portal", "other"],
+        roles: ["buyer", "accounts payable", "receiving", "quality", "engineering", "owner"],
+      },
+      hints: {
+        emails: 'label one "invoices / AP" or "quality / MTRs" to send those there',
+        addresses: '"billing" = bill to, "shipping" = default ship-to',
+        phones: "the first one is printed on documents",
+      },
+      newDraft: () => ({ tags: [], phones: [{ label: "work", value: "" }], emails: [{ label: "work", value: "" }],
+        addresses: [{ label: "billing", value: "" }, { label: "shipping", value: "" }], websites: [],
+        people: [{ name: "", role: "buyer", phone: "", email: "" }], notes: "" }),
+      // what in the app reads each entry, so it's clear what a label does
+      usedFor(c, key, r, i) {
+        const n = [];
+        if (key === "emails" && r.value === c.invoice_email) n.push("invoices go here");
+        if (key === "emails" && r.value === c.mtr_email) n.push("MTRs go here");
+        if (key === "addresses" && r.value === c.address) n.push("bill to");
+        if (key === "addresses" && r.value === c.shipping_address) n.push("default ship-to");
+        if ((key === "phones" || key === "emails") && i === 0) n.push("main");
+        return n;
+      },
+      loadExtra: async () => { orders = await apiFetch("/api/customer-orders/"); },
+      quickExtra: c => `<a href="customer-orders.html?new=${c.id}"><b>＋</b>order</a>`,
+      body(c) {
+        const mine = orders.filter(o => o.customer_id === c.id).sort((a, b) => b.id - a.id);
+        const open = mine.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status));
+        return `
+          <div class="stats">
+            <div><strong>${mine.length}</strong><span>orders</span></div>
+            <div><strong>${open.length}</strong><span>open now</span></div>
+            <div><strong>${fmtMoney(mine.filter(o => o.status !== "cancelled").reduce((s, o) => s + orderTotal(o), 0))}</strong><span>total sales</span></div>
+            <div><strong>${mine[0] ? fmtDate(mine[0].created_at || mine[0].order_date) : "—"}</strong><span>last order</span></div>
+          </div>
+          <h4 style="margin-top:20px;">Orders</h4>
+          ${mine.length ? `<div class="table-scroll"><table>
+            <thead><tr><th>Code</th><th>PO #</th><th>Created</th><th>Status</th><th class="num sum">Total</th></tr></thead>
+            <tbody>${mine.map(o => `<tr><td><a class="link" href="customer-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${escapeHtml(o.po_number || "")}</td>
+              <td>${fmtDate(o.created_at || o.order_date)}</td><td><span class="tag ${o.status}">${o.status}</span></td><td class="num">${fmtMoney(orderTotal(o))}</td></tr>`).join("")}</tbody>
+          </table></div>` : `<p class="muted">No orders yet.</p>`}`;
+      },
+    });
   </script>
   </div>
 </body>

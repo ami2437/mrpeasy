@@ -10,6 +10,7 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
+    <div class="card" id="money-card"><h3 style="margin-top:0;">Money</h3><div class="muted">Loading…</div></div>
     <div class="card" id="action-card"><h3 style="margin-top:0;">Action Items</h3><div id="action-items" class="muted">Loading…</div></div>
 
     <div class="card" id="summary-card">Loading...</div>
@@ -94,8 +95,78 @@
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function money(n) { return `$${n.toFixed(2)}`; }
 
+    // ---- Money: what's owed to us, what's in the pipeline, what we owe ----
+    function renderMoney(orders, pos, invoices, shipments) {
+      const day = 86400000, now = Date.now();
+      const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
+      const n = (k, w) => `${k} ${w}${k === 1 ? "" : "s"}`;
+      const live = invoices.filter(i => i.status !== "void");
+      const sent = live.filter(i => i.status === "sent" || (i.status !== "draft" && i.balance > 0.005));
+      const unpaid = sent.filter(i => i.balance > 0.005);
+      const overdue = unpaid.filter(i => i.due_date && new Date(i.due_date).getTime() < now);
+      const drafts = live.filter(i => i.status === "draft");
+      const monthKey = d => { const x = new Date(d); return x.getFullYear() * 12 + x.getMonth(); };
+      const thisM = monthKey(now);
+      const paidIn = m => sum(live.flatMap(i => i.payments), p => monthKey(p.paid_date || p.created_at) === m ? p.amount : 0);
+      // shipments: which have an invoice (any, even a draft), and their value
+      const lineById = new Map(orders.flatMap(o => o.lines.map(l => [l.id, l])));
+      const shipValue = s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? l.quantity * ol.unit_price : 0; });
+      const invoicedAny = new Set(live.flatMap(i => i.shipment_ids));
+      const invoicedReal = new Set(live.filter(i => i.status !== "draft").flatMap(i => i.shipment_ids));
+      const gone = shipments.filter(s => ["shipped", "delivered", "invoiced"].includes(s.status));
+      const noInvoice = gone.filter(s => !invoicedAny.has(s.id));
+      const draftOnly = gone.filter(s => invoicedAny.has(s.id) && !invoicedReal.has(s.id));
+      const delivered = gone.filter(s => s.status === "delivered" && !invoicedAny.has(s.id));
+      // orders: value not shipped yet (open quantity x price), ordered but not booked
+      const openOrders = orders.filter(o => !["cancelled", "draft"].includes(o.status));
+      const notShipped = openOrders.map(o => ({ o, v: sum(o.lines, l => Math.max(0, l.quantity - l.shipped_quantity) * l.unit_price) })).filter(x => x.v > 0.005);
+      const notBooked = openOrders.map(o => ({ o, v: sum(o.lines, l => Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity) * l.unit_price) })).filter(x => x.v > 0.005);
+      const draftOrders = orders.filter(o => o.status === "draft");
+      // purchasing
+      const livePOs = pos.filter(p => p.status !== "cancelled");
+      const bills = livePOs.flatMap(p => p.bills.map(b => ({ ...b, po: p })));
+      const billed = sum(bills, b => b.amount);
+      const owed = bills.filter(b => b.balance > 0.005);
+      const billsOverdue = owed.filter(b => b.due_date && new Date(b.due_date).getTime() < now);
+      const notReceived = livePOs.map(p => ({ p, v: sum(p.lines, l => Math.max(0, l.quantity - l.received_quantity) * l.unit_cost) })).filter(x => x.v > 0.005);
+      const receivedNotBilled = livePOs.map(p => {
+        const recv = sum(p.lines, l => Math.min(l.received_quantity, l.quantity) * l.unit_cost);
+        return { p, v: recv - sum(p.bills, b => b.amount - 0) };
+      }).filter(x => x.v > 0.5);
+      const poTotal = sum(livePOs, p => p.order_total);
+      const vendorPaidIn = m => sum(livePOs.flatMap(p => p.payments || []), x => monthKey(x.paid_date || x.created_at) === m ? x.amount : 0);
+
+      const fig = (label, amount, sub, cls = "", href = "") => `<a class="mfig ${cls}" ${href ? `href="${href}"` : ""}>
+        <span class="mfig-label">${label}</span><strong>${fmtMoney(amount)}</strong><span class="mfig-sub">${sub}</span></a>`;
+      document.getElementById("money-card").innerHTML = `<h3 style="margin-top:0;">Money</h3>
+        <div class="mgroup"><div class="mgroup-title">Receivables — owed to us</div><div class="mfigs">
+          ${fig("Sent, not paid", sum(unpaid, i => i.balance), n(unpaid.length, "invoice"), unpaid.length ? "warn" : "", "invoices.html")}
+          ${fig("Overdue", sum(overdue, i => i.balance), overdue.length ? `${n(overdue.length, "invoice")} past due` : "nothing past due", overdue.length ? "bad" : "good", "invoices.html")}
+          ${fig("Draft / Dummy invoices", sum(drafts, i => i.total), `${n(drafts.length, "invoice")} not sent`, drafts.length ? "warn" : "", "invoices.html")}
+          ${fig("Shipped, no invoice at all", sum(noInvoice, shipValue), `${n(noInvoice.length, "shipment")} — not even a draft`, noInvoice.length ? "bad" : "good", "shipments.html")}
+          ${fig("Delivered, no invoice", sum(delivered, shipValue), n(delivered.length, "shipment"), delivered.length ? "bad" : "good", "shipments.html")}
+          ${fig("Shipped, draft invoice only", sum(draftOnly, shipValue), n(draftOnly.length, "shipment"), draftOnly.length ? "warn" : "", "invoices.html")}
+          ${fig("Collected this month", paidIn(thisM), `last month ${fmtMoney(paidIn(thisM - 1))}`, "good", "invoices.html")}
+        </div></div>
+        <div class="mgroup"><div class="mgroup-title">Orders pipeline</div><div class="mfigs">
+          ${fig("Ordered, not shipped yet", sum(notShipped, x => x.v), n(notShipped.length, "order"), "", "customer-orders.html")}
+          ${fig("Not even booked yet", sum(notBooked, x => x.v), n(notBooked.length, "order"), notBooked.length ? "warn" : "", "customer-orders.html")}
+          ${fig("Draft orders", sum(draftOrders, o => sum(o.lines, l => l.quantity * l.unit_price)), `${n(draftOrders.length, "order")} not confirmed`, draftOrders.length ? "warn" : "", "customer-orders.html")}
+        </div></div>
+        <div class="mgroup"><div class="mgroup-title">Payables — what we owe vendors</div><div class="mfigs">
+          ${fig("PO value", poTotal, n(livePOs.length, "PO"), "", "purchase-orders.html")}
+          ${fig("Invoiced by vendors", billed, `${n(bills.length, "vendor invoice")} · ${poTotal ? Math.round(billed / poTotal * 100) : 0}% of PO value`, "", "purchase-orders.html")}
+          ${fig("Not invoiced by vendors yet", Math.max(0, poTotal - billed), "PO value no vendor has billed", "", "purchase-orders.html")}
+          ${fig("Owed on vendor invoices", sum(owed, b => b.balance), n(owed.length, "unpaid invoice"), owed.length ? "warn" : "good", "purchase-orders.html")}
+          ${fig("Vendor invoices overdue", sum(billsOverdue, b => b.balance), billsOverdue.length ? n(billsOverdue.length, "invoice") : "nothing past due", billsOverdue.length ? "bad" : "good", "purchase-orders.html")}
+          ${fig("Received, not invoiced by vendor", sum(receivedNotBilled, x => x.v), n(receivedNotBilled.length, "PO"), receivedNotBilled.length ? "warn" : "", "purchase-orders.html")}
+          ${fig("Ordered, not received yet", sum(notReceived, x => x.v), n(notReceived.length, "PO"), "", "purchase-orders.html")}
+          ${fig("Paid to vendors this month", vendorPaidIn(thisM), `last month ${fmtMoney(vendorPaidIn(thisM - 1))}`, "", "purchase-orders.html")}
+        </div></div>`;
+    }
+
     async function load() {
-      const [items, customerOrders, purchaseOrders, customers, vendors, invoices, expiringLots] = await Promise.all([
+      const [items, customerOrders, purchaseOrders, customers, vendors, invoices, expiringLots, shipments] = await Promise.all([
         apiFetch("/api/stock-items/"),
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/purchase-orders/"),
@@ -103,7 +174,9 @@
         apiFetch("/api/vendors/"),
         apiFetch("/api/invoices/"),
         apiFetch("/api/lots/expiring?within_days=30"),
+        apiFetch("/api/shipments/"),
       ]);
+      renderMoney(customerOrders, purchaseOrders, invoices, shipments);
 
       const customerName = id => { const c = customers.find(c => c.id === id); return c ? c.name : id; };
       const vendorName = id => { const v = vendors.find(v => v.id === id); return v ? v.name : id; };

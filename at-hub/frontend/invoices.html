@@ -35,10 +35,11 @@
       <h4>Recent uploads</h4>
       <div id="funding-history" class="muted">—</div>
     </div>
+    <div id="inv-metrics"></div>
     <div class="card">
       <table class="list-fit">
-        <thead><tr><th>Code</th><th>Customer</th><th>Order</th><th>PO #</th><th>Job #</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Payment</th><th>Disbursed</th><th class="num">Funding</th><th class="num">Discount</th><th>Status</th></tr></thead>
-        <tbody id="invoices-body"><tr><td colspan="16">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Customer</th><th title="Order, the customer's PO # and job #">Order / PO / Job</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Balance</th><th>Payment</th><th class="num" title="Factor funding: amount, discount and disbursement date">Funding</th><th>Status</th></tr></thead>
+        <tbody id="invoices-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -107,34 +108,90 @@
       return inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "";
     }
 
+    // Figures above the list. They follow the search box, so "Hudson" or "C89104" gives that customer's / order's numbers.
+    function renderMetrics(list, searching) {
+      const el = document.getElementById("inv-metrics");
+      const day = 86400000, now = Date.now();
+      const live = list.filter(i => i.status !== "void");
+      const billed = live.filter(i => i.status !== "draft");
+      const drafts = live.filter(i => i.status === "draft");
+      const open = billed.filter(i => i.balance > 0.005);
+      const overdue = open.filter(i => i.due_date && new Date(i.due_date).getTime() < now);
+      const sum = (xs, f) => xs.reduce((s, x) => s + (f(x) || 0), 0);
+      const age = i => (now - new Date(i.invoice_date).getTime()) / day;
+      const buckets = [["0–30 days", 0, 30], ["31–60", 30, 60], ["61–90", 60, 90], ["90+", 90, 1e9]]
+        .map(([label, lo, hi]) => { const xs = open.filter(i => age(i) >= lo && age(i) < hi); return { label, n: xs.length, amt: sum(xs, i => i.balance) }; });
+      // days to get paid: invoice date -> last payment, for paid invoices
+      const paidDays = billed.filter(i => i.status === "paid" && i.payments.length)
+        .map(i => (Math.max(...i.payments.map(p => new Date(p.paid_date || p.created_at).getTime())) - new Date(i.invoice_date).getTime()) / day)
+        .filter(d => d >= 0 && d < 400);
+      const avgDays = paidDays.length ? paidDays.reduce((a, b) => a + b, 0) / paidDays.length : null;
+      const funded = billed.filter(i => i.funding_amount != null);
+      const fundAmt = sum(funded, i => i.funding_amount), fundDisc = sum(funded, i => i.funding_discount);
+      const monthKey = d => { const x = new Date(d); return `${x.getFullYear()}-${x.getMonth()}`; };
+      const thisM = monthKey(now), lastD = new Date(); lastD.setDate(1); lastD.setMonth(lastD.getMonth() - 1);
+      const thisMonth = sum(billed.filter(i => monthKey(i.invoice_date) === thisM), i => i.total);
+      const lastMonth = sum(billed.filter(i => monthKey(i.invoice_date) === monthKey(lastD)), i => i.total);
+      // shipped but never invoiced (non-draft): money waiting to be billed
+      const invoicedShip = new Set(billed.flatMap(i => i.shipment_ids));
+      const lineById = new Map(orders.flatMap(o => o.lines.map(l => [l.id, l])));
+      const unbilledShip = searching ? [] : shipments.filter(s => ["shipped", "delivered"].includes(s.status) && !invoicedShip.has(s.id));
+      const unbilledAmt = sum(unbilledShip, s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? l.quantity * ol.unit_price : 0; }));
+      const tile = (label, value, sub = "", cls = "", onclick = "") =>
+        `<div class="stat ${onclick ? "stat-click" : ""}" ${onclick ? `onclick="${onclick}" title="Show these"` : ""}><div class="stat-label">${label}</div>
+          <div class="stat-value ${cls}">${value}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ""}</div>`;
+      const n = (xs, w = "invoice") => `${xs.length} ${w}${xs.length === 1 ? "" : "s"}`;
+      el.innerHTML = `<div class="card inv-metrics">
+        <div class="stat-row">
+          ${tile("Invoiced", fmtMoney(sum(billed, i => i.total)), n(billed))}
+          ${tile("Collected", fmtMoney(sum(billed, i => i.amount_paid)), billed.length ? `${Math.round(sum(billed, i => i.amount_paid) / Math.max(sum(billed, i => i.total), 1) * 100)}% of invoiced` : "")}
+          ${tile("Unpaid", fmtMoney(sum(open, i => i.balance)), n(open), open.length ? "" : "pos", "filterStatus('sent')")}
+          ${tile("Overdue", fmtMoney(sum(overdue, i => i.balance)), overdue.length ? `${n(overdue)} past due` : "nothing past due", overdue.length ? "neg" : "pos")}
+          ${tile("Draft / Dummy", fmtMoney(sum(drafts, i => i.total)), `${n(drafts)} not sent yet`, "", "filterStatus('draft')")}
+          ${tile("This month", fmtMoney(thisMonth), `last month ${fmtMoney(lastMonth)}`)}
+          ${tile("Avg. days to paid", avgDays == null ? "—" : `${Math.round(avgDays)} days`, paidDays.length ? `over ${paidDays.length} paid invoices` : "")}
+          ${searching ? "" : tile("Shipped, not invoiced", fmtMoney(unbilledAmt), `${unbilledShip.length} shipment${unbilledShip.length === 1 ? "" : "s"}`, unbilledShip.length ? "neg" : "pos")}
+        </div>
+        <div class="metric-strips">
+          <div><span class="metric-strip-title">Unpaid by age</span>${buckets.map(b => `<span class="metric-chip ${b.label === "90+" && b.n ? "neg" : ""}"><b>${b.label}</b> ${fmtMoney(b.amt)} <span class="muted">· ${b.n}</span></span>`).join("")}</div>
+          ${funded.length ? `<div><span class="metric-strip-title">Funding</span>
+            <span class="metric-chip"><b>Funded</b> ${fmtMoney(fundAmt)} <span class="muted">· ${n(funded)}</span></span>
+            <span class="metric-chip"><b>Discount paid</b> ${fmtMoney(fundDisc)} <span class="muted">· ${fundAmt + fundDisc ? (fundDisc / (fundAmt + fundDisc) * 100).toFixed(2) : "0.00"}%</span></span></div>` : ""}
+        </div>
+      </div>`;
+    }
+    // Clicking a tile filters the list by status (through the header filter's tick boxes is the general way)
+    let statusOnly = null;
+    function filterStatus(st) { statusOnly = statusOnly === st ? null : st; renderInvoices(); }
+
     function renderInvoices() {
       const tbody = document.getElementById("invoices-body");
       const q = document.getElementById("search").value.trim();
-      const filtered = invoices.filter(inv => matchesSearch(inv, q));
+      const searched = invoices.filter(inv => matchesSearch(inv, q));
+      renderMetrics(searched, !!q);
+      const filtered = statusOnly ? searched.filter(i => statusOnly === "sent" ? i.status !== "draft" && i.status !== "void" && i.balance > 0.005 : i.status === statusOnly) : searched;
+      document.querySelectorAll("#inv-metrics .stat-click").forEach(t => t.classList.toggle("on",
+        (statusOnly === "sent" && t.textContent.includes("Unpaid")) || (statusOnly === "draft" && t.textContent.includes("Draft"))));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="16" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(inv => `
         <tr class="${inv.is_combined ? "row-combined" : ""}">
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}</td>
           <td>${customerName(inv.customer_id)}</td>
-          <td>${refLink("order", inv.order_id)}</td>
-          <td>${escapeHtml(orderField(inv, "po_number"))}</td>
-          <td>${escapeHtml(orderField(inv, "job_number"))}</td>
+          <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
           <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
           <td>${fmtDate(inv.due_date)}</td>
           <td class="num">${inv.status === 'void' ? '' : fmtMoney(invoiceTotal(inv))}</td>
-          <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.amount_paid)}</td>
           <td class="num">${inv.status === 'void' ? '' : fmtMoney(inv.balance)}</td>
           <td>${paymentCell(inv)}</td>
-          <td>${fmtDate(inv.disbursement_date)}</td>
-          <td class="num">${inv.funding_amount != null ? fmtMoney(inv.funding_amount) : ""}</td>
-          <td class="num">${inv.funding_discount != null ? fmtMoney(inv.funding_discount) : ""}</td>
+          <td class="num">${inv.funding_amount != null ? `${fmtMoney(inv.funding_amount)}<div class="muted small">−${fmtMoney(inv.funding_discount || 0)} · ${fmtDate(inv.disbursement_date)}</div>` : ""}</td>
           <td><span class="tag ${inv.status === 'paid' ? 'shipped' : inv.status === 'void' ? 'cancelled' : inv.status === 'sent' ? 'confirmed' : 'draft'}">${inv.status}</span></td>
         </tr>
       `).join("");
+      limitRows(tbody, "invoices", renderInvoices);
     }
 
     // Item # has its own column; older lines stored "CODE — title" as the description.
@@ -592,7 +649,7 @@
               For Gmail use <code>smtp.gmail.com</code>, port 587, and an App Password.</div>`}
           ${emailConfig.configured ? `<p class="muted" style="margin:0;">Sends from <strong>${escapeHtml(emailConfig.from_address)}</strong>${company.email ? ` · replies go to ${escapeHtml(company.email)}` : ""}</p>` : ""}
           <div class="row">
-            <div><label>To <span class="muted">(separate several with commas)</span></label><input type="text" id="em-to" value="${escapeHtml(customer.email || "")}" placeholder="customer@example.com"></div>
+            <div><label>To <span class="muted">(separate several with commas)</span></label><input type="text" id="em-to" value="${escapeHtml(customer.invoice_email || customer.email || "")}" placeholder="customer@example.com"></div>
             <div><label>CC</label><input type="text" id="em-cc" placeholder="Optional"></div>
           </div>
           <label>Subject</label><input type="text" id="em-subject" value="${escapeHtml(`Invoice ${invoice.code} from ${company.name || ""}`.trim())}">
@@ -608,7 +665,7 @@
         </div>
       `;
       panel.scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById(customer.email ? "em-body" : "em-to").focus();
+      document.getElementById(customer.invoice_email || customer.email ? "em-body" : "em-to").focus();
     }
 
     async function sendEmail(id) {

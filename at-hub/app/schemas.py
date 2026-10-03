@@ -119,6 +119,7 @@ class StockItemCreate(InputModel):
     selling_price: Optional[float] = 0
     reorder_point: Optional[float] = 0
     default_pack_size: Optional[int] = None
+    created_via: Optional[str] = None  # "ai-scan" when made from a scanned PO
 
 
 class StockItemUpdate(InputModel):
@@ -152,6 +153,8 @@ class StockItemResponse(BaseModel):
     reorder_point: Optional[float] = None
     default_pack_size: Optional[int] = None
     is_active: bool
+    created_via: Optional[str] = None
+    verified_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -230,6 +233,17 @@ class PartyUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class CustomerCreate(PartyCreate):
+    details: Optional[dict] = None  # the contact card -- see ContactCardMixin
+
+
+class CustomerUpdate(PartyUpdate):
+    details: Optional[dict] = None
+
+
+VendorCreate, VendorUpdate = CustomerCreate, CustomerUpdate  # same contact card
+
+
 class PartyResponse(BaseModel):
     id: int
     code: Optional[str] = None  # vendors: V-0001
@@ -240,6 +254,10 @@ class PartyResponse(BaseModel):
     address: Optional[str] = None
     shipping_address: Optional[str] = None
     is_active: bool
+    details: Optional[dict] = None  # the contact card
+    invoice_email: Optional[str] = None  # customers: where invoices go (an "invoices / AP" email, else the main one)
+    mtr_email: Optional[str] = None
+    po_email: Optional[str] = None  # vendors: where our POs go (a "purchasing" / "orders" email, else the main one)
 
     class Config:
         from_attributes = True
@@ -313,6 +331,7 @@ class CustomerOrderResponse(BaseModel):
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
+    duplicate_po_ok: Optional[str] = None  # set once a manager has OK'd sharing the customer PO # with an earlier order
     lines: List[CustomerOrderLineResponse] = []
 
     class Config:
@@ -338,9 +357,14 @@ class CustomerOrderLineAdd(InputModel):
 
 
 class CustomerOrderLineUpdate(InputModel):
+    item_id: Optional[int] = None  # replace the item (only while nothing on the line is shipped or booked)
     quantity: Optional[float] = None
     unit_price: Optional[float] = None
     delivery_date: Optional[datetime] = None
+
+
+class LineOrderRequest(BaseModel):
+    line_ids: List[int]  # every line of the order, in the new display order
 
 
 class BookLineRequest(BaseModel):
@@ -671,6 +695,7 @@ class PurchaseOrderLineCreate(InputModel):
 class PurchaseOrderCreate(BaseModel):
     vendor_id: int
     expected_date: Optional[datetime] = None
+    vendor_so_number: Optional[str] = None  # the vendor's sales order / confirmation #
     notes: Optional[str] = None
     lines: List[PurchaseOrderLineCreate]
 
@@ -800,6 +825,9 @@ class PurchaseOrderResponse(BaseModel):
     code: str
     vendor_id: int
     order_date: datetime
+    created_at: Optional[datetime] = None  # when the PO was entered (MRPeasy's "created" for imported ones)
+    created_by: Optional[str] = None
+    vendor_so_number: Optional[str] = None
     expected_date: Optional[datetime] = None
     status: str
     freight_cost: Optional[float] = None
@@ -823,6 +851,7 @@ class PurchaseOrderResponse(BaseModel):
 class PurchaseOrderUpdate(BaseModel):
     vendor_id: Optional[int] = None
     expected_date: Optional[datetime] = None
+    vendor_so_number: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -835,6 +864,7 @@ class PurchaseOrderLineAdd(InputModel):
 
 
 class PurchaseOrderLineUpdate(InputModel):
+    item_id: Optional[int] = None  # replace the item (only while nothing on the line is received)
     quantity: Optional[float] = None
     unit_cost: Optional[float] = None
     vendor_item_code: Optional[str] = None

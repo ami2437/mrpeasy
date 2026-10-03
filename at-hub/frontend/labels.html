@@ -259,7 +259,7 @@
       shSel.dispatchEvent(new Event("change"));  // refresh the search box text
       shSel.addEventListener("change", () => selectShipment(shSel.value));
       const blItem = document.getElementById("bl-item");
-      blItem.innerHTML = `<option value="">—</option>` + items.map(i => `<option value="${i.id}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+      blItem.innerHTML = `<option value="">—</option>` + items.map(i => `<option value="${i.id}" ${itemPickAttr(i)}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("");
       blItem.dispatchEvent(new Event("change"));  // refresh the search box text
       blItem.addEventListener("change", () => {
         const it = byId(items, parseInt(blItem.value));

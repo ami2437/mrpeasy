@@ -183,7 +183,7 @@ def for_customer_order(order_id: int, db: Session = Depends(get_db)):
     emails = db.query(MtrEmail).filter(MtrEmail.order_id == order.id).order_by(MtrEmail.sent_at.desc()).all()
     return {
         "order_id": order.id, "order_code": order.code, "po_number": order.po_number,
-        "customer": customer.name if customer else None, "customer_email": customer.email if customer else None,
+        "customer": customer.name if customer else None, "customer_email": customer.mtr_email if customer else None,
         "lines": out,
         "emails": [{"to": e.to_address, "cc": e.cc_address, "subject": e.subject, "files": e.files,
                     "sent_by": e.sent_by, "sent_at": _iso(e.sent_at)} for e in emails],

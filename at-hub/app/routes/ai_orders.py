@@ -27,3 +27,17 @@ async def extract(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if len(data) > MAX_PDF_BYTES:
         raise HTTPException(status_code=400, detail="PDF is larger than 15 MB")
     return ai_orders.extract_order(db, data)
+
+
+@router.post("/validate/{order_id}")
+def validate(order_id: int, claude: bool = True, db: Session = Depends(get_db)):
+    """Check a saved order against its attached customer PO with every reader we have (exact layout reader,
+    local AI, and -- when asked -- Claude on redacted text). Reports differences; changes nothing."""
+    from app.services import ai_validate
+    return ai_validate.validate_order(db, order_id, use_claude=claude)
+
+
+@router.get("/missing-nuts/{order_id}")
+def missing_nuts(order_id: int, db: Session = Depends(get_db)):
+    """Bolt lines on a saved order without their $0 nut line, with the nut to add (existing or new)."""
+    return ai_orders.missing_nuts(db, order_id)

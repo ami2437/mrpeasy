@@ -63,9 +63,10 @@
     </div>
 
     <div class="card">
+      <div class="tabs" id="list-tabs"></div>
       <table class="list-fit" id="orders-table">
-        <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th title="When the order was entered">Created</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th>Shipments</th><th>Invoices</th><th></th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="13">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Customer</th><th>PO #</th><th>Job #</th><th title="When the order was entered">Created</th><th>Delivery date</th><th class="num sum">Order total</th><th>Status</th><th>Notes</th><th>Progress</th><th title="Each shipment with the invoice that billed it">Shipments → Invoices</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -92,6 +93,9 @@
       document.getElementById("ai-draft-note").innerHTML = "";
       document.getElementById("po-dup-warning").innerHTML = "";
       if (show) {
+        // start clean: nothing left over from the last order, copy or scan
+        document.querySelectorAll("#form-card input:not([type=file]):not([type=checkbox]), #form-card textarea").forEach(el => { el.value = ""; });
+        document.querySelectorAll("#form-card .error").forEach(el => { el.textContent = ""; });
         document.getElementById("lines-body").innerHTML = "";
         fillShipTo();
         addLine();
@@ -111,7 +115,7 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td class="line-no"></td>
-        <td class="grow"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)</option>`).join("")}</select></td>
+        <td class="grow"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)${itemPickNote(i)}</option>`).join("")}</select></td>
         <td class="num"><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
         <td class="num">${priceInput("l-price", 0)}<div data-price-delta data-kind="sale" data-price-input=".l-price"></div></td>
         <td class="num subtotal"></td>
@@ -121,7 +125,8 @@
       const delta = tr.querySelector("[data-price-delta]");
       tr.querySelector(".l-item").addEventListener("change", (e) => {
         const price = e.target.selectedOptions[0].dataset.price;
-        tr.querySelector(".l-price").value = price;
+        // a line filled from a scanned PO keeps its price (scanned or since corrected): only the item changes
+        if (!(tr.keepOnPick && tr.querySelector(".l-price").value !== "")) tr.querySelector(".l-price").value = price;
         delta.dataset.item = e.target.value;
         refreshPriceDeltas(tr);
       });
@@ -172,6 +177,79 @@
           ? `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`
           : `<span class="neg">● Not Ready</span> — ${escapeHtml(s.message)}`;
       } catch (e) { el.textContent = e.message; }
+    }
+
+    // Items on the scanned PO that we don't have yet (and bolts' $0 nuts): create them all in one click,
+    // then the PO is read again so every line picks up its item and nut.
+    let lastDraft = null;
+    let productGroups = [];  // the fixed list to pick from -- new items never invent a group
+    apiFetch("/api/stock-items/groups/list").then(gs => { productGroups = gs.map(g => g.name); }).catch(() => {});
+    // "BOLT" / "Bolts" from the PO -> the listed "Bolt"; nothing when there's no such group
+    const groupKey = n => { const k = (n || "").trim().toLowerCase(); return k.length > 3 && k.endsWith("s") && !k.endsWith("ss") ? k.slice(0, -1) : k; };
+    function groupMatch(name) { return productGroups.find(g => groupKey(g) === groupKey(name)) || ""; }
+    function newItemSuggestions(d) {
+      const out = [];
+      d.lines.forEach(l => {
+        if (l.new_item) out.push({ ...l.new_item, kind: "item" });
+        if (l.new_nut) out.push({ ...l.new_nut, kind: "nut", bolt: (l.new_item || {}).code || l.item_code });
+      });
+      return out;
+    }
+    function newItemsHtml(d) {
+      const list = newItemSuggestions(d);
+      if (!list.length || !AuthGuard.hasRole("manager")) return "";
+      return `<div class="notice"><strong>${list.length} item${list.length === 1 ? "" : "s"} on this PO ${list.length === 1 ? "isn't" : "aren't"} in AT-HUB yet.</strong>
+        <table class="compact-table no-table-tools" style="margin:6px 0; max-width:900px;">
+          <thead><tr><th></th><th>Code</th><th>Title</th><th>Group</th><th class="num">Price</th><th>How it was named</th></tr></thead>
+          <tbody>${list.map((x, i) => `<tr>
+            <td><input type="checkbox" class="new-item-pick" data-i="${i}" ${x.kind === "nut" || x.tick !== false ? "checked" : ""} style="width:auto;"></td>
+            <td><input type="text" class="new-item-code" data-i="${i}" value="${escapeHtml(x.code)}" style="width:120px;"></td>
+            <td><input type="text" class="new-item-title" data-i="${i}" value="${escapeHtml(x.title)}" style="min-width:320px;"></td>
+            <td>${(() => { const pick = groupMatch(x.category);
+              return `<select class="new-item-group" data-i="${i}" style="width:120px;" ${pick ? "" : 'title="No matching group: pick one"'}>
+                <option value="">— pick —</option>${productGroups.map(g => `<option ${g === pick ? "selected" : ""}>${escapeHtml(g)}</option>`).join("")}</select>`; })()}</td>
+            <td class="num"><span class="price-input"><span>$</span><input type="number" class="new-item-price" data-i="${i}" step="${PRICE_STEP}" min="0" value="${x.selling_price || 0}" style="width:90px;"></span></td>
+            <td class="small ${x.confidence === "check" || x.tick === false ? "neg" : "muted"}">${x.looks_like ? `${x.tick !== false ? "New item # — similar to" : "Reads like"} our <strong>${escapeHtml(x.looks_like.code)}</strong> (${Math.round(x.looks_like.score * 100)}%)${x.tick !== false ? "" : " — tick only if it's a different item"}. ` : ""}${x.kind === "nut" ? `$0 nut for ${escapeHtml(x.bolt)}${x.per_bolt > 1 ? ` (${x.per_bolt} per bolt)` : ""} — ${escapeHtml(x.why)}` : "their item # and description, PO price"}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+        <button class="small-btn" id="create-items-btn" onclick="createNewItems()">Create ticked items &amp; re-read the PO</button>
+        <span class="muted small">Check the titles first — anything in red needs a look.</span>
+        <div id="new-items-error" class="error"></div></div>`;
+    }
+    async function createNewItems() {
+      const list = newItemSuggestions(lastDraft);
+      const err = document.getElementById("new-items-error");
+      const btn = document.getElementById("create-items-btn");
+      err.textContent = "";
+      btn.disabled = true;
+      const failed = [];
+      const noGroup = [...document.querySelectorAll(".new-item-pick:checked")].filter(p => !document.querySelector(`.new-item-group[data-i="${p.dataset.i}"]`).value);
+      if (noGroup.length) {
+        err.textContent = `Pick a group for ${noGroup.map(p => list[parseInt(p.dataset.i)].code).join(", ")} first.`;
+        btn.disabled = false;
+        return;
+      }
+      for (const pick of document.querySelectorAll(".new-item-pick:checked")) {
+        const i = parseInt(pick.dataset.i), x = list[i];
+        try {
+          await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({
+            code: document.querySelector(`.new-item-code[data-i="${i}"]`).value.trim(),
+            title: document.querySelector(`.new-item-title[data-i="${i}"]`).value.trim(),
+            category: document.querySelector(`.new-item-group[data-i="${i}"]`).value.trim() || null,
+            selling_price: parseFloat(document.querySelector(`.new-item-price[data-i="${i}"]`).value) || 0,
+            created_via: "ai-scan" }) });
+        } catch (e) { failed.push(`${x.code}: ${e.message}`); }
+      }
+      items = await apiFetch("/api/stock-items/");
+      try {
+        const form = new FormData();
+        form.append("file", aiPdfFile);
+        fillOrderFromDraft(await apiUpload("/api/ai-orders/extract", form), aiPdfFile);
+        if (failed.length) document.getElementById("new-items-error").textContent = `Not created: ${failed.join("; ")}`;
+      } catch (e) {
+        err.textContent = e.message;
+        btn.disabled = false;
+      }
     }
 
     async function readPoWithAi() {
@@ -227,8 +305,6 @@
         const select = tr.querySelector(".l-item");
         select.id = `ai-co-item-${n}`;
         if (!l.item_id) tr.classList.add("ai-unmatched");
-        // picking a suggestion resets the price to the item's default: put the PO's price back
-        tr.aiAfterPick = () => { if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price; };
         const said = [l.item_code, l.customer_item_code, l.description].filter(Boolean).join(" · ");
         if (l.item_id) {
           select.value = l.item_id;
@@ -240,6 +316,7 @@
         tr.querySelector(".l-qty").value = l.quantity || 1;
         if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price;
         if (l.delivery_date) tr.querySelector(".l-delivery").value = l.delivery_date;
+        if (l.unit_price != null) tr.keepOnPick = true;  // from now on, picking another item keeps the PO's price
         if (l.companion_of) {
           tr.classList.add("nut-companion");
           tr.querySelector(".grow").insertAdjacentHTML("beforeend", `<div class="small muted">↳ ${escapeHtml(l.companion_note)}</div>`);
@@ -254,7 +331,8 @@
       });
       if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF.</span>`); }
       recalcLines("lines-body", "new-order-total");
-      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> ${d.template ? `using the exact <strong>${escapeHtml(d.template)}</strong> PO reader` : `by the local AI (${escapeHtml(d.model)})`}.
+      lastDraft = d;
+      document.getElementById("ai-draft-note").innerHTML = newItemsHtml(d) + `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> ${d.template ? `using the exact <strong>${escapeHtml(d.template)}</strong> PO reader` : `by the local AI (${escapeHtml(d.model)})`}.
         Check every field before creating the order. The PDF will be attached as the customer PO.${notes.length ? `<ul>${notes.map(n => `<li>${n}</li>`).join("")}</ul>` : ""}</div>`;
       document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
     }
@@ -326,10 +404,9 @@
       document.getElementById("detail-card").style.display = "none";
       toggleForm(true);
       document.getElementById("f-customer").value = o.customer_id;
+      // Only the customer, ship-to and items carry over: the PO #, PO date, job #, notes, dates, the customer's PDF
+      // and other attachments all belong to the old PO (toggleForm has blanked them and dropped any scanned file).
       document.getElementById("f-ship-to").value = o.ship_to_address || "";
-      document.getElementById("f-job-number").value = o.job_number || "";
-      document.getElementById("f-notes").value = o.notes || "";
-      document.getElementById("f-po-number").value = "";
       document.getElementById("lines-body").innerHTML = "";
       o.lines.forEach(l => {
         addLine();
@@ -343,10 +420,94 @@
       });
       recalcLines("lines-body", "new-order-total");
       document.getElementById("ai-draft-note").innerHTML = `<div class="notice info">Copied from <strong>${escapeHtml(o.code)}</strong>
-        (${o.lines.length} line${o.lines.length === 1 ? "" : "s"}). Enter the new customer PO # and dates, check quantities, then Create.</div>`;
+        (${o.lines.length} line${o.lines.length === 1 ? "" : "s"}): customer, ship-to and items only — no PO #, job #, notes or files.
+        Enter the new customer PO # and dates, check quantities, then Create.</div>`;
       checkDuplicatePo();
       document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
       document.getElementById("f-po-number").focus();
+    }
+
+    // The earliest other live order of the same customer with the same customer PO # (the later order is the suspect).
+    function earlierSamePo(o) {
+      const po = (o.po_number || "").trim().toLowerCase();
+      if (!po || o.status === "cancelled") return null;
+      return orders.filter(x => x.id !== o.id && x.id < o.id && x.customer_id === o.customer_id && x.status !== "cancelled"
+        && (x.po_number || "").trim().toLowerCase() === po)[0] || null;
+    }
+
+    function duplicateBanner(order, isManager) {
+      const dup = earlierSamePo(order);
+      if (!dup) return "";
+      if (order.duplicate_po_ok) return `<p class="muted small">Same customer PO # as <a class="link" onclick="showDetail(${dup.id})">${escapeHtml(dup.code)}</a> — OK'd as a separate order by ${escapeHtml(order.duplicate_po_ok)}.</p>`;
+      return `<div class="notice"><strong>Possible duplicate.</strong> Customer PO ${escapeHtml(order.po_number)} is already on order
+        <a class="link" onclick="showDetail(${dup.id})">${escapeHtml(dup.code)}</a> (${escapeHtml(dup.status)}, created ${fmtDate(dup.created_at || dup.order_date)}).
+        Check it isn't the same order entered twice — if it is, cancel this one.
+        ${isManager ? `<div style="margin-top:6px;"><button class="small-btn" onclick="acceptDuplicatePo(${order.id})">OK — this is a separate order</button></div>` : ""}</div>`;
+    }
+
+    async function acceptDuplicatePo(orderId) {
+      try {
+        await apiFetch(`/api/customer-orders/${orderId}/duplicate-po-ok`, { method: "POST" });
+        await loadOrders();
+        showDetail(orderId);
+      } catch (err) {
+        document.getElementById("detail-error").textContent = err.message;
+      }
+    }
+
+    // One row per shipment with the invoice that billed it beside it; invoices with no shipment at the end.
+    function shipInvoicePairs(ships, invs) {
+      const used = new Set();
+      const rows = ships.map(s => {
+        const inv = invs.find(i => (i.shipment_ids || []).includes(s.id)) || null;
+        if (inv) used.add(inv.id);
+        return `<div class="pair-row"><a class="ship-chip st-${s.status}" href="shipments.html?id=${s.id}" title="${escapeHtml(`${s.code} · ${s.status}`)}"><i></i>${escapeHtml(s.code)}</a>
+          <span class="pair-arrow">→</span>${inv ? invoiceChip(inv) : '<span class="muted small">not invoiced</span>'}</div>`;
+      });
+      invs.filter(i => !used.has(i.id)).forEach(i => rows.push(`<div class="pair-row"><span class="muted small">no shipment</span><span class="pair-arrow">→</span>${invoiceChip(i)}</div>`));
+      return rows.join("") || '<span class="muted">—</span>';
+    }
+
+    // Created -> Confirmed -> Booked -> Shipped -> Invoiced -> Paid, each with its date once reached
+    function orderTimeline(order, ships, invs) {
+      const live = ships.filter(s => s.status !== "cancelled");
+      const realInv = invs.filter(i => !["draft", "void"].includes(i.status));
+      const anyBooked = order.lines.some(l => l.booked_quantity > 0 || l.shipped_quantity > 0);
+      const allShipped = order.lines.length && order.lines.every(l => l.shipped_quantity >= l.quantity - 1e-9);
+      const shipDates = live.map(s => s.ship_date).filter(Boolean).sort();
+      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+      const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
+      const payDates = realInv.flatMap(i => i.payments.map(p => p.paid_date || p.created_at)).filter(Boolean).sort();
+      const steps = [
+        ["Created", true, order.created_at || order.order_date],
+        ["Confirmed", order.status !== "draft" && order.status !== "cancelled", null],
+        ["Booked", anyBooked, live.map(s => s.created_at).filter(Boolean).sort()[0]],
+        ["Shipped", allShipped, shipDates[shipDates.length - 1], !allShipped && shipDates.length ? "partly" : ""],
+        ["Invoiced", total > 0 && invoiced >= total - 0.01, realInv.map(i => i.invoice_date).sort()[0], realInv.length && invoiced < total - 0.01 ? "partly" : invs.some(i => i.status === "draft") && !realInv.length ? "draft" : ""],
+        ["Paid", invoiced > 0 && paid >= invoiced - 0.01 && invoiced >= total - 0.01, payDates[payDates.length - 1], paid > 0.005 && paid < invoiced - 0.01 ? "partly" : ""],
+      ];
+      if (order.status === "cancelled") return `<div class="timeline cancelled"><span class="tag cancelled">Cancelled</span></div>`;
+      return `<div class="timeline">${steps.map(([label, done, date, partial]) => `<div class="tl-step ${done ? "done" : partial ? "partial" : ""}">
+          <span class="tl-dot">${done ? "✓" : ""}</span><span class="tl-label">${label}</span>
+          <span class="tl-date">${done && date ? fmtDate(date) : partial ? partial : ""}</span></div>`).join('<span class="tl-bar"></span>')}</div>`;
+    }
+
+    // The order's money at a glance (same look as a PO's)
+    function orderMoneyTiles(order, invs) {
+      if (hidesMoney()) return "";
+      const total = order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+      const shipped = order.lines.reduce((s, l) => s + Math.min(l.shipped_quantity, l.quantity) * l.unit_price, 0);
+      const realInv = invs.filter(i => !["draft", "void"].includes(i.status));
+      const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
+      const drafts = invs.filter(i => i.status === "draft").reduce((s, i) => s + i.total, 0);
+      const open = total - shipped;
+      return `<div class="money-tiles">
+        <div class="mtile t-total"><span>Order total</span><strong>${fmtMoney(total)}</strong><small>${order.lines.length} lines</small></div>
+        <div class="mtile ${open > 0.005 ? "t-wait" : "t-zero"}"><span>Not shipped yet</span><strong>${fmtMoney(open)}</strong><small>${open > 0.005 ? "still to ship" : "all shipped"}</small></div>
+        <div class="mtile t-billed"><span>Invoiced</span><strong>${fmtMoney(invoiced)}</strong><small>${drafts ? `+ ${fmtMoney(drafts)} in drafts` : `${realInv.length} invoice${realInv.length === 1 ? "" : "s"}`}</small></div>
+        <div class="mtile t-paid"><span>Paid</span><strong>${fmtMoney(paid)}</strong><small>${invoiced ? Math.round(paid / invoiced * 100) : 0}% of invoiced</small></div>
+        <div class="mtile ${invoiced - paid > 0.005 ? "t-owed" : "t-zero"}"><span>Owed to us</span><strong>${fmtMoney(Math.max(0, invoiced - paid))}</strong><small>${invoiced - paid > 0.005 ? "unpaid invoices" : "nothing owed"}</small></div>
+      </div>`;
     }
 
     function customerName(id) {
@@ -390,16 +551,37 @@
       });
     }
 
+
+    // Cancelled orders live on their own tab (where they can be deleted), out of the working list.
+    let listView = "active";
+    function listTabs(active, cancelled, noun) {
+      document.getElementById("list-tabs").innerHTML = `
+        <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
+        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>`;
+    }
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
       const q = document.getElementById("search").value.trim();
-      const filtered = orders.filter(o => matchesSearch(o, q));
+      const searched = orders.filter(o => matchesSearch(o, q));
+      const cancelledOnes = searched.filter(o => o.status === "cancelled");
+      listTabs(searched.length - cancelledOnes.length, cancelledOnes.length, "Orders");
+      const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="13" class="muted">${orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="muted">${listView === "cancelled" ? "No cancelled orders." : orders.length ? "No orders match your search." : "No orders yet."}</td></tr>`;
+        return;
+      }
+      if (listView === "cancelled") {
+        tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
+          <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td><td>${customerName(o.customer_id)}</td>
+          <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
+          <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0))}</td>
+          <td><span class="tag cancelled">cancelled</span></td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
+          <td colspan="2"></td>
+          <td>${AuthGuard.hasRole("manager") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
         return;
       }
       // In-progress orders first (newest first); finished ones fold away below unless expanded or searched for.
-      const newest = (a, b) => new Date(b.order_date) - new Date(a.order_date) || b.id - a.id;
+      const newest = (a, b) => new Date(b.created_at || b.order_date) - new Date(a.created_at || a.order_date) || b.id - a.id;
       const prog = new Map(filtered.map(o => [o.id, orderProgress(o)]));
       const open = filtered.filter(o => !prog.get(o.id).done).sort(newest);
       const finished = filtered.filter(o => prog.get(o.id).done).sort(newest);
@@ -413,7 +595,7 @@
         <tr class="${done ? "order-done" : ""}">
           <td><a class="link" onclick="showDetail(${o.id})">${o.code}</a></td>
           <td>${customerName(o.customer_id)}</td>
-          <td>${escapeHtml(o.po_number || "")}</td>
+          <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
@@ -425,18 +607,17 @@
             ${progressBar("Invoiced", orderTotal ? invoicedAmt / orderTotal * 100 : 0, "inv", `${fmtMoney(invoicedAmt)} of ${fmtMoney(orderTotal)} invoiced`)}
             ${progressBar("Paid", invoicedAmt ? paidAmt / invoicedAmt * 100 : 0, "paid", `${fmtMoney(paidAmt)} of ${fmtMoney(invoicedAmt)} invoiced has been paid`)}
           </td>
-          <td><div class="chip-stack">${orderShipments.map(s => `<a class="ship-chip st-${s.status}" href="shipments.html?id=${s.id}" title="${escapeHtml(`${s.code} · ${s.status}`)}"><i></i>${escapeHtml(s.code)}</a>`).join("") || '<span class="muted">—</span>'}</div></td>
-          <td><div class="chip-stack">${orderInvoices.map(i => invoiceChip(i)).join("") || '<span class="muted">—</span>'}</div></td>
+          <td>${shipInvoicePairs(orderShipments, orderInvoices)}</td>
           <td class="nowrap">
             ${o.status === "draft" && AuthGuard.hasRole("manager") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
-            ${o.status !== "cancelled" && AuthGuard.hasRole("manager") ? `<button class="secondary small-btn" onclick="openProfit(${o.id})">Profit</button>` : ""}
+            ${o.status !== "cancelled" && AuthGuard.hasRole("manager") ? `<a class="link small" onclick="openProfit(${o.id})">Profit</a>` : ""}
           </td>
         </tr>
       `;
       };
-      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="13" class="muted">No orders in progress${q ? " match your search" : ""}.</td></tr>`)
+      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="12" class="muted">No orders in progress${q ? " match your search" : ""}.</td></tr>`)
         + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
-            <td colspan="13"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — shipped, invoiced and paid${expanded ? "" : " · click to show"}</span></td></tr>`
+            <td colspan="12"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — shipped, invoiced and paid${expanded ? "" : " · click to show"}</span></td></tr>`
           + (expanded ? finished.map(row).join("") : "") : "");
     }
 
@@ -460,9 +641,9 @@
         const unpicked = s.quantity - s.picked_quantity;
         const canUnbook = ["new", "ready"].includes(s.status) && unpicked > 0;
         return `
-        <div class="nowrap" id="alloc-${line.id}-${s.shipment_id}">
+        <div class="cell-entry" id="alloc-${line.id}-${s.shipment_id}">
           <a class="link" href="shipments.html?id=${s.shipment_id}">${s.code}</a>
-          <span class="muted small">· ${fmtQty(s.quantity)} · ${s.status === "ready" ? `${fmtQty(s.picked_quantity)} picked` : s.status}</span>
+          <div class="muted small">${fmtQty(s.quantity)} · ${s.status === "ready" ? `${fmtQty(s.picked_quantity)} picked` : s.status}</div>
           ${canUnbook ? `<a class="link small" onclick="showUnbook(${line.id}, ${s.shipment_id}, ${unpicked})">Unbook</a>` : ""}
         </div>`;
       }).join("");
@@ -508,8 +689,8 @@
       return line.booking_sources.map(b => {
         const src = b.source === "purchase" && b.reference
           ? `<a class="link" href="purchase-orders.html?id=${poIdByCode[b.reference] || ""}">${escapeHtml(b.reference)}</a>`
-          : `<span class="tag source-manual">${b.source === "adjustment" ? "Manual Adj." : escapeHtml(b.source)}</span>`;
-        return `<div class="nowrap">${src} <span class="muted small">· ${b.lot_code ? escapeHtml(b.lot_code) : "No Lot"} · ${fmtQty(b.quantity)}</span></div>`;
+          : `<span class="tag source-manual" title="${b.source === "adjustment" ? "Stock added by a manual adjustment (not from a PO)" : ""}">${b.source === "adjustment" ? "Adj" : escapeHtml(b.source)}</span>`;
+        return `<div class="cell-entry">${src}<div class="muted small">${b.lot_code ? escapeHtml(b.lot_code) : "no lot"} · ${fmtQty(b.quantity)}</div></div>`;
       }).join("");
     }
 
@@ -519,7 +700,7 @@
       const lineInvoices = invoices.filter(i => (i.shipment_ids || [i.shipment_id]).some(id => shipmentIds.includes(id)) && i.status !== "void");
       if (!lineInvoices.length) return `<span class="muted">—</span>`;
       return lineInvoices.map(i => `
-        <div class="nowrap">${invoiceChip(i)}</div>
+        <div class="cell-entry">${invoiceChip(i)}</div>
       `).join("");
     }
 
@@ -555,9 +736,16 @@
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
       card.innerHTML = `
-        <h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status}</span>
+        <h3 class="detail-head" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status}</span>
           <span class="muted small" style="font-weight:400;">Created ${fmtDate(order.created_at || order.order_date)}${order.created_by ? ` by ${escapeHtml(order.created_by === "mrpeasy-import" ? "MRPeasy import" : order.created_by)}` : ""}</span>
-          ${isManager ? `<button class="secondary small-btn" style="margin-left:auto;" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}</h3>
+          <span class="file-strip" id="co-file-strip" style="margin-left:auto;"></span>
+          ${aiValidateButton("order", order.id)}
+          <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this order">Print</button>
+          ${isManager ? `<button class="secondary small-btn" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}</h3>
+        ${duplicateBanner(order, isManager)}
+        <div id="ai-validate-panel"></div>
+        ${orderTimeline(order, orderShipments, orderInvoices)}
+        ${orderMoneyTiles(order, orderInvoices)}
 
         <h4>Order details</h4>
         <div class="field-grid">
@@ -575,26 +763,31 @@
             <textarea id="e-ship-to" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.ship_to_address || '')}</textarea></div>
           <div class="wide"><label>Notes</label><textarea id="e-notes" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.notes || '')}</textarea></div>
         </div>
-        ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;">Save Order Details</button>` : ""}
+        ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;" title="Saves the details above and any line changes below">Save Order Details</button>` : ""}
 
-        <h4 style="margin-top:20px;">Lines</h4>
+        <h4 style="margin-top:20px; display:flex; align-items:center; gap:10px;">Lines
+          ${editable ? `<button class="secondary small-btn" onclick="checkMissingNuts(${order.id})" title="Find bolt lines with no $0 nut line under them">+ Add missing nuts</button>` : ""}</h4>
+        <div id="nut-panel"></div>
         <div class="table-scroll">
-        <table class="lines-table compact-table fit-table">
+        <table class="lines-table compact-table fit-table wrap-cells">
           <thead><tr>
             <th title="Line number — identifies this line even when the same item is on the order more than once">#</th>
             <th class="grow">Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>
             <th class="num">Booked</th><th title="Lot each booked unit comes from: a purchase order receipt or a manual stock adjustment">Booking source</th><th class="num">Shipped</th><th>Status</th>
-            <th>Shipments</th><th>Invoices</th><th>Delivery</th>
-            ${editable ? "<th></th>" : ""}${canBook ? `<th title="Quantity to book into a new shipment">Book</th>` : ""}
+            <th>Shipments</th><th>Invoices</th>
+            ${canBook ? `<th title="Quantity to book into a new shipment">Book</th>` : ""}
           </tr></thead>
           <tbody id="order-lines-body" oninput="recalcLines('order-lines-body', 'order-total'); refreshPriceDeltas(this)">
             ${order.lines.map(l => {
               const openQty = Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity);
               const item = items.find(i => i.id === l.item_id) || {};
               return `
-              <tr data-line="${l.id}" data-qty="${l.quantity}" data-price="${l.unit_price}">
-                <td class="line-no">#${l.line_no ?? ""}</td>
-                <td class="grow"><strong>${escapeHtml(item.code || l.item_id)}</strong> ${groupTag(item)}${item.title ? `<div class="muted small">${escapeHtml(item.title)}</div>` : ""}</td>
+              <tr data-line="${l.id}" data-code="${escapeHtml(item.code || "")}" data-qty="${l.quantity}" data-price="${l.unit_price}" data-delivery="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}">
+                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderLineBulk(${order.id})">` : ""}#${l.line_no ?? ""}${editable && l.shipped_quantity === 0 && l.booked_quantity === 0
+                  ? ` <a class="line-x" title="Remove this line" onclick="removeLine(${order.id}, ${l.id})">✕</a>` : ""}<span class="save-dot" title=""></span></td>
+                <td class="grow"><strong>${escapeHtml(item.code || l.item_id)}</strong> ${groupTag(item)}${editable && l.shipped_quantity === 0 && l.booked_quantity === 0
+                  ? `<a class="link item-replace" title="Pick a different item for this line" onclick="replaceLineItem(${order.id}, ${l.id}, ${l.item_id}, this)">change</a>` : ""}${item.title ? `<div class="muted small">${escapeHtml(item.title)}</div>` : ""}
+                  <div class="line-delivery small">Delivery ${editable ? `<input type="date" class="e-line-delivery" value="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}">` : `<strong>${fmtDate(l.delivery_date) || "—"}</strong>`}</div></td>
                 <td class="num">${editable && l.shipped_quantity === 0 ? `<input type="number" step="1" min="1" class="e-line-qty qty-input" value="${l.quantity}">` : fmtQty(l.quantity)}</td>
                 <td class="num">${editable ? priceInput("e-line-price", l.unit_price) : fmtPrice(l.unit_price)}
                   <div data-price-delta data-kind="sale" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_price}" ${editable ? `data-price-input=".e-line-price"` : ""}></div></td>
@@ -605,11 +798,7 @@
                 <td><span class="tag ${l.line_status}">${l.line_status.replace("_", " ")}</span></td>
                 <td>${lineShipmentsHtml(l)}</td>
                 <td>${lineInvoicesHtml(l)}</td>
-                <td>${editable ? `<input type="date" class="e-line-delivery" value="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}" style="width:128px;">` : fmtDate(l.delivery_date)}</td>
-                ${editable ? `<td class="nowrap">
-                  <a class="link" onclick="saveLine(${order.id}, ${l.id})">Save</a>
-                  ${l.shipped_quantity === 0 && l.booked_quantity === 0 ? `<br><a class="link" onclick="removeLine(${order.id}, ${l.id})">Remove</a>` : ""}
-                </td>` : ""}
+
                 ${canBook ? `<td>${openQty > 0
                   ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div>`
                   : `<span class="muted small">Allocated</span>`}</td>` : ""}
@@ -620,19 +809,20 @@
           <tfoot><tr>
             <td></td><td class="grow">Order total</td><td class="num" id="order-qty">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td>
             <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + l.quantity * l.unit_price, 0))}</td>
-            <td colspan="${7 + (editable ? 1 : 0) + (canBook ? 1 : 0)}"></td>
+            <td colspan="${6 + (canBook ? 1 : 0)}"></td>
           </tr></tfoot>
         </table>
         </div>
         ${editable ? `
           <div class="row" style="margin-top:8px; max-width:760px;">
-            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
             <div style="flex:0;"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="${items.length ? items[0].selling_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
               <div data-price-delta data-kind="sale" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
             <div style="flex:0;"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
         ` : ""}
+        <div id="line-bulk"></div>
         <div id="lines-error" class="error"></div>
 
         ${canBook ? `
@@ -669,9 +859,15 @@
         <p class="muted small" style="margin-top:0;">The customer's PO and anything else that came with the order.</p>
         <div id="co-attachments"></div>
 
-        <h4 style="margin-top:20px;">Material Test Reports (MTRs)</h4>
-        <p class="muted small" style="margin-top:0;">MTRs for the lots this order shipped from. Tick the ones the customer needs and email them.</p>
-        <div id="co-mtrs"></div>
+        <details class="fold-section" style="margin-top:20px;">
+          <summary><h4 style="display:inline; margin:0;">Material Test Reports (MTRs)</h4> <span class="muted small">— click to show</span></summary>
+          <p class="muted small" style="margin-top:6px;">MTRs for the lots this order shipped from. Tick the ones the customer needs and email them.</p>
+          <div id="co-mtrs"></div>
+        </details>
+        <details class="fold-section" style="margin-top:14px;" ontoggle="if (this.open) renderActivity('co-activity', 'customer_order', ${order.id}, ${escapeHtml(JSON.stringify(Object.fromEntries(order.lines.map(l => [l.id, l.line_no]))))})">
+          <summary><h4 style="display:inline; margin:0;">History</h4> <span class="muted small">— who changed what, click to show</span></summary>
+          <div id="co-activity" style="margin-top:6px;"></div>
+        </details>
 
         <div id="profit-panel"></div>
 
@@ -679,11 +875,22 @@
           ${order.status !== "cancelled" && isManager ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
           ${isManager ? `<button class="secondary" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}
           ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
+          ${order.status === "cancelled" && isManager ? `<button class="danger" onclick="deleteOrder(${order.id})">Delete Order</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
       refreshPriceDeltas(card);
-      renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "other"]);
+      if (editable) {
+        enableLineDrag(document.getElementById("order-lines-body"), ids => saveLineOrder(order.id, ids));
+        // a line saves itself when its qty, price or date is changed -- no Save link
+        document.getElementById("order-lines-body").addEventListener("change", e => {
+          const tr = e.target.closest("tr[data-line]");
+          if (tr && e.target.matches(".e-line-qty, .e-line-price, .e-line-delivery")) autoSaveLine(order.id, tr);
+        });
+      }
+      renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "invoice", "packing_list", "bol", "mtr", "other"],
+        { onChange: () => renderFileStrip("co-file-strip", "customer_order", order.id) });
+      renderFileStrip("co-file-strip", "customer_order", order.id);
       renderOrderMtrs("co-mtrs", order.id);
     }
 
@@ -703,10 +910,154 @@
             notes: document.getElementById("e-notes").value,
           }),
         });
+        // Lines edited in the table are saved too (each line still has its own Save link).
+        const failed = [];
+        for (const row of document.querySelectorAll("#order-lines-body tr[data-line]")) {
+          const qtyInput = row.querySelector(".e-line-qty");
+          const qty = qtyInput ? parseFloat(qtyInput.value) || 0 : undefined;
+          const price = parseFloat(row.querySelector(".e-line-price").value) || 0;
+          const delivery = row.querySelector(".e-line-delivery").value || null;
+          const changed = (qty !== undefined && Math.abs(qty - parseFloat(row.dataset.qty)) > 1e-9)
+            || Math.abs(price - parseFloat(row.dataset.price)) > 1e-9 || (delivery || "") !== row.dataset.delivery;
+          if (!changed) continue;
+          try {
+            await apiFetch(`/api/customer-orders/${orderId}/lines/${row.dataset.line}`, {
+              method: "PUT", body: JSON.stringify({ quantity: qty, unit_price: price, delivery_date: delivery }),
+            });
+          } catch (err) {
+            failed.push(`${row.querySelector(".line-no").textContent}: ${err.message}`);
+          }
+        }
         await loadOrders();
-        showDetail(orderId);
+        await showDetail(orderId);
+        if (failed.length) document.getElementById("detail-error").textContent = `Details saved, but some lines weren't: ${failed.join("; ")}`;
       } catch (err) {
         errorEl.textContent = err.message;
+      }
+    }
+
+    // ---- bolts on a saved order that have no $0 nut line under them ----
+    let nutProposals = [];
+    async function checkMissingNuts(orderId) {
+      const el = document.getElementById("nut-panel");
+      el.innerHTML = `<p class="muted small">Checking the bolts…</p>`;
+      try { nutProposals = await apiFetch(`/api/ai-orders/missing-nuts/${orderId}`); }
+      catch (e) { el.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; return; }
+      if (!nutProposals.length) { el.innerHTML = `<div class="notice info">Every bolt on this order already has its nut line.</div>`; return; }
+      el.innerHTML = `<div class="notice"><strong>${nutProposals.length} bolt${nutProposals.length === 1 ? "" : "s"} without a nut line</strong>
+        <table class="compact-table no-table-tools" style="margin:6px 0;">
+          <thead><tr><th></th><th>Bolt</th><th>Nut item</th><th>Title</th><th class="num">Qty</th><th>Why</th></tr></thead>
+          <tbody>${nutProposals.map((p, i) => `<tr>
+            <td><input type="checkbox" class="nut-pick" data-i="${i}" checked style="width:auto;"></td>
+            <td><strong>${escapeHtml(p.bolt_code)}</strong></td>
+            <td>${escapeHtml(p.nut.code)} ${p.nut.existing ? '<span class="muted small">(exists)</span>' : '<span class="small">(new)</span>'}</td>
+            <td>${p.nut.existing ? escapeHtml(p.nut.title) : `<input type="text" class="nut-title" data-i="${i}" value="${escapeHtml(p.nut.title)}" style="min-width:240px;">`}</td>
+            <td class="num">${fmtQty(p.quantity)}</td>
+            <td class="small ${p.nut.confidence === "check" ? "neg" : "muted"}">${escapeHtml(p.nut.why || "")}</td></tr>`).join("")}</tbody>
+        </table>
+        <button class="small-btn" onclick="addMissingNuts(${orderId})">Add ticked nuts at $0</button>
+        <a class="link small" onclick="document.getElementById('nut-panel').innerHTML=''">Close</a>
+        <span class="muted small">New nut items are created needing verification, like other scanned items.</span>
+        <div id="nut-error" class="error"></div></div>`;
+    }
+    async function addMissingNuts(orderId) {
+      const failed = [];
+      for (const box of document.querySelectorAll(".nut-pick:checked")) {
+        const i = parseInt(box.dataset.i), p = nutProposals[i];
+        try {
+          let nutId = p.nut.id;
+          if (!p.nut.existing) {
+            const title = document.querySelector(`.nut-title[data-i="${i}"]`).value.trim();
+            nutId = (await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({
+              code: p.nut.code, title, category: "Nut", selling_price: 0, created_via: "ai-scan" }) })).id;
+          }
+          await apiFetch(`/api/customer-orders/${orderId}/lines`, { method: "POST", body: JSON.stringify({ item_id: nutId, quantity: p.quantity, unit_price: 0 }) });
+        } catch (e) { failed.push(`${p.nut.code}: ${e.message}`); }
+      }
+      items = await apiFetch("/api/stock-items/");
+      await loadOrders();
+      await showDetail(orderId);
+      if (failed.length) document.getElementById("lines-error").textContent = `Not added: ${failed.join("; ")}`;
+    }
+
+    // ---- line tools on a saved order: drag order, replace item, act on several ticked lines ----
+    async function saveLineOrder(orderId, ids) {
+      try {
+        await apiFetch(`/api/customer-orders/${orderId}/line-order`, { method: "PUT", body: JSON.stringify({ line_ids: ids }) });
+        await loadOrders();
+      } catch (err) { document.getElementById("lines-error").textContent = err.message; showDetail(orderId); }
+    }
+    function replaceLineItem(orderId, lineId, itemId, anchor) {
+      openItemReplace(anchor, itemId, async newId => {
+        const it = items.find(i => i.id === newId) || {};
+        const row = document.querySelector(`tr[data-line="${lineId}"]`);
+        const keepPrice = row && row.querySelector(".e-line-price") ? parseFloat(row.querySelector(".e-line-price").value) : null;
+        const usePrice = keepPrice != null && confirm(`Keep this line's price (${fmtPrice(keepPrice)})?\nCancel = use ${it.code}'s selling price (${fmtPrice(it.selling_price || 0)}).`);
+        await apiFetch(`/api/customer-orders/${orderId}/lines/${lineId}`, { method: "PUT",
+          body: JSON.stringify({ item_id: newId, unit_price: usePrice ? keepPrice : (it.selling_price || 0) }) });
+        await loadOrders();
+        showDetail(orderId);
+      });
+    }
+    function pickedLines() { return [...document.querySelectorAll("#order-lines-body .line-pick:checked")].map(c => parseInt(c.value)); }
+    function renderLineBulk(orderId) {
+      const ids = pickedLines();
+      const el = document.getElementById("line-bulk");
+      el.innerHTML = ids.length ? `<div class="line-bulk"><strong>${ids.length} line${ids.length === 1 ? "" : "s"} ticked</strong>
+          <label class="small" style="display:flex; gap:4px; align-items:center;">Delivery <input type="date" id="bulk-line-date" style="width:140px;"></label>
+          <button class="secondary small-btn" onclick="bulkLineDate(${orderId})">Set delivery date</button>
+          <button class="secondary small-btn" onclick="bulkLineMove(${orderId}, 'top')">Move to top</button>
+          <button class="secondary small-btn" onclick="bulkLineMove(${orderId}, 'bottom')">Move to bottom</button>
+          <button class="danger small-btn" onclick="bulkLineRemove(${orderId})">Remove</button>
+          <a class="link small" onclick="document.querySelectorAll('#order-lines-body .line-pick').forEach(c => c.checked = false); renderLineBulk(${orderId})">Clear</a></div>` : "";
+    }
+    async function bulkLineDate(orderId) {
+      const d = document.getElementById("bulk-line-date").value;
+      if (!d) { document.getElementById("lines-error").textContent = "Pick the delivery date first."; return; }
+      for (const id of pickedLines()) {
+        try { await apiFetch(`/api/customer-orders/${orderId}/lines/${id}`, { method: "PUT", body: JSON.stringify({ delivery_date: d }) }); }
+        catch (e) { document.getElementById("lines-error").textContent = e.message; }
+      }
+      await loadOrders(); showDetail(orderId);
+    }
+    async function bulkLineMove(orderId, where) {
+      const picked = new Set(pickedLines());
+      const all = [...document.querySelectorAll("#order-lines-body tr[data-line]")].map(tr => parseInt(tr.dataset.line));
+      const rest = all.filter(id => !picked.has(id)), moved = all.filter(id => picked.has(id));
+      await saveLineOrder(orderId, where === "top" ? [...moved, ...rest] : [...rest, ...moved]);
+      showDetail(orderId);
+    }
+    async function bulkLineRemove(orderId) {
+      const ids = pickedLines();
+      if (!confirm(`Remove ${ids.length} line${ids.length === 1 ? "" : "s"} from this order?`)) return;
+      const failed = [];
+      for (const id of ids) {
+        try { await apiFetch(`/api/customer-orders/${orderId}/lines/${id}`, { method: "DELETE" }); }
+        catch (e) { failed.push(e.message); }
+      }
+      await loadOrders(); await showDetail(orderId);
+      if (failed.length) document.getElementById("lines-error").textContent = `Some lines weren't removed: ${failed.join("; ")}`;
+    }
+
+    async function autoSaveLine(orderId, tr) {
+      const dot = tr.querySelector(".save-dot");
+      const qtyInput = tr.querySelector(".e-line-qty");
+      dot.className = "save-dot saving"; dot.title = "Saving…";
+      try {
+        const saved = await apiFetch(`/api/customer-orders/${orderId}/lines/${tr.dataset.line}`, { method: "PUT", body: JSON.stringify({
+          quantity: qtyInput ? parseFloat(qtyInput.value) || 0 : undefined,
+          unit_price: parseFloat(tr.querySelector(".e-line-price").value) || 0,
+          delivery_date: tr.querySelector(".e-line-delivery").value || null }) });
+        const line = saved.lines.find(l => l.id === parseInt(tr.dataset.line));
+        if (line) { tr.dataset.qty = line.quantity; tr.dataset.price = line.unit_price; tr.dataset.delivery = line.delivery_date ? line.delivery_date.substring(0, 10) : ""; }
+        const i = orders.findIndex(o => o.id === orderId);
+        if (i >= 0) orders[i] = saved;
+        dot.className = "save-dot saved"; dot.title = "Saved";
+        setTimeout(() => { if (dot.className === "save-dot saved") dot.className = "save-dot"; }, 2500);
+        renderOrders();
+      } catch (err) {
+        dot.className = "save-dot failed"; dot.title = err.message;
+        document.getElementById("lines-error").textContent = `Line #${tr.querySelector(".line-no").textContent.replace(/\D+/g, " ").trim().split(" ")[0]}: ${err.message}`;
       }
     }
 
@@ -768,6 +1119,18 @@
         await apiFetch(`/api/customer-orders/${orderId}/cancel`, { method: "POST" });
         await loadOrders();
         showDetail(orderId);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function deleteOrder(orderId) {
+      const o = orders.find(x => x.id === orderId);
+      if (!confirm(`Delete ${o ? o.code : "this order"} for good? Its lines, cancelled shipments and attached files go too. This can't be undone.`)) return;
+      try {
+        await apiFetch(`/api/customer-orders/${orderId}`, { method: "DELETE" });
+        document.getElementById("detail-card").style.display = "none";
+        await loadOrders();
       } catch (err) {
         alert(err.message);
       }
@@ -935,22 +1298,32 @@
     }
 
     async function init() {
+      // everything in one round trip (orders too -- loadOrders() is for refreshes after a change)
       let purchaseOrders;
-      [customers, items, shipments, invoices, purchaseOrders] = await Promise.all([
+      [customers, items, shipments, invoices, purchaseOrders, orders] = await Promise.all([
         apiFetch("/api/customers/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/shipments/"),
         apiFetch("/api/invoices/").catch(() => []),
         apiFetch("/api/purchase-orders/").catch(() => []),
+        apiFetch("/api/customer-orders/"),
       ]);
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
-      await loadOrders();
+      enableLineDrag(document.getElementById("lines-body"));  // new order: lines saved in the order shown
+      renderOrders();
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");
       const customerId = params.get("customer_id");
       if (id) showDetail(parseInt(id));
+      const newFor = parseInt(params.get("new"));  // "+ order" on a customer's card
+      if (newFor && customers.some(c => c.id === newFor)) {
+        toggleForm(true);
+        document.getElementById("f-customer").value = newFor;
+        fillShipTo();
+        document.getElementById("f-po-number").focus();
+      }
       if (customerId) {
         document.getElementById("search").value = customerName(parseInt(customerId));
         renderOrders();

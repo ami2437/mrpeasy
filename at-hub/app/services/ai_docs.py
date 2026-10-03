@@ -32,7 +32,10 @@ LINES_SCHEMA = """  "lines": [
 
 PROMPTS = {
     "vendor_invoice": """You read invoices that vendors send to our company (we are the buyer) and turn them into JSON.
-Return ONLY a JSON object with exactly these keys:
+One file can hold SEVERAL invoices (e.g. one per shipment of the same order), often after an order
+acknowledgement or packing list. Return one entry per INVOICE -- an order acknowledgement, quote, packing list
+or statement is not an invoice, skip it. An invoice continues across its pages ("1 of 2", "2 of 2").
+Return ONLY a JSON object: {"invoices": [ <one object per invoice> ]}, each object with exactly these keys:
 {
   "vendor_name": string|null,        // the company that ISSUED the invoice
   "invoice_number": string|null,
@@ -47,7 +50,8 @@ Return ONLY a JSON object with exactly these keys:
   "notes": string|null
 }
 Rules: never invent values -- null when something isn't on the document; numbers without $ or commas;
-freight, shipping, handling and delivery rows go into shipping_handling, NOT into lines.
+freight, shipping, handling and delivery rows go into shipping_handling, NOT into lines;
+each invoice's lines, subtotal and total are only its own -- never the order acknowledgement's.
 
 Invoice text:
 ---
@@ -126,10 +130,26 @@ def _read(file_bytes: bytes, filename: str) -> Dict[str, Any]:
 def _match_vendor(db: Session, name: Optional[str], text: str = "") -> Dict[str, Any]:
     """Rank our vendors: the name the AI read, plus any of a vendor's phone numbers, email
     domains or website found anywhere in the document (letterheads are often misread)."""
+    from app.models import CompanyProfile
+    from app.services.ai_cloud import REDACT_TERMS
     vendors = db.query(Vendor).filter(Vendor.is_active == True).all()  # noqa: E712
+    # the AI often reads OUR name off the bill-to / ship-to block: that's never the vendor
+    company = db.query(CompanyProfile).first()
+    ours = {_norm(t) for t in REDACT_TERMS + [company.name if company else ""] if t}
     target = _norm(name)
+    if target and any(o and (o in target or target in o) for o in ours):
+        target = ""
     digits = re.sub(r"\D", "", text or "")
     low = (text or "").lower()
+    flat = _norm(text or "")
+    # part #s each vendor uses (learned from past POs): a vendor's own codes on the document point to it,
+    # even when the name is only in a logo picture (Ziegler's sales orders)
+    tokens = {t.upper() for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9/.\-]{4,}", text or "")}
+    part_hits = {}
+    for vi in db.query(VendorItem).all():
+        code = (vi.vendor_item_code or "").strip().upper()
+        if len(code) >= 5 and not code.isdigit() and code in tokens:
+            part_hits.setdefault(vi.vendor_id, set()).add(code)
     ranked = []
     for v in vendors:
         vn = _norm(v.name)
@@ -137,17 +157,31 @@ def _match_vendor(db: Session, name: Optional[str], text: str = "") -> Dict[str,
         if target and vn:
             s = 1.0 if vn == target else (0.92 if (vn in target or target in vn) else difflib.SequenceMatcher(None, vn, target).ratio())
             why = "name"
-        for ph in re.split(r"[,;/]", v.phone or ""):
+        # the vendor's own name printed on the document (letterhead, remit-to, footer)
+        words = [w for w in re.split(r"[^a-z0-9]+", (v.name or "").lower()) if len(w) >= 3 and w not in ("inc", "llc", "ltd", "corp", "company", "the", "and", "co")]
+        if vn and len(vn) >= 5 and vn in flat:
+            s, why = max(s, 0.95), "its name is on the document"
+        elif words and len(words[0]) >= 5 and re.search(rf"\b{re.escape(words[0])}\b", low) and (len(words) == 1 or re.search(rf"\b{re.escape(words[1])}\b", low)):
+            s, why = max(s, 0.9), "its name is on the document"
+        if part_hits.get(v.id):
+            hits = sorted(part_hits[v.id])
+            s, why = max(s, 0.9 if len(hits) == 1 else 0.95), f"its part # {', '.join(hits[:3])} is on the document"
+        card = v.details  # every phone / email / website on the vendor's contact card
+        phones = re.split(r"[,;/]", v.phone or "") + [r.get("value") or "" for r in card["phones"]] + [p.get("phone") or "" for p in card["people"]]
+        emails = re.split(r"[,;\s]+", v.email or "") + [r.get("value") or "" for r in card["emails"]] + [p.get("email") or "" for p in card["people"]]
+        sites = [r.get("value") or "" for r in card["websites"]]
+        for ph in phones:
             d = re.sub(r"\D", "", ph)[-10:]
             if len(d) >= 7 and d in digits:
                 s, why = max(s, 0.97), "phone number on the document"
-        for em in re.split(r"[,;\s]+", v.email or ""):
+        for em in emails:
             dom = em.split("@")[-1].lower() if "@" in em else ""
             if dom and dom not in ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com") and dom in low:
                 s, why = max(s, 0.97), "email domain on the document"
         web = re.search(r"web:\s*(?:https?://)?(?:www\.)?([^\s/]+)", (v.address or "").lower())
-        if web and web.group(1) in low:
-            s, why = max(s, 0.97), "website on the document"
+        for site in ([web.group(1)] if web else []) + [re.sub(r"^(https?://)?(www\.)?", "", x.lower()).split("/")[0] for x in sites]:
+            if site and site in low:
+                s, why = max(s, 0.97), "website on the document"
         if s >= 0.45:
             ranked.append({"vendor_id": v.id, "name": v.name, "code": v.code, "score": round(s, 2), "why": why})
     ranked.sort(key=lambda r: -r["score"])
@@ -191,9 +225,11 @@ def _check_invoice_against_po(po: PurchaseOrder, lines: List[Dict[str, Any]]) ->
     ids = {l.item_id for l in po.lines}
     po_items = ItemMatcher(object_session(po).query(StockItem).filter(StockItem.id.in_(ids)).all() if ids else [])
     for ln in lines:
-        po_line = next((l for l in po.lines if l.id not in used and (
+        same = [l for l in po.lines if l.id not in used and (
             (ln.get("item_id") and l.item_id == ln["item_id"]) or
-            (ln.get("vendor_item_code") and _norm(l.vendor_item_code) == _norm(ln["vendor_item_code"])))), None)
+            (ln.get("vendor_item_code") and _norm(l.vendor_item_code) == _norm(ln["vendor_item_code"])))]
+        # the same item on several PO lines (split deliveries): the line with this quantity, else the first
+        po_line = next((l for l in same if ln.get("quantity") is not None and abs(l.quantity - ln["quantity"]) < 1e-6), same[0] if same else None)
         if not po_line and ln.get("description"):
             open_ids = {l.item_id for l in po.lines if l.id not in used}
             best = po_items.rank([ln.get("vendor_item_code")], ln["description"], top=3, only_ids=open_ids)
@@ -211,6 +247,34 @@ def _check_invoice_against_po(po: PurchaseOrder, lines: List[Dict[str, Any]]) ->
                 issues.append(f"price {ln['unit_price']:g} vs PO {po_line.unit_cost:g}")
         checks.append({**ln, "po_line_id": po_line.id if po_line else None, "issues": issues})
     return checks
+
+
+def _invoice_out(db: Session, po, doc: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    """One invoice read from the document: bill fields, its lines checked against the PO, and anything that doesn't add up."""
+    vendor = _match_vendor(db, data.get("vendor_name"), doc["text"])
+    lines = _vendor_lines(db, po.vendor_id if po else vendor.get("vendor_id"), data.get("lines"))
+    total, sh = _num(data.get("total")), _num(data.get("shipping_handling")) or 0
+    subtotal = _num(data.get("subtotal"))
+    lines_sum = round(sum((l["quantity"] or 0) * (l["unit_price"] or 0) for l in lines), 2)
+    inv = {
+        "vendor_name": data.get("vendor_name"), "vendor": vendor,
+        "invoice_number": data.get("invoice_number"), "invoice_date": _date(data.get("invoice_date")),
+        "due_date": _date(data.get("due_date")), "po_number": data.get("po_number"),
+        "subtotal": subtotal, "shipping_handling": sh, "tax": _num(data.get("tax")), "total": total,
+        "lines_sum": lines_sum, "notes": data.get("notes"),
+        "lines": _check_invoice_against_po(po, lines) if po else lines,
+    }
+    warnings = []
+    if po:
+        if data.get("po_number") and _norm(data["po_number"]) != _norm(po.code):
+            warnings.append(f"Invoice references PO {data['po_number']}, this is {po.code}")
+        if vendor.get("vendor_id") and vendor["vendor_id"] != po.vendor_id:
+            warnings.append(f"Invoice looks like it's from {vendor.get('suggested_name')}, not this PO's vendor")
+    goods = subtotal if subtotal is not None else lines_sum
+    if total is not None and goods and abs(goods + sh + (_num(data.get("tax")) or 0) - total) > 0.02:
+        warnings.append(f"Goods {goods:,.2f} + S&H {sh:,.2f}{' + tax' if data.get('tax') else ''} doesn't add up to the total {total:,.2f}")
+    inv["warnings"] = warnings
+    return inv
 
 
 def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Optional[int] = None,
@@ -237,30 +301,12 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
         out["model"] = settings.ai_vision_model if doc["images"] else settings.ai_model
 
     if kind == "vendor_invoice":
+        # one file may hold several invoices (one per shipment): each is checked on its own
         po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first() if po_id else None
-        vendor = _match_vendor(db, data.get("vendor_name"), doc["text"])
-        lines = _vendor_lines(db, po.vendor_id if po else vendor.get("vendor_id"), data.get("lines"))
-        total, sh = _num(data.get("total")), _num(data.get("shipping_handling")) or 0
-        subtotal = _num(data.get("subtotal"))
-        lines_sum = round(sum((l["quantity"] or 0) * (l["unit_price"] or 0) for l in lines), 2)
-        out.update({
-            "vendor_name": data.get("vendor_name"), "vendor": vendor,
-            "invoice_number": data.get("invoice_number"), "invoice_date": _date(data.get("invoice_date")),
-            "due_date": _date(data.get("due_date")), "po_number": data.get("po_number"),
-            "subtotal": subtotal, "shipping_handling": sh, "tax": _num(data.get("tax")), "total": total,
-            "lines_sum": lines_sum, "notes": data.get("notes"),
-            "lines": _check_invoice_against_po(po, lines) if po else lines,
-        })
-        warnings = []
-        if po:
-            if data.get("po_number") and _norm(data["po_number"]) != _norm(po.code):
-                warnings.append(f"Invoice references PO {data['po_number']}, this is {po.code}")
-            if vendor.get("vendor_id") and vendor["vendor_id"] != po.vendor_id:
-                warnings.append(f"Invoice looks like it's from {vendor.get('suggested_name')}, not this PO's vendor")
-        goods = subtotal if subtotal is not None else lines_sum
-        if total is not None and goods and abs(goods + sh + (_num(data.get("tax")) or 0) - total) > 0.02:
-            warnings.append(f"Goods {goods:,.2f} + S&H {sh:,.2f}{' + tax' if data.get('tax') else ''} doesn't add up to the total {total:,.2f}")
-        out["warnings"] = warnings
+        found = data.get("invoices") if isinstance(data.get("invoices"), list) else [data]
+        invoices = [_invoice_out(db, po, doc, inv) for inv in found if isinstance(inv, dict)] or [_invoice_out(db, po, doc, {})]
+        out.update(invoices[0])
+        out["invoices"] = invoices
 
     elif kind == "vendor_order":
         vendor = _match_vendor(db, data.get("vendor_name"), doc["text"])

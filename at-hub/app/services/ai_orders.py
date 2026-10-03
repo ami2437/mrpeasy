@@ -193,14 +193,21 @@ def _match_customer(db: Session, name: Optional[str]) -> Dict[str, Any]:
             "suggested_name": best.name if best else None}
 
 
-def _match_item(items: List[StockItem], codes: List[Optional[str]], description: Optional[str], matcher=None) -> Dict[str, Any]:
+def _match_item(items: List[StockItem], codes: List[Optional[str]], description: Optional[str], matcher=None,
+                codes_are_ours: bool = False) -> Dict[str, Any]:
     """Our item for a PO line: certain on an exact code, otherwise ranked by fastener attributes.
-    Always returns the top candidates so the user can pick when it isn't sure."""
+    Always returns the top candidates so the user can pick when it isn't sure.
+    codes_are_ours: the customer prints OUR item # (Chart: 53552 / 53552-HPC), so an item # we don't have is a
+    new item -- never quietly swapped for a look-alike with the same description."""
     from app.services.item_match import ItemMatcher, pick
     candidates = (matcher or ItemMatcher(items)).rank(codes, description)
-    item_id = pick(candidates)
+    wanted = {(c or "").strip().lower() for c in codes if c}
+    exact = next((i.id for i in items if (i.code or "").strip().lower() in wanted), None)
+    if exact:
+        return {"item_id": exact, "match": "code", "confidence": 1.0, "candidates": candidates}
+    item_id = None if (codes_are_ours and wanted) else pick(candidates)
     top = candidates[0] if candidates else None
-    return {"item_id": item_id, "match": ("code" if top and top["score"] >= 0.999 else "description") if item_id else None,
+    return {"item_id": item_id, "match": "description" if item_id else None,
             "confidence": top["score"] if top else 0, "candidates": candidates}
 
 
@@ -215,31 +222,40 @@ MENTIONS_NUT = re.compile(r"nuts?(?![a-z])", re.I)
 
 def nut_history(db: Session) -> Dict[int, List[int]]:
     """Per bolt: [orders that had its nut line, orders that didn't] -- how the team actually entered them."""
-    from app.models import CustomerOrderLine
-    items = {i.id: i.code or "" for i in db.query(StockItem).all()}
+    from app.models import CustomerOrder, CustomerOrderLine
+    all_items = db.query(StockItem).all()
+    items = {i.id: i.code or "" for i in all_items}
     nut_ids = {NUT_SUFFIX.sub("", code).strip().lower(): iid for iid, code in items.items() if NUT_SUFFIX.search(code)}
-    per_order = {}
-    for order_id, item_id in db.query(CustomerOrderLine.order_id, CustomerOrderLine.item_id).all():
+    # a nut made here (not imported) only counts from when it existed: orders before it couldn't have had it
+    since = {i.id: i.created_at for i in all_items if i.mrp_id is None and i.created_at}
+    per_order, when = {}, {}
+    for order_id, item_id, created in (db.query(CustomerOrderLine.order_id, CustomerOrderLine.item_id, CustomerOrder.created_at)
+                                       .join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id).all()):
         per_order.setdefault(order_id, set()).add(item_id)
+        when[order_id] = created
     hist = {}
-    for ids in per_order.values():
+    for order_id, ids in per_order.items():
         for iid in ids:
             nut = nut_ids.get(items.get(iid, "").strip().lower())
             if nut and not NUT_SUFFIX.search(items[iid]):
+                if nut not in ids and nut in since and when[order_id] and when[order_id] < since[nut]:
+                    continue
                 hist.setdefault(iid, [0, 0])[0 if nut in ids else 1] += 1
     return hist
 
 
-def nut_needed(bolt: StockItem, history: Optional[Dict[int, List[int]]]) -> Optional[str]:
-    """None when the bolt gets a separate $0 nut line, else the reason it doesn't."""
-    title = bolt.title or ""
+def nut_needed(bolt: StockItem, history: Optional[Dict[int, List[int]]], po_text: str = "") -> Optional[str]:
+    """None when the bolt gets a separate $0 nut line, else the reason it doesn't.
+    po_text: the PO line's own description + note -- it can say "W/A194-2H HEX NUT" when our title doesn't."""
+    from app.services.item_naming import usually_with_nut
+    title = f"{bolt.title or ''} {po_text or ''}"
     if ASSEMBLED.search(title):
         return "comes with the nut assembled"
     # what the team did before with this exact bolt beats any reading of its description
     w, wo = (history or {}).get(bolt.id, (0, 0))
     if w + wo:
         return None if w >= wo else f"past orders for it didn't have a separate nut ({w} of {w + wo} did)"
-    if not MENTIONS_NUT.search(title):
+    if not MENTIONS_NUT.search(title) and not usually_with_nut(bolt.title) and not usually_with_nut(po_text):
         return "its description doesn't mention a nut"
     return None
 
@@ -264,7 +280,7 @@ def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem], hist
         nut = nut_for.get(bolt.code.strip().lower())
         if not nut or nut.id in on_po or not line.get("quantity"):
             continue
-        reason = nut_needed(bolt, history)
+        reason = nut_needed(bolt, history, f"{line.get('description') or ''} {line.get('line_note') or ''}")
         if reason:
             line["nut_skipped"] = f"No $0 nut added for {bolt.code}: {reason}"
             continue
@@ -277,6 +293,48 @@ def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem], hist
             "companion_note": f"$0 matching nut for {bolt.code}{' (2 per bolt)' if two else ''}",
         })
     return out
+
+
+def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes_are_ours: bool = False) -> None:
+    """For PO lines we have no item for, the item to create (their item #, their description, the PO price) --
+    and for a bolt sold with a nut, its $0 nut (<code>-NUT, titled from the bolt's description; see item_naming).
+    A bolt we do have but whose nut item is missing gets just the nut suggestion. Nothing is created here."""
+    from app.services import item_naming
+    codes = {(i.code or "").strip().lower() for i in items}
+    has_nut = {NUT_SUFFIX.sub("", i.code).strip().lower() for i in items if NUT_SUFFIX.search(i.code or "")}
+    by_id = {i.id: i for i in items}
+    for line in lines:
+        if line.get("companion_of"):
+            continue
+        code = (line.get("item_code") or "").strip()
+        bolt = by_id.get(line.get("item_id")) if line.get("match") == "code" else None  # only a sure match is "ours"
+        # the item keeps the PO's note with its description, as we've always titled them ("..._NUT SHALL BE WAXED DIP")
+        full = " ".join(x for x in [(line.get("description") or "").strip(), (line.get("line_note") or "").strip()] if x)
+        if not bolt and code and code.lower() not in codes and line.get("description"):
+            near = next((c for c in line.get("candidates") or [] if c.get("score", 0) >= 0.85), None)
+            line["new_item"] = {"code": code, "title": line["description"].strip() if not line.get("line_note") else full,
+                                "category": item_naming.item_category(line["description"]),
+                                "selling_price": line.get("unit_price") or 0,
+                                # an existing item reads the same: offer it, but don't tick "create" by default
+                                "looks_like": near and {"code": near["code"], "score": round(near["score"], 2)},
+                                # ticked to create unless the customer's own part # merely reads like an item we have
+                                "tick": codes_are_ours or not near}
+        # our title plus what this PO line says ("W/A194-2H HEX NUT" may be only on the PO)
+        desc = f"{bolt.title} {full}" if bolt else full
+        base = bolt.code if bolt else code
+        if (not bolt and "new_item" not in line) or not base or base.strip().lower() in has_nut:
+            continue
+        if item_naming.item_category(bolt.title if bolt else desc) not in ("Bolt", "Stud"):
+            continue
+        said = WITH_NUT.search(desc) or MENTIONS_NUT.search(desc)
+        if not said and not item_naming.usually_with_nut(bolt.title if bolt else desc):
+            continue
+        nut = item_naming.nut_title(desc)
+        if nut["title"] and not said:  # sold with a nut by habit, not because the PO says so
+            nut["confidence"], nut["why"] = "check", f"{nut['why']} -- the PO doesn't mention a nut, but these bolts always get one: check"
+        if nut["title"]:  # None = assembled: no separate nut
+            line["new_nut"] = {"code": item_naming.nut_code(base), "title": nut["title"], "category": "Nut", "selling_price": 0,
+                               "per_bolt": nut["per_bolt"], "confidence": nut["confidence"], "why": nut["why"]}
 
 
 def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
@@ -301,11 +359,12 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
         code = raw.get("item_code")
         # customers print their part #; ours is often the same with "-HPC" added
         codes = [code, raw.get("customer_item_code"), f"{code}-HPC" if code else None]
-        match = _match_item(items, codes, raw.get("description"), matcher)
+        match = _match_item(items, codes, raw.get("description"), matcher, codes_are_ours=bool(data.get("template")))
         lines.append({
             "item_code": code,
             "customer_item_code": raw.get("customer_item_code"),
             "description": raw.get("description"),
+            "line_note": raw.get("line_note"),
             "quantity": qty,
             "unit": raw.get("unit"),
             "unit_price": _num(raw.get("unit_price")),
@@ -313,6 +372,7 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
             **match,
         })
     lines = add_nut_companions(lines, items, nut_history(db))
+    suggest_new_items(lines, items, codes_are_ours=bool(data.get("template")))
 
     return {
         "model": source,
@@ -330,3 +390,46 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
         "lines": lines,
         "text_preview": text[:4000],
     }
+
+
+def missing_nuts(db: Session, order_id: int) -> List[Dict[str, Any]]:
+    """For a saved order: bolt lines that should have a $0 nut line under them but don't.
+    Each: the nut item to add (existing, or a new one to create first) and how many."""
+    from app.models import CustomerOrder
+    from app.services import item_naming
+    order = db.query(CustomerOrder).filter(CustomerOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    items = db.query(StockItem).all()
+    by_id = {i.id: i for i in items}
+    nut_for = {}
+    for i in items:
+        if NUT_SUFFIX.search(i.code or "") and i.is_active is not False:
+            nut_for.setdefault(NUT_SUFFIX.sub("", i.code).strip().lower(), i)
+    on_order = {l.item_id for l in order.lines}
+    history = nut_history(db)
+    out = []
+    for l in order.lines:
+        bolt = by_id.get(l.item_id)
+        if not bolt or NUT_SUFFIX.search(bolt.code or "") or item_naming.item_category(bolt.title) not in ("Bolt", "Stud"):
+            continue
+        nut = nut_for.get(bolt.code.strip().lower())
+        if nut and nut.id in on_order:
+            continue
+        reason = nut_needed(bolt, history)
+        if reason:
+            continue
+        two = bool(TWO_NUTS.search(bolt.title or ""))
+        entry = {"bolt_line_id": l.id, "bolt_code": bolt.code, "quantity": l.quantity * (2 if two else 1)}
+        if nut:
+            entry["nut"] = {"id": nut.id, "code": nut.code, "title": nut.title, "existing": True}
+        else:
+            named = item_naming.nut_title(bolt.title)
+            if not named["title"]:
+                continue
+            said = WITH_NUT.search(bolt.title or "") or MENTIONS_NUT.search(bolt.title or "")
+            entry["nut"] = {"code": item_naming.nut_code(bolt.code), "title": named["title"], "existing": False,
+                            "confidence": named["confidence"] if said else "check",
+                            "why": named["why"] if said else f"{named['why']} -- the title doesn't mention a nut, but these bolts always get one"}
+        out.append(entry)
+    return out

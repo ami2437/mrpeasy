@@ -66,7 +66,107 @@ def redact(text: str, db: Session) -> Tuple[str, List[str]]:
             removed.append(f"'{term}' x{n}")
     for dom in our_domains:
         text = re.sub(rf"[\w.+-]+@{re.escape(dom)}", "[OUR EMAIL]", text, flags=re.I)
+
+    # 4. card payments: the masked card # and the auth / merchant / reference numbers printed with it
+    text, n = CARD_MASKED.subn("[CARD]", text)
+    pages, card_lines = [], 0
+    for page in re.split(r"(?=\[Page \d+\])", text):
+        if CARD_WORDS.search(page):
+            lines, inside = page.splitlines(), False
+            for k, line in enumerate(lines):
+                if CARD_START.search(line):
+                    inside = True
+                elif inside and re.match(r"\s*(SUB-?TOTAL|TOTAL\b)", line, re.I):
+                    inside = False
+                if inside and re.search(r"\d", line) and not re.fullmatch(r"\s*[\d,]+\.\d{2}\s*:?\s*", line):
+                    lines[k], card_lines = "[REDACTED: card payment]", card_lines + 1
+            page = "\n".join(lines)
+        pages.append(page)
+    text = "".join(pages)
+    if n or card_lines:
+        removed.append(f"card payment details ({n + card_lines} line(s))")
+
+    # 5. us as the vendor's customer: our account #, the people who order, every phone number
+    account_ids = {m.group(2).strip() for m in OUR_ACCOUNT.finditer(text) if re.fullmatch(r"[\w-]{3,20}", m.group(2).strip())}
+    text, n = OUR_ACCOUNT.subn(lambda m: m.group(1) + "[REDACTED: our account #]", text)
+    for acct in account_ids:  # some layouts print the value away from its label
+        text, k = re.subn(rf"(?<![\w.,]){re.escape(acct)}(?![\w.,])", "[REDACTED: our account #]", text)
+        n += k
+    if n:
+        removed.append(f"{n} customer/account # line(s)")
+    from app.models import User
+    people = {p for u in db.query(User).all() for p in [u.full_name or ""] + (u.full_name or "").split()[:1] if len(p) >= 3}
+    people |= {m.group(2).strip() for m in PERSON.finditer(text)} - {"[EMAIL]", "[PHONE]", "[OUR COMPANY]"}
+    for name in sorted(people, key=len, reverse=True):
+        text, n = re.subn(rf"(?<![A-Za-z]){re.escape(name)}(?![A-Za-z])", "[PERSON]", text, flags=re.I)
+        if n:
+            removed.append(f"person '{name}' x{n}")
+    text, n = PHONE.subn("[PHONE]", text)
+    if n:
+        removed.append(f"{n} phone(s)")
     return text, removed
+
+
+CARD_MASKED = re.compile(r"[*Xx•]{2,}[\s-]*\d{4}\b")
+CARD_WORDS = re.compile(r"card issuer|merchant\s*id|authori[sz]ation\s*(number|amount|code)|\bcard\s*:", re.I)
+CARD_START = re.compile(r"accepted by|tran(saction)?\s*type|card\s*(holder|type)?\s*:|merchant|authori[sz]", re.I)
+OUR_ACCOUNT = re.compile(r"^(\s*(?:customer|cust\.?|client)\s*(?:id|#|no\.?|number)\s*:?\s*)(\S.*)$", re.I | re.M)
+
+
+# Customer POs: the customer's identity stays here too. Brand words they print that aren't in their customer record.
+CUSTOMER_ALIASES = {"Hudson Products": ["CHART INDUSTRIES", "CHARTINDUSTRIES", "CHART", "HUDSON", "HPC"]}
+PHONE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s*|\b\d{3}[\s.-])\d{3}[\s.-]\d{4}\b")
+URL = re.compile(r"(?:https?://|www\.)\S+", re.I)
+# "PO Issued By Andrew Stiles", "QUOTED VIA ANDY 9/17/26", "Buyer: ...", "Attn: ..." -> the person's name
+PERSON = re.compile(r"((?:issued|ordered|approved|prepared)[ \t]+by[ \t]*:?[ \t]*|taken[ \t]+by[ \t]*:[ \t]*|quoted[ \t]+via[ \t]+"
+                    r"|(?:buyer|attn|attention|requisitioner|contact)[ \t]*:[ \t]*)"
+                    r"([A-Za-z][A-Za-z.'-]*(?:[ \t]+[A-Za-z][A-Za-z.'-]*){0,2})", re.I)
+TERMS_HEADING = re.compile(r"^[^\n]{0,60}\bterms\s*(?:&|and)\s*conditions\b[^\n]{0,100}$", re.I | re.M)
+
+
+def redact_customer_po(text: str, db: Session) -> Tuple[str, List[str], Any]:
+    """A customer's PO with both sides removed: us (as redact()) and the customer -- their names, brand words,
+    addresses, phones, emails, web addresses and the people named on it. The customer is identified here,
+    locally, before anything is sent; returns (safe text, what was removed, that Customer or None)."""
+    from app.models import Customer
+    # the T&Cs printed after the order (Chart's run 40 KB) aren't needed to read it
+    heading = next((m for m in TERMS_HEADING.finditer(text) if m.start() > 1500), None)
+    if heading:
+        text = text[:heading.start()]
+    upper = text.upper()
+    customer = None
+    for c in db.query(Customer).all():
+        if any(w and len(w) >= 4 and w.upper() in upper for w in [c.name] + CUSTOMER_ALIASES.get(c.name, [])):
+            customer = c
+            break
+
+    removed = []
+    # contact details first, whole, before any name inside them is replaced
+    for label, pattern, repl in (("email", EMAIL, "[EMAIL]"), ("web address", URL, "[URL]"), ("phone", PHONE, "[PHONE]")):
+        text, n = pattern.subn(repl, text)
+        if n:
+            removed.append(f"{n} {label}(s)")
+    people = {m.group(2).strip() for m in PERSON.finditer(text)} - {"[EMAIL]", "[PHONE]"}
+    text, more = redact(text, db)
+    removed += more
+
+    terms = list(people)
+    if customer:
+        c = customer
+        terms += [c.name] + CUSTOMER_ALIASES.get(c.name, []) + [c.contact_name or "", c.email or "", c.phone or ""]
+        terms += [l for l in (c.address or "").splitlines() + (c.shipping_address or "").splitlines() if len(l.strip()) > 4]
+        card = c.details  # every person, phone, email, address and website on their contact card
+        for key in ("phones", "emails", "websites"):
+            terms += [r.get("value") or "" for r in card[key]]
+        terms += [l for r in card["addresses"] for l in (r.get("value") or "").splitlines() if len(l.strip()) > 4]
+        terms += [r.get(k) or "" for r in card["people"] for k in ("name", "phone", "email")]
+    for term in sorted({t.strip() for t in terms if t and len(t.strip()) >= 3}, key=len, reverse=True):
+        label = "[PERSON]" if term in people else "[CUSTOMER]"
+        # never inside a part # ("57402-HPC" stays: HPC there is our item suffix, not the customer's name)
+        text, n = re.subn(rf"(?<![A-Za-z0-9-]){re.escape(term)}(?![A-Za-z0-9])", label, text, flags=re.I)
+        if n:
+            removed.append(f"{'person' if term in people else 'customer'} '{term}' x{n}")
+    return text, removed, customer
 
 
 def ask_claude(prompt: str, text: str, schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,7 +209,7 @@ _LINE = {"type": "object", "additionalProperties": False,
          "required": ["vendor_item_code", "description", "quantity", "unit_price"],
          "properties": {"vendor_item_code": _s, "description": _s, "quantity": _n, "unit_price": _n}}
 SCHEMAS = {
-    "vendor_invoice": {"type": "object", "additionalProperties": False,
+    "vendor_invoice_one": {"type": "object", "additionalProperties": False,
                        "required": ["vendor_name", "invoice_number", "invoice_date", "due_date", "po_number", "lines",
                                     "subtotal", "shipping_handling", "tax", "total", "notes"],
                        "properties": {"vendor_name": _s, "invoice_number": _s, "invoice_date": _s, "due_date": _s, "po_number": _s,
@@ -121,3 +221,16 @@ SCHEMAS = {
                      "properties": {"vendor_name": _s, "document_number": _s, "document_date": _s, "expected_date": _s,
                                     "lines": {"type": "array", "items": _LINE}, "shipping_handling": _n, "total": _n, "notes": _s}},
 }
+SCHEMAS["customer_po"] = {
+    "type": "object", "additionalProperties": False,
+    "required": ["po_number", "order_date", "delivery_date", "job_number", "notes", "lines"],
+    "properties": {"po_number": _s, "order_date": _s, "delivery_date": _s, "job_number": _s, "notes": _s,
+                   "lines": {"type": "array", "items": {
+                       "type": "object", "additionalProperties": False,
+                       "required": ["item_code", "customer_item_code", "description", "quantity", "unit", "unit_price", "delivery_date"],
+                       "properties": {"item_code": _s, "customer_item_code": _s, "description": _s, "quantity": _n,
+                                      "unit": _s, "unit_price": _n, "delivery_date": _s}}}},
+}
+# a file can hold several invoices (one per shipment): always a list
+SCHEMAS["vendor_invoice"] = {"type": "object", "additionalProperties": False, "required": ["invoices"],
+                             "properties": {"invoices": {"type": "array", "items": SCHEMAS.pop("vendor_invoice_one")}}}
