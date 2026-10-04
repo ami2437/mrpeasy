@@ -5,7 +5,8 @@ stays the same across imports -- order / PO / shipment / invoice codes, item cod
 names, an order line's line #, a PO line's position among lines of the same item -- never by database id.
 
 Carried: attached files (+ which PO lines an MTR covers), learned item matches, line notes (+ "print"),
-vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links, pack sizes. Files themselves stay in uploads/ untouched;
+vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links, pack sizes (+ history),
+quotes, tasks, roles and Template Designer layouts. (Users and the company profile are copied by load.py.) Files themselves stay in uploads/ untouched;
 only their database rows move. Anything whose record no longer exists is reported, not guessed.
 """
 import sqlite3
@@ -227,6 +228,39 @@ def carry_over(db, live_path, rep) -> None:
         n += 1
     if n:
         rep.add("carry-over", f"tasks: {n} {S}")
+
+    # ---- 8. roles (custom ones, and any changes to the built-in ones) ----
+    from app.models import DocTemplate, PackSizeHistory, Role
+    n = 0
+    for r in _rows(live, "select * from roles"):
+        db.merge(Role(key=r["key"], name=r["name"], description=r["description"], permissions=r["permissions"], builtin=bool(r["builtin"]),
+                      updated_by=r["updated_by"], updated_at=_dt(r["updated_at"])))
+        n += 1
+    if n:
+        rep.add("carry-over", f"roles: {n} {S}")
+
+    # ---- 9. Template Designer layouts (a customer's own default follows the customer by name) ----
+    n = 0
+    for t in _rows(live, "select * from doc_templates"):
+        cust = cust_by_name.get(live_cust.get(t["customer_id"], "")) if t["customer_id"] else None
+        if t["customer_id"] and not cust:
+            rep.add("carry-over", f"template {t['name']}: its customer is gone -- kept, not tied to a customer")
+        db.add(DocTemplate(**{k: t[k] for k in t.keys() if k not in ("id", "customer_id", "created_at", "updated_at")},
+                           customer_id=cust, created_at=_dt(t["created_at"]), updated_at=_dt(t["updated_at"])))
+        n += 1
+    if n:
+        rep.add("carry-over", f"designer templates: {n} {S}")
+
+    # ---- 10. pack size history (by item code) ----
+    n = 0
+    for h in _rows(live, "select * from pack_size_history"):
+        item = item_by_code.get(live_item.get(h["item_id"]))
+        if item:
+            db.add(PackSizeHistory(item_id=item, pack_size=h["pack_size"], previous_pack_size=h["previous_pack_size"], source=h["source"],
+                                   reference=h["reference"], changed_by=h["changed_by"], changed_at=_dt(h["changed_at"])))
+            n += 1
+    if n:
+        rep.add("carry-over", f"pack size history: {n} {S}")
 
     live.close()
     db.flush()
