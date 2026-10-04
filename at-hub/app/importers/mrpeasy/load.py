@@ -80,6 +80,13 @@ def clean(v):
     return v or None
 
 
+def line_note(p):
+    """MRPeasy keeps a line's free-text note ("25 x 80 Box", a tag number...) in its "description";
+    it is the item's title when nobody typed one."""
+    v = clean((p.get("description") or "").replace("\r\n", "\n"))
+    return None if v is None or v == (p.get("item_title") or "").strip() else v
+
+
 def address_text(a) -> str:
     if not a:
         return None
@@ -311,7 +318,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         for n, p in enumerate(sorted(o["products"], key=ord_key), start=1):
             line = CustomerOrderLine(order=co, mrp_id=p["line_id"], line_no=n, item_id=items[p["article_id"]].id,
                                      quantity=f(p["quantity"]), unit_price=f(p["item_price"]),
-                                     delivery_date=dt(p["delivery_date"]), shipped_quantity=0)
+                                     delivery_date=dt(p["delivery_date"]), shipped_quantity=0, notes=line_note(p))
             db.add(line)
             co_lines[p["line_id"]] = line
             lines_by_co_item[(o["cust_ord_id"], p["article_id"])].append((line, f(p["shipped"])))
@@ -456,7 +463,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
                              if any(x["article_id"] == p["article_id"] and f(x["quantity_picked"]) > 0 for x in s["products"])), None)
                 db.add(InvoiceLine(invoice=inv, item_id=it.id, order_line_id=line.id if line else None,
                                    shipment_id=ship.id if ship else None,
-                                   description=clean(p["description"]) or f"{it.code} - {it.title}",
+                                   description=it.title, notes=line_note(p),
                                    quantity=q, unit_price=price))
         if status == "paid":
             db.add(InvoicePayment(invoice=inv, amount=round(f(i["total_price"]), 2), paid_date=dt(i["last_payment"]),
