@@ -19,3 +19,17 @@ def test_create_corrects_unless_kept(api):
     assert a["code"] == f"{n}-NUT"
     b = api.post("/api/stock-items/", json={"code": f"{n + 1}-NUTS", "title": "nut", "category": "Nut", "keep_code": True})
     assert b["code"] == f"{n + 1}-NUTS"
+
+
+def test_groups_never_created_automatically(api, client):
+    from app.services.ai_orders import _listed_group
+    assert _listed_group("BOLTS", ["Bolt", "Nut"]) == "Bolt"
+    assert _listed_group("Anchor", ["Bolt", "Nut"]) is None  # not on the list: left blank for the user
+    names = {g["name"] for g in api.get("/api/stock-items/groups/list")}
+    assert not {"Anchor", "Pin", "Rivet", "Misc"} & names
+    from app.services.auth import AuthService
+    emp = client.post("/api/users/", json={"username": "emp_grp", "password": "x" * 10, "role": "employee"},
+                      headers={"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"})
+    assert emp.status_code < 300, emp.text
+    h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'emp_grp'})}"}
+    assert client.post("/api/stock-items/groups/list", json={"name": "Hinge"}, headers=h).status_code == 403

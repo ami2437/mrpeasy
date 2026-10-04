@@ -59,6 +59,10 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.fixture(scope="session")
 def client():
     with TestClient(app) as c:
+        # groups are never created automatically: set them up as a manager would
+        h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"}
+        for g in ("Bolt", "Nut", "Washer", "Stud", "Screw"):
+            c.post("/api/stock-items/groups/list", json={"name": g}, headers=h)
         yield c
 
 

@@ -188,10 +188,7 @@ class ProductGroupService:
             if g.name.isupper() and not counts.get(g.name) and _group_key(g.name) in spelling:
                 g.name = spelling[_group_key(g.name)]
         keys = {_group_key(g.name) for g in db.query(ProductGroup).all()}
-        for name in DEFAULT_PRODUCT_GROUPS:
-            if _group_key(name) not in keys:
-                db.add(ProductGroup(name=name))
-                keys.add(_group_key(name))
+        # Groups are never created automatically -- only a manager adds one (Stock Items -> groups).
         # an item whose group isn't on the list (typed in long ago) gets its group added, under the existing spelling if any
         for (c,) in db.query(StockItem.category).distinct().all():
             if c and _group_key(c) not in keys:

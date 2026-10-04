@@ -297,7 +297,16 @@ def add_nut_companions(lines: List[Dict[str, Any]], items: List[StockItem], hist
     return out
 
 
-def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes_are_ours: bool = False) -> None:
+def _listed_group(name: Optional[str], groups: Optional[List[str]]) -> Optional[str]:
+    """Only ever suggest a group that's on the list (in its listed spelling); unsure -> None, the user picks.
+    The AI never creates groups -- only a manager does, on the Stock Items page."""
+    if not name or groups is None:
+        return None if groups is not None else name
+    key = lambda n: re.sub(r"s$", "", re.sub(r"[^a-z]", "", n.lower()))
+    return next((g for g in groups if key(g) == key(name)), None)
+
+
+def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes_are_ours: bool = False, groups: Optional[List[str]] = None) -> None:
     """For PO lines we have no item for, the item to create (their item #, their description, the PO price) --
     and for a bolt sold with a nut, its $0 nut (<code>-NUT, titled from the bolt's description; see item_naming).
     A bolt we do have but whose nut item is missing gets just the nut suggestion. Nothing is created here."""
@@ -315,7 +324,7 @@ def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes
         if not bolt and code and code.lower() not in codes and line.get("description"):
             near = next((c for c in line.get("candidates") or [] if c.get("score", 0) >= 0.85), None)
             line["new_item"] = {"code": code, "title": line["description"].strip() if not line.get("line_note") else full,
-                                "category": item_naming.item_category(line["description"]),
+                                "category": _listed_group(item_naming.item_category(line["description"]), groups),
                                 "selling_price": line.get("unit_price") or 0,
                                 # an existing item reads the same: offer it, but don't tick "create" by default
                                 "looks_like": near and {"code": near["code"], "score": round(near["score"], 2)},
@@ -335,7 +344,7 @@ def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes
         if nut["title"] and not said:  # sold with a nut by habit, not because the PO says so
             nut["confidence"], nut["why"] = "check", f"{nut['why']} -- the PO doesn't mention a nut, but these bolts always get one: check"
         if nut["title"]:  # None = assembled: no separate nut
-            line["new_nut"] = {"code": item_naming.nut_code(base), "title": nut["title"], "category": "Nut", "selling_price": 0,
+            line["new_nut"] = {"code": item_naming.nut_code(base), "title": nut["title"], "category": _listed_group("Nut", groups), "selling_price": 0,
                                "per_bolt": nut["per_bolt"], "confidence": nut["confidence"], "why": nut["why"]}
 
 
@@ -376,7 +385,8 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
             **match,
         })
     lines = add_nut_companions(lines, items, nut_history(db))
-    suggest_new_items(lines, items, codes_are_ours=bool(data.get("template")))
+    from app.models import ProductGroup
+    suggest_new_items(lines, items, codes_are_ours=bool(data.get("template")), groups=[g.name for g in db.query(ProductGroup).all()])
 
     return {
         "model": source,
