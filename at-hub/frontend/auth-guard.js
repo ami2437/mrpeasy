@@ -184,6 +184,55 @@ async function refreshPriceDeltas(root = document) {
   }
 }
 
+// Before invoicing: shipments that went out but aren't marked delivered get a reminder with a date
+// to mark them delivered. Never a blocker -- "Invoice Anyway" carries on. Resolves true to go ahead.
+async function deliveredCheckBeforeInvoice(shipments) {
+  const pending = (shipments || []).filter(s => s && s.status === "shipped" && !s.delivered_at);
+  if (!pending.length) return true;
+  const today = new Date().toISOString().substring(0, 10);
+  const { value, el } = await askDialog({ title: pending.length === 1 ? "Not delivered yet" : `${pending.length} shipments not delivered yet`, tone: "warn",
+    body: `<p>${pending.map(s => `<strong>${escapeHtml(s.code)}</strong>${s.ship_date ? ` shipped ${fmtDate(s.ship_date)}` : ""}`).join(", ")}
+        ${pending.length === 1 ? "isn't" : "aren't"} marked delivered. Mark ${pending.length === 1 ? "it" : "them"} delivered to complete the order's flow, or invoice anyway.</p>
+      <label>Delivered on</label><input type="date" class="ask-delivered" value="${today}" max="${today}" style="max-width:180px;">
+      <p class="muted small" style="margin-top:6px;">Uploading a proof of delivery later also marks it delivered.</p>`,
+    buttons: [{ label: "Mark Delivered & Invoice", value: "mark", cls: "confirm-btn" }, { label: "Invoice Anyway", value: "skip", cls: "secondary" },
+              { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value === "skip") return true;
+  if (value !== "mark") return false;
+  const date = el.querySelector(".ask-delivered").value;
+  try {
+    for (const s of pending)
+      await apiFetch(`/api/shipments/${s.id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }) });
+  } catch (e) { alert(e.message); return false; }
+  toast(`Marked ${pending.map(s => s.code).join(", ")} delivered`);
+  return true;
+}
+
+// A small choice pop-up: resolves to the clicked button's value (null on Esc / click outside),
+// with the dialog element so the caller can read any inputs in `body` before it closes.
+// askDialog({ title, body: html, buttons: [{ label, value, cls }] }) -> Promise<{ value, el }>
+function askDialog({ title, body = "", buttons = [], tone = "" }) {
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal ask-dialog ${tone}" role="dialog" aria-modal="true"><h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
+      <div class="ask-body">${body}</div>
+      <div class="btn-row" style="margin-top:14px;">${buttons.map((b, i) => `<button type="button" class="${b.cls || ""}" data-i="${i}">${escapeHtml(b.label)}</button>`).join("")}</div></div>`;
+    const done = value => { document.removeEventListener("keydown", onKey); back.remove(); resolve({ value, el: back }); };
+    const onKey = e => { if (e.key === "Escape") done(null); };
+    back.addEventListener("click", e => {
+      if (e.target === back) return done(null);
+      const btn = e.target.closest("button[data-i]");
+      if (btn) { const b = buttons[+btn.dataset.i]; done(b.value); }
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(back);
+    decorateIcons(back);
+    const first = back.querySelector("input, button[data-i]");
+    if (first) first.focus();
+  });
+}
+
 async function showPriceHistory(itemId) {
   let modal = document.getElementById("price-history-modal");
   if (!modal) {
@@ -1354,6 +1403,7 @@ const ICON_PATHS = {
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  thumbsUp: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   notePen: '<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4M2 10h4M2 14h4M2 18h4"/><path d="M21.38 5.62a1 1 0 0 0-3-3L13 8l-1 4 4-1Z"/>',
@@ -1362,7 +1412,7 @@ const ICON_PATHS = {
 // ---- Status as a small icon (same look as the order timeline); the word stays in the tooltip and as
 // hidden text, so search, header filters and exports still see it. statusIcon("partially_shipped")
 const STATUS_ICONS = {
-  draft: ["pencil", "Draft"], confirmed: ["clock", "Confirmed — in progress"], not_booked: ["clock", "Not booked yet"],
+  draft: ["pencil", "Draft"], confirmed: ["thumbsUp", "Confirmed — in progress"], not_booked: ["clock", "Not booked yet"],
   partially_booked: ["half", "Partly booked"], booked: ["package", "Booked into a shipment"],
   partially_shipped: ["half", "Partly shipped"], shipped: ["check", "Shipped"], delivered: ["checkCircle", "Delivered"],
   invoiced: ["receipt", "Invoiced"], paid: ["dollar", "Paid"], cancelled: ["x", "Cancelled"],
@@ -1458,7 +1508,7 @@ const BUTTON_ICONS = [
   [/delete|remove/i, "trash"], [/^\s*(cancel|close|discard)/i, "x"], [/receive/i, "download"], [/reset|undo|unship|unbook|roll ?back/i, "undo"],
   [/preview/i, "eye"], [/\bai\b|read po/i, "sparkles"], [/payment|^\s*pay\b|funding/i, "dollar"], [/^\s*edit/i, "pencil"],
   [/label/i, "tag"], [/profit|report/i, "chart"], [/history/i, "clock"], [/^\s*(add|new|create)\b/i, "plus"],
-  [/apply|confirm|mark|deliver/i, "check"], [/ship|pick|pack/i, "truck"],
+  [/confirm/i, "thumbsUp"], [/apply|mark|deliver/i, "check"], [/ship|pick|pack/i, "truck"],
 ];
 const SECTION_ICONS = [
   [/lines|items/i, "list"], [/details|summary/i, "info"], [/attach/i, "paperclip"], [/mtr|test report/i, "fileCheck"],

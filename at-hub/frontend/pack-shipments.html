@@ -483,6 +483,7 @@
       runOne(id, "pick", { pick_all: true });
     }
     async function invoiceOne(id) {
+      if (!await deliveredCheckBeforeInvoice([byId(id)])) return;
       try {
         const inv = await apiFetch(`/api/invoices/from-shipment/${id}`, { method: "POST", body: JSON.stringify({ shipping_charge: 0 }) });
         await reloadList();
@@ -554,6 +555,7 @@
       const eligible = selectedShipments().filter(s => ["shipped", "delivered"].includes(s.status));
       if (!eligible.length) { showError("None of the selected shipments are shipped/delivered and un-invoiced."); return; }
       const combine = document.getElementById("bulk-combine").checked;
+      if (!await deliveredCheckBeforeInvoice(eligible)) return;
       if (!combine) {
         if (!confirm(`Create ${eligible.length} draft invoice(s), one per shipment?`)) return;
         return bulkRun("Invoiced", s => ["shipped", "delivered"].includes(s.status),

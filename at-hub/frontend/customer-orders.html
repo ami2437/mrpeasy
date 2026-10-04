@@ -15,8 +15,8 @@
       <h1 class="page-title">Customer Orders</h1>
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
+        <button class="manager-only secondary toolbar-end" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
         <button class="manager-only" onclick="toggleForm()">+ New Order</button>
-        <button class="manager-only secondary" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
         <button class="ai-btn manager-only" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
     </div>
@@ -494,13 +494,15 @@
       return rows.join("") || '<span class="muted">—</span>';
     }
 
-    // Created -> Confirmed -> Booked -> Shipped -> Invoiced -> Paid, each with its date once reached
+    // Created -> Confirmed -> Booked -> Shipped -> Delivered -> Invoiced -> Paid, each with its date once reached
     function orderTimeline(order, ships, invs) {
       const live = ships.filter(s => s.status !== "cancelled");
       const realInv = invs.filter(i => !["draft", "void"].includes(i.status));
       const anyBooked = order.lines.some(l => l.booked_quantity > 0 || l.shipped_quantity > 0);
       const allShipped = order.lines.length && order.lines.every(l => l.shipped_quantity >= l.quantity - 1e-9);
       const shipDates = live.map(s => s.ship_date).filter(Boolean).sort();
+      const sent = live.filter(s => s.status === "shipped" || s.ship_date), delivDates = sent.map(s => s.delivered_at).filter(Boolean).sort();
+      const allDelivered = allShipped && sent.length && sent.every(s => s.delivered_at);
       const total = order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
       const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
       const payDates = realInv.flatMap(i => i.payments.map(p => p.paid_date || p.created_at)).filter(Boolean).sort();
@@ -509,6 +511,7 @@
         ["Confirmed", order.status !== "draft" && order.status !== "cancelled", null],
         ["Booked", anyBooked, live.map(s => s.created_at).filter(Boolean).sort()[0]],
         ["Shipped", allShipped, shipDates[shipDates.length - 1], !allShipped && shipDates.length ? "partly" : ""],
+        ["Delivered", allDelivered, delivDates[delivDates.length - 1], !allDelivered && delivDates.length ? "partly" : ""],
         ["Invoiced", total > 0 && invoiced >= total - 0.01, realInv.map(i => i.invoice_date).sort()[0], realInv.length && invoiced < total - 0.01 ? "partly" : invs.some(i => i.status === "draft") && !realInv.length ? "draft" : ""],
         ["Paid", invoiced > 0 && paid >= invoiced - 0.01 && invoiced >= total - 0.01, payDates[payDates.length - 1], paid > 0.005 && paid < invoiced - 0.01 ? "partly" : ""],
       ];
@@ -685,11 +688,13 @@
           + (expanded ? finished.map(row).join("") : "") : "");
     }
 
-    async function confirmOrder(id) {
+    async function confirmOrder(id, reopen) {
       try {
         await apiFetch(`/api/customer-orders/${id}/confirm`, { method: "POST" });
         await loadOrders();
-      } catch (err) { alert(err.message); }
+        if (reopen) { await showDetail(id); toast("Order confirmed"); }
+        return true;
+      } catch (err) { alert(err.message); return false; }
     }
 
     // Short on a specific nut but its generic item has stock: offer the transfer right here.
@@ -818,13 +823,22 @@
       const orderShipments = shipmentsForOrder(order);
       const orderInvoices = invoices.filter(i => i.order_id === order.id);
 
+      const isDraft = order.status === "draft";
+      card.classList.toggle("order-draft", isDraft);
+      // Converted from a quote: the quote links back to it (managers have quotes loaded); else the "From quote Q-…" note
+      const fromQuote = (typeof quotes !== "undefined" ? quotes : []).find(q => q.order_id === order.id);
+      const fromQuoteCode = fromQuote ? fromQuote.code : ((order.notes || "").match(/From quote (Q-?\d+)/) || [])[1];
       card.innerHTML = `
         <h3 class="detail-head" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status}</span>
           <span class="muted small" style="font-weight:400;">Created ${fmtDate(order.created_at || order.order_date)}${order.created_by ? ` by ${escapeHtml(order.created_by === "mrpeasy-import" ? "MRPeasy import" : order.created_by)}` : ""}</span>
+          ${fromQuoteCode ? `<span class="from-quote-badge" ${fromQuote ? `onclick="openQuote(${fromQuote.id})" title="Open the quote this order came from"` : ""}>${icon("file")}from ${escapeHtml(fromQuoteCode)}</span>` : ""}
+          ${isDraft && isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)" title="Confirm this order with the customer -- needed before creating shipments">Confirm Order</button>` : ""}
           <span class="file-strip" id="co-file-strip" style="margin-left:auto;"></span>
           ${aiValidateButton("order", order.id)}
           <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this order">Print</button>
           ${isManager ? `<button class="secondary small-btn" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}</h3>
+        ${isDraft ? `<div class="draft-banner">${icon("pencil")}<div><strong>Draft — not confirmed.</strong> Confirm the order before creating shipments.</div>
+          ${isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)">Confirm Order</button>` : ""}</div>` : ""}
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
         ${orderTimeline(order, orderShipments, orderInvoices)}
@@ -1259,6 +1273,18 @@
       if (!lines.length) {
         errorEl.textContent = "Enter a quantity to book on at least one line.";
         return;
+      }
+      const ord = orders.find(o => o.id === orderId);
+      if (ord && ord.status === "draft") {
+        const canConfirm = AuthGuard.hasRole("manager");
+        const { value } = await askDialog({ title: "Order not confirmed", tone: "warn",
+          body: `<p><strong>${escapeHtml(ord.code)}</strong> is still a draft. An order has to be confirmed before stock is booked into a shipment.</p>
+            ${canConfirm ? "" : `<p class="muted">Ask a manager to confirm it.</p>`}`,
+          buttons: canConfirm ? [{ label: "Confirm Order & Create Shipment", value: "confirm", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }]
+                              : [{ label: "OK", value: null, cls: "secondary" }] });
+        if (value !== "confirm") return;
+        try { await apiFetch(`/api/customer-orders/${orderId}/confirm`, { method: "POST" }); }
+        catch (err) { errorEl.textContent = err.message; return; }
       }
       try {
         const shipment = await apiFetch(`/api/customer-orders/${orderId}/shipments`, {

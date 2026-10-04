@@ -630,6 +630,7 @@ async function createInvoice(shipmentId) {
   errorEl.textContent = "";
   try {
     const extra = Array.from(document.querySelectorAll(".inv-combine:checked")).map(c => parseInt(c.value));
+    if (!await deliveredCheckBeforeInvoice([shipmentId, ...extra].map(id => shipmentsById[id]))) return;
     const invoice = await apiFetch(`/api/invoices/from-shipments`, {
       method: "POST",
       body: JSON.stringify({

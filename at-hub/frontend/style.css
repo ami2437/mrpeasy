@@ -613,6 +613,7 @@ html[data-theme="dark"] .done { background: #14532d; color: #bbf7d0; }
 .toolbar-row > button { white-space: nowrap; }
 .toolbar-row > button:first-of-type { margin-left: auto; }
 .toolbar-row > button:not(.secondary):not(.ai-btn) { order: 99; }
+.toolbar-row > .toolbar-end { order: 98; margin-left: auto; }  /* a secondary button that sits beside the main one (+ New Quote by + New Order) */
 
 /* ---- Invoice chip (invoiceChip in auth-guard.js) ---- */
 .inv-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -1103,12 +1104,17 @@ button:not(:disabled):active { transform: translateY(1px); }
 #items-table td:first-child > a { white-space: nowrap; }
 
 /* ---- line-row icon buttons (trash, note): one click, tooltip says what ---- */
-.icon-btn { background: none !important; border: 0; padding: 3px; margin: 0 1px; color: var(--muted); border-radius: 5px; cursor: pointer;
+/* Each kind keeps a faint tint of its own colour so it never blends into the row. */
+.icon-btn { --ib: var(--accent); background: color-mix(in srgb, var(--ib) 11%, transparent) !important; border: 0; padding: 3px; margin: 0 1px;
+  color: color-mix(in srgb, var(--ib) 85%, var(--text)); border-radius: 6px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; box-shadow: none !important; }
 .icon-btn .ico { margin: 0 !important; width: 15px; height: 15px; }
-.icon-btn:hover { color: var(--text); background: var(--surface-3) !important; }
-.trash-btn:hover { color: var(--neg); background: color-mix(in srgb, var(--neg) 12%, transparent) !important; }
-.note-btn.has-note { color: var(--accent); }
+.icon-btn:hover { color: var(--ib); background: color-mix(in srgb, var(--ib) 22%, transparent) !important; }
+.trash-btn { --ib: var(--neg); }
+.note-btn { --ib: #b45309; }
+.note-btn.has-note { --ib: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent) !important; }
+.q-hist-btn { --ib: var(--ai); }
+html[data-theme="dark"] .note-btn:not(.has-note) { --ib: #fbbf24; }
 .line-actions { white-space: nowrap; text-align: right; }
 .line-note { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
 .line-note .ln-text { flex: 1; min-height: 28px; font-size: 12.5px; resize: vertical; padding: 4px 6px; background: color-mix(in srgb, #fde68a 18%, var(--input-bg)); }
@@ -1141,7 +1147,7 @@ td.num, th.num { font-variant-numeric: tabular-nums; }
 .line-no .line-actions { display: flex; gap: 0; margin-top: 4px; text-align: left; }
 .line-no .line-actions .icon-btn { padding: 2px; }
 .fit-table.wrap-cells th.grow, .fit-table.wrap-cells td.grow { min-width: 172px; }
-.list-clip { color: var(--muted); margin-left: 4px; display: inline-flex; vertical-align: -2px; }
+.list-clip { color: var(--accent); margin-left: 4px; display: inline-flex; vertical-align: -2px; padding: 2px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .list-clip .ico { width: 13px; height: 13px; }
 
 /* status icons (statusIcon in auth-guard.js): timeline-style dots -- scoped to .st-ico so the
@@ -1191,3 +1197,24 @@ table.list-fit > thead > tr > th { position: sticky; top: 0; z-index: 5; box-sha
 .ai-doc-head select { width: auto; padding: 2px 6px; }
 .ai-doc-target, .d-bill { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .d-bill input, .ai-doc-target input { padding: 3px 6px; }
+
+/* ---- draft order: amber underlay + DRAFT watermark until it's confirmed ---- */
+#detail-card.order-draft { position: relative; background: color-mix(in srgb, #f59e0b 7%, var(--surface)); border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent); overflow: hidden; }
+#detail-card.order-draft::after { content: "DRAFT"; position: absolute; top: 140px; left: 50%; transform: translateX(-50%) rotate(-16deg);
+  font-size: 150px; font-weight: 800; letter-spacing: .12em; color: rgba(217, 119, 6, .09); pointer-events: none; z-index: 5; white-space: nowrap; }
+@media print { #detail-card.order-draft::after { color: rgba(0, 0, 0, .08); } }
+.draft-banner { display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin: 4px 0 10px; border-radius: 7px;
+  background: color-mix(in srgb, #f59e0b 16%, transparent); border: 1px solid color-mix(in srgb, #f59e0b 50%, transparent); color: var(--text); }
+.draft-banner > .ico { color: #b45309; width: 18px; height: 18px; }
+.draft-banner > div { flex: 1; }
+html[data-theme="dark"] .draft-banner > .ico { color: #fbbf24; }
+/* Confirm: green, with a thumbs-up (the clock is for history / waiting) */
+button.confirm-btn { background: #15803d; border-color: #15803d; color: #fff; }
+button.confirm-btn:hover { background: #166534; border-color: #166534; }
+.from-quote-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  color: var(--ai); background: color-mix(in srgb, var(--ai) 12%, transparent); border: 1px solid color-mix(in srgb, var(--ai) 30%, transparent); cursor: pointer; }
+.from-quote-badge .ico { width: 13px; height: 13px; margin: 0 !important; }
+/* askDialog() pop-ups */
+.modal.ask-dialog { max-width: 580px; }
+.modal.ask-dialog.warn { border-top: 4px solid #d97706; }
+.ask-body p { margin: 0 0 8px; }

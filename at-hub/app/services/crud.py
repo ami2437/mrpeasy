@@ -941,6 +941,8 @@ class CustomerOrderService:
         order = CustomerOrderService.get(db, order_id)
         if order.status in ("shipped", "invoiced", "cancelled"):
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
+        if order.status == "draft":
+            raise HTTPException(status_code=400, detail=f"Order {order.code} isn't confirmed yet -- confirm it before creating a shipment")
         requested = [l for l in data.lines if l.quantity > 0]
         if not requested:
             raise HTTPException(status_code=400, detail="Enter a quantity to book on at least one line")
@@ -1003,8 +1005,6 @@ class CustomerOrderService:
             # (two lines for the same item on one order must not double-book a lot).
             db.flush()
 
-        if order.status == "draft":
-            order.status = "confirmed"
         db.commit()
         db.refresh(shipment)
         return shipment

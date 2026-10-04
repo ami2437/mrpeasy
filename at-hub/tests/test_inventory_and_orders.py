@@ -111,3 +111,14 @@ def test_po_receive_then_cancel_rules(make, api):
 def make_code(prefix):
     from tests.builders import uid
     return uid(prefix)
+
+
+def test_draft_order_must_be_confirmed_before_shipment(make, api):
+    a = make.item()
+    make.stock(a, 5)
+    o = make.order(lines=[(a, 5, 1)], confirm=False)
+    body = {"lines": [{"line_id": o["lines"][0]["id"], "quantity": 5}]}
+    r = api.post(f"/api/customer-orders/{o['id']}/shipments", json=body, expect=400)
+    assert "isn't confirmed" in r["detail"]
+    api.post(f"/api/customer-orders/{o['id']}/confirm")
+    assert api.post(f"/api/customer-orders/{o['id']}/shipments", json=body)["code"].startswith("SH")
