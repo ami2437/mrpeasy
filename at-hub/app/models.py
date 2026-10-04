@@ -166,8 +166,8 @@ class ContactCardMixin:
         self.shipping_address = by_label(d["addresses"], "ship") or by_label(d["addresses"], "pickup")
 
     def email_for(self, purpose: str) -> Optional[str]:
-        """The email labelled for this purpose ("invoice", "mtr"), else the main one."""
-        words = {"invoice": ("invoice", "ap", "accounts payable", "billing"), "mtr": ("mtr", "quality", "qa", "cert"),
+        """The email labelled for this purpose ("invoice", "mtr", "quote"), else the main one."""
+        words = {"quote": ("quote", "quotes", "rfq", "purchasing", "buyer", "orders", "order", "po"),"invoice": ("invoice", "ap", "accounts payable", "billing"), "mtr": ("mtr", "quality", "qa", "cert"),
                  "po": ("purchasing", "orders", "order", "po"), "remit": ("remit", "accounts receivable", "ar", "payments")}[purpose]
         for r in self.details["emails"]:
             label = (r.get("label") or "").lower()
@@ -963,6 +963,21 @@ class Quote(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     lines = relationship("QuoteLine", backref="quote", cascade="all, delete-orphan", order_by="QuoteLine.position")
+    emails = relationship("QuoteEmail", cascade="all, delete-orphan", order_by="QuoteEmail.sent_at.desc()")
+
+
+class QuoteEmail(Base):
+    """Log of every time a quote was emailed to the customer."""
+    __tablename__ = "quote_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quote_id = Column(Integer, ForeignKey("quotes.id"), nullable=False, index=True)
+    to_address = Column(String, nullable=False)
+    cc_address = Column(String, nullable=True)
+    subject = Column(String, nullable=False)
+    body = Column(Text, nullable=True)
+    sent_by = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
 
 
 class QuoteLine(Base):

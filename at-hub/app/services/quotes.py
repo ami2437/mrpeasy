@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import CustomerOrder, CustomerOrderLine, Quote, QuoteLine, StockItem
+from app.models import Customer, CustomerOrder, CustomerOrderLine, Quote, QuoteLine, StockItem
 from app.services import item_alias
 from app.services.crud import price_history
 from app.services.item_match import ItemMatcher, pick
@@ -41,35 +41,61 @@ def split_qty(line: str):
     return None, t
 
 
-def suggest_price(db: Session, item: StockItem, customer_id: int) -> dict:
+def _when(d) -> str:
+    return f", {d:%m/%d/%Y}" if d else ""
+
+
+def suggest_price(db: Session, item: StockItem, customer_id: int, exclude_quote_id: Optional[int] = None) -> dict:
     """Last price this customer paid / was quoted, else the last sale to anyone, else the item's
-    selling price -- with the latest cost so the margin can be seen."""
+    selling price -- with the latest cost so the margin can be seen. `others` lists the other
+    recent prices that differ from the one picked, so a disagreement is never hidden."""
     hist = price_history(db, item.id)
     sales = [h for h in hist if h["kind"] == "sale" and h["status"] != "cancelled"]
-    cust_name = None
     mine = []
     for h in sales:
         o = db.query(CustomerOrder).filter(CustomerOrder.id == h["doc_id"]).first()
         if o and o.customer_id == customer_id:
             mine.append(h)
-    quoted = (db.query(QuoteLine, Quote).join(Quote, Quote.id == QuoteLine.quote_id)
-              .filter(QuoteLine.item_id == item.id, Quote.customer_id == customer_id, QuoteLine.unit_price > 0)
-              .order_by(Quote.quote_date.desc()).first())
+    qq = (db.query(QuoteLine, Quote).join(Quote, Quote.id == QuoteLine.quote_id)
+          .filter(QuoteLine.item_id == item.id, Quote.customer_id == customer_id, QuoteLine.unit_price > 0))
+    if exclude_quote_id:
+        qq = qq.filter(Quote.id != exclude_quote_id)
+    quoted = qq.order_by(Quote.quote_date.desc()).first()
     cost = next((h["unit_price"] for h in hist if h["kind"] == "purchase" and h["unit_price"] > 0), None) or item.cost_price or 0
+    # Every candidate in priority order; the first one is the suggestion.
+    cands = []
     if mine:
         h = mine[0]
-        price, basis = h["unit_price"], f"last sold to this customer ({h['doc_code']}, {h['date']:%m/%d/%Y})" if h["date"] else f"last sold to this customer ({h['doc_code']})"
-    elif quoted:
-        price, basis = quoted[0].unit_price, f"last quoted to this customer ({quoted[1].code})"
-    elif sales:
+        cands.append((h["unit_price"], f"last sold to this customer ({h['doc_code']}{_when(h['date'])})"))
+    if quoted:
+        cands.append((quoted[0].unit_price, f"last quoted to this customer ({quoted[1].code}{_when(quoted[1].quote_date)})"))
+    if sales and not (mine and sales[0] is mine[0]):
         h = sales[0]
-        price, basis = h["unit_price"], f"last sold to {h['party']} ({h['doc_code']})"
-    else:
-        price, basis = item.selling_price or 0, "item's selling price"
-    return {"price": price, "basis": basis, "cost": cost,
+        cands.append((h["unit_price"], f"last sold to {h['party']} ({h['doc_code']}{_when(h['date'])})"))
+    if item.selling_price:
+        cands.append((item.selling_price, "item's selling price"))
+    price, basis = cands[0] if cands else (0, "no price history")
+    others, seen = [], {round(price, 5)}
+    for p, b in cands[1:]:
+        if round(p, 5) not in seen and b != "item's selling price":
+            seen.add(round(p, 5))
+            others.append({"price": p, "basis": b})
+    return {"price": price, "basis": basis, "cost": cost, "others": others,
             "margin_pct": round((price - cost) / price * 100, 1) if price and cost else None,
             "history": [{"date": h["date"].isoformat() if h["date"] else None, "doc": h["doc_code"], "party": h["party"],
                          "qty": h["quantity"], "price": h["unit_price"], "kind": h["kind"]} for h in hist[:6]]}
+
+
+def quoted_history(db: Session, item_id: int, customer_id: Optional[int] = None, exclude_quote_id: Optional[int] = None) -> List[dict]:
+    """Every price this item was quoted at, newest first; this customer's quotes are flagged."""
+    q = (db.query(QuoteLine, Quote, Customer).join(Quote, Quote.id == QuoteLine.quote_id)
+         .join(Customer, Customer.id == Quote.customer_id).filter(QuoteLine.item_id == item_id))
+    if exclude_quote_id:
+        q = q.filter(Quote.id != exclude_quote_id)
+    return [{"quote_id": qt.id, "code": qt.code, "date": qt.quote_date.isoformat() if qt.quote_date else None,
+             "customer_id": c.id, "customer": c.name, "mine": c.id == customer_id, "status": qt.status,
+             "qty": l.quantity, "price": l.unit_price}
+            for l, qt, c in q.order_by(Quote.quote_date.desc(), Quote.id.desc()).limit(200).all()]
 
 
 def parse_text(db: Session, customer_id: int, text: str) -> List[dict]:

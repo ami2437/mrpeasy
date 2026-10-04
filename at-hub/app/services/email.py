@@ -1,4 +1,4 @@
-"""Sends invoices and purchase orders by SMTP, configured through SMTP_* settings in .env."""
+"""Sends invoices, purchase orders and quotes by SMTP, configured through SMTP_* settings in .env."""
 import re
 import smtplib
 import ssl
@@ -10,9 +10,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from app.models import Invoice, InvoiceEmail, PurchaseOrder, PurchaseOrderEmail
+from app.models import Invoice, InvoiceEmail, PurchaseOrder, PurchaseOrderEmail, Quote, QuoteEmail
 from app.services.crud import get_company_profile
-from app.services.pdf import invoice_pdf, purchase_order_pdf, money
+from app.services.money import line_amount
+from app.services.pdf import invoice_pdf, purchase_order_pdf, quote_pdf, money
 
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
 
@@ -150,6 +151,27 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
     db.add(log)
     if po.status == "draft":
         po.status = "ordered"
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+def send_quote(db: Session, q: Quote, to: str, cc: str, subject: str, body: str,
+               attach_pdf: bool, sent_by: str) -> QuoteEmail:
+    """Emails the quote to the customer. A draft quote becomes "sent" once it has gone out."""
+    rows = [("Quote", q.code), ("Quote date", q.quote_date.strftime("%b %d, %Y") if q.quote_date else "")]
+    if q.valid_until:
+        rows.append(("Valid until", q.valid_until.strftime("%b %d, %Y")))
+    if q.customer_ref:
+        rows.append(("Your reference", q.customer_ref))
+    rows.append(("Total", money(round(sum(line_amount(l.quantity, l.unit_price) for l in q.lines), 2))))
+    attachment = (quote_pdf(db, q), f"Quote-{q.code}.pdf") if attach_pdf else None
+    to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment)
+    log = QuoteEmail(quote_id=q.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
+                     subject=subject.strip(), body=body, sent_by=sent_by)
+    db.add(log)
+    if q.status == "draft":
+        q.status = "sent"
     db.commit()
     db.refresh(log)
     return log

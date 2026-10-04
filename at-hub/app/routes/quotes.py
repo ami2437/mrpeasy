@@ -1,4 +1,4 @@
-"""Quotations: create (by hand or from pasted RFQ text), price from history, PDF, convert to an order."""
+"""Quotations: create (by hand or from pasted RFQ text), price from history, PDF, email, convert to an order."""
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -43,7 +43,10 @@ def _out(db: Session, q: Quote) -> dict:
              for l in q.lines]
     return {"id": q.id, "code": q.code, "customer_id": q.customer_id, "customer": cust.name if cust else "", "status": q.status,
             "quote_date": q.quote_date, "valid_until": q.valid_until, "customer_ref": q.customer_ref, "notes": q.notes,
-            "order_id": q.order_id, "created_by": q.created_by, "lines": lines, "total": round(sum(l["amount"] for l in lines), 2)}
+            "order_id": q.order_id, "created_by": q.created_by, "lines": lines, "total": round(sum(l["amount"] for l in lines), 2),
+            "customer_email": cust.email_for("quote") if cust else None, "customer_contact": cust.contact_name if cust else None,
+            "emails": [{"to": e.to_address, "cc": e.cc_address, "subject": e.subject, "sent_by": e.sent_by,
+                        "sent_at": e.sent_at.isoformat() if e.sent_at else None} for e in q.emails]}
 
 
 def _get(db: Session, quote_id: int) -> Quote:
@@ -127,11 +130,46 @@ def parse(data: ParseIn, db: Session = Depends(get_db)):
 
 
 @router.get("/price/{item_id}")
-def price(item_id: int, customer_id: int, db: Session = Depends(get_db)):
+def price(item_id: int, customer_id: int, exclude_quote_id: Optional[int] = None, db: Session = Depends(get_db)):
     item = db.query(StockItem).filter(StockItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
-    return quote_svc.suggest_price(db, item, customer_id)
+    return quote_svc.suggest_price(db, item, customer_id, exclude_quote_id)
+
+
+class PricesIn(BaseModel):
+    customer_id: int
+    item_ids: List[int]
+    exclude_quote_id: Optional[int] = None
+
+
+@router.post("/prices")
+def prices(data: PricesIn, db: Session = Depends(get_db)):
+    """Price hints for every line of a saved quote at once (keyed by item id); prices on the quote stay as they are."""
+    items = db.query(StockItem).filter(StockItem.id.in_(set(data.item_ids))).all()
+    return {i.id: quote_svc.suggest_price(db, i, data.customer_id, data.exclude_quote_id) for i in items}
+
+
+@router.get("/item-history/{item_id}")
+def item_history(item_id: int, customer_id: Optional[int] = None, exclude_quote_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Every earlier quote of this item, newest first (this customer's flagged `mine`)."""
+    return quote_svc.quoted_history(db, item_id, customer_id, exclude_quote_id)
+
+
+class EmailIn(BaseModel):
+    to: str  # one or more addresses, comma/semicolon separated
+    cc: Optional[str] = None
+    subject: str
+    body: str
+    attach_pdf: bool = True
+
+
+@router.post("/{quote_id}/email")
+def email(quote_id: int, data: EmailIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    from app.services import email as email_service
+    q = _get(db, quote_id)
+    email_service.send_quote(db, q, data.to, data.cc, data.subject, data.body, data.attach_pdf, user.username)
+    return _out(db, q)
 
 
 class ConvertIn(BaseModel):

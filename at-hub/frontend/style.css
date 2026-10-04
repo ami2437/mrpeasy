@@ -196,6 +196,10 @@ button.small-btn { padding: 4px 10px; font-size: 13px; }
   background: #e5e9ef; color: #4b5563; font-size: 13px;
 }
 .price-input > input { border-radius: 0 5px 5px 0; width: 100%; min-width: 0; }
+/* Quote line price: input + earlier-quotes clock icon; the hint under it wraps instead of widening the table */
+.q-price-cell { display: inline-flex; align-items: center; gap: 2px; }
+.q-basis { max-width: 240px; margin-left: auto; white-space: normal; text-align: right; line-height: 1.35; }
+.q-other { color: var(--warn, #b45309); }
 input.qty-input { width: 84px; }
 
 /* Line tables: every column shrinks to its content; only .grow (item/description) takes spare room */
