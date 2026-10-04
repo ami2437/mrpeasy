@@ -89,3 +89,6 @@
 @media (max-width: 1200px) { .dz { grid-template-columns: 190px minmax(0, 1fr) 260px; } }
 #type-tabs { grid-template-columns: repeat(6, auto); margin: 0; flex: 1; max-width: 860px; }
 .color-pick input[data-empty] { opacity: .3; }
+.blk-kv { display: flex; flex-direction: column; overflow: hidden; }
+.kv-row { display: flex; align-items: flex-start; line-height: 1.3; }
+.kv-row > span { flex: none; }

@@ -29,9 +29,37 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.platypus import BaseDocTemplate, Flowable, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle
 
-from app.services.pdf import FONT, FONT_BOLD, FONT_ITALIC
+from app.services.pdf import FONT as BASE_FONT, FONT_BOLD as BASE_BOLD, FONT_ITALIC as BASE_ITALIC
 
-PH = re.compile(r"\{\{\s*([\w.]+)\s*\}\}")
+# Font families a template can choose (spec["font"]): "sans" = the built-in PDFs' font; "ui" = Segoe UI, as in the
+# design samples (falls back to sans where it isn't installed, e.g. a Linux server without it).
+FAMILIES = {"sans": (BASE_FONT, BASE_BOLD, BASE_ITALIC, BASE_BOLD)}
+
+
+def _register_ui():
+    import os
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    d = "C:/Windows/Fonts/"
+    files = {"UI": "segoeui.ttf", "UI-Bold": "segoeuib.ttf", "UI-Italic": "segoeuii.ttf", "UI-Semi": "seguisb.ttf"}
+    if not all(os.path.exists(d + f) for k, f in files.items() if k != "UI-Semi"):
+        return
+    for name, f in files.items():
+        path = d + f if os.path.exists(d + f) else d + files["UI-Bold"]
+        pdfmetrics.registerFont(TTFont(name, path))
+    FAMILIES["ui"] = ("UI", "UI-Bold", "UI-Italic", "UI-Semi")
+
+
+_register_ui()
+FONT, FONT_BOLD, FONT_ITALIC, FONT_SEMI = FAMILIES["sans"]
+
+
+def use_family(name):
+    global FONT, FONT_BOLD, FONT_ITALIC, FONT_SEMI
+    FONT, FONT_BOLD, FONT_ITALIC, FONT_SEMI = FAMILIES.get(name or "sans", FAMILIES["sans"])
+
+
+PH = re.compile(r"\{\{\s*([\w.]+)\s*(?:\|([^}]*))?\}\}")  # {{field}} or {{field|shown when empty}}
 ALIGN = {"left": TA_LEFT, "center": TA_CENTER, "right": TA_RIGHT}
 
 
@@ -59,10 +87,11 @@ def fill(text, ctx, markup=True):
     tags and escapes only the filled-in values."""
     out = []
     for line in str(text or "").split("\n"):
-        keys = PH.findall(line)
-        vals = [lookup(ctx, k) for k in keys]
-        if keys and not any(v.strip() for v in vals):
+        found = PH.findall(line)
+        vals = [lookup(ctx, k) for k, _ in found]
+        if found and not any(v.strip() for v in vals) and not any(d for _, d in found):
             continue
+        vals = [v if v.strip() else d for v, (_, d) in zip(vals, found)]
         it = iter(vals)
         filled = PH.sub(lambda m: (escape(next(it)) if markup else next(it)), line)
         out.append(filled)
@@ -70,8 +99,12 @@ def fill(text, ctx, markup=True):
 
 
 # ---------- one block ----------
+def _font(st):
+    return FONT_BOLD if st.get("bold") else FONT_SEMI if st.get("semi") else FONT_ITALIC if st.get("italic") else FONT
+
+
 def _para_style(st, size=None):
-    return ParagraphStyle("b", fontName=FONT_BOLD if st.get("bold") else (FONT_ITALIC if st.get("italic") else FONT),
+    return ParagraphStyle("b", fontName=_font(st),
                           fontSize=size or float(st.get("size", 9)), leading=(size or float(st.get("size", 9))) * float(st.get("lh", 1.25)),
                           textColor=color(st.get("color"), colors.HexColor("#1e293b")), alignment=ALIGN.get(st.get("align", "left"), TA_LEFT))
 
@@ -119,7 +152,7 @@ def draw_block(c, b, ctx, ox, oy):
         spacing = float(st.get("spacing", 0) or 0)
         if spacing and "\n" not in text and "<" not in text:  # letter-spaced single line (titles)
             size = float(st.get("size", 9))
-            font = FONT_BOLD if st.get("bold") else FONT
+            font = _font(st)
             from reportlab.pdfbase.pdfmetrics import stringWidth
             tw = stringWidth(text, font, size) + spacing * max(0, len(text) - 1)
             tx = {"center": ix + (iw - tw) / 2, "right": ix + iw - tw}.get(st.get("align"), ix)
@@ -149,6 +182,29 @@ def draw_block(c, b, ctx, ox, oy):
         c.clipPath(p, stroke=0, fill=0)
         para.drawOn(c, ix, py)
         c.restoreState()
+    elif t == "kv":  # label / value list: "Order # | {{order.code}}" per line; empty values skip the row (or show style.empty)
+        size, lw = float(st.get("size", 8.8)), float(st.get("label_w", 0.95)) * inch
+        step = size * float(st.get("lh", 1.7))
+        kst = ParagraphStyle("k", fontName=FONT, fontSize=float(st.get("label_size", size - 0.8)), leading=size * 1.3,
+                             textColor=color(st.get("label_color"), colors.HexColor("#64748b")))
+        vst = ParagraphStyle("v", fontName=FONT if st.get("plain") else _font({"semi": True, **st}), fontSize=size, leading=size * 1.3,
+                             textColor=color(st.get("color"), colors.HexColor("#1e293b")))
+        yy = iy + ih
+        for line in str(b.get("text") or "").split("\n"):
+            if "|" not in line:
+                continue
+            k, v = line.split("|", 1)
+            val = fill(v.strip(), ctx).strip() or escape(st.get("empty", "") or "")
+            if not val:
+                continue
+            kp, vp = Paragraph(escape(k.strip()), kst), Paragraph(val.replace("\n", "<br/>"), vst)
+            _, kh = kp.wrap(lw, ih)
+            _, vh = vp.wrap(max(10, iw - lw), ih)
+            if yy - max(kh, vh) < iy - 1:
+                break
+            kp.drawOn(c, ix, yy - kh)
+            vp.drawOn(c, ix + lw, yy - vh)
+            yy -= max(step, vh + size * 0.4)
     elif t == "image":
         data = ctx.get("_logo") if b.get("src", "logo") == "logo" else None
         if not data or "," not in data:
@@ -235,8 +291,8 @@ def build_table(tspec, rows, width):
     size = float(st.get("size", 8.6))
     body = ParagraphStyle("td", fontName=FONT, fontSize=size, leading=size * 1.3, textColor=color(st.get("color"), colors.HexColor("#1e293b")))
     muted = ParagraphStyle("tdm", parent=body, fontSize=size - 0.8, leading=(size - 0.8) * 1.3, textColor=colors.HexColor("#64748b"))
-    bold = ParagraphStyle("tdb", parent=body, fontName=FONT_BOLD)
-    head = ParagraphStyle("th", fontName=FONT_BOLD, fontSize=float(st.get("header_size", 7.5)), leading=float(st.get("header_size", 7.5)) * 1.3,
+    bold = ParagraphStyle("tdb", parent=body, fontName=FONT_SEMI, textColor=colors.HexColor("#0f172a"))
+    head = ParagraphStyle("th", fontName=FONT_SEMI, fontSize=float(st.get("header_size", 7.5)), leading=float(st.get("header_size", 7.5)) * 1.3,
                           textColor=color(st.get("header_color"), colors.HexColor("#64748b")))
     fixed = sum(float(c.get("w") or 0) * inch for c in cols)
     flex = [c for c in cols if not float(c.get("w") or 0)]
@@ -257,7 +313,8 @@ def build_table(tspec, rows, width):
                              alignment=ALIGN.get(a, TA_LEFT))
         return Paragraph(txt, sty)
 
-    data = [[Paragraph(escape(c.get("header") or ""), ParagraphStyle("h", parent=head, alignment=ALIGN.get(
+    upper = st.get("header_upper")
+    data = [[Paragraph(escape((c.get("header") or "").upper() if upper else c.get("header") or ""), ParagraphStyle("h", parent=head, alignment=ALIGN.get(
         c.get("align") or ("right" if c["key"] in ("qty", "price", "amount", "ordered", "shipped", "backorder") else "left"), TA_LEFT)))
              for c in cols]]
     data += [[cell(c, r) for c in cols] for r in rows]
@@ -318,6 +375,7 @@ def _canvas_class(spec, ctx, page_w, page_h, margin):
 
 
 def render(spec, ctx, rows, title="Document") -> bytes:
+    use_family(spec.get("font"))
     page = spec.get("page") or {}
     pw, ph, m = float(page.get("w", 8.5)) * inch, float(page.get("h", 11)) * inch, float(page.get("margin", 0.5)) * inch
     header, running, summary, footer = (spec.get(k) or {} for k in ("header", "running", "summary", "footer"))
@@ -345,6 +403,7 @@ def render(spec, ctx, rows, title="Document") -> bytes:
 
 def render_labels(spec, contexts) -> bytes:
     """One page per label (box labels, address labels)."""
+    use_family(spec.get("font"))
     page = spec.get("page") or {}
     pw, ph, m = float(page.get("w", 6)) * inch, float(page.get("h", 4)) * inch, float(page.get("margin", 0.15)) * inch
     buf = io.BytesIO()

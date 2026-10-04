@@ -124,7 +124,7 @@ function drawBar() {
   bar.innerHTML = `
     <input type="text" id="tpl-name" value="${escapeHtml(tpl.name)}" oninput="dirty = true; markDirty()" title="Template name">
     <div class="dz-tools">
-      ${["text", "field", "image", "barcode", "qr", "rect", "line"].map(k => `<button class="secondary small-btn" onclick="addBlock('${k}')" title="Add ${k === "image" ? "logo" : k}">${{ text: "Text", field: "Field", image: "Logo", barcode: "Barcode", qr: "QR", rect: "Box", line: "Line" }[k]}</button>`).join("")}
+      ${["text", "field", "kv", "image", "barcode", "qr", "rect", "line"].map(k => `<button class="secondary small-btn" onclick="addBlock('${k}')" title="Add ${{ image: "the logo", kv: "a label / value list", field: "a field" }[k] || "a " + k}">${{ text: "Text", field: "Field", kv: "List", image: "Logo", barcode: "Barcode", qr: "QR", rect: "Box", line: "Line" }[k]}</button>`).join("")}
     </div>
     <span class="dz-sep"></span>
     <button class="icon-btn" onclick="undo()" title="Undo (Ctrl+Z)">${icon("undo")}</button>
@@ -169,6 +169,8 @@ function addBlock(kind) {
   const field = (typeOf().fields || [])[0];
   const base = { id: newId(), x: 0.2, y: 0.2, w: 2, h: 0.3, style: { size: 10, color: "#1e293b" } };
   const b = { text: { ...base, type: "text", text: "Your text" }, field: { ...base, type: "text", text: `{{${field ? field.key : "doc.number"}}}`, style: { size: 10, bold: true, color: "#0f172a" } },
+    kv: { ...base, type: "kv", w: 2.6, h: 1.0, text: isLabel() ? "PO # | {{label.po}}\nJob # | {{label.job}}" : "Order # | {{order.code}}\nCustomer PO | {{order.po_number}}",
+          style: { size: 8.8, label_size: 8, label_w: 0.95, lh: 1.7, color: "#1e293b" } },
     image: { ...base, type: "image", src: "logo", w: 0.9, h: 0.6 }, barcode: { ...base, type: "barcode", value: "{{doc.number}}", w: 2.2, h: 0.5, style: { show_text: true } },
     qr: { ...base, type: "qr", value: "{{doc.number}}", w: 0.9, h: 0.9, style: {} }, rect: { ...base, type: "rect", w: 2, h: 0.8, style: { bg: "#f8fafc", border: 0.6, border_color: "#e2e8f0", radius: 4 } },
     line: { ...base, type: "line", w: 3, h: 0.02, style: { border: 1, color: "#1e293b" } } }[kind];
@@ -192,14 +194,16 @@ function safeMarkup(s) {  // the template's own tags: <b> <i> <u> <br> <font siz
     .replace(/&lt;\/font&gt;/gi, "</span>");
 }
 let zoomNow = 1;
+const FIELD_RE = /\{\{\s*([\w.]+)\s*(?:\|([^}]*))?\}\}/g;  // {{field}} or {{field|shown when empty}}
 function fillText(text) {
   const out = [];
   String(text || "").split("\n").forEach(line => {
-    const keys = [...line.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)].map(m => m[1]);
-    const vals = keys.map(k => String(lookup(k)));
-    if (keys.length && !vals.some(v => v.trim())) return;
+    const found = [...line.matchAll(FIELD_RE)];
+    let vals = found.map(m => String(lookup(m[1])));
+    if (found.length && !vals.some(v => v.trim()) && !found.some(m => m[2])) return;
+    vals = vals.map((v, i) => v.trim() ? v : (found[i][2] || ""));
     let i = 0;
-    out.push(line.replace(/\{\{\s*([\w.]+)\s*\}\}/g, () => "\u0000" + (i++) + "\u0000"));
+    out.push(line.replace(FIELD_RE, () => "\u0000" + (i++) + "\u0000"));
     out[out.length - 1] = { tpl: out[out.length - 1], vals };
   });
   return out.map(o => safeMarkup(o.tpl).replace(/\u0000(\d+)\u0000/g, (m, n) => escapeHtml(o.vals[+n]).replace(/\n/g, "<br>"))).join("<br>");
@@ -226,11 +230,22 @@ function blockEl(b, scale, interactive, bandKey) {
     zoomNow = scale;
     const inner = document.createElement("div");
     inner.className = "blk-text";
-    Object.assign(inner.style, { fontSize: `${fs}px`, lineHeight: st.lh || 1.25, fontWeight: st.bold ? 700 : 400, fontStyle: st.italic ? "italic" : "normal",
+    Object.assign(inner.style, { fontSize: `${fs}px`, lineHeight: st.lh || 1.25, fontWeight: st.bold ? 700 : st.semi ? 600 : 400, fontStyle: st.italic ? "italic" : "normal",
       color: st.color || "#1e293b", textAlign: st.align || "left", textTransform: st.upper ? "uppercase" : "none",
       letterSpacing: st.spacing ? `${st.spacing * PT * scale}px` : "normal", justifyContent: { middle: "center", bottom: "flex-end" }[st.valign] || "flex-start" });
     inner.innerHTML = `<div>${fillText(b.text)}</div>`;
     el.appendChild(inner);
+  } else if (b.type === "kv") {
+    const lw = (st.label_w ?? 0.95) * PX * scale, step = (st.size || 8.8) * (st.lh || 1.7) * PT * scale;
+    zoomNow = scale;
+    el.innerHTML = String(b.text || "").split("\n").filter(l => l.includes("|")).map(l => {
+      const [k, ...v] = l.split("|");
+      let val = fillText(v.join("|").trim());
+      if (!val.replace(/<[^>]+>/g, "").trim()) val = escapeHtml(st.empty || "");
+      return val ? `<div class="kv-row" style="min-height:${step}px;font-size:${(st.size || 8.8) * PT * scale}px">
+        <span style="width:${lw}px;font-size:${(st.label_size || (st.size || 8.8) - 0.8) * PT * scale}px;color:${st.label_color || "#64748b"}">${escapeHtml(k.trim())}</span>
+        <b style="font-weight:${st.plain ? 400 : 600};color:${st.color || "#1e293b"}">${val}</b></div>` : "";
+    }).join("");
   } else if (b.type === "image") {
     el.innerHTML = `<img src="${logoUrl}" alt="" style="object-position:${st.align === "right" ? "right" : st.align === "center" ? "center" : "left"} top">`;
   } else if (b.type === "barcode") {
@@ -266,7 +281,7 @@ function tableEl(t, scale, interactive) {
   el.innerHTML = `<table class="no-table-tools no-col-bands" style="width:${width}px;font-size:${fs}px">
     <colgroup>${cols.map(c => `<col style="width:${(parseFloat(c.w) || 0) * PX * scale || share}px">`).join("")}</colgroup>
     <thead><tr style="${st.header_bg ? `background:${st.header_bg};` : ""}${st.top_rule ? `box-shadow:inset 0 ${0.8 * PT * scale}px 0 ${st.top_rule};` : ""}">${cols.map(c =>
-      `<th style="padding:${pad}px;font-size:${hs}px;color:${st.header_color || "#64748b"};text-align:${c.align || (numeric(c.key) ? "right" : "left")};${st.header_rule ? `border-bottom:${(st.header_rule_w || 1.2) * PT * scale}px solid ${st.header_rule}` : ""}">${escapeHtml(c.header || "")}</th>`).join("")}</tr></thead>
+      `<th style="padding:${pad}px;font-size:${hs}px;font-weight:600;${st.header_upper ? "text-transform:uppercase;" : ""}color:${st.header_color || "#64748b"};text-align:${c.align || (numeric(c.key) ? "right" : "left")};${st.header_rule ? `border-bottom:${(st.header_rule_w || 1.2) * PT * scale}px solid ${st.header_rule}` : ""}">${escapeHtml(c.header || "")}</th>`).join("")}</tr></thead>
     <tbody>${rows.map((r, i) => `<tr style="${st.zebra && i % 2 ? `background:${st.zebra};` : ""}">${cols.map(c =>
       `<td style="padding:${pad}px;text-align:${c.align || (numeric(c.key) ? "right" : "left")};border-bottom:0.5px solid ${st.row_rule || "#e2e8f0"};${c.key === "amount" ? "font-weight:700;" : ""}">${cell(c, r)}</td>`).join("")}</tr>`).join("")
       || `<tr><td colspan="${cols.length}" style="padding:${pad}px;color:#94a3b8">(the record's lines go here)</td></tr>`}</tbody></table>`;
@@ -281,7 +296,8 @@ function renderPage(s, scale, interactive) {
   const page = s.page || {}, m = (page.margin ?? 0.5) * PX * scale;
   const sheet = document.createElement("div");
   sheet.className = "sheet" + (interactive ? " editing" : "");
-  Object.assign(sheet.style, { width: `${(page.w || 8.5) * PX * scale}px`, minHeight: `${(page.h || 11) * PX * scale}px`, padding: `${m}px` });
+  Object.assign(sheet.style, { width: `${(page.w || 8.5) * PX * scale}px`, minHeight: `${(page.h || 11) * PX * scale}px`, padding: `${m}px`,
+    fontFamily: s.font === "ui" ? '"Segoe UI", system-ui, sans-serif' : 'Arial, "Segoe UI", sans-serif' });
   for (const [k, label] of (isLabelSpec(s) ? BANDS_LABEL : BANDS_DOC)) {
     if (k === "running" && !interactive) continue;
     const bd = document.createElement("div");
@@ -426,16 +442,22 @@ function drawProps() {
   const b = blockOf();
   if (b) {
     const st = b.style || {};
-    const kind = { text: "Text", image: "Logo", barcode: "Barcode", qr: "QR code", rect: "Box", line: "Line" }[b.type];
+    const kind = { text: "Text", kv: "Label / value list", image: "Logo", barcode: "Barcode", qr: "QR code", rect: "Box", line: "Line" }[b.type];
     el.innerHTML = `<div class="props-head"><h3>${kind}</h3><span class="muted small">${escapeHtml(bandsOf().find(x => x[0] === sel.band)?.[1] || "")}</span></div>
       ${b.type === "text" ? field("Text — {{fields}} fill in; a line whose fields are empty is left out", `<textarea id="p-text" rows="5" data-path="text" oninput="setProp(this)">${escapeHtml(b.text || "")}</textarea>${fieldPicker("text")}
-          <div class="muted small">Tags: &lt;b&gt;bold&lt;/b&gt; &lt;i&gt;italic&lt;/i&gt; &lt;font size=14&gt;big&lt;/font&gt;</div>`, true) : ""}
+          <div class="muted small">Tags: &lt;b&gt;bold&lt;/b&gt; &lt;i&gt;italic&lt;/i&gt; &lt;font size=14&gt;big&lt;/font&gt; · {{field|—}} shows — when empty</div>`, true) : ""}
+      ${b.type === "kv" ? field("One row per line: <b>Label | {{field}}</b> — a row whose field is empty is left out", `<textarea id="p-text" rows="6" data-path="text" oninput="setProp(this)">${escapeHtml(b.text || "")}</textarea>${fieldPicker("text")}`, true)
+          + `<div class="pgrid">${field("Text size", num("style.size", st.size || 8.8, 0.2, 5))}${field("Label size", num("style.label_size", st.label_size || 8, 0.2, 5))}
+             ${field("Label column (in)", num("style.label_w", st.label_w ?? 0.95, 0.05, 0.2))}${field("Row spacing", num("style.lh", st.lh || 1.7, 0.05, 1))}
+             ${field("Value color", col("style.color", st.color))}${field("Label color", col("style.label_color", st.label_color))}</div>
+             ${field("Show for an empty value (blank = leave the row out)", `<input type="text" value="${escapeHtml(st.empty || "")}" data-path="style.empty" oninput="setProp(this)" placeholder="e.g. —">`)}
+             <div class="pchecks">${chk("style.plain", st.plain, "Values not bold")}</div>` : ""}
       ${["barcode", "qr"].includes(b.type) ? field("Value", `<input type="text" id="p-value" value="${escapeHtml(b.value || "")}" data-path="value" oninput="setProp(this)">${fieldPicker("value")}`, true) : ""}
       <div class="pgrid">${field("X (in)", num("x", b.x))}${field("Y (in)", num("y", b.y))}${field("Width", num("w", b.w, 0.01, 0.02))}${field("Height", num("h", b.h, 0.01, 0.01))}</div>
       ${b.type === "text" ? `<div class="pgrid">${field("Size (pt)", num("style.size", st.size || 9, 0.5, 4))}${field("Color", col("style.color", st.color))}
           ${field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]]))}${field("Vertical", sel_("style.valign", st.valign || "top", [["top", "Top"], ["middle", "Middle"], ["bottom", "Bottom"]]))}
           ${field("Line height", num("style.lh", st.lh || 1.25, 0.05, 0.8))}${field("Letter spacing", num("style.spacing", st.spacing || 0, 0.5, 0))}</div>
-          <div class="pchecks">${chk("style.bold", st.bold, "Bold")}${chk("style.italic", st.italic, "Italic")}${chk("style.upper", st.upper, "UPPERCASE")}${chk("style.fit_wrap", st.fit === "wrap", "Don't shrink to fit")}</div>` : ""}
+          <div class="pchecks">${chk("style.bold", st.bold, "Bold")}${chk("style.semi", st.semi, "Semibold")}${chk("style.italic", st.italic, "Italic")}${chk("style.upper", st.upper, "UPPERCASE")}${chk("style.fit_wrap", st.fit === "wrap", "Don't shrink to fit")}</div>` : ""}
       ${b.type === "image" ? field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]])) + `<p class="muted small">Shows your company logo (Company Settings).</p>` : ""}
       ${b.type === "barcode" ? `<div class="pchecks">${chk("style.show_text", st.show_text !== false, "Print the value under the bars")}</div>${field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]]))}` : ""}
       ${b.type === "line" ? `<div class="pgrid">${field("Thickness (pt)", num("style.border", st.border || 1, 0.1, 0.1))}${field("Color", col("style.color", st.color))}</div>` : ""}
@@ -469,6 +491,7 @@ function drawProps() {
   } else {
     const p = spec.page || (spec.page = {});
     el.innerHTML = `<div class="props-head"><h3>Page</h3></div>
+      ${field("Font", sel_("font", spec.font || "sans", [["ui", "Segoe UI (as in the samples)"], ["sans", "Arial (built-in documents)"]]))}
       <div class="pgrid">${field("Width (in)", num("page.w", p.w || 8.5, 0.1, 1))}${field("Height (in)", num("page.h", p.h || 11, 0.1, 1))}${field("Margin (in)", num("page.margin", p.margin ?? 0.5, 0.05, 0))}</div>
       ${isLabel() ? `<p class="muted small">Labels print one page per box. 6 × 4 in fits most thermal label printers.</p>` : ""}
       <p class="muted small">Click a band (Header, Line items, Summary, Footer) or a block to edit it.</p>`;
@@ -481,7 +504,7 @@ function syncGeometryInputs(b) {
 
 function target(path) {  // "style.size" on the block, or "table.columns.2.w" / "page.w" / "header.h" on the spec
   const parts = path.split(".");
-  const root = ["table", "page", "header", "running", "summary", "footer"].includes(parts[0]) ? spec : blockOf();
+  const root = ["table", "page", "header", "running", "summary", "footer", "font"].includes(parts[0]) ? spec : blockOf();
   let o = root;
   for (const p of parts.slice(0, -1)) o = o[p] ?? (o[p] = /^\d+$/.test(p) ? [] : {});
   return [o, parts[parts.length - 1]];

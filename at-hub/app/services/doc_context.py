@@ -57,10 +57,11 @@ def addr(text):
 
 
 # ---------- the field picker ----------
-_COMPANY = [("company.name", "Our company name"), ("company.address", "Our address"), ("company.phone", "Our phone"),
+_COMPANY = [("company.name", "Our company name"), ("company.address", "Our address"), ("company.address_line", "Our address on one line"), ("company.phone", "Our phone"),
             ("company.email", "Our email"), ("company.website", "Our website"), ("company.tax_id", "Our tax ID"),
             ("company.contact_line", "Our phone · email · website"), ("company.invoice_notes", "Invoice notes / payment terms")]
-_DOC = [("doc.title", "Document title"), ("doc.number", "Document number"), ("doc.date", "Document date"), ("page", "Page number")]
+_DOC = [("doc.title", "Document title (INVOICE)"), ("doc.name", "Document name (Invoice)"), ("doc.number", "Document number"),
+        ("doc.date", "Document date"), ("page", "Page number"), ("pages", "Number of pages")]
 _CUST = [("customer.name", "Customer name"), ("customer.contact", "Customer contact"), ("customer.phone", "Customer phone"),
          ("customer.email", "Customer email"), ("customer.bill_to", "Bill-to address"), ("customer.ship_to", "Ship-to address")]
 _ORDER = [("order.code", "Order #"), ("order.po_number", "Customer PO #"), ("order.job_number", "Job #"),
@@ -107,7 +108,8 @@ COLUMNS = {
 
 def _company(db):
     c = get_company_profile(db)
-    return c, {"name": c.name or "", "address": addr(c.address), "phone": c.phone or "", "email": c.email or "",
+    return c, {"name": c.name or "", "address": addr(c.address), "address_line": ", ".join(addr(c.address).splitlines()),
+               "phone": c.phone or "", "email": c.email or "",
                "website": (c.website or "").replace("https://", "").replace("http://", ""), "tax_id": c.tax_id or "",
                "contact_line": " · ".join(x for x in [c.phone, c.email, (c.website or "").replace("https://", "")] if x),
                "invoice_notes": c.invoice_notes or ""}
@@ -142,6 +144,7 @@ def build(db: Session, doc_type: str, record, options: Optional[dict] = None):
     ctx, rows = fn(db, record, options)
     ctx["company"] = company
     ctx["_logo"] = company_row.logo_data
+    ctx["doc"]["name"] = ctx["doc"]["title"].title()  # "Packing List" (footers)
     return ctx, rows
 
 
@@ -247,7 +250,7 @@ def _purchase_order(db, po: PurchaseOrder, opt):
            "po": {"date": date(po.order_date or po.created_at), "expected": date(po.expected_date), "vendor_so": po.vendor_so_number or "",
                   "buyer": po.created_by if po.created_by not in (None, "mrpeasy-import") else "", "notes": po.notes or "",
                   "ship_to": lines(company.name, addr(company.address), company.phone)},
-           "totals": {"subtotal": money(sub), "charges": money(charges) if charges else "", "total": money(sub + charges), "lines": str(len(rows))},
+           "totals": {"subtotal": money(sub), "charges": money(charges), "total": money(sub + charges), "lines": str(len(rows))},
            "_watermark": "CANCELLED" if po.status == "cancelled" else None}
     return ctx, rows
 

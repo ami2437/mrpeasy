@@ -189,46 +189,6 @@ def _company_block(x, y, light=False):
             T(x, y + 0.28, 4.4, 0.5, "{{company.address}}\n{{company.contact_line}}", size=8, color="#c7d2fe" if light else MUTED, lh=1.3)]
 
 
-def executive(doc_type):
-    d = DOCS[doc_type]
-    header = [B("image", 0, 0, 0.8, 0.8), *_company_block(0.95, 0.04),
-              T(3.8, 0.0, 3.5, 0.2, "{{doc.title}}", size=8.5, bold=True, color=MUTED, align="right", spacing=3),
-              T(3.3, 0.22, 4.0, 0.42, "{{doc.number}}", size=19, bold=True, color=INK, align="right"),
-              B("line", 0, 0.9, W, 0.02, border=1.6, color=NAVY)]
-    if d.get("barcode"):
-        header.append(B("barcode", 5.1, 0.6, 2.2, 0.27, value=d["barcode"], show_text=False, align="right"))
-    header += _facts_strip(1.05, d["facts"]) + _parties(1.85, d["parties"])
-    return {"name": "Executive", "page": {"w": 8.5, "h": 11, "margin": 0.6}, "header": {"h": 2.95, "blocks": header}, "running": _running(),
-            "table": {"columns": [{"key": k, "header": h, "w": w} for k, h, w in d["columns"]],
-                      "style": {"header_bg": "#f1f5f9", "top_rule": NAVY, "header_color": MUTED, "row_rule": RULE, "size": 8.6}},
-            "summary": _summary(d, NAVY), "footer": _footer()}
-
-
-def modern(doc_type):
-    d = DOCS[doc_type]
-    hero_k, hero_v, hero_sub = d["hero"]
-    header = [B("rect", -0.6, -0.6, 8.5, 1.3, bg=NAVY), B("rect", -0.6, 0.66, 8.5, 0.05, bg="#24365f"),
-              B("rect", 0, -0.42, 0.88, 0.88, bg="#ffffff", radius=8), B("image", 0.07, -0.35, 0.74, 0.74),
-              *_company_block(1.05, -0.36, light=True),
-              T(3.8, -0.38, 3.5, 0.4, "{{doc.title}}", size=20, bold=True, color="#ffffff", align="right"),
-              T(3.8, 0.02, 3.5, 0.25, "{{doc.number}}", size=10.5, bold=True, color="#c7d2fe", align="right")]
-    if d.get("barcode"):
-        header.append(B("barcode", 5.3, 0.76, 2.0, 0.26, value=d["barcode"], show_text=False, align="right"))
-    party_k, party_v = d["parties"][0]
-    header += [LABEL(0, 1.0, 3.5, party_k), T(0, 1.18, 3.6, 0.8, party_v, size=9, lh=1.35),
-               T(3.8, 1.12, 3.5, 0.18, hero_k, size=8, bold=True, color=MUTED, align="right", upper=True),
-               T(2.8, 1.3, 4.5, 0.48, hero_v, size=26, bold=True, color=INK, align="right"),
-               T(3.3, 1.8, 4.0, 0.2, hero_sub, size=8.5, color=MUTED, align="right"),
-               B("line", 0, 2.12, W, 0.01, border=0.6, color=RULE), B("line", 0, 2.72, W, 0.01, border=0.6, color=RULE)]
-    cw = W / len(d["chips"])
-    for i, (k, v) in enumerate(d["chips"]):
-        header += [LABEL(i * cw + 0.08, 2.2, cw - 0.1, k), T(i * cw + 0.08, 2.37, cw - 0.1, 0.32, v, size=10, bold=True, color=INK)]
-    return {"name": "Modern Bold", "page": {"w": 8.5, "h": 11, "margin": 0.6}, "header": {"h": 2.92, "blocks": header}, "running": _running(),
-            "table": {"columns": [{"key": k, "header": h, "w": w} for k, h, w in d["columns"]],
-                      "style": {"header_rule": NAVY, "header_rule_w": 1.6, "header_color": MUTED, "zebra": PANEL, "row_rule": RULE, "size": 8.6}},
-            "summary": _summary(d, ACCENT), "footer": _footer()}
-
-
 def classic(doc_type):
     d = DOCS[doc_type]
     meta = "\n".join(f"{k}  <b>{v}</b>" for k, v in d["chips"])
@@ -310,6 +270,236 @@ def classic_address_label():
               T(1.4, 2.0, 4.1, 1.1, "{{label.to}}", size=15, bold=True, lh=1.25),
               T(0.12, 3.3, 2.8, 0.3, "Ref {{label.ref}}", size=9, bold=True), T(2.9, 3.3, 2.68, 0.3, "{{label.note}}", size=9, align="right")]
     return {"name": "Classic address label", "page": {"w": 6, "h": 4, "margin": 0.15}, "header": {"h": LH, "blocks": blocks}}
+
+
+# ======================================================================================================
+# Executive and Modern Bold: the design samples shown earlier (pdf-samples/A-executive-*, B-modern-*),
+# rebuilt block for block -- same font (Segoe UI), sizes, colours and spacing.
+# Band coordinates are inches from the top-left of the content area (page margin 0.6 in).
+# ======================================================================================================
+SEMI_MUTED = dict(semi=True, color=MUTED)
+TOP = 1.02     # A: where the content starts under the header rule
+TOP_B = 0.95   # B: under the navy band
+
+
+def _L(x, y, w, text):                      # small caps label (sample "label": semibold 7 pt, muted)
+    return T(x, y, w, 0.14, text, size=7, upper=True, **SEMI_MUTED)
+
+
+def _party(x, y, w, label, name, body):     # BILL TO / Hudson Products / address lines
+    return [_L(x, y, w, label), T(x, y + 0.167, w, 0.21, name, size=10.5, bold=True, color=INK),
+            T(x, y + 0.354, w, 0.85, body, size=8.8, lh=1.364)]
+
+
+def _kv(x, y, w, label, rows, empty=None, h=1.1):
+    st = dict(size=8.8, label_size=8, label_w=0.95, lh=1.7, color=TEXT)
+    if empty:
+        st["empty"] = empty
+    return [_L(x, y, w, label), B("kv", x, y + 0.181, w, h, "\n".join(f"{k} | {v}" for k, v in rows), **st)]
+
+
+def _strip(y, facts, filled=True, highlight=False):
+    """The key-facts strip: A = light panel with dividers (last cell highlighted), B = lines above and below."""
+    n, out = len(facts), []
+    cw, h = W / n, 0.535 if not highlight else 0.576
+    if filled:
+        out.append(B("rect", 0, y, W, h, bg=PANEL, border=0.6, border_color=RULE))
+    else:
+        out += [B("line", 0, y, W, 0.01, border=0.6, color=RULE), B("line", 0, y + h, W, 0.01, border=0.6, color=RULE)]
+    for i, (k, v) in enumerate(facts):
+        big = highlight and i == n - 1
+        if big:
+            out.append(B("rect", i * cw, y, cw, h, bg="#eef2ff", border=0.6, border_color=RULE))
+        elif i and filled:
+            out.append(B("line", i * cw, y, 0.01, h, border=0.6, color=RULE))
+        out.append(T(i * cw + 0.139, y + 0.111, cw - 0.2, 0.13, k, size=6.8, upper=True, **SEMI_MUTED))
+        out.append(T(i * cw + 0.139, y + 0.229, cw - 0.2, 0.3, v, size=13 if big else 10,
+                     **(dict(bold=True, color=NAVY) if big else dict(semi=True, color=INK))))
+    return out
+
+
+def _furniture_a():
+    return [B("image", 0, -0.15, 0.75, 0.75),
+            T(0.93, -0.12, 4.4, 0.22, "{{company.name}}", size=12.5, bold=True, color=INK),
+            T(0.93, 0.115, 4.4, 0.62, "{{company.address}}\n{{company.phone}} · {{company.email}}\n{{company.website}}", size=8, color=MUTED, lh=1.3125),
+            T(3.3, -0.1, 4.0, 0.16, "{{doc.title}}", size=8.5, align="right", spacing=4.6, **SEMI_MUTED),
+            T(3.0, 0.055, 4.3, 0.34, "{{doc.number}}", size=19, bold=True, color=INK, align="right"),
+            B("line", 0, 0.76, W, 0.02, border=1.6, color=NAVY)]
+
+
+def _furniture_b():
+    return [B("rect", -0.6, -0.6, 8.5, 1.25, bg=NAVY), B("rect", -0.6, 0.59, 8.5, 0.06, bg="#24365f"),
+            B("rect", 0, -0.4, 0.85, 0.85, bg="#ffffff", radius=8), B("image", 0.08, -0.32, 0.69, 0.69, align="center"),
+            T(1.02, -0.24, 4.2, 0.26, "{{company.name}}", size=14, bold=True, color="#ffffff"),
+            T(1.02, 0.04, 4.6, 0.36, "{{company.address_line}} · {{company.phone}} · {{company.email}}\n{{company.website}}",
+              size=8.2, color="#c7d2fe", lh=1.49),
+            T(3.3, -0.28, 4.0, 0.34, "{{doc.title}}", size=20, bold=True, color="#ffffff", align="right"),
+            T(3.3, 0.1, 4.0, 0.2, "{{doc.number}}", size=10.5, semi=True, color="#c7d2fe", align="right")]
+
+
+def _hero(y, label, value, sub):
+    return [T(3.65, y, 3.65, 0.14, label, size=8, align="right", upper=True, **SEMI_MUTED),
+            T(1.5, y + 0.167, 5.8, 0.42, value, size=26, bold=True, color=INK, align="right"),
+            T(3.65, y + 0.583, 3.65, 0.17, sub, size=8.8, color=MUTED, align="right")]
+
+
+def _table(style_b, cols):
+    st = {"header_upper": True, "header_size": 7, "header_color": MUTED, "row_rule": RULE, "size": 8.8, "pad": 6}
+    st.update({"header_rule": NAVY, "header_rule_w": 1.6, "zebra": PANEL} if style_b else {"header_bg": "#f1f5f9", "top_rule": NAVY})
+    return {"columns": [{"key": k, "header": h, "w": w, **({"align": a} if a else {})} for k, h, w, a in cols], "style": st}
+
+
+def _totals_x(rows, due_label, due_value, y, due_bg):
+    out, yy = [], y
+    for k, v in rows:
+        out += [T(4.3, yy + 0.056, 1.44, 0.17, k, size=8.8, color=MUTED, align="right"),
+                T(5.85, yy + 0.056, 1.34, 0.17, v, size=8.8, semi=True, color=TEXT, align="right"),
+                B("line", 4.3, yy + 0.278, 3.0, 0.01, border=0.5, color=RULE)]
+        yy += 0.278
+    out += [B("rect", 4.3, yy, 3.0, 0.444, bg=due_bg),
+            T(4.41, yy + 0.13, 1.33, 0.2, due_label, size=9.5, semi=True, color="#ffffff", align="right"),
+            T(5.85, yy + 0.09, 1.34, 0.28, due_value, size=13, bold=True, color="#ffffff", align="right")]
+    return out, yy + 0.444
+
+
+def _panels(y, sections, h=0.75):
+    n = len(sections)
+    cw = W / n
+    out = [B("rect", 0, y, W, h, bg=PANEL, border=0.6, border_color=RULE)]
+    for i, (k, v) in enumerate(sections):
+        if i:
+            out.append(B("line", i * cw, y, 0.01, h, border=0.6, color=RULE))
+        out += [_L(i * cw + 0.139, y + 0.111, cw - 0.28, k), T(i * cw + 0.139, y + 0.236, cw - 0.28, h - 0.27, v, size=8.2, lh=1.4)]
+    return out
+
+
+def _signs(y, labels):
+    n = len(labels)
+    cw = W / n
+    out = []
+    for i, k in enumerate(labels):
+        out += [B("line", i * cw, y, cw - 0.333, 0.01, border=0.8, color=TEXT),
+                T(i * cw, y + 0.04, cw - 0.333, 0.16, k, size=8.2, color=MUTED),
+                T(i * cw, y + 0.21, cw - 0.333, 0.14, "Name · Signature · Date", size=7, **SEMI_MUTED)]
+    return out
+
+
+def _qr_panel(y):
+    return [B("rect", 0, y, W, 0.85, border=0.6, border_color=RULE), B("rect", 1.0, y, W - 1.0, 0.85, bg=PANEL),
+            B("qr", 0.0, y, 0.85, 0.85, value="{{shipment.pod_url}}"),
+            T(1.139, y + 0.29, 6.0, 0.18, "Driver: scan to upload proof of delivery for {{shipment.code}}", size=8.8, semi=True, color=TEXT),
+            T(1.139, y + 0.47, 6.0, 0.16, "{{shipment.pod_url}}", size=8, color=MUTED)]
+
+
+def _footer_ab(style_b):
+    out = [B("rect", -0.6, 0.45, 8.5, 0.5, bg=PANEL)] if style_b else []
+    return {"h": 0.35, "blocks": out + [
+        B("line", 0, 0.45, W, 0.01, border=0.6, color=RULE),
+        T(0, 0.53, 5.4, 0.14, "{{company.name}} · {{company.email}} · {{company.phone}} · {{company.website}}", size=7.5, color=FAINT),
+        T(4.3, 0.53, 3.0, 0.14, "{{doc.name}} {{doc.number}}  ·  Page {{page}}", size=7.5, color=FAINT, align="right")]}
+
+
+def _running_ab():
+    return {"h": 0.15, "blocks": [
+        T(0, -0.26, 4.0, 0.16, "{{doc.name}} {{doc.number}}", size=8, **SEMI_MUTED),
+        T(3.3, -0.26, 4.0, 0.16, "{{company.name}}", size=8, align="right", **SEMI_MUTED),
+        B("line", 0, -0.05, W, 0.01, border=0.6, color=RULE)]}
+
+
+INV_COLS = [("line_no", "#", 0.32, ""), ("item_code_desc", "Item / description", 0, ""), ("qty", "Qty", 0.95, ""),
+            ("price", "Unit price", 1.0, ""), ("amount", "Amount", 1.2, "")]
+PO_COLS = [("line_no", "#", 0.32, ""), ("item_code_desc", "Your part # / description", 0, ""), ("qty", "Qty", 0.95, ""),
+           ("price", "Unit cost", 1.0, ""), ("amount", "Amount", 1.2, "")]
+PL_COLS = [("line_no", "Ln", 0.32, ""), ("item_code_desc", "Item / description", 0, ""), ("ordered", "Ordered", 0.72, ""),
+           ("shipped", "Shipped", 0.72, ""), ("backorder", "Backorder", 0.78, ""), ("boxes", "Boxes", 1.18, "right"), ("check", "Check", 0.58, "center")]
+
+
+def _sample(doc_type, b):
+    """The sample design for one document: b = False -> Executive, True -> Modern Bold."""
+    name = "Modern Bold" if b else "Executive"
+    head = _furniture_b() if b else _furniture_a()
+    y0 = TOP_B if b else TOP
+    due_bg = ACCENT if b else NAVY
+    page = {"w": 8.5, "h": 11, "margin": 0.6}
+    if doc_type in ("invoice", "quote"):
+        inv = doc_type == "invoice"
+        bill = ("Bill to" if inv else "Prepared for", "{{customer.name}}", "Attn: {{customer.contact}}\n{{customer.bill_to}}")
+        if b:
+            head += _party(0, y0, 3.6, *bill)
+            head += _hero(y0, "Amount due" if inv else "Quote total", "{{totals.total}}",
+                          "Due {{invoice.due_date}}" if inv else "Valid until {{quote.valid_until}}")
+            chips = ([("Invoice date", "{{invoice.date}}"), ("Order #", "{{order.code}}"), ("Customer PO", "{{order.po_number}}"),
+                      ("Job #", "{{order.job_number}}"), ("Shipment", "{{invoice.shipments}}"), ("Shipped", "{{invoice.shipped}}")] if inv else
+                     [("Quote date", "{{quote.date}}"), ("Valid until", "{{quote.valid_until}}"), ("Your reference", "{{quote.ref}}"), ("Lines", "{{totals.lines}}")])
+            head += _strip(y0 + 1.048, chips, filled=False)
+            h = y0 + 1.048 + 0.535 + 0.25
+        else:
+            facts = ([("Invoice date", "{{invoice.date}}"), ("Due date", "{{invoice.due_date}}"), ("Terms", "{{invoice.terms}}"),
+                      ("Customer PO", "{{order.po_number}}"), ("Amount due", "{{totals.total}}")] if inv else
+                     [("Quote date", "{{quote.date}}"), ("Valid until", "{{quote.valid_until}}"), ("Your reference", "{{quote.ref|—}}"),
+                      ("Lines", "{{totals.lines}}"), ("Quote total", "{{totals.total}}")])
+            head += _strip(y0, facts, highlight=True)
+            py = y0 + 0.576 + 0.222
+            head += _party(0, py, 2.07, *bill)
+            head += _party(2.263, py, 2.07, "Ship to", "{{customer.name}}", "{{customer.ship_to}}")
+            head += (_kv(4.526, py, 2.774, "Order details", [("Order #", "{{order.code}}"), ("Customer PO", "{{order.po_number}}"),
+                     ("Job #", "{{order.job_number}}"), ("Shipment", "{{invoice.shipments}}"), ("Shipped", "{{invoice.shipped}}")]) if inv else
+                     _kv(4.526, py, 2.774, "Quote", [("Quote #", "{{doc.number}}"), ("Date", "{{quote.date}}"), ("Valid until", "{{quote.valid_until}}"),
+                                                     ("Your reference", "{{quote.ref}}")]))
+            h = py + 1.22 + 0.25
+        tot, yy = _totals_x([("Subtotal", "{{totals.subtotal}}"), ("Tax", "{{totals.tax}}")] if inv else [],
+                            "Amount due" if inv else "Quote total", "{{totals.total}}", 0.167, due_bg)
+        notes = ([("Payment instructions & terms", "{{company.invoice_notes}}"), ("Notes", "{{invoice.notes}}\nThank you for your business!")] if inv else
+                 [("Notes", "{{quote.notes|—}}"), ("Terms", "Prices are valid until {{quote.valid_until}}. To order, reply with your PO.")])
+        summary = {"h": round(yy + 0.222 + 0.8, 2), "blocks": tot + _panels(yy + 0.222, notes)}
+        table = _table(b, INV_COLS)
+    elif doc_type == "purchase_order":
+        vendor = ("Vendor", "{{vendor.name}}", "Attn: {{vendor.contact}}\n{{vendor.address}}\n{{vendor.email}}")
+        ship = ("Ship to", "{{company.name}}", "{{company.address}}\n{{company.phone}}")
+        det = [("PO date", "{{po.date}}"), ("Required by", "{{po.expected}}"), ("Vendor SO #", "{{po.vendor_so}}"), ("Buyer", "{{po.buyer}}")]
+        if b:
+            head += _party(0, y0, 3.6, *vendor)
+            head += _hero(y0, "PO total", "{{totals.total}}", "Required by {{po.expected}}")
+            cy = y0 + 1.0 + 0.194
+            head += _party(0, cy, 3.45, *ship) + _kv(3.65, cy, 3.65, "Details", det)
+            h = cy + 1.04 + 0.22
+        else:
+            head += _strip(y0, [("PO date", "{{po.date}}"), ("Required by", "{{po.expected|ASAP}}"), ("Vendor SO #", "{{po.vendor_so|—}}"),
+                                ("Lines", "{{totals.lines}}"), ("PO total", "{{totals.total}}")], highlight=True)
+            py = y0 + 0.576 + 0.222
+            head += _party(0, py, 2.29, *vendor) + _party(2.482, py, 2.22, *ship) + _kv(4.891, py, 2.409, "Details", det)
+            h = py + 1.06 + 0.25
+        tot, yy = _totals_x([("Subtotal", "{{totals.subtotal}}"), ("Freight / charges", "{{totals.charges}}")], "PO total", "{{totals.total}}", 0.167, due_bg)
+        notes = [("Instructions", "Please confirm receipt, pricing and ship date. Material test reports (MTRs) must ship with the material. "
+                                  "Reference our PO # on all boxes, packing lists and invoices."), ("Notes", "{{po.notes|—}}")]
+        py = yy + 0.222
+        summary = {"h": round(py + 0.8 + 0.6, 2), "blocks": tot + _panels(py, notes) + _signs(py + 0.8 + 0.36, ["Authorized by"])}
+        table = _table(b, PO_COLS)
+    else:  # packing list
+        head.append(B("barcode", 5.3, 0.77 if b else 0.44, 2.0, 0.27, value="{{shipment.code}}", show_text=False, align="right"))
+        head += _party(0, y0, 3.6, "Ship to", "{{customer.name}}", "Attn: {{customer.contact}}\n{{customer.ship_to}}\n{{customer.phone}}")
+        px = 0.52 * W
+        head += [_L(px, y0, 3.4, "Customer PO #"), T(px, y0 + 0.153, 3.4, 0.3, "{{order.po_number|—}}", size=17, bold=True, color=INK)]
+        head += _kv(px, y0 + 0.542, 3.4, "Shipment", [("Order #", "{{order.code}}"), ("Job #", "{{order.job_number}}"), ("Ship date", "{{shipment.ship_date}}"),
+                                                      ("Carrier", "{{shipment.carrier}}"), ("Tracking #", "{{shipment.tracking}}")], empty="—")
+        ty = y0 + 1.764 + 0.194
+        head += _strip(ty, [("Lines", "{{shipment.lines}}"), ("Units", "{{shipment.units}}"), ("Boxes", "{{shipment.boxes|—}}"),
+                            ("Pallets", "{{shipment.pallets|—}}"), ("Weight", "{{shipment.weight|—}}")], filled=not b)
+        h = ty + 0.535 + 0.222
+        summary = {"h": 2.95, "blocks": _panels(0.222, [("Receiving", "<b>Notes:</b> {{shipment.notes}}\nPlease count boxes against this list and "
+                                                       "note any shortage or damage on the carrier's delivery receipt before signing.")], h=0.6)
+                   + _signs(0.222 + 0.6 + 0.25 + 0.36, ["Shipped by", "Carrier / driver", "Received by"]) + _qr_panel(0.222 + 0.6 + 0.25 + 0.36 + 0.42 + 0.194)}
+        table = _table(b, PL_COLS)
+    return {"name": name, "font": "ui", "page": page, "header": {"h": round(h, 2), "blocks": head}, "running": _running_ab(),
+            "table": table, "summary": summary, "footer": _footer_ab(b)}
+
+
+def executive(doc_type):
+    return _sample(doc_type, False)
+
+
+def modern(doc_type):
+    return _sample(doc_type, True)
 
 
 def starters(doc_type):
