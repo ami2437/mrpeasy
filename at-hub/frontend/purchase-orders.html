@@ -13,7 +13,7 @@
     <div class="card page-toolbar">
       <h1 class="page-title">Purchase Orders</h1>
       <div class="row toolbar-row">
-        <input type="text" id="search" placeholder="Search PO code, vendor, or item code...">
+        <input type="text" id="search" placeholder="Search PO, vendor, SO #, item, or the job # its material went to...">
         <button class="secondary" onclick="toggleVendorPayments()" data-icon="dollar">Vendor Payments <span id="vp-badge"></span></button>
         <button onclick="toggleForm()">+ New Purchase Order</button>
       </div>
@@ -330,15 +330,8 @@
     }
 
     function matchesSearch(o, q) {
-      if (!q) return true;
-      q = q.toLowerCase();
-      if (o.code.toLowerCase().includes(q)) return true;
-      if (vendorName(o.vendor_id).toLowerCase().includes(q)) return true;
-      if ((o.vendor_so_number || "").toLowerCase().includes(q) || (o.notes || "").toLowerCase().includes(q)) return true;
-      return o.lines.some(l => {
-        const item = items.find(i => i.id === l.item_id);
-        return item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q));
-      });
+      return searchMatch(q, o.code, vendorName(o.vendor_id), o.vendor_so_number, o.notes, o.jobs || [],
+        o.lines.map(l => { const item = items.find(i => i.id === l.item_id); return item ? [item.code, item.title] : []; }));
     }
 
 

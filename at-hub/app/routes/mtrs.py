@@ -56,7 +56,7 @@ def _orders_for_po_lines(db: Session, po_line_ids: set) -> dict:
     out: dict = {}
     for po_line_id, sl, sh, order, cust in rows:
         out.setdefault(po_line_id, []).append({
-            "order_id": order.id, "order_code": order.code, "po_number": order.po_number,
+            "order_id": order.id, "order_code": order.code, "po_number": order.po_number, "job_number": order.job_number,
             "customer": cust.name, "shipment_id": sh.id, "shipment_code": sh.code,
             "ship_date": _iso(sh.ship_date), "quantity": sl.picked_quantity or sl.quantity,
         })

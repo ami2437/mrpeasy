@@ -13,7 +13,7 @@
     <div class="card page-toolbar">
       <h1 class="page-title">Lots</h1>
       <div class="row toolbar-row">
-        <input type="text" id="search" placeholder="Search lot #, item code, or PO...">
+        <input type="text" id="search" placeholder="Search lot #, item, PO or the job # it shipped to...">
         <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="in-stock-only" checked style="width:auto;display:inline-block;"> In stock only</label>
         <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="missing-only" style="width:auto;display:inline-block;"> Missing cost only</label>
       </div>
@@ -90,9 +90,7 @@
         const item = itemsById[lot.item_id];
         if (inStockOnly && lot.quantity <= 0) return false;
         if (missingOnly && lot.unit_cost != null) return false;
-        return !q || lot.lot_code.toLowerCase().includes(q)
-          || (item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q)))
-          || (lot.source_reference || "").toLowerCase().includes(q);
+        return searchMatch(q, lot.lot_code, item && item.code, item && item.title, lot.source_reference, lot.jobs || []);
       });
       const tbody = document.getElementById("lots-body");
       if (!filtered.length) {

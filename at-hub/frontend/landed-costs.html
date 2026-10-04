@@ -40,7 +40,7 @@
       <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
 
       <h4 style="margin-top:18px;">Apply to purchase orders</h4>
-      <input type="text" id="po-search" placeholder="Filter by PO code, vendor, or item code..." oninput="renderPoChecklist()" style="max-width:420px;">
+      <input type="text" id="po-search" placeholder="Filter by PO, vendor, item, or job #..." oninput="renderPoChecklist()" style="max-width:420px;">
       <div class="table-scroll" style="max-height:300px; overflow-y:auto; margin-top:8px; border:1px solid #e2e6ed; border-radius:6px;">
         <table class="compact-table">
           <thead><tr><th style="width:30px;"></th><th>PO</th><th>Vendor</th><th>Status</th><th>Ordered</th><th class="num sum">Total qty</th><th>Items</th></tr></thead>
@@ -110,10 +110,8 @@
 
     function renderPoChecklist() {
       const q = document.getElementById("po-search").value.trim().toLowerCase();
-      const candidates = pos.filter(po => po.status !== "cancelled" || selected.has(po.id)).filter(po => !q
-        || po.code.toLowerCase().includes(q)
-        || String(vendorName(po.vendor_id)).toLowerCase().includes(q)
-        || po.lines.some(l => String(itemCode(l.item_id)).toLowerCase().includes(q)));
+      const candidates = pos.filter(po => po.status !== "cancelled" || selected.has(po.id)).filter(po =>
+        searchMatch(q, po.code, vendorName(po.vendor_id), po.vendor_so_number, po.jobs || [], po.lines.map(l => itemCode(l.item_id))));
       const tbody = document.getElementById("po-checklist");
       if (!candidates.length) {
         tbody.innerHTML = `<tr><td colspan="7" class="muted">No purchase orders match.</td></tr>`;

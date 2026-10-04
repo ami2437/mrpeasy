@@ -173,6 +173,7 @@ class StockItemResponse(BaseModel):
 
 # ---- Lots ----
 class LotResponse(BaseModel):
+    jobs: List[str] = []  # job #s of the orders this lot shipped on (search)
     id: int
     item_id: int
     lot_code: str
@@ -879,6 +880,7 @@ class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
 
 
 class PurchaseOrderResponse(BaseModel):
+    jobs: List[str] = []  # job #s its received material shipped to (search)
     id: int
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
     row_updated_at: Optional[datetime] = None

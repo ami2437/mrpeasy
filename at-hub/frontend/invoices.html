@@ -64,13 +64,8 @@
     function invoiceTotal(inv) { return sumLines(inv.lines); }
 
     function matchesSearch(inv, q) {
-      if (!q) return true;
-      q = q.toLowerCase();
-      if (inv.code.toLowerCase().includes(q)) return true;
-      if (customerName(inv.customer_id).toLowerCase().includes(q)) return true;
-      if (orderField(inv, "po_number").toLowerCase().includes(q) || orderField(inv, "job_number").toLowerCase().includes(q)) return true;
-      if (refLink("order", inv.order_id).toLowerCase().includes(q) || refLink("shipment", inv.shipment_id).toLowerCase().includes(q)) return true;
-      return inv.lines.some(l => l.description.toLowerCase().includes(q));
+      return searchMatch(q, inv.code, customerName(inv.customer_id), orderField(inv, "po_number"), orderField(inv, "job_number"),
+        refLink("order", inv.order_id).replace(/<[^>]+>/g, ""), inv.shipment_codes || [], inv.lines.map(l => l.description));
     }
 
     function refLink(kind, id) {

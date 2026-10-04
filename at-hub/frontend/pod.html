@@ -68,7 +68,7 @@
       const statuses = filter === "shipped" ? ["shipped"] : ["shipped", "delivered", "invoiced"];
       const list = shipments.filter(s => statuses.includes(s.status)).filter(s => {
         const o = orderOf(s);
-        return !q || [s.code, o.code, o.po_number, o.job_number, customerName(o.customer_id)].some(v => (v || "").toLowerCase().includes(q));
+        return searchMatch(q, s.code, o.code, o.po_number, o.job_number, customerName(o.customer_id));
       }).slice(0, 50);
       if (!qEl) {
         document.getElementById("app").innerHTML = `<div class="card">

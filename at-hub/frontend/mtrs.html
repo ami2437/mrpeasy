@@ -17,7 +17,7 @@
       <div class="row" style="align-items:flex-end;">
         <div style="flex:2;"><label>Item</label><select id="f-item" data-searchable></select></div>
         <div><label>Vendor</label><select id="f-vendor"><option value="">All Vendors</option></select></div>
-        <div style="flex:2;"><label>Search</label><input type="text" id="f-search" placeholder="PO #, Heat #, File Name, Customer Order…"></div>
+        <div style="flex:2;"><label>Search</label><input type="text" id="f-search" placeholder="PO #, Heat #, File Name, Customer Order, Job #…"></div>
       </div>
       <div id="unlinked"></div>
     </div>
@@ -87,10 +87,10 @@ Thank you.</textarea>
 
     function render() {
       const vendorId = document.getElementById("f-vendor").value;
-      const words = document.getElementById("f-search").value.toLowerCase().split(/\s+/).filter(Boolean);
-      const shown = rows.filter(r => (!vendorId || String(r.vendor_id) === vendorId) && words.every(w =>
-        [r.po_code, r.heat_number, r.filename, r.note, r.item_code, r.item_title, r.vendor,
-         ...r.shipped_on.flatMap(s => [s.order_code, s.customer, s.po_number, s.shipment_code])].join(" ").toLowerCase().includes(w)));
+      const q = document.getElementById("f-search").value;
+      const shown = rows.filter(r => (!vendorId || String(r.vendor_id) === vendorId) && searchMatch(q,
+        r.po_code, r.heat_number, r.filename, r.note, r.item_code, r.item_title, r.vendor,
+        r.shipped_on.map(s => [s.order_code, s.customer, s.po_number, s.job_number, s.shipment_code])));
       const body = document.getElementById("mtr-body");
       if (!shown.length) {
         body.innerHTML = `<tr><td colspan="8" class="muted">${rows.length ? "No MTRs Match These Filters." : "No MTRs Linked Yet — Upload One On A Purchase Order And Tick The Lines It Covers."}</td></tr>`;

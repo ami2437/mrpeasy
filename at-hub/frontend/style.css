@@ -1567,3 +1567,11 @@ html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 .stage-tabs { gap: 2px; }
 #period-wrap { flex: 0 0 auto; white-space: nowrap; margin: 0; }
 #period-wrap select { width: auto !important; min-width: 0; display: inline-block; }
+
+/* Bulk: sort & filters */
+.sort-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; flex: 1 1 100%; order: 5; }
+.sort-filters .check-label, #area-invoices .check-label { margin: 0; gap: 5px; white-space: nowrap; font-size: 12.5px; color: var(--text-2); }
+.sort-filters select, #area-invoices .check-label select { width: auto !important; padding: 4px 6px; font-size: 12.5px; max-width: 200px; }
+.sort-filters { justify-content: flex-start; }
+.sort-filters > label, #period-wrap { flex: 0 0 auto !important; width: auto !important; }
+.sort-filters select, #period-wrap select { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; max-width: 220px; }

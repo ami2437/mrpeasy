@@ -19,7 +19,7 @@
     </div>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <input type="text" id="search" placeholder="Search shipment, order, PO #, carrier, or tracking #...">
+        <input type="text" id="search" placeholder="Search shipment, order, customer, PO #, job #, item, carrier or tracking #...">
         <select id="status-filter" style="max-width:200px;">
           <option value="">All statuses</option>
           <option value="open">Open (new + ready)</option>
@@ -55,13 +55,9 @@
     let currentTab = "active";
 
     function matchesSearch(s, q) {
-      if (!q) return true;
-      q = q.toLowerCase();
-      return s.code.toLowerCase().includes(q)
-        || orderCode(s.order_id).toLowerCase().includes(q)
-        || ((order(s.order_id) || {}).po_number || "").toLowerCase().includes(q)
-        || (s.carrier || "").toLowerCase().includes(q)
-        || (s.tracking_number || "").toLowerCase().includes(q);
+      const o = order(s.order_id) || {};
+      return searchMatch(q, s.code, o.code, o.po_number, o.job_number, customerName(o.customer_id), s.carrier, s.tracking_number,
+        s.lines.map(l => itemCode(l.item_id)));
     }
 
     function renderShipments() {

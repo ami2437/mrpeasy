@@ -10,7 +10,11 @@ router = APIRouter(prefix="/api/lots", tags=["lots"], dependencies=[Depends(requ
 
 @router.get("/", response_model=list[LotResponse])
 def list_lots(item_id: int | None = Query(None), db: Session = Depends(get_db)):
-    return LotService.list(db, item_id=item_id)
+    from app.services.jobs import jobs_by_lot
+    lots, jobs = LotService.list(db, item_id=item_id), jobs_by_lot(db)
+    for lot in lots:
+        lot.jobs = sorted(jobs.get(lot.id, ()))
+    return lots
 
 
 @router.get("/expiring", response_model=list[LotResponse])

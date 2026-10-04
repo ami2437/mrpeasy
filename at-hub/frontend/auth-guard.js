@@ -168,6 +168,20 @@ async function apiUpload(path, form) {
 const PRICE_STEP = "0.00001"; // unit prices/costs are kept to 5 decimal places
 
 // Employees work shipments only and never see dollar amounts (the server blanks them too).
+// Every search box: each word typed must appear somewhere in the record's fields, and spaces / dashes / slashes
+// don't matter -- "m246 30a", "M246-30A" and "m24630a" all find job M246-30A; "hudson 4180718" narrows to both.
+function searchNorm(v) { return String(v ?? "").toLowerCase(); }
+function searchMatch(q, ...values) {
+  const words = searchNorm(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = values.flat(Infinity).filter(v => v != null && v !== "").map(searchNorm).join(" \u0001 ");
+  const loose = hay.replace(/[^a-z0-9\u0001]+/g, " "), tight = hay.replace(/[^a-z0-9\u0001]+/g, "");
+  return words.every(w => {
+    const wl = w.replace(/[^a-z0-9]+/g, " ").trim(), wt = w.replace(/[^a-z0-9]+/g, "");
+    return hay.includes(w) || (wl && loose.includes(wl)) || (wt && tight.includes(wt));
+  });
+}
+
 function hidesMoney() { return !!AuthGuard.getUser() && !AuthGuard.can("money.view"); }
 
 // Unit price/cost: $ with up to 5 decimals, at least 2 ($0.21375, $3.50).
@@ -2313,7 +2327,9 @@ const QuickFind = {
     this.data = [
       ...orders.map(o => ({ kind: "Order", label: o.code, sub: [cname[o.customer_id], o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`, o.status].filter(Boolean).join(" · "), href: `customer-orders.html?id=${o.id}`, hay: `${o.code} ${o.po_number || ""} ${o.job_number || ""} ${cname[o.customer_id] || ""}` })),
       ...pos.map(p => ({ kind: "PO", label: p.code, sub: [vname[p.vendor_id], p.vendor_so_number && `SO ${p.vendor_so_number}`, p.status].filter(Boolean).join(" · "), href: `purchase-orders.html?id=${p.id}`, hay: `${p.code} ${p.vendor_so_number || ""} ${vname[p.vendor_id] || ""}` })),
-      ...shipments.map(s => ({ kind: "Shipment", label: s.code, sub: [s.status, s.tracking_number].filter(Boolean).join(" · "), href: `shipments.html?id=${s.id}`, hay: `${s.code} ${s.tracking_number || ""}` })),
+      ...shipments.map(s => { const o = orders.find(x => x.id === s.order_id) || {}; return { kind: "Shipment", label: s.code,
+        sub: [s.status, o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`, s.tracking_number].filter(Boolean).join(" · "),
+        href: `shipments.html?id=${s.id}`, hay: `${s.code} ${s.tracking_number || ""} ${o.code || ""} ${o.po_number || ""} ${o.job_number || ""}` }; }),
       ...invoices.map(i => ({ kind: "Invoice", label: i.code, sub: [cname[i.customer_id], i.status, fmtMoney(i.total)].filter(Boolean).join(" · "), href: `invoices.html?id=${i.id}`, hay: `${i.code} ${cname[i.customer_id] || ""}` })),
       ...items.map(i => ({ kind: "Item", label: i.code, sub: i.title, href: `item.html?id=${i.id}`, hay: `${i.code} ${i.title} ${i.category || ""}` })),
       ...customers.map(c => ({ kind: "Customer", label: c.name, sub: c.contact_name || "", href: `customers.html?id=${c.id}`, hay: `${c.name} ${c.contact_name || ""}` })),

@@ -24,7 +24,17 @@
       <div class="stage-tabs" id="stage-tabs" role="tablist"></div>
       <div class="stage-hint muted small" id="stage-hint"></div>
       <div class="filters">
-        <input type="text" id="search" placeholder="Search shipment, order, customer, PO or item #...">
+        <input type="text" id="search" placeholder="Search shipment, order, customer, PO #, job # or item #...">
+        <div class="sort-filters">
+          <label class="check-label">Sort <select id="sort-by" onchange="prefChanged()">
+            <option value="recent">Most recent</option><option value="oldest">Oldest first</option><option value="customer">Customer A–Z</option>
+            <option value="order">Order #</option><option value="po">PO #</option><option value="job">Job #</option><option value="shipment">Shipment #</option>
+            <option value="units">Most units</option></select></label>
+          <label class="check-label">Customer <select id="f-customer" onchange="prefChanged()"><option value="">All</option></select></label>
+          <label class="check-label">Packing <select id="f-packed" onchange="prefChanged()"><option value="">Any</option><option value="packed">Packed</option><option value="unpacked">Not packed</option></select></label>
+          <label class="check-label">POD <select id="f-pod" onchange="prefChanged()"><option value="">Any</option><option value="missing">Missing</option><option value="has">Has POD</option></select></label>
+          <a class="link small" id="f-clear" onclick="clearFilters()" style="display:none;">Clear filters</a>
+        </div>
         <label id="period-wrap" class="check-label" style="display:none;">Shipped within
           <select id="period" onchange="renderAll()" style="width:auto;padding:5px 6px;font-size:13px;">
             <option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">a year</option><option value="0">any time</option></select></label>
@@ -93,7 +103,11 @@
     <div id="area-invoices" style="display:none;">
       <div class="card batch-toolbar">
         <div class="filters">
-          <input type="text" id="inv-search" placeholder="Search invoice, customer, PO or shipment #..." oninput="renderInvoices()">
+          <input type="text" id="inv-search" placeholder="Search invoice, customer, PO #, job # or shipment #..." oninput="renderInvoices()">
+          <label class="check-label">Sort <select id="inv-sort" onchange="renderInvoices()" style="width:auto;">
+            <option value="recent">Most recent</option><option value="oldest">Oldest first</option><option value="customer">Customer A–Z</option>
+            <option value="total">Largest total</option><option value="code">Invoice #</option></select></label>
+          <label class="check-label">Customer <select id="inv-customer" onchange="renderInvoices()" style="width:auto;max-width:200px;"><option value="">All</option></select></label>
           <select id="inv-filter" onchange="renderInvoices()" style="max-width:220px;">
             <option value="unsent">Not sent yet (drafts)</option><option value="open">Unpaid (sent)</option><option value="all">All live invoices</option>
           </select>
@@ -173,11 +187,9 @@
 
     // ---- filtering ----
     function matches(s, q) {
-      if (!q) return true;
       const ord = order(s.order_id) || {};
-      const hay = [s.code, ord.code, ord.po_number, ord.job_number, customerName(ord.customer_id), s.carrier, s.tracking_number,
-        ...s.lines.map(l => itemCode(l.item_id))].join(" ").toLowerCase();
-      return hay.includes(q.toLowerCase());
+      return searchMatch(q, s.code, ord.code, ord.po_number, ord.job_number, customerName(ord.customer_id), s.carrier, s.tracking_number,
+        s.lines.map(l => itemCode(l.item_id)));
     }
     // ---- stages: the same steps as one shipment (pick -> accept packing -> Ship Now -> delivered -> invoice) ----
     const STAGES = [
@@ -204,16 +216,66 @@
     let stage = null;
     function stageOf(s) { return STAGES.find(st => st.key !== "all" && st.test(s)) || null; }
     function inPlay(s) { return s.status !== "cancelled" && s.lines.length; }
-    function visibleShipments() {
+    function visibleShipments(stageKey = stage) {
       const q = document.getElementById("search").value.trim();
-      const st = STAGES.find(x => x.key === stage);
+      const st = STAGES.find(x => x.key === stageKey);
       const days = st.history ? parseInt(document.getElementById("period").value) : 0;
       const since = days ? Date.now() - days * 864e5 : 0;
-      return shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q)
-        && (!since || q || !["invoiced", "delivered"].includes(s.status) || new Date(s.ship_date || s.created_at).getTime() >= since));
+      const cust = document.getElementById("f-customer").value, packed = document.getElementById("f-packed").value, pod = document.getElementById("f-pod").value;
+      const list = shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q)
+        && (!since || q || !["invoiced", "delivered"].includes(s.status) || new Date(s.ship_date || s.created_at).getTime() >= since)
+        && (!cust || String((order(s.order_id) || {}).customer_id) === cust)
+        && (!packed || (packed === "packed") === isPacked(s))
+        && (!pod || (pod === "has") === !!(s.pods && s.pods.length)));
+      return sortShipments(list);
     }
+    function searching() { return !!document.getElementById("search").value.trim() || ["f-customer", "f-packed", "f-pod"].some(id => document.getElementById(id).value); }
+    // ---- sort & filter (remembered); default: most recent first ----
+    const when = s => new Date(s.ship_date || s.created_at || 0).getTime() || 0;
+    const byText = f => (a, b) => String(f(a) || "~").localeCompare(String(f(b) || "~"), undefined, { numeric: true, sensitivity: "base" });
+    function noMatchHere() {
+      const elsewhere = STAGES.filter(x => x.key !== stage && x.key !== "all").map(x => [x, visibleShipments(x.key).length]).filter(([, n]) => n);
+      return elsewhere.length ? `Nothing in <b>${escapeHtml(STAGES.find(x => x.key === stage).label)}</b> matches — found in ${elsewhere.map(([x, n]) =>
+          `<a class="link" onclick="setStage('${x.key}', true)">${escapeHtml(x.label)} (${n})</a>`).join(", ")}.`
+        : "No shipments match this search or these filters.";
+    }
+    function sortShipments(list) {
+      const k = document.getElementById("sort-by").value, o = s => order(s.order_id) || {};
+      const cmp = {
+        recent: (a, b) => when(b) - when(a) || b.id - a.id,
+        oldest: (a, b) => when(a) - when(b) || a.id - b.id,
+        customer: byText(s => customerName(o(s).customer_id)),
+        order: byText(s => o(s).code), po: byText(s => o(s).po_number), job: byText(s => o(s).job_number), shipment: byText(s => s.code),
+        units: (a, b) => b.lines.reduce((t, l) => t + l.quantity, 0) - a.lines.reduce((t, l) => t + l.quantity, 0),
+      }[k] || ((a, b) => when(b) - when(a));
+      return list.slice().sort((a, b) => cmp(a, b) || when(b) - when(a) || b.id - a.id);
+    }
+    function fillCustomerFilter() {
+      const sel = document.getElementById("f-customer"), cur = sel.value;
+      const ids = [...new Set(shipments.filter(inPlay).map(s => (order(s.order_id) || {}).customer_id).filter(Boolean))];
+      const opts = ids.map(id => [id, customerName(id)]).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+      sel.innerHTML = `<option value="">All</option>` + opts.map(([id, n]) => `<option value="${id}">${escapeHtml(n)}</option>`).join("");
+      sel.value = opts.some(([id]) => String(id) === cur) ? cur : "";
+    }
+    const PREF_IDS = ["sort-by", "f-customer", "f-packed", "f-pod"];
+    function prefChanged() {
+      try { localStorage.setItem("bulk_prefs", JSON.stringify(Object.fromEntries(PREF_IDS.map(id => [id, document.getElementById(id).value])))); } catch {}
+      renderAll();
+    }
+    function loadPrefs() {
+      let p = {};
+      try { p = JSON.parse(localStorage.getItem("bulk_prefs")) || {}; } catch {}
+      PREF_IDS.forEach(id => { if (p[id] != null) document.getElementById(id).value = p[id]; });
+      if (!document.getElementById("sort-by").value) document.getElementById("sort-by").value = "recent";
+    }
+    function clearFilters() {
+      ["f-customer", "f-packed", "f-pod"].forEach(id => { document.getElementById(id).value = ""; });
+      prefChanged();
+    }
+
     function drawStages() {
-      const counts = Object.fromEntries(STAGES.map(st => [st.key, shipments.filter(s => inPlay(s) && st.test(s)).length]));
+      // while searching / filtering, each tab counts its matches -- so a job # in another stage is one click away
+      const counts = Object.fromEntries(STAGES.map(st => [st.key, searching() ? visibleShipments(st.key).length : shipments.filter(s => inPlay(s) && st.test(s)).length]));
       const st = STAGES.find(x => x.key === stage);
       document.getElementById("stage-tabs").innerHTML = STAGES.map((x, i) => `${i && x.key !== "all" ? `<span class="stage-arrow" aria-hidden="true">›</span>` : ""}
         <button role="tab" aria-selected="${x.key === stage}" class="stage-tab ${x.key === stage ? "on" : ""} ${x.key === "all" ? "stage-all" : ""}" onclick="setStage('${x.key}')">
@@ -221,6 +283,7 @@
       document.getElementById("stage-hint").innerHTML = st.hint;
       document.querySelectorAll(".pack-tools").forEach(el => { el.style.display = ["pick", "pack", "ship", "all"].includes(stage) ? "" : "none"; });
       document.getElementById("period-wrap").style.display = st.history ? "" : "none";
+      document.getElementById("f-clear").style.display = ["f-customer", "f-packed", "f-pod"].some(id => document.getElementById(id).value) ? "" : "none";
       drawStageActions();
     }
     function setStage(key, keepSelection = false) {
@@ -355,7 +418,7 @@
       drawStages();
       const q = document.getElementById("search").value.trim();
       container.innerHTML = shown.length ? shown.map(renderCard).join("")
-        : `<div class="card muted stage-empty">${q ? "No shipments match this search." : STAGES.find(x => x.key === stage).empty}</div>`;
+        : `<div class="card muted stage-empty">${searching() ? noMatchHere() : STAGES.find(x => x.key === stage).empty}</div>`;
       shown.filter(s => openCards.has(s.id)).forEach(s => renderPallets(s.id));
       if (detailOpenId && cardEl(detailOpenId)) attachDetail(detailOpenId);
       updateSelectionUi();
@@ -851,12 +914,21 @@
     async function loadInvoices() {
       if (!invoicesAll) document.getElementById("inv-body").innerHTML = `<tr><td colspan="9" class="muted">Loading…</td></tr>`;
       invoicesAll = await apiFetch("/api/invoices/");
+      const sel = document.getElementById("inv-customer"), cur = sel.value;
+      const ids = [...new Set(invoicesAll.map(i => i.customer_id))].sort((a, b) => String(customerName(a)).localeCompare(String(customerName(b))));
+      sel.innerHTML = `<option value="">All</option>` + ids.map(id => `<option value="${id}">${escapeHtml(customerName(id))}</option>`).join("");
+      sel.value = cur;
       renderInvoices();
     }
     function visibleInvoices() {
       const f = document.getElementById("inv-filter").value, q = document.getElementById("inv-search").value.trim().toLowerCase();
       return (invoicesAll || []).filter(i => i.status !== "void" && (f === "all" || (f === "unsent" ? i.status === "draft" : i.status === "sent")))
-        .filter(i => { const o = order(i.order_id) || {}; return !q || [i.code, customerName(i.customer_id), o.po_number, o.code, ...(i.shipment_codes || [])].join(" ").toLowerCase().includes(q); });
+        .filter(i => { const o = order(i.order_id) || {}; return searchMatch(q, i.code, customerName(i.customer_id), o.po_number, o.job_number, o.code, i.shipment_codes || []); })
+        .filter(i => { const c = document.getElementById("inv-customer").value; return !c || String(i.customer_id) === c; })
+        .sort({ recent: (a, b) => new Date(b.invoice_date) - new Date(a.invoice_date) || b.id - a.id,
+                oldest: (a, b) => new Date(a.invoice_date) - new Date(b.invoice_date) || a.id - b.id,
+                customer: byText(i => customerName(i.customer_id)), total: (a, b) => b.total - a.total,
+                code: byText(i => i.code) }[document.getElementById("inv-sort").value]);
     }
     function renderInvoices() {
       const list = visibleInvoices();
@@ -1003,6 +1075,7 @@
     // ---- loading ----
     async function reloadList() {
       shipments = await apiFetch("/api/shipments/");
+      fillCustomerFilter();
       // Saved shipments re-render from the server; forget selections that no longer exist.
       [...selected].forEach(id => { if (!byId(id)) selected.delete(id); });
       renderAll();
@@ -1023,6 +1096,8 @@
         // History is optional: a missing endpoint shouldn't leave the screen empty.
         apiFetch("/api/stock-items/pack-sizes/history").catch(() => []),
       ]);
+      fillCustomerFilter();
+      loadPrefs();
       // where to start: ?stage=, a linked shipment's stage, the last stage used, else the first with work in it
       const params = new URLSearchParams(location.search), id = parseInt(params.get("id"));
       let saved = null;

@@ -539,13 +539,11 @@
 
     // Items tab: one row per order line across all live orders (like MRPeasy's Items view)
     function renderItemLines(q) {
-      const words = (q || "").toLowerCase().split(/\s+/).filter(Boolean);
       const itemBy = Object.fromEntries(items.map(i => [i.id, i]));
       const rows = [];
       orders.filter(o => o.status !== "cancelled").sort((a, b) => b.id - a.id).forEach(o => o.lines.forEach(l => {
         const it = itemBy[l.item_id] || {};
-        const hay = `${o.code} ${customerName(o.customer_id)} ${o.po_number || ""} ${o.job_number || ""} ${it.code || ""} ${it.title || ""} ${it.category || ""} ${l.notes || ""}`.toLowerCase();
-        if (words.length && !words.every(w => hay.includes(w))) return;
+        if (!searchMatch(q, o.code, customerName(o.customer_id), o.po_number, o.job_number, it.code, it.title, it.category, l.notes)) return;
         const open = Math.max(0, l.quantity - l.shipped_quantity);
         rows.push(`<tr>
           <td><a class="link" onclick="showDetail(${o.id})">${escapeHtml(o.code)}</a><div class="muted small">${escapeHtml(customerName(o.customer_id))}</div></td>
@@ -591,16 +589,8 @@
     }
 
     function matchesSearch(o, q) {
-      if (!q) return true;
-      q = q.toLowerCase();
-      if (o.code.toLowerCase().includes(q)) return true;
-      if (customerName(o.customer_id).toLowerCase().includes(q)) return true;
-      if ((o.po_number || "").toLowerCase().includes(q)) return true;
-      if ((o.job_number || "").toLowerCase().includes(q)) return true;
-      return o.lines.some(l => {
-        const item = items.find(i => i.id === l.item_id);
-        return item && (item.code.toLowerCase().includes(q) || item.title.toLowerCase().includes(q));
-      });
+      return searchMatch(q, o.code, customerName(o.customer_id), o.po_number, o.job_number,
+        o.lines.map(l => { const item = items.find(i => i.id === l.item_id); return item ? [item.code, item.title] : []; }));
     }
 
 

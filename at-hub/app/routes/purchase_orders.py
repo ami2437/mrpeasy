@@ -54,7 +54,11 @@ def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(ge
 
 @router.get("/", response_model=list[PurchaseOrderResponse])
 def list_orders(status: str | None = Query(None), db: Session = Depends(get_db)):
-    return PurchaseOrderService.list(db, status=status)
+    from app.services.jobs import jobs_by_po
+    pos, jobs = PurchaseOrderService.list(db, status=status), jobs_by_po(db)
+    for po in pos:
+        po.jobs = sorted(jobs.get(po.id, ()))
+    return pos
 
 
 @router.post("/", response_model=PurchaseOrderResponse)
