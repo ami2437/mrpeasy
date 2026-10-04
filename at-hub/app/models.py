@@ -555,9 +555,9 @@ class LandedCostAllocation(Base):
 class Shipment(Base):
     """One shipping event against a customer order, covering all or part of its lines.
 
-    Lifecycle: new (items booked from specific lots) -> ready (bookings confirmed,
-    picking can start) -> shipped (every line fully picked; stock leaves on_hand)
-    -> invoiced. new/ready shipments can be cancelled, releasing their bookings."""
+    Lifecycle: new (items booked from specific lots) -> ready (bookings confirmed, picking can
+    start) -> picked + packing accepted -> shipped (Ship: stock leaves on_hand) -> delivered ->
+    invoiced. new/ready shipments can be cancelled, releasing their bookings."""
     __tablename__ = "shipments"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -572,6 +572,8 @@ class Shipment(Base):
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     status = Column(String, nullable=False, default="new")  # new | ready | shipped | delivered | invoiced | cancelled
+    packed_at = Column(DateTime, nullable=True)  # packing (boxes, pallets) reviewed and accepted -- needed before Ship
+    packed_by = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

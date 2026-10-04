@@ -31,11 +31,12 @@
       <div class="batch-actions">
         <label class="check-label"><input type="checkbox" id="select-all"> All shown</label>
         <span class="sel-count" id="sel-count">0 selected</span>
-        <button onclick="bulkSavePacking()" title="Save packing (boxes + pallets) for the selected shipments as shown">Save Packing</button>
+        <button onclick="bulkSavePacking()" title="Save and accept packing (boxes + pallets) for the selected shipments as shown">Save Packing</button>
         <button class="secondary" onclick="printSelectedLabels()">Print Labels</button>
         <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>
         <button class="secondary" onclick="bulkConfirm()">Confirm Bookings</button>
-        <button class="secondary" onclick="bulkPickAll()">Pick All &amp; Ship</button>
+        <button class="secondary" onclick="bulkPickAll()">Pick All</button>
+        <button class="ship-now" onclick="bulkShip()" title="Ships the selected shipments that are fully picked with packing accepted">Ship</button>
         <span id="bulk-deliver" style="display:none;" class="check-label">
           <button class="secondary" onclick="bulkDeliver()" title="Managers: mark delivered without a POD">Mark Delivered</button>
           <input type="date" id="bulk-delivered-date" style="width:auto;padding:5px 6px;font-size:13px;">
@@ -234,7 +235,10 @@
     function lifecycleButtons(s) {
       const b = [];
       if (s.status === "new") b.push(`<button class="secondary" onclick="runOne(${s.id}, 'confirm-booking')">Confirm Bookings</button>`);
-      if (["new", "ready"].includes(s.status)) b.push(`<button class="secondary" onclick="pickAllOne(${s.id})">Pick All &amp; Ship</button>`);
+      const picked = s.lines.length && s.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9);
+      if (["new", "ready"].includes(s.status) && !picked) b.push(`<button class="secondary" onclick="pickAllOne(${s.id})">Pick All</button>`);
+      if (s.status === "ready" && picked) b.push(s.packed_at ? `<button class="ship-now" onclick="runOne(${s.id}, 'ship')">Ship</button>`
+        : `<span class="muted small" title="Save Packing accepts it">packing not accepted</span>`);
       if (s.status === "shipped" && canManage) b.push(`<button class="secondary" onclick="runOne(${s.id}, 'delivered', {delivered_at: null})" title="Mark delivered today without a POD">Mark Delivered</button>`);
       if (["shipped", "delivered"].includes(s.status)) b.push(`<button class="secondary" onclick="invoiceOne(${s.id})">Create Invoice</button>`);
       return b.join("");
@@ -448,6 +452,8 @@
       const pallets = collectPalletRows(id);
       await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes }) });
       await apiFetch(`/api/shipments/${id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets }) });
+      // reviewed here, so the packing is accepted (Ship needs it)
+      if (["new", "ready"].includes((byId(id) || {}).status)) await apiFetch(`/api/shipments/${id}/accept-packing`, { method: "POST" });
       delete drafts[id];
       const card = cardEl(id);
       if (card) card.querySelector(".ship-body").innerHTML = "";  // redraw from the saved state
@@ -474,7 +480,7 @@
       } catch (e) { if (err) err.textContent = e.message; else showError(e.message); }
     }
     async function pickAllOne(id) {
-      if (!confirm("Mark every line fully picked? The shipment ships and stock leaves on-hand.")) return;
+      if (!confirm("Mark every line fully picked? (It ships once the packing is accepted -- Ship.)")) return;
       const s = byId(id);
       if (s.status === "new") {
         try { await apiFetch(`/api/shipments/${id}/confirm-booking`, { method: "POST" }); }
@@ -539,11 +545,18 @@
     }
     function bulkPickAll() {
       const n = selectedShipments().filter(s => ["new", "ready"].includes(s.status)).length;
-      if (!n || !confirm(`Pick everything and ship ${n} shipment(s)? Stock leaves on-hand.`)) { if (!n) showError("None of the selected shipments are open (new/ready)."); return; }
-      bulkRun("Shipped", s => ["new", "ready"].includes(s.status), async s => {
+      if (!n || !confirm(`Mark everything picked on ${n} shipment(s)? They ship with Ship once the packing is accepted.`)) { if (!n) showError("None of the selected shipments are open (new/ready)."); return; }
+      bulkRun("Picked", s => ["new", "ready"].includes(s.status), async s => {
         if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
         await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
       });
+    }
+    function bulkShip() {
+      const ready = s => s.status === "ready" && s.packed_at && s.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9);
+      const n = selectedShipments().filter(ready).length;
+      if (!n) { showError("None of the selected shipments are fully picked with packing accepted (Pick All, then Save Packing)."); return; }
+      if (!confirm(`Ship ${n} shipment(s)? Stock leaves on-hand.`)) return;
+      bulkRun("Shipped", ready, s => apiFetch(`/api/shipments/${s.id}/ship`, { method: "POST" }));
     }
     function bulkDeliver() {
       const date = document.getElementById("bulk-delivered-date").value;

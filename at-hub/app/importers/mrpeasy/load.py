@@ -530,11 +530,13 @@ def _packing_from_old_backend(db, shipments, items, rep):
         return
     old = sqlite3.connect(f"file:{OLD_BACKEND_DB}?mode=ro", uri=True)
     sh_by_code = {s.code: s for s in shipments.values()}
+    from app.services.item_naming import normalize_code
     item_by_code = {i.code: i for i in items.values()}
+    find = lambda c: item_by_code.get((c or "").strip()) or item_by_code.get(normalize_code((c or "").strip()))  # 15420-NUTS == 15420-NUT
     n_box = n_pal = n_pack = 0
     for code, item_code, order_line, box_no, qty, lot_codes, pallet in old.execute(
             "select shipment_code, item_code, order_line, box_number, quantity_in_box, lot_codes, pallet_number from shipment_boxes"):
-        sh, it = sh_by_code.get(code), item_by_code.get(item_code)
+        sh, it = sh_by_code.get(code), find(item_code)
         if not sh or not it:
             rep.add("packing", f"box for {code}/{item_code}: shipment or item not in MRPeasy export -- skipped")
             continue
@@ -549,8 +551,8 @@ def _packing_from_old_backend(db, shipments, items, rep):
             db.add(PalletWeight(shipment=sh_by_code[code], pallet_number=pallet, weight=weight, dimensions=dims))
             n_pal += 1
     for item_code, size in old.execute("select item_code, pack_size from pack_sizes"):
-        if item_code in item_by_code and size:
-            item_by_code[item_code].default_pack_size = int(size)
+        if find(item_code) and size:
+            find(item_code).default_pack_size = int(size)
             n_pack += 1
     old.close()
     rep.add("packing", f"Imported {n_box} boxes, {n_pal} pallet weights, {n_pack} pack sizes from the old backend")

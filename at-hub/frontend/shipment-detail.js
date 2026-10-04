@@ -26,7 +26,7 @@ function lotCode(id) { const lot = lots.find(l => l.id === id); return lot ? lot
 
 const STATUS_HELP = {
   new: "Items are booked from stock (reserved, still on hand). Confirm the bookings to start picking, unbook individual lines, or cancel to release everything.",
-  ready: "Bookings confirmed — pick the items. The shipment ships automatically once every line is fully picked.",
+  ready: "Bookings confirmed — pick the items, then review and accept the packing; Ship Now sends it.",
   shipped: "Fully picked and shipped — stock has left on-hand. Waiting for proof of delivery.",
   delivered: "Delivered to the customer — ready to invoice.",
   invoiced: "Shipped and invoiced.",
@@ -84,10 +84,12 @@ function linesSectionHtml(shipment) {
     </table>
     <div style="margin-top:10px;">
       ${shipment.status === "new" ? `<button onclick="shipmentAction(${shipment.id}, 'confirm-booking')">Confirm Bookings</button>` : ""}
-      ${picking ? `
-        <button onclick="pickEntered(${shipment.id})">Pick Entered Quantities</button>
-        <button onclick="pickAll(${shipment.id})">Pick All &amp; Ship</button>
-      ` : ""}
+      ${picking && !allPicked(shipment) ? `<button onclick="pickEntered(${shipment.id})" title="Records the Pick now quantities (they start at everything left)">Pick</button>` : ""}
+      ${picking && allPicked(shipment) ? `<span class="pick-done">${icon("checkCircle")}All picked</span>
+        ${shipment.packed_at ? `<span class="muted small">Packing accepted by ${escapeHtml(shipment.packed_by || "")}</span>
+          <button class="ship-now" onclick="shipNow(${shipment.id})">Ship Now</button>
+          <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
+        : `<button class="ship-now" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
       ${shipment.status === "shipped" && AuthGuard.hasRole("manager") ? `<button onclick="shipmentAction(${shipment.id}, 'delivered', {delivered_at: null})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
       ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.hasRole("manager") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
@@ -114,13 +116,15 @@ async function shipmentAction(id, action, body) {
   try {
     await apiFetch(`/api/shipments/${id}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
     await reloadList();
-    showDetail(id);
+    await showDetail(id);
   } catch (err) {
     errorEl.textContent = err.message;
   }
 }
 
-function pickEntered(id) {
+function allPicked(shipment) { return shipment.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9); }
+
+async function pickEntered(id) {
   const lines = Array.from(document.querySelectorAll(".pick-qty"))
     .map(el => ({ shipment_line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
     .filter(l => l.quantity > 0);
@@ -128,7 +132,107 @@ function pickEntered(id) {
     document.getElementById("lifecycle-error").textContent = "Enter a picked quantity on at least one line.";
     return;
   }
-  shipmentAction(id, "pick", { lines });
+  await shipmentAction(id, "pick", { lines });
+  const sh = shipmentsById[id];
+  if (sh && sh.status === "ready" && allPicked(sh)) openPackReview(id);  // everything picked: on to packing
+}
+
+// ---- Pack & ship: once everything is picked, the packing, pallets, labels and carrier sections open in a
+// glass pop-up. Accept Packaging saves them and lights up Ship Now; shipping returns to the previous screen.
+let packReview = null;  // { id, moved: [[section, placeholder]] }
+function openPackReview(id) {
+  const sh = shipmentsById[id];
+  if (!sh || document.getElementById("pack-review")) return;
+  const back = document.createElement("div");
+  back.className = "glass-back";
+  back.id = "pack-review";
+  back.innerHTML = `<div class="glass-panel pack-panel" role="dialog" aria-modal="true" aria-labelledby="pr-title">
+    <div class="sm-head">
+      <div><h3 id="pr-title">Pack &amp; ship ${escapeHtml(sh.code)}</h3>
+        <div class="pr-steps"><span class="done">${icon("check")}Picked</span><span class="pr-step-pack ${sh.packed_at ? "done" : "on"}">${sh.packed_at ? icon("check") : "2"} Packing</span><span class="pr-step-ship">3 Ship</span></div></div>
+      <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closePackReview()">${icon("x")}</button>
+    </div>
+    <p class="muted small" style="margin:0 0 8px;">Check how it's packed — boxes by pack size, pallets, labels and the packing list — and the carrier, then accept the packaging.</p>
+    <div class="pr-body" id="pr-body"></div>
+    <div class="sm-foot">
+      <div class="sm-summary" id="pr-summary"></div>
+      <div class="error" id="pr-error"></div>
+      <button type="button" class="secondary" onclick="closePackReview()">Close</button>
+      <button type="button" id="pr-accept" onclick="acceptPackaging(${id})">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>
+      <button type="button" class="ship-now" id="pr-ship" onclick="shipNow(${id}, true)" ${sh.packed_at ? "" : "disabled"}>Ship Now</button>
+    </div></div>`;
+  document.body.appendChild(back);
+  document.body.classList.add("glass-open");
+  // the real sections move in (their inputs and buttons keep working) and move back on close
+  const body = back.querySelector("#pr-body");
+  packReview = { id, moved: [] };
+  ["sec-packing", "sec-pallets", "sec-carrier"].forEach(secId => {
+    const sec = document.getElementById(secId);
+    if (!sec) return;
+    const ph = document.createComment(secId);
+    sec.parentNode.insertBefore(ph, sec);
+    body.appendChild(sec);
+    packReview.moved.push([sec, ph]);
+  });
+  const boxes = document.getElementById("box-count");
+  document.getElementById("pr-summary").innerHTML = sh.packed_at ? `<span class="pos">Packing accepted</span> · ready to ship` : `${boxes ? boxes.textContent : "0"} boxes proposed`;
+  if (sh.packed_at) document.getElementById("pr-ship").classList.add("lit");
+}
+function closePackReview() {
+  const back = document.getElementById("pack-review");
+  if (packReview) packReview.moved.forEach(([sec, ph]) => { ph.parentNode.insertBefore(sec, ph); ph.remove(); });
+  packReview = null;
+  document.body.classList.remove("glass-open");
+  if (back) { back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
+}
+async function acceptPackaging(id) {
+  const err = document.getElementById("pr-error"), btn = document.getElementById("pr-accept");
+  err.textContent = "";
+  btn.disabled = true;
+  try {
+    await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes: collectBoxes() }) });
+    await apiFetch(`/api/shipments/${id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets: collectPallets() }) });
+    if (document.getElementById("s-carrier")) {
+      const cost = document.getElementById("s-cost").value;
+      await apiFetch(`/api/shipments/${id}`, { method: "PUT", body: JSON.stringify({
+        carrier: document.getElementById("s-carrier").value || null, tracking_number: document.getElementById("s-tracking").value || null,
+        shipping_cost: cost ? parseFloat(cost) : null, notes: document.getElementById("s-notes").value || null }) });
+    }
+    shipmentsById[id] = await apiFetch(`/api/shipments/${id}/accept-packing`, { method: "POST" });
+    btn.textContent = "✓ Packaging Accepted";
+    btn.classList.add("secondary");
+    document.querySelector("#pack-review .pr-step-pack").className = "pr-step-pack done";
+    document.querySelector("#pack-review .pr-step-pack").innerHTML = `${icon("check")} Packing`;
+    document.querySelector("#pack-review .pr-step-ship").classList.add("on");
+    document.getElementById("pr-summary").innerHTML = `<span class="pos">Packing accepted</span> · ${shipmentsById[id].boxes.length} boxes`;
+    const ship = document.getElementById("pr-ship");
+    ship.disabled = false;
+    ship.classList.add("lit");
+    ship.focus();
+  } catch (e) { err.textContent = e.message; }
+  btn.disabled = false;
+}
+async function shipNow(id, fromReview = false) {
+  const err = document.getElementById(fromReview ? "pr-error" : "lifecycle-error");
+  if (err) err.textContent = "";
+  try {
+    const sh = await apiFetch(`/api/shipments/${id}/ship`, { method: "POST" });
+    if (fromReview) {
+      const panel = document.querySelector("#pack-review .glass-panel");
+      const done = document.createElement("div");
+      done.className = "sm-done";
+      done.innerHTML = `<div class="sm-done-check ship-truck">${icon("truck")}</div><h3>${escapeHtml(sh.code)} shipped</h3><p class="muted">Stock has left on-hand · taking you back…</p>`;
+      panel.appendChild(done);
+      requestAnimationFrame(() => done.classList.add("show"));
+      await new Promise(r => setTimeout(r, 1200));
+      closePackReview();
+    } else toast(`${sh.code} shipped`);
+    // back to where they came from: the page that linked here, else the shipments list
+    const ref = document.referrer ? new URL(document.referrer) : null;
+    if (ref && ref.origin === location.origin && ref.pathname !== location.pathname && !ref.pathname.endsWith("login.html")) location.href = ref.href;
+    else if (typeof closeRecordPage === "function" && SHIPMENT_DETAIL_CONTAINER === "detail-card" && !document.getElementById("detail-card").classList.contains("embedded")) { await reloadList(); closeRecordPage(); }
+    else { await reloadList(); showDetail(id); }
+  } catch (e) { if (err) err.textContent = e.message; }
 }
 
 async function unbookLine(shipmentId, lineId) {
@@ -141,10 +245,6 @@ async function unbookLine(shipmentId, lineId) {
   await shipmentAction(shipmentId, "unbook", { shipment_line_id: lineId, quantity: qty });
 }
 
-function pickAll(id) {
-  if (!confirm("Mark every line fully picked? The shipment will ship and stock will leave on-hand.")) return;
-  shipmentAction(id, "pick", { pick_all: true });
-}
 
 function cancelShipment(id) {
   if (!confirm("Cancel this shipment? Its bookings are released back to stock and its packing list is cleared.")) return;
@@ -572,7 +672,7 @@ async function showDetail(id) {
     <section class="dsec">${linesSectionHtml(shipment)}
 
     ${shipment.status !== "cancelled" ? `
-    </section><section class="dsec"><h4 class="dsec-title">Packing
+    </section><section class="dsec" id="sec-packing"><h4 class="dsec-title">Packing
       ${shipment.boxes.length
         ? `<span class="tag shipped">packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}</span>`
         : `<span class="tag draft">not packed — review and Save Packing</span>`}</h4>
@@ -595,7 +695,7 @@ async function showDetail(id) {
       <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
     </details>
 
-    </section><section class="dsec"><h4 class="dsec-title">Pallets <span class="muted small">(optional)</span></h4>
+    </section><section class="dsec" id="sec-pallets"><h4 class="dsec-title">Pallets <span class="muted small">(optional)</span></h4>
     <p class="muted">Give lines a pallet # above, then enter each pallet's weight and dimensions here. Or paste from a spreadsheet:
       <strong>Item # · Pallet # · Weight · Dimensions</strong>, one row per item. Weight and dimensions only need to be on one row per pallet.</p>
     <details style="margin-bottom:10px;">
@@ -621,7 +721,7 @@ async function showDetail(id) {
     ` : ""}
 
     ${shipment.status !== "cancelled" ? `
-    </section><section class="dsec"><h4 class="dsec-title">Carrier</h4>
+    </section><section class="dsec" id="sec-carrier"><h4 class="dsec-title">Carrier</h4>
     <div class="carrier-grid">
       <div><label>Carrier</label><input type="text" id="s-carrier" value="${escapeHtml(shipment.carrier || "")}" placeholder="E.g. UPS, FedEx Freight"></div>
       <div><label>Tracking Number</label><input type="text" id="s-tracking" value="${escapeHtml(shipment.tracking_number || "")}"></div>

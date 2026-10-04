@@ -1388,3 +1388,25 @@ html[data-theme="dark"] .modal-backdrop { background: rgba(0, 0, 0, .45); }
 html[data-theme="dark"] .modal-backdrop > .modal { background: linear-gradient(160deg, rgba(36, 46, 62, .9), rgba(23, 30, 41, .82)); border-color: rgba(255, 255, 255, .12);
   box-shadow: 0 30px 80px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .08); }
 @media (prefers-reduced-motion: reduce) { .modal-backdrop, .modal-backdrop > .modal { animation: none; } }
+
+/* ---- Pack & ship pop-up (shipment-detail.js openPackReview) ---- */
+.glass-panel.pack-panel { width: min(1120px, 100%); }
+.pr-body { max-height: 62vh; overflow: auto; border-radius: 14px; padding: 4px 12px; background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.pr-body > .dsec { margin: 8px 0; box-shadow: none; }
+.pr-steps { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.pr-steps > span { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px;
+  color: var(--muted); background: var(--surface-3); }
+.pr-steps > span.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.pr-steps > span.done { color: #15803d; background: color-mix(in srgb, #16a34a 14%, transparent); }
+.pr-steps .ico { width: 12px; height: 12px; margin: 0 !important; }
+button.ship-now { background: #15803d; border-color: #15803d; color: #fff; font-weight: 600; }
+button.ship-now:hover:not(:disabled) { background: #166534; }
+button.ship-now.lit { animation: ship-glow 1.6s ease-in-out infinite; }
+@keyframes ship-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .45); } 50% { box-shadow: 0 0 0 7px rgba(22, 163, 74, 0); } }
+.pick-done { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: #15803d; margin-right: 6px; }
+.pick-done .ico { width: 16px; height: 16px; }
+.sm-done-check.ship-truck { background: var(--accent); box-shadow: 0 10px 30px rgba(47, 111, 237, .35); }
+.sm-done.show .ship-truck .ico { animation: truck-go 1s ease-in .2s both; }
+@keyframes truck-go { 0% { transform: translateX(0); } 60% { transform: translateX(4px); } 100% { transform: translateX(46px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { button.ship-now.lit, .sm-done.show .ship-truck .ico { animation: none; } }

@@ -1121,7 +1121,8 @@ class ShipmentService:
 
     @staticmethod
     def pick(db: Session, shipment_id: int, data, created_by: str) -> Shipment:
-        """Record picked quantities. Once every line is fully picked the shipment closes as shipped."""
+        """Record picked quantities. Nothing ships here: once everything is picked, packing is accepted
+        and then Ship sends it (ship())."""
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status != "ready":
             raise HTTPException(
@@ -1147,9 +1148,57 @@ class ShipmentService:
                                f"left to pick on that line"
                     )
                 line.picked_quantity = (line.picked_quantity or 0) + req.quantity
+        db.commit()
+        db.refresh(shipment)
+        return shipment
 
-        if all((l.picked_quantity or 0) >= l.quantity - 1e-9 for l in shipment.lines):
-            ShipmentService._close(db, shipment, created_by)
+    @staticmethod
+    def default_boxes(db: Session, shipment: Shipment) -> list:
+        """Boxes by each order line's pack size (the item's default; no pack size = one box), as the packing screen proposes."""
+        out, qty = [], {}
+        first = {}
+        for l in shipment.lines:
+            qty[l.order_line_id] = qty.get(l.order_line_id, 0) + l.quantity
+            first.setdefault(l.order_line_id, l)
+        for ol_id, total in qty.items():
+            l = first[ol_id]
+            item = db.query(StockItem).filter(StockItem.id == l.item_id).first()
+            pack = int((item.default_pack_size if item else None) or 0) or int(total)
+            n, left = 0, total
+            while left > 1e-9:
+                n += 1
+                out.append(ShipmentBox(shipment_id=shipment.id, order_line_id=ol_id, item_id=l.item_id, box_number=n,
+                                       quantity_in_box=min(pack, left)))
+                left -= pack
+        return out
+
+    @staticmethod
+    def accept_packing(db: Session, shipment_id: int, by: str) -> Shipment:
+        """Packing reviewed and accepted (Ship needs it). No boxes saved yet: they're made from the pack sizes."""
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status not in ShipmentService.OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- packing is accepted before it ships")
+        if not shipment.boxes:
+            for box in ShipmentService.default_boxes(db, shipment):
+                db.add(box)
+        shipment.packed_at, shipment.packed_by = datetime.utcnow(), by
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
+    def ship(db: Session, shipment_id: int, created_by: str) -> Shipment:
+        """Send it: everything picked and packing accepted -> stock leaves on-hand, status shipped."""
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status != "ready":
+            raise HTTPException(status_code=400, detail="Confirm the bookings and pick first" if shipment.status == "new"
+                                else f"Shipment is {shipment.status} -- nothing to ship")
+        short = [l for l in shipment.lines if (l.picked_quantity or 0) < l.quantity - 1e-9]
+        if short:
+            raise HTTPException(status_code=400, detail=f"{len(short)} line(s) aren't fully picked yet -- pick everything before shipping")
+        if not shipment.packed_at:
+            raise HTTPException(status_code=400, detail="Review and accept the packing before shipping")
+        ShipmentService._close(db, shipment, created_by)
         db.commit()
         db.refresh(shipment)
         return shipment

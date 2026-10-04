@@ -531,6 +531,8 @@ class ShipmentResponse(BaseModel):
     ship_date: Optional[datetime] = None
     delivered_at: Optional[datetime] = None
     delivered_by: Optional[str] = None
+    packed_at: Optional[datetime] = None
+    packed_by: Optional[str] = None
     created_at: Optional[datetime] = None
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None

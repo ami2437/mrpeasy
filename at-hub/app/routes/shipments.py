@@ -135,6 +135,18 @@ def pick(shipment_id: int, data: PickRequest, db: Session = Depends(get_db), cur
     return ShipmentService.pick(db, shipment_id, data, created_by=current_user.username)
 
 
+@router.post("/{shipment_id}/accept-packing", response_model=ShipmentResponse)
+def accept_packing(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Packing reviewed: Ship is allowed once everything is picked. Unsaved packing is made from pack sizes."""
+    return with_pods(db, ShipmentService.accept_packing(db, shipment_id, current_user.username))
+
+
+@router.post("/{shipment_id}/ship", response_model=ShipmentResponse)
+def ship(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Everything picked and packing accepted: stock leaves on-hand and the shipment is shipped."""
+    return with_pods(db, ShipmentService.ship(db, shipment_id, current_user.username))
+
+
 @router.post("/{shipment_id}/unbook", response_model=ShipmentResponse)
 def unbook(shipment_id: int, data: UnbookRequest, db: Session = Depends(get_db)):
     """Release booked, unpicked quantity back to stock (all or part of a line)."""

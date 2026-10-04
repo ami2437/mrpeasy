@@ -5,7 +5,7 @@ stays the same across imports -- order / PO / shipment / invoice codes, item cod
 names, an order line's line #, a PO line's position among lines of the same item -- never by database id.
 
 Carried: attached files (+ which PO lines an MTR covers), learned item matches, line notes (+ "print"),
-vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links. Files themselves stay in uploads/ untouched;
+vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links, pack sizes. Files themselves stay in uploads/ untouched;
 only their database rows move. Anything whose record no longer exists is reported, not guessed.
 """
 import sqlite3
@@ -151,6 +151,15 @@ def carry_over(db, live_path, rep) -> None:
             it.parent_item_id, parent.is_generic, links = parent.id, True, links + 1
     if flags or links:
         rep.add("carry-over", f"generic stock: {flags} generic item(s), {links} draw link(s) {S}")
+
+    # ---- 4c. pack sizes set or changed in AT-HUB win over the portal's / MRPeasy's ----
+    n = 0
+    for r in _rows(live, "select code, default_pack_size from stock_items where default_pack_size is not null"):
+        it = new_items.get(r["code"])
+        if it and r["default_pack_size"] and it.default_pack_size != r["default_pack_size"]:
+            it.default_pack_size, n = r["default_pack_size"], n + 1
+    if n:
+        rep.add("carry-over", f"pack sizes set in AT-HUB: {n} {S}")
 
     # ---- 5. line notes ----
     n = 0

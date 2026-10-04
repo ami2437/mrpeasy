@@ -16,7 +16,24 @@ def test_receive_book_ship_moves_stock(make, api):
     assert item_state(api, a) == (100, 30, 70)                 # booked, not gone yet
     api.post(f"/api/shipments/{sh['id']}/confirm-booking")
     api.post(f"/api/shipments/{sh['id']}/pick", json={"pick_all": True})
-    assert item_state(api, a) == (70, 0, 70)                   # picked = shipped = left on-hand
+    assert item_state(api, a) == (100, 30, 70)                 # picked, not shipped yet
+    api.post(f"/api/shipments/{sh['id']}/ship", expect=400)    # packing not accepted
+    api.post(f"/api/shipments/{sh['id']}/accept-packing")
+    assert api.post(f"/api/shipments/{sh['id']}/ship")["status"] == "shipped"
+    assert item_state(api, a) == (70, 0, 70)                   # shipped = left on-hand
+
+
+def test_accept_packing_proposes_boxes_from_pack_size(make, api):
+    a = make.item()
+    api.put(f"/api/stock-items/{a['id']}", json={"default_pack_size": 40})
+    make.stock(a, 100)
+    o = make.order(lines=[(a, 90, 1)])
+    sh = api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": o["lines"][0]["id"], "quantity": 90}]})
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    api.post(f"/api/shipments/{sh['id']}/pick", json={"lines": [{"shipment_line_id": sh["lines"][0]["id"], "quantity": 50}]})
+    sh = api.post(f"/api/shipments/{sh['id']}/accept-packing")
+    assert [b["quantity_in_box"] for b in sh["boxes"]] == [40, 40, 10] and sh["packed_by"]
+    api.post(f"/api/shipments/{sh['id']}/ship", expect=400)    # 40 still to pick
 
 
 def test_cannot_book_more_than_available(make, api):

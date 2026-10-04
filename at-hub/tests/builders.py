@@ -47,13 +47,15 @@ class Builders:
         return o
 
     def ship(self, order, quantities=None):
-        """Book, confirm and pick a shipment -> shipped. quantities: {order_line_id: qty} (default: everything open)."""
+        """Book, confirm, pick, accept packing and ship. quantities: {order_line_id: qty} (default: everything open)."""
         if quantities is None:
             quantities = {l["id"]: l["quantity"] - l["shipped_quantity"] - l["booked_quantity"] for l in order["lines"]}
         sh = self.api.post(f"/api/customer-orders/{order['id']}/shipments",
                            json={"lines": [{"line_id": lid, "quantity": q} for lid, q in quantities.items() if q > 0]})
         self.api.post(f"/api/shipments/{sh['id']}/confirm-booking")
-        return self.api.post(f"/api/shipments/{sh['id']}/pick", json={"pick_all": True})
+        self.api.post(f"/api/shipments/{sh['id']}/pick", json={"pick_all": True})
+        self.api.post(f"/api/shipments/{sh['id']}/accept-packing")
+        return self.api.post(f"/api/shipments/{sh['id']}/ship")
 
     def invoice(self, shipments, shipping=0, **kw):
         if not isinstance(shipments, list):
