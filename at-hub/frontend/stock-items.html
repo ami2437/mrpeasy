@@ -69,7 +69,7 @@
       <h3 id="form-title">New Stock Item</h3>
       <input type="hidden" id="edit-id">
       <div class="row">
-        <div><label>Code</label><input type="text" id="f-code"></div>
+        <div><label>Code</label><input type="text" id="f-code" data-autocorrect="item-code"></div>
         <div><label>Title</label><input type="text" id="f-title"></div>
         <div><label>Unit</label><input type="text" id="f-unit" placeholder="Ea, Kg, ..."></div>
       </div>
@@ -303,6 +303,7 @@
             method: "POST",
             body: JSON.stringify({
               code: document.getElementById("f-code").value,
+              keep_code: document.getElementById("f-code").dataset.keep === "1",
               title: document.getElementById("f-title").value,
               unit: document.getElementById("f-unit").value,
               category: document.getElementById("f-category").value || null,

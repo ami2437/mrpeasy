@@ -125,9 +125,12 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
 
     # --- items (plus any deleted item that still holds stock or history) ---
     items = {}
+    from app.services.item_naming import normalize_code
+    raw_codes = {it["code"] for it in snap("items")}
+    tidy = lambda c: normalize_code(c) if normalize_code(c) == c or normalize_code(c) not in raw_codes else c  # never onto another item's code
     for it in snap("items"):
         items[it["article_id"]] = StockItem(
-            mrp_id=it["article_id"], code=it["code"], title=it["title"] or it["code"], unit=units.get(it["unit_id"]),
+            mrp_id=it["article_id"], code=tidy(it["code"]), title=it["title"] or it["code"], unit=units.get(it["unit_id"]),
             category=it["group_title"], selling_price=f(it["selling_price"]), cost_price=f(it["avg_cost"]),
             reorder_point=f(it["min_quantity"]), is_active=not it["deleted"])
     inventory = snap("inventory")

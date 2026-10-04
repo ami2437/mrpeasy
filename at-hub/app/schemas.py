@@ -111,6 +111,7 @@ class Token(BaseModel):
 # ---- Stock Items ----
 class StockItemCreate(InputModel):
     code: str
+    keep_code: bool = False  # the user undid the autocorrect (-NUTS -> -NUT): save the code as typed
     title: str
     unit: Optional[str] = None
     category: Optional[str] = None

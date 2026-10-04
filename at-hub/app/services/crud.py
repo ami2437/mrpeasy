@@ -335,9 +335,12 @@ class StockItemService:
 
     @staticmethod
     def create(db: Session, data) -> StockItem:
+        from app.services.item_naming import normalize_code
+        if not data.keep_code:
+            data.code = normalize_code(data.code)
         if db.query(StockItem).filter(StockItem.code == data.code).first():
             raise HTTPException(status_code=400, detail=f"Item code '{data.code}' already exists")
-        fields = data.dict()
+        fields = data.dict(exclude={"keep_code"})
         fields["category"] = ProductGroupService.require(db, data.category)
         item = StockItem(**fields)
         db.add(item)

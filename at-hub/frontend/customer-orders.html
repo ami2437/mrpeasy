@@ -221,7 +221,7 @@
           <thead><tr><th></th><th>Code</th><th>Title</th><th>Group</th><th class="num">Price</th><th>How it was named</th></tr></thead>
           <tbody>${list.map((x, i) => `<tr>
             <td><input type="checkbox" class="new-item-pick" data-i="${i}" ${x.kind === "nut" || x.tick !== false ? "checked" : ""} style="width:auto;"></td>
-            <td><input type="text" class="new-item-code" data-i="${i}" value="${escapeHtml(x.code)}" style="width:120px;"></td>
+            <td><input type="text" class="new-item-code" data-autocorrect="item-code" data-i="${i}" value="${escapeHtml(x.code)}" style="width:120px;"></td>
             <td><input type="text" class="new-item-title" data-i="${i}" value="${escapeHtml(x.title)}" style="min-width:320px;"></td>
             <td>${(() => { const pick = groupMatch(x.category);
               return `<select class="new-item-group" data-i="${i}" style="width:120px;" ${pick ? "" : 'title="No matching group: pick one"'}>
@@ -252,6 +252,7 @@
         try {
           await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({
             code: document.querySelector(`.new-item-code[data-i="${i}"]`).value.trim(),
+            keep_code: document.querySelector(`.new-item-code[data-i="${i}"]`).dataset.keep === "1",
             title: document.querySelector(`.new-item-title[data-i="${i}"]`).value.trim(),
             category: document.querySelector(`.new-item-group[data-i="${i}"]`).value.trim() || null,
             selling_price: parseFloat(document.querySelector(`.new-item-price[data-i="${i}"]`).value) || 0,

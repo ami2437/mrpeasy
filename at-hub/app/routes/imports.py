@@ -97,6 +97,9 @@ def _plan(kind: str, parsed: Dict[str, Any], db: Session) -> List[Dict[str, Any]
                     errors.append(f"'{v}' isn't one of the product groups")
                     continue
                 v = group
+            if kind == "items" and field == "code":
+                from app.services.item_naming import normalize_code
+                v = normalize_code(v)  # 15420-NUTS -> 15420-NUT, same as typing it
             vals[field] = v
         k = (vals.get(key) or "").strip().lower()
         if not k:

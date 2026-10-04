@@ -117,3 +117,13 @@ NUT_HEADS = re.compile(r"^(BOLT_(HH|HEX|HVY|CAR)|SCREW_CAP)", re.I)
 def usually_with_nut(description: str) -> bool:
     d = (description or "").strip()
     return bool(NUT_HEADS.match(d) and USUALLY_WITH_NUT.search(d))
+
+
+# ---- item code clean-up: one spelling for nut codes ----
+NUT_SUFFIX = re.compile(r"\s*-\s*nuts?\s*$", re.I)
+
+
+def normalize_code(code: str) -> str:
+    """'15420-NUTS', '15385 - NUT', '31568-Nut', '55659 -NUTS' -> '15420-NUT' ... (only the nut suffix is touched)."""
+    code = (code or "").strip()
+    return NUT_SUFFIX.sub("-NUT", code) if NUT_SUFFIX.search(code) else code

@@ -1385,6 +1385,24 @@ function statusIcon(status) {
   return `<span class="st-ico st-${escapeHtml(status)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ico === "half" ? "" : icon(ico)}<span class="sr-only">${escapeHtml((status || "").replace(/_/g, " "))}</span></span>`;
 }
 
+// ---- Item code autocorrect: '15420-NUTS' / '15385 - Nut' -> '15420-NUT', with Undo to keep what was typed.
+// Any <input data-autocorrect="item-code">; the page sends keep_code: input.dataset.keep === "1".
+function normalizeItemCode(code) { return /\s*-\s*nuts?\s*$/i.test(code) ? code.replace(/\s*-\s*nuts?\s*$/i, "-NUT") : code; }
+document.addEventListener("focusout", e => {
+  const el = e.target;
+  if (!el.matches || !el.matches('input[data-autocorrect="item-code"]') || el.dataset.keep === "1") return;
+  const typed = el.value.trim(), fixed = normalizeItemCode(typed);
+  el.parentNode.querySelectorAll(".ac-note").forEach(n => n.remove());
+  if (fixed === typed) return;
+  el.value = fixed;
+  const note = document.createElement("div");
+  note.className = "ac-note small muted";
+  note.innerHTML = `Changed to <strong>${escapeHtml(fixed)}</strong> (nut codes end in -NUT) · <a class="link">Undo</a>`;
+  note.querySelector("a").onclick = () => { el.value = typed; el.dataset.keep = "1"; note.innerHTML = `Kept <strong>${escapeHtml(typed)}</strong> as typed.`; };
+  el.insertAdjacentElement("afterend", note);
+});
+document.addEventListener("input", e => { if (e.target.matches && e.target.matches('input[data-autocorrect="item-code"]')) delete e.target.dataset.keep; });
+
 // ---- Line-row icon buttons: one click does it, the hover tooltip says what ----
 // trashBtn("removeLine(3, 9)") -> a small bin icon; onclick is plain JS (use single quotes inside).
 function trashBtn(onclick, title = "Remove this line") {
