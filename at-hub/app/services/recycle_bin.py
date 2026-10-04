@@ -105,8 +105,7 @@ def restore(db: Session, entry_id: int) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = json.loads(entry.rows)
     tables = {t.name: t for t in Base.metadata.sorted_tables}
     order = {t.name: i for i, t in enumerate(Base.metadata.sorted_tables)}  # parents before children
-    if any(r["table"] == "shipments" and r["cols"].get("status") in ("new", "ready") for r in rows):
-        raise HTTPException(status_code=400, detail="An open shipment's stock bookings were released when it was deleted -- create the shipment again instead")
+    rebook = _check_rebooking(db, rows)  # an open shipment's bookings were released when it was deleted: book them again
     db.info["restoring"] = True
     renumbered = []
     try:
@@ -139,6 +138,7 @@ def restore(db: Session, entry_id: int) -> Dict[str, Any]:
                     dst = Path(settings.upload_dir).resolve() / r["cols"]["stored_name"]
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(src), str(dst))
+        notes = _apply_rebooking(db, rebook, new_id)
         entry.restored_at = datetime.utcnow()
         entry.restored_by = current_user.get()
         db.commit()
@@ -147,7 +147,56 @@ def restore(db: Session, entry_id: int) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"Can't restore: something now uses the same number or id ({str(exc.orig)[:120]})")
     finally:
         db.info.pop("restoring", None)
-    return {"restored": entry.label, "rows": len(rows), "renumbered": renumbered}
+    return {"restored": entry.label, "rows": len(rows), "renumbered": renumbered, "notes": notes}
+
+
+def _check_rebooking(db: Session, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """An open (new / ready) shipment in the entry: its lines must still fit in free stock -- per item and per lot --
+    to be booked again. Refuses with what's short; returns what to book."""
+    from app.models import Lot, Shipment, ShipmentLine, StockItem
+    open_ids = {r["cols"]["id"] for r in rows if r["table"] == "shipments" and r["cols"].get("status") in ("new", "ready")}
+    if not open_ids:
+        return {}
+    lines = [r["cols"] for r in rows if r["table"] == "shipment_lines" and r["cols"].get("shipment_id") in open_ids]
+    by_item, by_lot = {}, {}
+    for l in lines:
+        by_item[l["item_id"]] = by_item.get(l["item_id"], 0) + (l["quantity"] or 0)
+        if l.get("lot_id"):
+            by_lot[l["lot_id"]] = by_lot.get(l["lot_id"], 0) + (l["quantity"] or 0)
+    short = []
+    for item_id, q in by_item.items():
+        it = db.get(StockItem, item_id)
+        if not it or it.available + 1e-9 < q:
+            short.append(f"{it.code if it else item_id}: needs {q:g}, {max(0, it.available if it else 0):g} free")
+    for lot_id, q in by_lot.items():
+        lot = db.get(Lot, lot_id)
+        held = (db.query(ShipmentLine).join(Shipment, Shipment.id == ShipmentLine.shipment_id)
+                .filter(ShipmentLine.lot_id == lot_id, Shipment.status.in_(("new", "ready"))).all())
+        free = (lot.quantity if lot else 0) - sum(h.quantity for h in held)
+        if free + 1e-9 < q:
+            short.append(f"lot {lot.lot_code if lot else lot_id}: needs {q:g}, {max(0, free):g} free")
+    if short:
+        raise HTTPException(status_code=400, detail="Can't book this shipment again -- the stock has been used since it was deleted: "
+                                                    + "; ".join(short) + ". Create a new shipment instead.")
+    orders = {r["cols"].get("order_id") for r in rows if r["table"] == "shipments" and r["cols"]["id"] in open_ids}
+    return {"by_item": by_item, "orders": orders}
+
+
+def _apply_rebooking(db: Session, rebook: Dict[str, Any], new_id: Dict[tuple, int]) -> List[str]:
+    from app.models import CustomerOrder, StockItem
+    if not rebook:
+        return []
+    notes = []
+    for item_id, q in rebook["by_item"].items():
+        it = db.get(StockItem, new_id.get(("stock_items", item_id), item_id))
+        it.booked = (it.booked or 0) + q
+    for oid in rebook["orders"]:
+        order = db.get(CustomerOrder, new_id.get(("customer_orders", oid), oid))
+        if order and order.status == "cancelled":  # its shipment is back, so the order is live again
+            order.status = "confirmed"
+            notes.append(f"{order.code} was cancelled -- reopened, since its shipment is back")
+    notes.append("Stock booked again for the restored shipment (it's open: pick, pack and ship it to send it)")
+    return notes
 
 
 def purge(db: Session, entry_id: int) -> None:

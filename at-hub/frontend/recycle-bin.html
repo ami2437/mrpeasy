@@ -64,7 +64,7 @@
       try {
         const r = await apiFetch(`/api/recycle-bin/${id}/restore`, { method: "POST" });
         msg.className = "small pos";
-        msg.textContent = `Restored ${r.restored}.${r.renumbered && r.renumbered.length ? ` Its number was taken meanwhile, so it came back as: ${r.renumbered.join(", ")}.` : ""}`;
+        msg.textContent = `Restored ${r.restored}.${r.renumbered && r.renumbered.length ? ` Its number was taken meanwhile, so it came back as: ${r.renumbered.join(", ")}.` : ""}${r.notes && r.notes.length ? " " + r.notes.join(". ") + "." : ""}`;
         load();
       } catch (err) { msg.className = "small neg"; msg.textContent = err.message; }
     }

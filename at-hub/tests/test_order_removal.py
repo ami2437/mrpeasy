@@ -62,3 +62,35 @@ def test_deleted_invoice_restores_whole(api, client, admin_headers, make):
     assert client.post(f"/api/recycle-bin/{entry['id']}/restore", headers=admin_headers).status_code == 200
     back = api.get(f"/api/invoices/{inv['id']}")
     assert back["status"] == "void" and len(back["lines"]) == len(inv["lines"]) and back["shipment_ids"] == [sh["id"]]
+
+
+def test_restored_open_shipment_is_booked_again(api, client, admin_headers, make):
+    """Restore an open shipment (or one undone by Cancel / Delete Order): its stock is booked again and a cancelled
+    order is reopened -- refused only when the stock was used meanwhile."""
+    a = make.item(price=2)
+    make.stock(a, 30)
+    o = make.order(lines=[(a, 30, 2)])
+    sh = make.ship(o)
+    api.post(f"/api/shipments/{sh['id']}/unship", json={})        # what Cancel / Delete Order does
+    api.delete(f"/api/shipments/{sh['id']}")
+    api.post(f"/api/customer-orders/{o['id']}/cancel")
+    assert api.get(f"/api/stock-items/{a['id']}")["booked"] == 0
+    entry = next(e for e in client.get("/api/recycle-bin", headers=admin_headers).json() if sh["code"] in e["label"])
+    r = client.post(f"/api/recycle-bin/{entry['id']}/restore", headers=admin_headers)
+    assert r.status_code == 200 and any("reopened" in n for n in r.json()["notes"]), r.text
+    assert api.get(f"/api/stock-items/{a['id']}")["booked"] == 30
+    assert api.get(f"/api/customer-orders/{o['id']}")["status"] == "confirmed"
+    assert api.get(f"/api/shipments/{sh['id']}")["status"] == "new"
+
+
+def test_restore_refused_when_stock_is_gone(api, client, admin_headers, make):
+    a = make.item(price=2)
+    make.stock(a, 10)
+    o = make.order(lines=[(a, 10, 2)])
+    sh = api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": o["lines"][0]["id"], "quantity": 10}]})
+    api.delete(f"/api/shipments/{sh['id']}")
+    o2 = make.order(lines=[(a, 10, 2)])
+    api.post(f"/api/customer-orders/{o2['id']}/shipments", json={"lines": [{"line_id": o2["lines"][0]["id"], "quantity": 10}]})  # takes it
+    entry = next(e for e in client.get("/api/recycle-bin", headers=admin_headers).json() if sh["code"] in e["label"])
+    r = client.post(f"/api/recycle-bin/{entry['id']}/restore", headers=admin_headers)
+    assert r.status_code == 400 and "used since" in r.json()["detail"]
