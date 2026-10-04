@@ -381,6 +381,9 @@ class StockItemService:
         adj_note = (updates.pop("adjustment_note", None) or "").strip()
         if "default_pack_size" in updates:
             StockItemService.set_pack_size(db, item, updates.pop("default_pack_size"), created_by, "item edit")
+        if "parent_item_id" in updates:
+            from app.services.stock_transfer import check_parent
+            updates["parent_item_id"] = check_parent(db, item, updates["parent_item_id"])
 
         for key, value in updates.items():
             setattr(item, key, value)

@@ -136,6 +136,7 @@ class StockItemUpdate(InputModel):
     adjustment_unit_cost: Optional[float] = None  # required when on_hand goes up: what the added stock was acquired at
     adjustment_lot_code: Optional[str] = None  # optional; a LOT-##### number is generated otherwise
     adjustment_note: Optional[str] = None
+    parent_item_id: Optional[int] = None  # generic item to draw stock from; 0 clears it
 
 
 class StockItemResponse(BaseModel):
@@ -158,6 +159,7 @@ class StockItemResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    parent_item_id: Optional[int] = None
     class Config:
         from_attributes = True
 
@@ -179,6 +181,7 @@ class LotResponse(BaseModel):
     source: Optional[str] = None
     source_reference: Optional[str] = None
 
+    parent_lot_id: Optional[int] = None
     class Config:
         from_attributes = True
 

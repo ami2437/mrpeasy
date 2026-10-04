@@ -691,6 +691,25 @@
       } catch (err) { alert(err.message); }
     }
 
+    // Short on a specific nut but its generic item has stock: offer the transfer right here.
+    function genericOffer(l, openQty) {
+      const it = items.find(i => i.id === l.item_id) || {}, parent = it.parent_item_id && items.find(i => i.id === it.parent_item_id);
+      const short = Math.ceil(openQty - Math.max(0, itemAvailable(l.item_id)));
+      if (!parent || short <= 0 || !AuthGuard.hasRole("manager")) return "";
+      return `<div class="small">+${fmtQty(parent.available)} in ${escapeHtml(parent.code)} ·
+        <a class="link" onclick="transferForLine(${l.item_id}, ${short}, '${escapeHtml(parent.code)}')" title="Move ${fmtQty(short)} from the generic item into ${escapeHtml(it.code)}">Transfer ${fmtQty(short)}</a></div>`;
+    }
+    async function transferForLine(itemId, qty, parentCode) {
+      const q = prompt(`Transfer how many from ${parentCode}?`, qty);
+      if (!q) return;
+      try {
+        await apiFetch(`/api/stock-items/${itemId}/transfer-from-parent`, { method: "POST", body: JSON.stringify({ quantity: parseFloat(q), reference: currentOrderId ? (orders.find(o => o.id === currentOrderId) || {}).code : null }) });
+        items = await apiFetch("/api/stock-items/");
+        toast(`Transferred ${fmtQty(parseFloat(q))} from ${parentCode}`);
+        showDetail(currentOrderId);
+      } catch (e) { document.getElementById("lines-error").textContent = e.message; }
+    }
+
     function itemAvailable(id) {
       const i = items.find(i => i.id === id);
       return i ? i.available : 0;
@@ -865,7 +884,7 @@
                 <td>${lineInvoicesHtml(l)}</td>
 
                 ${canBook ? `<td>${openQty > 0
-                  ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div>`
+                  ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div>${genericOffer(l, openQty)}`
                   : `<span class="muted small">Allocated</span>`}</td>` : ""}
               </tr>
             `;

@@ -40,6 +40,7 @@ class StockItem(Base):
     title = Column(String, nullable=False)
     unit = Column(String, nullable=True)
     category = Column(String, nullable=True, index=True)  # product group name (see ProductGroup)
+    parent_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True, index=True)  # generic item it draws stock from (15420-NUT <- bulk 5/8 2H nut)
     created_via = Column(String, nullable=True)  # "ai-scan": made from a scanned customer PO -- worth a second look
     verified_by = Column(String, nullable=True)  # "who, when" a person checked an ai-scan item; until then it can't be picked
     barcode = Column(String, nullable=True, index=True)
@@ -92,6 +93,7 @@ class Lot(Base):
     source = Column(String, nullable=True)  # purchase | adjustment
     source_reference = Column(String, nullable=True)  # e.g. PO code
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
+    parent_lot_id = Column(Integer, ForeignKey("lots.id"), nullable=True, index=True)  # transferred from this generic item's lot
     created_at = Column(DateTime, default=datetime.utcnow)
 
     @property

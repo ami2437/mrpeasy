@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -165,3 +166,31 @@ def movements(item_id: int, limit: int = Query(500, ge=1, le=5000), db: Session 
     total_out = -sum(t.quantity_delta for t in txs if t.quantity_delta < 0)
     return {"item_id": item.id, "code": item.code, "title": item.title, "on_hand": item.on_hand,
             "total_in": total_in, "total_out": total_out, "movements": out}
+
+
+# ---- generic stock: transfer from / back to the generic item this one draws from ----
+from pydantic import BaseModel as _BM  # noqa: E402
+
+
+class _Qty(_BM):
+    quantity: float
+    reference: Optional[str] = None
+
+
+@router.get("/{item_id}/family")
+def item_family(item_id: int, db: Session = Depends(get_db)):
+    from app.services import stock_transfer
+    return stock_transfer.family(db, StockItemService.get(db, item_id))
+
+
+@router.post("/{item_id}/transfer-from-parent", dependencies=[Depends(require_role("manager"))])
+def transfer_from_parent(item_id: int, data: _Qty, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    from app.services import stock_transfer
+    lots = stock_transfer.from_parent(db, item_id, data.quantity, current_user.username, data.reference)
+    return {"lots": [{"id": l.id, "lot_code": l.lot_code, "quantity": l.quantity} for l in lots]}
+
+
+@router.post("/{item_id}/return-to-parent", dependencies=[Depends(require_role("manager"))])
+def return_to_parent(item_id: int, data: _Qty, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    from app.services import stock_transfer
+    return {"returned": stock_transfer.to_parent(db, item_id, data.quantity, current_user.username)}

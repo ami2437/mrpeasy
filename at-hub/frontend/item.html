@@ -23,6 +23,11 @@
 
     <div class="card" id="item-card"><p class="muted">Loading…</p></div>
 
+    <div class="card" id="family-card" style="display:none;">
+      <h3 style="margin-top:0;">Generic stock</h3>
+      <div id="family"></div>
+    </div>
+
     <div class="card">
       <h3 style="margin-top:0;">Where it's used</h3>
       <div id="usage" class="muted">Loading…</div>
@@ -46,6 +51,7 @@
         const [it, groups] = await Promise.all([apiFetch(`/api/stock-items/${itemId}`), apiFetch("/api/stock-items/groups/list")]);
         item = it;
         render(groups);
+        loadFamily();
         loadUsage();
         loadMovements();
       } catch (err) {
@@ -227,6 +233,53 @@
               || `<tr><td colspan="8" class="muted">No movements yet.</td></tr>`}</tbody>
           </table></div>`;
       } catch (err) { el.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`; }
+    }
+
+    // ---- generic stock: this item draws from a bulk generic item, or is one ----
+    let allItems = null;
+    async function loadFamily() {
+      const card = document.getElementById("family-card"), el = document.getElementById("family");
+      if (!isManager) return;
+      card.style.display = "";
+      const fam = await apiFetch(`/api/stock-items/${itemId}/family`);
+      if (fam.children.length) {
+        el.innerHTML = `<p class="muted small" style="margin-top:0;">This is a <strong>generic item</strong>: these items draw stock from it by transfer.</p>
+          <table class="compact-table"><thead><tr><th>Item</th><th>Title</th><th class="num">On hand</th><th class="num">Booked</th></tr></thead><tbody>
+          ${fam.children.map(k => `<tr><td><a class="link" href="item.html?id=${k.id}">${escapeHtml(k.code)}</a></td><td class="small">${escapeHtml(k.title)}</td>
+            <td class="num">${fmtQty(k.on_hand)}</td><td class="num">${fmtQty(k.booked)}</td></tr>`).join("")}</tbody></table>`;
+        return;
+      }
+      allItems = allItems || await apiFetch("/api/stock-items/");
+      const opts = allItems.filter(i => i.id !== itemId && !i.parent_item_id).map(i => `<option value="${i.id}" ${fam.parent && fam.parent.id === i.id ? "selected" : ""}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+      el.innerHTML = `<p class="muted small" style="margin-top:0;">For items like <strong>15420-NUT</strong> that use generic stock bought in bulk (e.g. 5/8" 2H nuts):
+          pick the generic item, then <strong>transfer</strong> what's needed. Transferred stock gets lots named after the generic lot (<code>L00512-T1</code>),
+          keeps its cost and traces to the same PO and MTR.</p>
+        <div class="row" style="max-width:760px;">
+          <div style="flex:3;"><label>Draws stock from</label><select id="fam-parent" data-searchable><option value="">— none —</option>${opts}</select></div>
+          <div style="flex:0 0 auto;"><button class="secondary" onclick="saveParent()">Save</button></div>
+        </div>
+        ${fam.parent ? `<div class="panel" style="margin-top:10px;">
+          <strong><a class="link" href="item.html?id=${fam.parent.id}">${escapeHtml(fam.parent.code)}</a></strong> has <strong>${fmtQty(fam.parent.free)}</strong> free.
+          <div class="row" style="margin-top:6px; max-width:620px;">
+            <div style="flex:0 0 140px;"><label>Quantity</label><input type="number" step="1" min="1" id="fam-qty"></div>
+            <div style="flex:0 0 auto;"><button onclick="famMove('transfer-from-parent')">Transfer From ${escapeHtml(fam.parent.code)}</button></div>
+            ${fam.transferred_free > 0 ? `<div style="flex:0 0 auto;"><button class="secondary" onclick="famMove('return-to-parent')" title="Up to ${fmtQty(fam.transferred_free)} transferred and not booked">Return To Generic</button></div>` : ""}
+          </div></div>` : ""}
+        <div id="fam-error" class="error"></div>`;
+    }
+    async function saveParent() {
+      try {
+        await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ parent_item_id: parseInt(document.getElementById("fam-parent").value) || 0 }) });
+        toast("Saved"); allItems = null; loadFamily();
+      } catch (e) { document.getElementById("fam-error").textContent = e.message; }
+    }
+    async function famMove(kind) {
+      const q = parseFloat(document.getElementById("fam-qty").value);
+      try {
+        await apiFetch(`/api/stock-items/${itemId}/${kind}`, { method: "POST", body: JSON.stringify({ quantity: q }) });
+        toast(kind === "transfer-from-parent" ? `Transferred ${fmtQty(q)}` : `Returned ${fmtQty(q)}`);
+        await load();
+      } catch (e) { document.getElementById("fam-error").textContent = e.message; }
     }
 
     if (!itemId) document.getElementById("item-card").innerHTML = `<div class="error">No item given.</div>`;
