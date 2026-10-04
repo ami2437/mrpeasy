@@ -601,8 +601,9 @@
       const labels = fresh.flatMap(s => {
         const ord = order(s.order_id) || {};
         return s.boxes.map(b => ({
-          customer: customerName(ord.customer_id), shipment: s.code, order: ord.code || "", po: ord.po_number || "", job: ord.job_number || "",
+          customer: customerName(ord.customer_id), customer_id: ord.customer_id, shipment: s.code, order: ord.code || "", po: ord.po_number || "", job: ord.job_number || "",
           item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
+          lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord.ship_to_address || "",
         }));
       });
       printBoxLabels(labels, "Batch Labels");

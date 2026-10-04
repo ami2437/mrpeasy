@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Template Designer</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="designer.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main class="designer-main">
+    <div class="card page-toolbar">
+      <h1 class="page-title">Template Designer</h1>
+      <div class="row toolbar-row">
+        <div class="seg-tabs" id="type-tabs"></div>
+      </div>
+    </div>
+    <div class="dz">
+      <aside class="card dz-list">
+        <div class="dz-list-head"><h3>Templates</h3><button class="small-btn" onclick="openGallery()" data-icon="plus">New</button></div>
+        <div id="tpl-list"></div>
+        <p class="muted small dz-hint">The <b>default</b> prints everywhere for this document. A customer's own default wins for that customer.
+          No default = the built-in layout.</p>
+      </aside>
+      <section class="card dz-stage">
+        <div class="dz-bar" id="dz-bar"></div>
+        <div class="dz-canvas-wrap" id="canvas-wrap"><div class="dz-empty" id="dz-empty">Pick a template on the left, or <a class="link" onclick="openGallery()">start a new one</a>.</div></div>
+      </section>
+      <aside class="card dz-props" id="props"></aside>
+    </div>
+  </main>
+  </div>
+  <script src="designer.js"></script>
+</body>
+</html>

@@ -354,7 +354,17 @@ def _notes_box(sections):
 INVOICE_STATUS_COLORS = {"draft": MUTED, "sent": ACCENT, "paid": GREEN, "void": RED}
 
 
+def _designed(db, doc_type, record, customer_id=None, **options):
+    """The default Template Designer layout for this document, if one is set (else None: built-in layout)."""
+    from app.services.templates import default_for, render_record
+    tpl = default_for(db, doc_type, customer_id)
+    return render_record(db, tpl, doc_type, record, options) if tpl else None
+
+
 def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes:
+    designed = _designed(db, "invoice", invoice, invoice.customer_id, show_notes=show_notes)
+    if designed:
+        return designed
     company = get_company_profile(db)
     customer = db.query(Customer).filter(Customer.id == invoice.customer_id).first()
     order = db.query(CustomerOrder).filter(CustomerOrder.id == invoice.order_id).first() if invoice.order_id else None
@@ -438,8 +448,12 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
     """include_boxes adds the per-line box breakdown; include_pallets adds a Pallet # column
     plus the pallet weight/dimensions section; include_lots adds the Lot # column -- all chosen
     by the user at print time."""
-    company = get_company_profile(db)
     order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
+    designed = _designed(db, "packing_list", shipment, order.customer_id if order else None, include_boxes=include_boxes,
+                         include_pallets=include_pallets, include_lots=include_lots, show_notes=show_notes)
+    if designed:
+        return designed
+    company = get_company_profile(db)
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first() if order else None
     items = {i.id: i for i in db.query(StockItem).filter(
         StockItem.id.in_({l.item_id for l in shipment.lines} | {b.item_id for b in shipment.boxes})).all()}
@@ -591,6 +605,9 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
 def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False, show_notes: bool = True) -> bytes:
     """for_vendor=True is the copy that goes out: lines show only the vendor's part # and
     description -- our own item numbers stay internal. The internal copy shows both."""
+    designed = _designed(db, "purchase_order", po, for_vendor=for_vendor, show_notes=show_notes)
+    if designed:
+        return designed
     company = get_company_profile(db)
     vendor = db.query(Vendor).filter(Vendor.id == po.vendor_id).first()
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in po.lines})).all()}
@@ -659,6 +676,9 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False,
 
 # ---- quotation ----
 def quote_pdf(db: Session, q) -> bytes:
+    designed = _designed(db, "quote", q, q.customer_id)
+    if designed:
+        return designed
     from app.services.money import line_amount
     company = get_company_profile(db)
     customer = db.query(Customer).filter(Customer.id == q.customer_id).first()

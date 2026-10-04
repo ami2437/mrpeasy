@@ -831,9 +831,10 @@ async function printLabels(shipmentId) {
   const ord = order(shipment.order_id);
   const job = ord && ord.job_number ? `-${ord.job_number}` : "";
   printBoxLabels(shipment.boxes.map(b => ({
-    customer: customerName(ord ? ord.customer_id : null), shipment: shipment.code,
+    customer: customerName(ord ? ord.customer_id : null), customer_id: ord ? ord.customer_id : null, shipment: shipment.code,
     order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
     item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
+    lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord ? ord.ship_to_address || "" : "",
   })), `${shipment.code}${job}-Labels`);
 }
 

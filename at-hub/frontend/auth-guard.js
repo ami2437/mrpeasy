@@ -703,10 +703,32 @@ function printLabelCards(cardsHtml, title, win = window.open("", "_blank")) {
   wait();
 }
 
-// labels: [{ customer, shipment, order, po, job, item_code, item_title, qty }]
+// labels: [{ customer, customer_id, shipment, order, po, job, item_code, item_title, qty, lot, pallet, ship_to }]
+// With a box-label template set as the default (Template Designer) the server draws them as a PDF -- a customer's
+// own template first; otherwise the built-in label below.
+let templateDefaults = null;
+// Labels drawn by the server with the default designed template; false = none applies (print the built-in one).
+async function printWithTemplate(docType, labels, win) {
+  try {
+    templateDefaults = templateDefaults || await apiFetch("/api/templates/defaults");
+    if (!templateDefaults[docType]) return false;
+    const custs = [...new Set(labels.map(l => l.customer_id).filter(Boolean))];
+    const res = await fetch(`${API_BASE}/api/templates/render-labels`, { method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` },
+      body: JSON.stringify({ doc_type: docType, labels, customer_id: custs.length === 1 ? custs[0] : null }) });
+    if (!res.ok) return false;
+    const url = URL.createObjectURL(await res.blob());
+    if (win) win.location.href = url; else window.open(url, "_blank");
+    return true;
+  } catch (e) { return false; }
+}
 async function printBoxLabels(labels, title) {
   const win = window.open("", "_blank");
   if (win) win.document.write("<p style='font-family:sans-serif;padding:20px;color:#555'>Preparing labels…</p>");
+  const counts = {}, seen = {};  // "Box 3 of 12" within each shipment
+  labels.forEach(l => { counts[l.shipment] = (counts[l.shipment] || 0) + 1; });
+  labels = labels.map(l => ({ ...l, box: l.box ?? (seen[l.shipment] = (seen[l.shipment] || 0) + 1), boxes: l.boxes ?? counts[l.shipment] }));
+  if (await printWithTemplate("box_label", labels, win)) return;
   const company = await labelCompany();
   printLabelCards(labels.map(l => boxLabelHtml(l, company, location.origin)).join(""), title, win);
 }
@@ -751,7 +773,7 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
-  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
+  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["designer.html", "Template Designer", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
   { label: "MRP Migrate", minRole: "admin", links: [["mrp-payments.html", "PO Payments Import"], ["file-matcher.html", "File Matcher", "super_admin"]] },
   { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["backups.html", "Backups"]] },
 ];
@@ -1464,6 +1486,7 @@ const ICON_PATHS = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  palette: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2z"/>',
   sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   thumbsUp: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
@@ -1563,7 +1586,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "backups.html": "save",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "backups.html": "save", "designer.html": "palette",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [

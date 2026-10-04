@@ -264,6 +264,8 @@ from app.routes import tasks as tasks_routes  # noqa: E402
 app.include_router(tasks_routes.router)
 from app.routes import backups as backups_routes  # noqa: E402
 app.include_router(backups_routes.router)
+from app.routes import templates as templates_routes  # noqa: E402
+app.include_router(templates_routes.router)
 from app.services.backups import start_scheduler  # noqa: E402
 start_scheduler()
 
@@ -279,6 +281,7 @@ async def concurrency_guard(request, call_next):
     auth = request.headers.get("authorization", "")
     user = (AuthService.decode_token(auth[7:]) or {}).get("sub") if auth.lower().startswith("bearer ") else None
     t_write, t_user = concurrency.WRITE_REQUEST.set({"committed": False} if write else None), concurrency.CURRENT_USER.set(user)
+    concurrency.REQUEST_BASE.set(str(request.base_url).rstrip("/"))
     try:
         expected = request.headers.get("x-row-version")
         m = concurrency.RECORD_PATH.match(request.url.path) if write and expected and not request.headers.get("x-force-save") else None

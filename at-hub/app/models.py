@@ -1028,3 +1028,22 @@ class QuoteLine(Base):
     unit_price = Column(Float, nullable=False, default=0)
     notes = Column(Text, nullable=True)
     source_text = Column(String, nullable=True)  # the pasted line it came from (taught to learned matches)
+
+
+class DocTemplate(Base):
+    """A designed layout for a printed document or label (Template Designer). One per doc_type can be the
+    default; a customer can have its own default for customer documents (invoice, packing list, quote,
+    box label). No default = the built-in layout."""
+    __tablename__ = "doc_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doc_type = Column(String, nullable=False, index=True)  # invoice | packing_list | purchase_order | quote | box_label | address_label
+    name = Column(String, nullable=False)
+    spec = Column(Text, nullable=False)  # JSON: page, bands (header / running / summary / footer) with blocks, table columns
+    is_default = Column(Boolean, nullable=False, default=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)  # default for this customer only
+    starter = Column(String, nullable=True)  # which ready-made design it began from
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

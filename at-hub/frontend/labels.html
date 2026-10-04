@@ -198,7 +198,9 @@
     function printAllBoxes(id) {
       const s = shipments.find(x => x.id === id);
       const base = shipmentLabelBase(s);
-      printBoxLabels(s.boxes.map(b => ({ ...base, item_code: byId(items, b.item_id).code, item_title: byId(items, b.item_id).title, qty: b.quantity_in_box })), `${s.code}-Labels`);
+      const o = byId(orders, s.order_id);
+      printBoxLabels(s.boxes.map(b => ({ ...base, customer_id: o.customer_id, item_code: byId(items, b.item_id).code, item_title: byId(items, b.item_id).title,
+        qty: b.quantity_in_box, lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: o.ship_to_address || "" })), `${s.code}-Labels`);
     }
 
     function fillAddressFromOrder(id) {
@@ -223,7 +225,7 @@
     }
     const companyFrom = () => [company.name, company.address, company.phone].filter(Boolean).join("\n");
 
-    function printNow() {
+    async function printNow() {
       const err = document.getElementById("lbl-error");
       err.textContent = "";
       if (mode === "shipment" && !shipSource) { err.textContent = "Pick A Shipment First."; return; }
@@ -231,6 +233,16 @@
       if (mode === "address" && !v("ad-to").trim()) { err.textContent = "Enter A Ship To Address."; return; }
       const n = copies();
       const title = mode === "shipment" ? `${shipDraft.shipment || "Label"}-OnDemand` : `${mode}-label`;
+      // a designed default (Template Designer) prints these too; free-text labels stay as they are
+      if (mode !== "free") {
+        const win = window.open("", "_blank");
+        const list = mode === "address"
+          ? Array.from({ length: n }, (_, i) => { const a = { from: v("ad-from"), to: v("ad-to"), attn: v("ad-attn"), ref: v("ad-ref"), note: v("ad-note") };
+              return c("ad-number") ? { ...a, note: [a.note, `Box ${i + 1} Of ${n}`].filter(Boolean).join(" · ") } : a; })
+          : Array.from({ length: n }, (_, i) => ({ ...(mode === "shipment" ? shipDraft : blankDraft), box: i + 1, boxes: n }));
+        if (await printWithTemplate(mode === "address" ? "address_label" : "box_label", list, win)) return;
+        if (win) win.close();
+      }
       // Card HTML for the print tab needs absolute logo URLs.
       const html = cardsFor(n).join("").replaceAll('src="/api/company/logo"', `src="${location.origin}/api/company/logo"`);
       printLabelCards(html, title);

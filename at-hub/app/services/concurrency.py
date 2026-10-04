@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 WRITE_REQUEST = contextvars.ContextVar("write_request", default=None)  # {"committed": bool} during a change request
 READ_ONLY = contextvars.ContextVar("read_only", default=False)  # a lookup that must never take the write lock (the signed-in user)
 CURRENT_USER = contextvars.ContextVar("current_user", default=None)
+REQUEST_BASE = contextvars.ContextVar("request_base", default="")  # how this request reached us (for links printed on PDFs)
 
 
 # ---------- 1. SQLite: WAL, wait instead of failing, write transactions take the lock up front ----------

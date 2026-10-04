@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Where uploaded attachments (PDFs, photos) are stored.
     upload_dir: str = "./uploads"
+    public_url: str = ""  # how people reach AT-HUB (e.g. https://hub.example.com) -- printed QR codes link here
     backup_dir: str = "./backups"
     backup_every_hours: float = 6  # automatic database backups; 0 turns them off
     backup_copies: str = ""  # more folders every backup is also copied to, ";"-separated (OneDrive, a NAS, a USB disk...)
