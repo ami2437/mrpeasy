@@ -135,7 +135,7 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td class="line-no"></td>
-        <td class="grow"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
+        <td class="grow"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)${itemPickNote(i, true)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
         <td class="num"><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
         <td class="num">${priceInput("l-price", 0)}<div data-price-delta data-kind="sale" data-price-input=".l-price"></div></td>
         <td class="num subtotal"></td>
@@ -151,11 +151,7 @@
         refreshPriceDeltas(tr);
       });
       tr.querySelector(".l-price").addEventListener("input", () => refreshPriceDeltas(tr));
-      const firstOption = tr.querySelector(".l-item").selectedOptions[0];
-      if (firstOption) {
-        tr.querySelector(".l-price").value = firstOption.dataset.price;
-        delta.dataset.item = firstOption.value;
-      }
+      tr.querySelector(".l-price").value = "";  // blank until an item is picked
       document.getElementById("lines-body").appendChild(tr);
       recalcLines("lines-body", "new-order-total");
       refreshPriceDeltas(tr);
@@ -917,10 +913,10 @@
         </div>
         ${editable ? `
           <div class="row add-line-row" style="margin-top:8px; max-width:760px;">
-            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
-            <div class="fixed price-cell"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="${items.length ? items[0].selling_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
-              <div data-price-delta data-kind="sale" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
+            <div class="fixed price-cell"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
+              <div data-price-delta data-kind="sale" data-item="" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
             <div class="fixed"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
         ` : ""}
@@ -1222,6 +1218,7 @@
     async function addLineToOrder(orderId) {
       const errorEl = document.getElementById("lines-error");
       errorEl.textContent = "";
+      if (!document.getElementById("new-line-item").value) { errorEl.textContent = "Pick the item to add first."; return; }
       try {
         await apiFetch(`/api/customer-orders/${orderId}/lines`, {
           method: "POST",

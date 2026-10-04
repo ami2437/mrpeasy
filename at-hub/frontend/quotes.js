@@ -27,8 +27,8 @@ function newQuote() {
 async function openQuote(id) { currentQuote = await apiFetch(`/api/quotes/${id}`); drawQuote(); }
 
 function quoteItemOptions(selected) {
-  return `<option value="">— not matched: pick our item —</option>` + items.map(i => `<option value="${i.id}" ${i.id === selected ? "selected" : ""}
-    data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+  return `<option value="">— not matched: pick our item —</option>` + items.map(i => `<option value="${i.id}" ${i.id === selected ? "selected" : itemPickAttr(i, true)}
+    data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i, true)}</option>`).join("");
 }
 
 function quoteLineRow(l) {
@@ -125,6 +125,7 @@ function useQuotedPrice(price) {
 
 function drawQuote() {
   const x = currentQuote, locked = x.status === "converted";
+  if (window.setRecordId) setRecordId(null);  // the address keeps no order id while a quote is open
   document.getElementById("form-card").style.display = "none";
   const card = document.getElementById("detail-card");
   card.style.display = "block";

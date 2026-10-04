@@ -99,7 +99,7 @@ def quoted_history(db: Session, item_id: int, customer_id: Optional[int] = None,
 
 
 def parse_text(db: Session, customer_id: int, text: str) -> List[dict]:
-    items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
+    items = db.query(StockItem).filter(StockItem.is_active == True, StockItem.is_generic == False).all()  # noqa: E712 (generic stock isn't sold)
     matcher = ItemMatcher(items, learned=item_alias.for_party(db, "customer", customer_id))
     by_id = {i.id: i for i in items}
     out = []

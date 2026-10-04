@@ -101,7 +101,7 @@
               </tr>`;
             }).join("") || `<tr><td colspan="6" class="muted">No Part # Mappings Yet.</td></tr>`}
             <tr>
-              <td style="min-width:240px;"><select id="xref-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
+              <td style="min-width:240px;"><select id="xref-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
               <td><input type="text" id="xref-code" placeholder="Vendor Part #" style="width:120px;"></td>
               <td><input type="text" id="xref-desc" placeholder="Optional"></td>
               <td colspan="3"><button class="secondary small-btn" onclick="addXref(${vendorId})">+ Add</button></td>
@@ -120,6 +120,7 @@
     async function addXref(vendorId) {
       const errorEl = document.getElementById("xref-error");
       errorEl.textContent = "";
+      if (!document.getElementById("xref-item").value) { errorEl.textContent = "Pick our item first."; return; }
       try {
         await apiFetch(`/api/vendors/${vendorId}/items`, {
           method: "POST",

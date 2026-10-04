@@ -13,6 +13,13 @@ from app.models import (
 )
 
 
+def not_for_sale(item: StockItem) -> None:
+    """Generic bulk stock (58-NUT) is never sold directly: the specific item is, and draws from it when booked."""
+    if item is not None and item.is_generic:
+        raise HTTPException(status_code=400, detail=f"{item.code} is generic bulk stock and isn't sold directly -- put the specific item "
+                                                    f"on the order (e.g. 15420-NUT); it draws from {item.code} when the shipment is booked")
+
+
 def get_company_profile(db: Session) -> CompanyProfile:
     """Single-row company profile (id=1), created with defaults on first use."""
     profile = db.query(CompanyProfile).filter(CompanyProfile.id == 1).first()
@@ -727,6 +734,7 @@ class CustomerOrderService:
         for line_no, line in enumerate(data.lines, 1):
             if not db.query(StockItem).filter(StockItem.id == line.item_id).first():
                 raise HTTPException(status_code=400, detail=f"Stock item {line.item_id} not found")
+            not_for_sale(db.query(StockItem).filter(StockItem.id == line.item_id).first())
             if line.quantity <= 0:
                 raise HTTPException(status_code=400, detail=f"Line #{line_no}: quantity must be greater than 0")
             db.add(CustomerOrderLine(
@@ -801,6 +809,7 @@ class CustomerOrderService:
             raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
         if not db.query(StockItem).filter(StockItem.id == data.item_id).first():
             raise HTTPException(status_code=400, detail=f"Stock item {data.item_id} not found")
+        not_for_sale(db.query(StockItem).filter(StockItem.id == data.item_id).first())
         if data.quantity <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
         db.add(CustomerOrderLine(
@@ -860,6 +869,7 @@ class CustomerOrderService:
                 raise HTTPException(status_code=400, detail="Item not found")
             if new_item.is_active is False:
                 raise HTTPException(status_code=400, detail=f"{new_item.code} is archived")
+            not_for_sale(new_item)
         else:
             updates.pop("item_id", None)
         if "quantity" in updates and updates["quantity"] is not None:

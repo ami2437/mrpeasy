@@ -107,3 +107,16 @@ def test_generic_test_order_renewed_once_used(make, api):
     api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": bolt["id"], "quantity": 10}]})  # used now
     r2 = api.post("/api/test-data/generic-nuts")
     assert r2["order_created"] and r2["order_id"] != r["order_id"]  # same TEST PO # is fine for test orders
+
+
+def test_generic_items_are_not_sold(make, api):
+    bulk = make.item(title="7/16-14 A194 2H HVY HEX NUT HDG BULK", group="Nut")
+    api.put(f"/api/stock-items/{bulk['id']}", json={"is_generic": True})
+    other = make.item()
+    c = make.customer()
+    r = api.post("/api/customer-orders/", json={"customer_id": c["id"], "lines": [{"item_id": bulk["id"], "quantity": 5, "unit_price": 1}]}, expect=400)
+    assert "generic bulk stock" in r["detail"]
+    o = make.order(lines=[(other, 5, 1)])
+    api.post(f"/api/customer-orders/{o['id']}/lines", json={"item_id": bulk["id"], "quantity": 5, "unit_price": 1}, expect=400)
+    api.put(f"/api/customer-orders/{o['id']}/lines/{o['lines'][0]['id']}", json={"item_id": bulk["id"]}, expect=400)
+    api.post("/api/quotes/", json={"customer_id": c["id"], "lines": [{"item_id": bulk["id"], "quantity": 5, "unit_price": 1}]}, expect=400)

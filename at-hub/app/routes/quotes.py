@@ -64,6 +64,9 @@ def _set_lines(db: Session, q: Quote, lines: List[LineIn]) -> None:
             raise HTTPException(status_code=400, detail=f"Line {pos + 1}: quantity must be more than 0")
         if not l.item_id and not (l.description or "").strip():
             raise HTTPException(status_code=400, detail=f"Line {pos + 1}: pick an item or type a description")
+        if l.item_id:
+            from app.services.crud import not_for_sale
+            not_for_sale(db.query(StockItem).filter(StockItem.id == l.item_id).first())
         q.lines.append(QuoteLine(position=pos, item_id=l.item_id, description=(l.description or "").strip() or None, quantity=l.quantity,
                                  unit_price=l.unit_price, notes=(l.notes or "").strip() or None, source_text=l.source_text))
         if l.item_id and l.source_text:  # the customer's wording -> the item picked: next paste matches it

@@ -216,12 +216,6 @@
       const el = document.getElementById("movements");
       try {
         const m = await apiFetch(`/api/stock-items/${itemId}/movements`);
-        const typeTag = t => `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : t === "transfer" ? "transfer" : "draft"}">${escapeHtml(t)}</span>`;
-        // a draw from generic stock: the generic item and its lot act like the supplier
-        const refCell = t => t.from_item_code && t.quantity > 0
-          ? `From <a class="link" href="item.html?id=${t.from_item_id}">${escapeHtml(t.from_item_code)}</a> <span class="muted">lot ${escapeHtml(t.from_lot || "")}</span>`
-          : t.type === "transfer" && t.quantity < 0 && t.reference ? `To <a class="link" onclick="openItemByCode('${escapeHtml(t.reference)}')">${escapeHtml(t.reference)}</a>`
-          : escapeHtml(t.reference || "");
         el.className = "";
         el.innerHTML = `<div class="stat-row">
             <div class="stat"><div class="stat-label">Total in</div><div class="stat-value pos">+${fmtQty(m.total_in)}</div></div>
@@ -229,11 +223,11 @@
             <div class="stat"><div class="stat-label">Movements</div><div class="stat-value">${m.movements.length}</div></div>
           </div>
           <div class="table-scroll" style="max-height:60vh;"><table class="compact-table">
-            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th class="num">Unit cost</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th class="num">Unit cost</th><th>Documents</th><th>Note</th><th>By</th></tr></thead>
             <tbody>${m.movements.map(t => `<tr>
-              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${typeTag(t.type)}</td>
+              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${movementTypeTag(t.type)}</td>
               <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
-              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td class="num">${t.unit_cost != null && !hidesMoney() ? fmtPrice(t.unit_cost) : ""}</td><td>${refCell(t)}</td>
+              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td class="num">${t.unit_cost != null && !hidesMoney() ? fmtPrice(t.unit_cost) : ""}</td><td>${movementLinks(t)}</td>
               <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")
               || `<tr><td colspan="9" class="muted">No movements yet.</td></tr>`}</tbody>
           </table></div>`;
@@ -242,11 +236,6 @@
 
     // ---- generic stock: this item is bulk generic stock (58-NUT), or a specific item that draws from one ----
     let allItems = null;
-    async function openItemByCode(code) {
-      allItems = allItems || await apiFetch("/api/stock-items/");
-      const it = allItems.find(i => i.code === code);
-      if (it) location.href = `item.html?id=${it.id}`;
-    }
     async function loadFamily() {
       const card = document.getElementById("family-card"), el = document.getElementById("family");
       if (!isManager) return;

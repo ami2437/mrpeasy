@@ -284,13 +284,15 @@ async function showPriceHistory(itemId) {
 // its data-search keywords (product group, barcode).
 // Item pickers: archived items and AI-created ones nobody has verified yet can't be picked for new lines.
 // They stay in the list (greyed, with the reason) so a line that already has one still shows it.
-function itemPickBlock(i) {
+// forSale: customer orders and quotes -- generic bulk stock (58-NUT) is never sold directly.
+function itemPickBlock(i, forSale = false) {
   if (i.is_active === false) return "archived";
   if (i.created_via === "ai-scan" && !i.verified_by) return "needs verifying (Stock Items)";
+  if (forSale && i.is_generic) return "generic bulk stock, not sold directly";
   return "";
 }
-function itemPickAttr(i) { return itemPickBlock(i) ? `disabled data-blocked="${escapeHtml(itemPickBlock(i))}"` : ""; }
-function itemPickNote(i) { return itemPickBlock(i) ? ` — ${itemPickBlock(i)}` : ""; }
+function itemPickAttr(i, forSale = false) { return itemPickBlock(i, forSale) ? `disabled data-blocked="${escapeHtml(itemPickBlock(i, forSale))}"` : ""; }
+function itemPickNote(i, forSale = false) { return itemPickBlock(i, forSale) ? ` — ${itemPickBlock(i, forSale)}` : ""; }
 
 function makeSearchable(select) {
   if (select.dataset.searchReady) return;
@@ -1714,7 +1716,15 @@ function aiVendorChips(cands, selectId) {
     const main = card && card.closest("main");
     if (!card || !main || NO_PAGE_MODE.includes(location.pathname.split("/").pop())) return;
     const listName = (document.title.split("—")[1] || "List").trim();
-    let open = false;
+    let open = false, recId = null;
+    // The record's id goes into the address (?id=…), so Back from a page it links to comes back to it.
+    if (typeof window.showDetail === "function") {
+      const orig = window.showDetail;
+      window.showDetail = function (id, ...rest) { recId = id; if (open) setUrl(id, true); return orig.call(this, id, ...rest); };
+    }
+    const urlFor = id => { const u = new URL(location.href); if (id) u.searchParams.set("id", id); else u.searchParams.delete("id"); return u.pathname + u.search + u.hash; };
+    const setUrl = (id, replace) => history[replace ? "replaceState" : "pushState"]({ record: true, id }, "", urlFor(id));
+    window.setRecordId = id => { recId = id; if (open) setUrl(id, true); };  // records drawn without showDetail (a quote)
     const ensureBar = () => {
       if (card.querySelector(":scope > .record-backbar")) return;
       card.insertAdjacentHTML("afterbegin", `<div class="record-backbar"><a class="link" onclick="closeRecordPage()">← Back to ${escapeHtml(listName)}</a></div>`);
@@ -1727,11 +1737,20 @@ function aiVendorChips(cands, selectId) {
       main.classList.toggle("record-mode", open);
       if (open) {
         window.scrollTo({ top: 0 });
-        if (!(history.state && history.state.record)) history.pushState({ record: true }, "", location.href);
+        if (!(history.state && history.state.record)) {
+          // opened from the list -- or the page was opened at ?id=…: put the list underneath so Back lands on it
+          if (new URL(location.href).searchParams.get("id")) history.replaceState(null, "", urlFor(null));
+          setUrl(recId, false);
+        }
+      } else if (history.state && history.state.record) {
+        history.replaceState(null, "", urlFor(null));  // closed with a button: the address drops the id
       }
     };
     new MutationObserver(sync).observe(card, { attributes: true, attributeFilter: ["style"], childList: true });
-    window.addEventListener("popstate", () => { if (open) { card.style.display = "none"; } });
+    window.addEventListener("popstate", e => {
+      if (open && !(e.state && e.state.record)) card.style.display = "none";
+      else if (!open && e.state && e.state.record && e.state.id && typeof window.showDetail === "function") window.showDetail(e.state.id);  // Forward
+    });
     window.closeRecordPage = () => {
       if (history.state && history.state.record) history.back();  // popstate hides the card
       else card.style.display = "none";
@@ -2209,4 +2228,167 @@ function saveBlob(blob, filename) {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+}
+
+// ---- Peek: a link to another record opens it in a glass pop-up to glance at, with "Open full page" ----
+// Any <a href="customer-orders.html?id=…"> (or purchase-orders / shipments / invoices / item) anywhere in the
+// app opens here instead of leaving the page. Ctrl/⌘/Shift-click, middle-click, target="_blank" and
+// data-nopeek still go to the page. Links inside the pop-up open in it too (‹ goes back).
+const PEEK_PAGES = { "customer-orders.html": "order", "purchase-orders.html": "po", "shipments.html": "shipment", "invoices.html": "invoice", "item.html": "item" };
+const peekCache = {};
+const pkDate = d => d ? new Date(d).toLocaleDateString() : "";
+const peekStack = [];
+function peekGet(url) { return (peekCache[url] ??= apiFetch(url).catch(e => { delete peekCache[url]; throw e; })); }
+async function peekItems() { return peekGet("/api/stock-items/"); }
+function peekParty(kind, id) { return id ? peekGet(`/api/${kind}/${id}`).catch(() => ({ name: "" })) : Promise.resolve({ name: "" }); }
+
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a[href]");
+  if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  if (a.target === "_blank" || a.hasAttribute("data-nopeek") || a.closest("[data-nopeek]")) return;
+  let url;
+  try { url = new URL(a.getAttribute("href"), location.href); } catch (err) { return; }
+  if (url.origin !== location.origin) return;
+  const kind = PEEK_PAGES[url.pathname.split("/").pop()], id = parseInt(url.searchParams.get("id"));
+  if (!kind || !id || [...url.searchParams.keys()].some(k => k !== "id")) return;
+  e.preventDefault();
+  e.stopPropagation();  // a row's own click (open / select) shouldn't fire as well
+  peek(kind, id, url.pathname.split("/").pop() + url.search, !!a.closest("#peek"));
+}, true);
+
+async function peek(kind, id, href, nested = false) {
+  let back = document.getElementById("peek");
+  if (!back) {
+    peekStack.length = 0;
+    back = document.createElement("div");
+    back.id = "peek";
+    back.className = "glass-back peek-back";
+    back.addEventListener("click", e => { if (e.target === back) closePeek(); });
+    back.innerHTML = `<div class="glass-panel peek-panel" role="dialog" aria-modal="true"></div>`;
+    document.body.appendChild(back);
+    document.addEventListener("keydown", peekKey);
+  }
+  if (nested && back.dataset.current) peekStack.push(back.dataset.current);
+  back.dataset.current = JSON.stringify([kind, id, href]);
+  const panel = back.querySelector(".peek-panel");
+  panel.innerHTML = `<div class="peek-head"><div class="peek-title"><span class="muted">Loading…</span></div>${peekButtons(href)}</div>`;
+  try {
+    const { title, sub, body } = await PEEK_RENDER[kind](id);
+    panel.innerHTML = `<div class="peek-head"><div class="peek-title">${peekStack.length ? `<button type="button" class="icon-btn peek-prev" title="Back" onclick="peekPrev()">‹</button>` : ""}
+        <div><h3>${title}</h3>${sub ? `<div class="muted small">${sub}</div>` : ""}</div></div>${peekButtons(href)}</div>
+      <div class="peek-body">${body}</div>`;
+    panel.classList.remove("peek-swap");
+    void panel.offsetWidth;
+    panel.classList.add("peek-swap");
+    decorateIcons(panel);
+  } catch (err) {
+    panel.querySelector(".peek-title").innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`;
+  }
+}
+function peekButtons(href) {
+  return `<div class="peek-actions"><a class="peek-open" href="${escapeHtml(href)}" data-nopeek>Open full page →</a>
+    <button type="button" class="icon-btn peek-close" aria-label="Close" onclick="closePeek()">${icon("x")}</button></div>`;
+}
+function peekPrev() {
+  const prev = peekStack.pop();
+  if (!prev) return;
+  const [kind, id, href] = JSON.parse(prev);
+  document.getElementById("peek").dataset.current = "";
+  peek(kind, id, href);
+}
+function peekKey(e) { if (e.key === "Escape") closePeek(); }
+function closePeek() {
+  const back = document.getElementById("peek");
+  document.removeEventListener("keydown", peekKey);
+  if (!back) return;
+  back.classList.add("closing");
+  setTimeout(() => back.remove(), 170);
+}
+
+// small building blocks
+const pk = {
+  tag: s => `<span class="tag ${escapeHtml(s || "")}">${escapeHtml((s || "").replace(/_/g, " "))}</span>`,
+  facts: rows => `<div class="peek-facts">${rows.filter(r => r && r[1] !== undefined && r[1] !== null && r[1] !== "").map(([k, v]) => `<div><span>${escapeHtml(k)}</span><strong>${v}</strong></div>`).join("")}</div>`,
+  link: (page, id, text) => `<a class="link" href="${page}?id=${id}">${escapeHtml(text)}</a>`,
+  money: v => hidesMoney() ? "" : fmtMoney(v || 0),
+  price: v => hidesMoney() ? "" : fmtPrice(v || 0),
+  table: (head, rows) => `<div class="peek-table-wrap"><table class="peek-table no-table-tools no-col-bands"><thead><tr>${head.map(h => `<th class="${h.startsWith("#") ? "num" : ""}">${escapeHtml(h.replace(/^#/, ""))}</th>`).join("")}</tr></thead>
+    <tbody>${rows.join("") || `<tr><td colspan="${head.length}" class="muted">None</td></tr>`}</tbody></table></div>`,
+  section: (title, html) => `<h4 class="peek-h">${escapeHtml(title)}</h4>${html}`,
+};
+const itemCell = (items, id) => { const i = items.find(x => x.id === id); return i ? `${pk.link("item.html", i.id, i.code)}<div class="muted small">${escapeHtml(i.title)}</div>` : `#${id}`; };
+
+const PEEK_RENDER = {
+  async order(id) {
+    const o = await apiFetch(`/api/customer-orders/${id}`);
+    const [items, cust] = await Promise.all([peekItems(), peekParty("customers", o.customer_id)]);
+    const total = o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
+    const ships = {};
+    o.lines.forEach(l => (l.shipments || []).forEach(s => { ships[s.shipment_id] = s.code || s.shipment_code || `#${s.shipment_id}`; }));
+    return { title: `${escapeHtml(o.code)} ${pk.tag(o.status)}`, sub: `${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}${o.job_number ? ` · Job ${escapeHtml(o.job_number)}` : ""}`,
+      body: pk.facts([["Created", pkDate(o.created_at || o.order_date)], ["Delivery", pkDate(o.delivery_date)], ["Customer PO date", pkDate(o.customer_po_date)], ["Order total", pk.money(total)]])
+        + pk.table(["Line", "Item", "#Qty", "#Shipped", "#Booked", ...(hidesMoney() ? [] : ["#Price", "#Amount"])], o.lines.map(l => `<tr><td>#${l.line_no ?? ""}</td><td>${itemCell(items, l.item_id)}</td>
+            <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.shipped_quantity)}</td><td class="num">${fmtQty(l.booked_quantity)}</td>
+            ${hidesMoney() ? "" : `<td class="num">${pk.price(l.unit_price)}</td><td class="num">${pk.money(lineAmount(l.quantity, l.unit_price))}</td>`}</tr>`))
+        + (Object.keys(ships).length ? pk.section("Shipments", `<div class="peek-chips">${Object.entries(ships).map(([sid, code]) => pk.link("shipments.html", sid, code)).join("")}</div>`) : "")
+        + (o.notes ? pk.section("Notes", `<p class="peek-notes">${escapeHtml(o.notes)}</p>`) : "") };
+  },
+  async po(id) {
+    const o = await apiFetch(`/api/purchase-orders/${id}`);
+    const [items, vend] = await Promise.all([peekItems(), peekParty("vendors", o.vendor_id)]);
+    return { title: `${escapeHtml(o.code)} ${pk.tag(o.status)}`, sub: `${escapeHtml(vend.name || "")}${o.vendor_so_number ? ` · Vendor SO ${escapeHtml(o.vendor_so_number)}` : ""}`,
+      body: pk.facts([["Ordered", pkDate(o.order_date || o.created_at)], ["Expected", pkDate(o.expected_date)], ["Order total", pk.money(o.order_total)], ["Paid", pk.money(o.amount_paid)]])
+        + pk.table(["Item", "Vendor part #", "#Qty", "#Received", ...(hidesMoney() ? [] : ["#Unit cost"])], o.lines.map(l => `<tr><td>${itemCell(items, l.item_id)}</td>
+            <td class="small">${escapeHtml(l.vendor_item_code || "")}</td><td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.received_quantity)}</td>
+            ${hidesMoney() ? "" : `<td class="num">${pk.price(l.unit_cost)}</td>`}</tr>`))
+        + (o.notes ? pk.section("Notes", `<p class="peek-notes">${escapeHtml(o.notes)}</p>`) : "") };
+  },
+  async shipment(id) {
+    const s = await apiFetch(`/api/shipments/${id}`);
+    const [items, o] = await Promise.all([peekItems(), apiFetch(`/api/customer-orders/${s.order_id}`).catch(() => null)]);
+    const cust = o ? await peekParty("customers", o.customer_id) : { name: "" };
+    const lots = {};
+    await Promise.all([...new Set(s.lines.map(l => l.lot_id).filter(Boolean))].map(lid => peekGet(`/api/lots/${lid}`).then(l => { lots[lid] = l.lot_code; }).catch(() => {})));
+    return { title: `${escapeHtml(s.code)} ${pk.tag(s.status)}`,
+      sub: `${o ? `Order ${pk.link("customer-orders.html", o.id, o.code)} · ${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}` : ""}`,
+      body: pk.facts([["Created", pkDate(s.created_at)], ["Shipped", pkDate(s.ship_date)], ["Delivered", pkDate(s.delivered_at)], ["Carrier", escapeHtml(s.carrier || "")],
+          ["Tracking", escapeHtml(s.tracking_number || "")], ["Invoice", s.invoice_id ? invoiceChipFromShipment(s) : ""], ["POD", s.pods && s.pods.length ? `${s.pods.length} file${s.pods.length === 1 ? "" : "s"}` : ""]])
+        + pk.table(["Line", "Item", "Lot", "#Booked", "#Picked"], s.lines.map(l => `<tr><td>#${l.line_no ?? ""}</td><td>${itemCell(items, l.item_id)}</td>
+            <td>${escapeHtml(lots[l.lot_id] || "")}</td><td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td></tr>`))
+        + (s.notes ? pk.section("Notes", `<p class="peek-notes">${escapeHtml(s.notes)}</p>`) : "") };
+  },
+  async invoice(id) {
+    const v = await apiFetch(`/api/invoices/${id}`);
+    const cust = await peekParty("customers", v.customer_id);
+    return { title: `${escapeHtml(v.code)} ${pk.tag(v.status)}`, sub: escapeHtml(cust.name || ""),
+      body: (v.status === "void" && v.void_reason ? `<div class="peek-void">Voided${v.voided_at ? ` ${pkDate(v.voided_at)}` : ""}${v.voided_by ? ` by ${escapeHtml(v.voided_by)}` : ""}: ${escapeHtml(v.void_reason)}</div>` : "")
+        + pk.facts([["Invoice date", pkDate(v.invoice_date)], ["Due", pkDate(v.due_date)], ["Total", pk.money(v.total)], ["Paid", pk.money(v.amount_paid)], ["Balance", pk.money(v.balance)],
+          ["Order", v.order_id ? pk.link("customer-orders.html", v.order_id, "open") : ""]])
+        + pk.table(["Description", "#Qty", ...(hidesMoney() ? [] : ["#Price", "#Amount"])], v.lines.map(l => `<tr><td class="small">${escapeHtml(l.description || "")}</td><td class="num">${fmtQty(l.quantity)}</td>
+            ${hidesMoney() ? "" : `<td class="num">${pk.price(l.unit_price)}</td><td class="num">${pk.money(l.amount)}</td>`}</tr>`))
+        + ((v.shipment_ids || []).length ? pk.section("Shipments", `<div class="peek-chips">${v.shipment_ids.map((sid, i) => pk.link("shipments.html", sid, (v.shipment_codes || [])[i] || `#${sid}`)).join("")}</div>`) : "") };
+  },
+  async item(id) {
+    const [i, m] = await Promise.all([apiFetch(`/api/stock-items/${id}`), apiFetch(`/api/stock-items/${id}/movements?limit=8`).catch(() => null)]);
+    return { title: `${escapeHtml(i.code)}${i.is_generic ? ` <span class="tag source-generic">generic bulk</span>` : ""}`, sub: `${escapeHtml(i.title)}${i.category ? ` · ${escapeHtml(i.category)}` : ""}`,
+      body: pk.facts([["On hand", fmtQty(i.on_hand)], ["Booked", fmtQty(i.booked)], ["Available", `<span class="${i.available < 0 ? "neg" : ""}">${fmtQty(i.available)}</span>`],
+          ["Cost", pk.price(i.cost_price)], ["Selling price", pk.price(i.selling_price)]])
+        + (m ? pk.section("Recent movements", pk.table(["Date", "Type", "#In / out", "Lot", "Documents"], m.movements.map(t => `<tr><td class="nowrap">${pkDate(t.date)}</td><td>${movementTypeTag(t.type)}</td>
+            <td class="num ${t.quantity < 0 ? "neg" : "pos"}">${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</td><td>${escapeHtml(t.lot || "")}</td><td>${movementLinks(t)}</td></tr>`))) : "") };
+  },
+};
+
+// Stock movements (item page + peek): the type, and its documents as links -- from / to item, shipment,
+// customer order, the customer's PO #, purchase order, invoice.
+function movementTypeTag(t) {
+  return `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : t === "transfer" ? "transfer" : "draft"}">${escapeHtml(t.replace(/_/g, " "))}</span>`;
+}
+const MOVE_PAGE = { shipment: "shipments.html", customer_order: "customer-orders.html", purchase_order: "purchase-orders.html", invoice: "invoices.html" };
+function movementLinks(t) {
+  const parts = [];
+  if (t.from_item_code && t.quantity > 0) parts.push(`From ${pk.link("item.html", t.from_item_id, t.from_item_code)}${t.from_lot ? ` <span class="muted">lot ${escapeHtml(t.from_lot)}</span>` : ""}`);
+  else if (t.type === "transfer" && t.quantity < 0 && t.ref_item_id) parts.push(`To ${pk.link("item.html", t.ref_item_id, t.reference)}`);
+  (t.links || []).forEach(l => parts.push(`<a class="doc-chip k-${l.kind}${l.po ? " cust-po" : ""}" href="${MOVE_PAGE[l.kind]}?id=${l.id}">${escapeHtml(l.label)}</a>`));
+  if (!parts.length && t.reference) parts.push(escapeHtml(t.reference));
+  return `<div class="move-links">${parts.join("")}</div>`;
 }

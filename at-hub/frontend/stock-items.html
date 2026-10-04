@@ -445,7 +445,7 @@
       const editRow = item => `
         <tr class="row-selected" data-item="${item.id}">
           <td class="sel-col"><input type="checkbox" checked onchange="toggleSelect(${item.id}, this.checked)"></td>
-          <td><a class="link" href="item.html?id=${item.id}"><strong>${escapeHtml(item.code)}</strong></a>${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
+          <td><a class="link" href="item.html?id=${item.id}" data-nopeek><strong>${escapeHtml(item.code)}</strong></a>${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
           <td><input type="text" data-f="title" value="${escapeHtml(item.title)}" style="min-width:260px;"></td>
           <td><select data-f="category">${groups.map(g => `<option ${g.name === item.category ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}</select></td>
           <td><input type="text" data-f="unit" value="${escapeHtml(item.unit || "")}" style="width:60px;"></td>
@@ -458,7 +458,7 @@
       const viewRow = item => `
         <tr class="${item.is_active === false ? "order-done" : ""} ${selected.has(item.id) ? "row-selected" : ""}" data-item="${item.id}">
           <td class="sel-col"><input type="checkbox" ${selected.has(item.id) ? "checked" : ""} onchange="toggleSelect(${item.id}, this.checked)"></td>
-          <td><a class="link" href="item.html?id=${item.id}"><strong>${escapeHtml(item.code)}</strong></a>${item.is_active === false ? ' <span class="tag cancelled">archived</span>' : ""}${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
+          <td><a class="link" href="item.html?id=${item.id}" data-nopeek><strong>${escapeHtml(item.code)}</strong></a>${item.is_active === false ? ' <span class="tag cancelled">archived</span>' : ""}${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
           <td>${escapeHtml(item.title)} ${hidesMoney() ? "" : `<a class="link small" onclick="showPriceHistory(${item.id})">Prices</a>`} <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a> <a class="link small" onclick="showMovements(${item.id})">Movement</a></td>
           <td>${groupTag(item)}</td>
           <td>${item.unit || ""}</td>

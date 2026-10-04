@@ -158,7 +158,7 @@ def ensure_generic_test_data(db: Session) -> dict:
     if created:
         order = CustomerOrderService.create(db, CustomerOrderCreate(
             customer_id=customer.id, po_number="TEST-GENERIC", job_number="TEST-JOB-GEN", allow_duplicate=True,
-            notes="Generic nut test: the nut lines are short -- the Book column offers to draw from TEST-GEN-916-NUT.",
+            notes="Generic nut test: the nut lines are short -- Create Shipment offers to draw them from TEST-GEN-916-NUT.",
             lines=[CustomerOrderLineCreate(item_id=bolt.id, quantity=2500, unit_price=1.95),
                    CustomerOrderLineCreate(item_id=items["TEST-91612-NUT"].id, quantity=2500, unit_price=0),
                    CustomerOrderLineCreate(item_id=items["TEST-91613-NUT"].id, quantity=600, unit_price=0)],

@@ -160,7 +160,7 @@
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="min-width:280px;"><select class="l-item" data-searchable>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
+        <td style="min-width:280px;"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
         <td><input type="text" class="l-vcode" style="width:130px;" placeholder="Vendor Part #"><div class="vcode-hint small"></div></td>
         <td><input type="text" class="l-vdesc" style="min-width:200px;" placeholder="Vendor Description"></td>
         <td><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
@@ -173,19 +173,14 @@
       tr.querySelector(".l-item").addEventListener("change", async (e) => {
         // a line filled from a scanned document keeps what's in its fields (scanned or since corrected): only the item changes
         const keep = tr.keepOnPick ? [".l-vcode", ".l-vdesc", ".l-cost"].map(c => [c, tr.querySelector(c).value]) : null;
-        tr.querySelector(".l-cost").value = e.target.selectedOptions[0].dataset.cost;
+        tr.querySelector(".l-cost").value = e.target.selectedOptions[0].dataset.cost || "";
         delta.dataset.item = e.target.value;
         await fillVendorCode(e.target, tr.querySelector(".l-vcode"), vendorId(), tr.querySelector(".l-vdesc"), tr.querySelector(".l-cost"));
         if (keep) keep.forEach(([c, v]) => { if (v !== "") tr.querySelector(c).value = v; });
         refreshPriceDeltas(tr);
       });
       tr.querySelector(".l-cost").addEventListener("input", () => refreshPriceDeltas(tr));
-      const firstOption = tr.querySelector(".l-item").selectedOptions[0];
-      if (firstOption) {
-        tr.querySelector(".l-cost").value = firstOption.dataset.cost;
-        delta.dataset.item = firstOption.value;
-        fillVendorCode(tr.querySelector(".l-item"), tr.querySelector(".l-vcode"), vendorId(), tr.querySelector(".l-vdesc"), tr.querySelector(".l-cost"));
-      }
+      tr.querySelector(".l-cost").value = "";  // blank until an item is picked
       document.getElementById("lines-body").appendChild(tr);
       refreshPriceDeltas(tr);
     }
@@ -254,6 +249,8 @@
       }
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
+      const missing = Array.from(document.querySelectorAll("#lines-body tr")).findIndex(tr => !tr.querySelector(".l-item").value);
+      if (missing >= 0) { errorEl.textContent = `Line ${missing + 1}: pick the item (or remove the line).`; return; }
       const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
         item_id: parseInt(tr.querySelector(".l-item").value),
         quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
@@ -531,13 +528,13 @@
         </div>
         ${editable ? `
           <div class="row add-line-row" style="margin-top:8px; max-width:1100px;">
-            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
                 onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
             <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>
             <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
-            <div class="fixed price-cell"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="${items.length ? items[0].cost_price || 0 : 0}" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
-              <div data-price-delta data-kind="purchase" data-item="${items.length ? items[0].id : ""}" data-doc="${order.id}" data-price-input=".new-line-cost"></div></div>
+            <div class="fixed price-cell"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
+              <div data-price-delta data-kind="purchase" data-item="" data-doc="${order.id}" data-price-input=".new-line-cost"></div></div>
             <div class="fixed"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
           </div>
           <div class="row" style="margin-top:6px; max-width:1100px;">
@@ -1251,6 +1248,7 @@ Thank you.</textarea>
     async function addLineToOrder(poId) {
       const errorEl = document.getElementById("lines-error");
       errorEl.textContent = "";
+      if (!document.getElementById("new-line-item").value) { errorEl.textContent = "Pick the item to add first."; return; }
       try {
         await apiFetch(`/api/purchase-orders/${poId}/lines`, {
           method: "POST",

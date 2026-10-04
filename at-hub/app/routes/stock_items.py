@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -146,6 +147,48 @@ def analytics(days: int = Query(90, ge=1, le=3650), limit: int = Query(15, ge=1,
     }
 
 
+_CODE = re.compile(r"[A-Za-z][\w-]*\d[\w-]*")
+
+
+def _attach_links(db: Session, movements: list) -> None:
+    """Each movement's documents, from the codes in its reference and note -- shipment (+ its order and
+    the customer's PO #), purchase order, customer order, invoice, other item -- so the page can link them."""
+    from app.models import CustomerOrder, Invoice, PurchaseOrder, Shipment, StockItem
+    tokens = {tok.rstrip("-") for m in movements for tok in _CODE.findall(f"{m['reference'] or ''} {m['note'] or ''}")}
+    if not tokens:
+        return
+    found = {}
+    for kind, model in (("shipment", Shipment), ("purchase_order", PurchaseOrder), ("customer_order", CustomerOrder),
+                        ("invoice", Invoice), ("item", StockItem)):
+        for rec in db.query(model).filter(model.code.in_(tokens)).all():
+            found.setdefault(rec.code, (kind, rec))
+    orders = {o.id: o for o in db.query(CustomerOrder).filter(CustomerOrder.id.in_(
+        {rec.order_id for kind, rec in found.values() if kind == "shipment"})).all()}
+    for m in movements:
+        links, seen = [], set()
+
+        def add(kind, rid, code, label=None):
+            if (kind, rid) not in seen:
+                seen.add((kind, rid))
+                links.append({"kind": kind, "id": rid, "code": code, "label": label or code})
+        for tok in _CODE.findall(f"{m['reference'] or ''} {m['note'] or ''}"):
+            hit = found.get(tok.rstrip("-"))
+            if not hit:
+                continue
+            kind, rec = hit
+            if kind == "item":
+                m["ref_item_id"] = rec.id if rec.code == m["reference"] else m.get("ref_item_id")
+                continue
+            add(kind, rec.id, rec.code)
+            if kind == "shipment" and rec.order_id in orders:
+                o = orders[rec.order_id]
+                add("customer_order", o.id, o.code)
+                if o.po_number and ("cust_po", o.id) not in seen:
+                    seen.add(("cust_po", o.id))
+                    links.append({"kind": "customer_order", "id": o.id, "code": o.code, "label": f"Cust PO {o.po_number}", "po": True})
+        m["links"] = links
+
+
 @router.get("/{item_id}/movements")
 def movements(item_id: int, limit: int = Query(500, ge=1, le=5000), db: Session = Depends(get_db)):
     """Every stock movement of one item, newest first, with the running on-hand balance
@@ -167,6 +210,7 @@ def movements(item_id: int, limit: int = Query(500, ge=1, le=5000), db: Session 
                     "from_lot": src.lot_code if src else None,
                     "reference": t.reference, "note": t.note, "by": t.created_by})
         balance -= t.quantity_delta
+    _attach_links(db, out)
     total_in = sum(t.quantity_delta for t in txs if t.quantity_delta > 0)
     total_out = -sum(t.quantity_delta for t in txs if t.quantity_delta < 0)
     return {"item_id": item.id, "code": item.code, "title": item.title, "on_hand": item.on_hand,
