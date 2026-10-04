@@ -274,7 +274,7 @@
 
         <div class="action-bar">
           ${editable ? `<button onclick="saveInvoice(${invoice.id})">Save Changes</button>` : ""}
-          ${invoice.status !== "void" ? `<button onclick="openEmailComposer(${invoice.id})">✉ Send Via Email</button>` : ""}
+          ${invoice.status !== "void" ? `<button class="${invoice.status === "draft" ? "next-step" : "secondary"}" onclick="openEmailComposer(${invoice.id})">✉ Send Via Email</button>` : ""}
           <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
           ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
           ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}

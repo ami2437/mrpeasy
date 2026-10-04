@@ -12,41 +12,24 @@
   <div id="sidebar"></div>
   <main>
     <div class="card batch-toolbar">
+      <div class="stage-tabs" id="stage-tabs" role="tablist"></div>
+      <div class="stage-hint muted small" id="stage-hint"></div>
       <div class="filters">
         <input type="text" id="search" placeholder="Search shipment, order, customer, PO or item #...">
-        <select id="view-filter">
-          <option value="active">All active (not invoiced)</option>
-          <option value="unpacked">Needs packing</option>
-          <option value="open">Open — booked / picking</option>
-          <option value="shipped">Shipped — awaiting delivery</option>
-          <option value="delivered">Delivered — ready to invoice</option>
-          <option value="all">Everything incl. invoiced</option>
-        </select>
         <a class="link small" onclick="expandAll(true)">Expand all</a>
         <a class="link small" onclick="expandAll(false)">Collapse all</a>
-        <a class="link small" onclick="togglePastePanel('pack')">Paste Pack Sizes</a>
-        <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
-        <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
+        <span class="pack-tools">
+          <a class="link small" onclick="togglePastePanel('pack')">Paste Pack Sizes</a>
+          <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
+          <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
+        </span>
       </div>
       <div class="batch-actions">
         <label class="check-label"><input type="checkbox" id="select-all"> All shown</label>
         <span class="sel-count" id="sel-count">0 selected</span>
-        <button onclick="bulkSavePacking()" title="Save and accept packing (boxes + pallets) for the selected shipments as shown">Save Packing</button>
-        <button class="secondary" onclick="printSelectedLabels()">Print Labels</button>
-        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>
-        <button class="secondary" onclick="bulkConfirm()">Confirm Bookings</button>
-        <button class="secondary" onclick="bulkPickAll()">Pick All</button>
-        <button class="ship-now" onclick="bulkShip()" title="Ships the selected shipments that are fully picked with packing accepted">Ship</button>
-        <span id="bulk-deliver" style="display:none;" class="check-label">
-          <button class="secondary" onclick="bulkDeliver()" title="Managers: mark delivered without a POD">Mark Delivered</button>
-          <input type="date" id="bulk-delivered-date" style="width:auto;padding:5px 6px;font-size:13px;">
-        </span>
-        <span class="check-label manager-only">
-          <button class="secondary" onclick="bulkInvoice()">Create Invoices</button>
-          <label class="check-label" title="Selected shipments of the same order go on one invoice"><input type="checkbox" id="bulk-combine"> One Per Order</label>
-        </span>
+        <span class="stage-actions" id="stage-actions"></span>
       </div>
-      <div class="small muted" style="margin-top:6px;">Packing list prints:
+      <div class="small muted pack-tools" style="margin-top:6px;">Packing list prints:
         <label class="inline-check"><input type="checkbox" id="pl-all-boxes" checked> Box details</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-pallets" checked> Pallet info</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-lots"> Lot #</label>
@@ -116,8 +99,6 @@
     let detailOpenId = null;
 
     const canManage = AuthGuard.hasRole("manager");
-    if (canManage) document.getElementById("bulk-deliver").style.display = "inline-flex";
-    document.getElementById("bulk-delivered-date").value = new Date().toISOString().substring(0, 10);
 
     function byId(id) { return shipments.find(s => s.id === id); }
     function cardEl(id) { return document.querySelector(`.ship-card[data-shipment="${id}"]`); }
@@ -166,18 +147,68 @@
         ...s.lines.map(l => itemCode(l.item_id))].join(" ").toLowerCase();
       return hay.includes(q.toLowerCase());
     }
+    // ---- stages: the same steps as one shipment (pick -> accept packing -> Ship Now -> delivered -> invoice) ----
+    const STAGES = [
+      { key: "pick", label: "To pick", test: s => ["new", "ready"].includes(s.status) && !allPicked(s),
+        hint: "Booked and waiting on the floor. <b>Pick All</b> marks every line picked (and confirms the bookings).",
+        empty: "Nothing to pick — new shipments land here once they're created on an order." },
+      { key: "pack", label: "To pack", test: s => s.status === "ready" && allPicked(s) && !s.packed_at,
+        hint: "Picked. Check pack sizes and pallets, then <b>Accept Packing</b> — labels and packing lists print from here.",
+        empty: "Nothing waiting on packing." },
+      { key: "ship", label: "Ready to ship", test: s => s.status === "ready" && allPicked(s) && !!s.packed_at,
+        hint: "Picked and packed. <b>Ship Now</b> takes the stock off on-hand — add carrier and tracking as they go out.",
+        empty: "Nothing ready to ship yet — accept packing on picked shipments first." },
+      { key: "shipped", label: "Shipped", test: s => s.status === "shipped",
+        hint: "On the truck. A driver's POD marks it delivered automatically; managers can <b>Mark Delivered</b> by hand.",
+        empty: "Nothing out for delivery." },
+      { key: "delivered", label: "Delivered · to bill", test: s => s.status === "delivered",
+        hint: "Delivered and not invoiced yet. <b>Create Invoices</b> — shipments of the same order share one invoice.",
+        empty: "Everything delivered has been invoiced." },
+      { key: "all", label: "Everything", test: s => true, hint: "Every shipment, invoiced ones included. Pick a stage to act on them.", empty: "No shipments yet." },
+    ];
+    let stage = null;
+    function stageOf(s) { return STAGES.find(st => st.key !== "all" && st.test(s)) || null; }
+    function inPlay(s) { return s.status !== "cancelled" && s.lines.length; }
     function visibleShipments() {
-      const view = document.getElementById("view-filter").value;
       const q = document.getElementById("search").value.trim();
-      return shipments.filter(s => {
-        if (s.status === "cancelled" || !s.lines.length) return false;
-        if (view !== "all" && s.status === "invoiced") return false;
-        if (view === "unpacked" && isPacked(s)) return false;
-        if (view === "open" && !["new", "ready"].includes(s.status)) return false;
-        if (view === "shipped" && s.status !== "shipped") return false;
-        if (view === "delivered" && s.status !== "delivered") return false;
-        return matches(s, q);
-      });
+      const st = STAGES.find(x => x.key === stage);
+      return shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q));
+    }
+    function drawStages() {
+      const counts = Object.fromEntries(STAGES.map(st => [st.key, shipments.filter(s => inPlay(s) && st.test(s)).length]));
+      const st = STAGES.find(x => x.key === stage);
+      document.getElementById("stage-tabs").innerHTML = STAGES.map((x, i) => `${i && x.key !== "all" ? `<span class="stage-arrow" aria-hidden="true">›</span>` : ""}
+        <button role="tab" aria-selected="${x.key === stage}" class="stage-tab ${x.key === stage ? "on" : ""} ${x.key === "all" ? "stage-all" : ""}" onclick="setStage('${x.key}')">
+          ${escapeHtml(x.label)}${x.key !== "all" ? `<span class="stage-count ${counts[x.key] ? "" : "zero"}">${counts[x.key]}</span>` : ""}</button>`).join("");
+      document.getElementById("stage-hint").innerHTML = st.hint;
+      document.querySelectorAll(".pack-tools").forEach(el => { el.style.display = ["pick", "pack", "ship", "all"].includes(stage) ? "" : "none"; });
+      drawStageActions();
+    }
+    function setStage(key, keepSelection = false) {
+      stage = key;
+      try { localStorage.setItem("batch_stage", key); } catch {}
+      if (!keepSelection) selected.clear();
+      renderAll();
+    }
+    // the one next step for this stage is the bright button; the rest are quieter
+    function drawStageActions() {
+      const today = new Date().toISOString().substring(0, 10);
+      const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
+        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>`;
+      const html = {
+        pick: `<button class="next-step" onclick="bulkPickAll()">${icon("check")} Pick All</button>
+          <button class="secondary" onclick="bulkSavePacking()" title="Packing can be accepted before picking is done">Accept Packing</button>${print}`,
+        pack: `<button class="next-step" onclick="bulkSavePacking()" title="Saves the boxes and pallets as shown and accepts the packing">${icon("package")} Accept Packing</button>${print}`,
+        ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}`,
+        shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
+          <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">
+          <button class="secondary" onclick="printSelectedPackingLists()">Packing Lists</button>`
+          : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>`,
+        delivered: canManage ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
+          : `<span class="muted small">A manager creates the invoices.</span>`,
+        all: `${print}`,
+      }[stage];
+      document.getElementById("stage-actions").innerHTML = html;
     }
 
     // ---- rendering ----
@@ -233,14 +264,11 @@
     }
 
     function lifecycleButtons(s) {
-      const b = [];
-      if (s.status === "new") b.push(`<button class="secondary" onclick="runOne(${s.id}, 'confirm-booking')">Confirm Bookings</button>`);
-      const picked = s.lines.length && s.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9);
-      if (["new", "ready"].includes(s.status) && !picked) b.push(`<button class="secondary" onclick="pickAllOne(${s.id})">Pick All</button>`);
-      if (s.status === "ready" && picked) b.push(s.packed_at ? `<button class="ship-now" onclick="runOne(${s.id}, 'ship')">Ship</button>`
-        : `<span class="muted small" title="Save Packing accepts it">packing not accepted</span>`);
-      if (s.status === "shipped" && canManage) b.push(`<button class="secondary" onclick="runOne(${s.id}, 'delivered', {delivered_at: null})" title="Mark delivered today without a POD">Mark Delivered</button>`);
-      if (["shipped", "delivered"].includes(s.status)) b.push(`<button class="secondary" onclick="invoiceOne(${s.id})">Create Invoice</button>`);
+      const b = [], next = (stageOf(s) || {}).key;
+      if (next === "pick") b.push(`<button class="next-step" onclick="pickAllOne(${s.id})">Pick All</button>`);
+      if (next === "ship") b.push(`<button class="next-step ship-now" onclick="openShipDialog([${s.id}])">Ship Now</button>`);
+      if (next === "shipped" && canManage) b.push(`<button class="next-step" onclick="deliverOne(${s.id})" title="Mark delivered today without a POD">Mark Delivered</button>`);
+      if (next === "delivered" && canManage) b.push(`<button class="next-step" onclick="offerBilling([byId(${s.id})])">Create Invoice</button>`);
       return b.join("");
     }
 
@@ -259,7 +287,7 @@
           <div class="pallet-area"></div>
         </details>
         <div class="ship-actions">
-          <button onclick="saveOne(${s.id})">Save Packing</button>
+          <button class="${(stageOf(s) || {}).key === "pack" ? "next-step" : "secondary"}" onclick="saveOne(${s.id})">${s.packed_at ? "Save Packing" : "Accept Packing"}</button>
           <button class="secondary" onclick="printLabels(${s.id})">Labels</button>
           <button class="secondary" onclick="packingListOne(${s.id})">Packing List</button>
           ${lifecycleButtons(s)}
@@ -282,8 +310,10 @@
 
       const container = document.getElementById("shipments-container");
       const shown = visibleShipments();
+      drawStages();
+      const q = document.getElementById("search").value.trim();
       container.innerHTML = shown.length ? shown.map(renderCard).join("")
-        : `<div class="card muted">${shipments.length ? "No shipments match this view/search." : "No shipments yet — create one from a customer order."}</div>`;
+        : `<div class="card muted stage-empty">${q ? "No shipments match this search." : STAGES.find(x => x.key === stage).empty}</div>`;
       shown.filter(s => openCards.has(s.id)).forEach(s => renderPallets(s.id));
       if (detailOpenId && cardEl(detailOpenId)) attachDetail(detailOpenId);
       updateSelectionUi();
@@ -466,8 +496,15 @@
         await savePackingFor(id);
         selected.add(id);  // just packed -> ready to print
         await reloadList();
-        showResult(`${byId(id).code} packed and selected for printing.`);
+        showResult(`${byId(id).code} packed${(stageOf(byId(id)) || {}).key === "ship" ? " — it's in Ready to ship" : ""}.`);
       } catch (e) { err.textContent = e.message; }
+    }
+    async function deliverOne(id) {
+      try {
+        const sh = await apiFetch(`/api/shipments/${id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: null }) });
+        await reloadList();
+        offerBilling([sh]);
+      } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
     }
 
     // ---- per-shipment lifecycle ----
@@ -486,15 +523,8 @@
         try { await apiFetch(`/api/shipments/${id}/confirm-booking`, { method: "POST" }); }
         catch (e) { document.getElementById(`err-${id}`).textContent = e.message; return; }
       }
-      runOne(id, "pick", { pick_all: true });
-    }
-    async function invoiceOne(id) {
-      if (!await deliveredCheckBeforeInvoice([byId(id)])) return;
-      try {
-        const inv = await apiFetch(`/api/invoices/from-shipment/${id}`, { method: "POST", body: JSON.stringify({ shipping_charge: 0 }) });
-        await reloadList();
-        showResult(`Created <a class="link" href="invoices.html?id=${inv.id}">${escapeHtml(inv.code)}</a> (draft) from ${escapeHtml(byId(id)?.code || "")}.`, true);
-      } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
+      await runOne(id, "pick", { pick_all: true });
+      if ((stageOf(byId(id)) || {}).key === "pack") { openCards.add(id); renderAll(); showResult(`${byId(id).code} picked — accept its packing next.`); }
     }
     function plQuery() {
       return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}&notes=${document.getElementById("pl-all-notes").checked}`;
@@ -528,67 +558,126 @@
       const skipped = chosen.filter(s => !eligible(s));
       const ok = [], failed = [];
       for (const s of targets) {
-        try { await action(s); ok.push(s.code); }
+        try { await action(s); ok.push(s); }
         catch (e) { failed.push(`${escapeHtml(s.code)}: ${escapeHtml(e.message)}`); }
       }
       await reloadList();
-      showResult(`${label}: ${ok.length} done${ok.length ? ` (${ok.join(", ")})` : ""}`
-        + (skipped.length ? ` · ${skipped.length} skipped — not at that stage (${skipped.map(s => s.code).join(", ")})` : ""));
       if (failed.length) showError(failed.join("<br>"));
+      return { ok: ok.map(s => s.id), msg: `${label}: ${ok.length} done${ok.length ? ` (${ok.map(s => s.code).join(", ")})` : ""}`
+        + (skipped.length ? ` · ${skipped.length} skipped — not at that stage (${skipped.map(s => s.code).join(", ")})` : "") };
+    }
+    // after a bulk step: show where they went and follow them there, still selected
+    function moveOn(res) {
+      if (!res || !res.ok.length) { if (res) showResult(res.msg); return; }
+      const where = stageOf(byId(res.ok[0]));
+      selected.clear();
+      res.ok.forEach(id => selected.add(id));
+      if (where && where.key !== stage) setStage(where.key, true); else renderAll();
+      showResult(res.msg + (where ? ` → now in ${where.label}` : ""));
     }
 
-    function bulkSavePacking() {
-      bulkRun("Packed", s => !["cancelled", "invoiced"].includes(s.status), s => savePackingFor(s.id));
+    async function bulkSavePacking() {
+      moveOn(await bulkRun("Packing accepted", s => ["new", "ready"].includes(s.status), s => savePackingFor(s.id)));
     }
-    function bulkConfirm() {
-      bulkRun("Bookings confirmed", s => s.status === "new", s => apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" }));
-    }
-    function bulkPickAll() {
+    async function bulkPickAll() {
       const n = selectedShipments().filter(s => ["new", "ready"].includes(s.status)).length;
-      if (!n || !confirm(`Mark everything picked on ${n} shipment(s)? They ship with Ship once the packing is accepted.`)) { if (!n) showError("None of the selected shipments are open (new/ready)."); return; }
-      bulkRun("Picked", s => ["new", "ready"].includes(s.status), async s => {
+      if (!n) { showError("Tick the shipments to pick first."); return; }
+      const { value } = await askDialog({ title: `Pick everything on ${n} shipment${n === 1 ? "" : "s"}?`, body: "<p>Every line is marked fully picked (bookings are confirmed too). They move to <b>To pack</b>.</p>",
+        buttons: [{ label: "Pick All", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      moveOn(await bulkRun("Picked", s => ["new", "ready"].includes(s.status), async s => {
         if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
         await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
-      });
-    }
-    function bulkShip() {
-      const ready = s => s.status === "ready" && s.packed_at && s.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9);
-      const n = selectedShipments().filter(ready).length;
-      if (!n) { showError("None of the selected shipments are fully picked with packing accepted (Pick All, then Save Packing)."); return; }
-      if (!confirm(`Ship ${n} shipment(s)? Stock leaves on-hand.`)) return;
-      bulkRun("Shipped", ready, s => apiFetch(`/api/shipments/${s.id}/ship`, { method: "POST" }));
-    }
-    function bulkDeliver() {
-      const date = document.getElementById("bulk-delivered-date").value;
-      bulkRun("Marked delivered (no POD)", s => s.status === "shipped", s => apiFetch(`/api/shipments/${s.id}/delivered`, {
-        method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }),
       }));
     }
-    async function bulkInvoice() {
-      const eligible = selectedShipments().filter(s => ["shipped", "delivered"].includes(s.status));
-      if (!eligible.length) { showError("None of the selected shipments are shipped/delivered and un-invoiced."); return; }
-      const combine = document.getElementById("bulk-combine").checked;
-      if (!await deliveredCheckBeforeInvoice(eligible)) return;
-      if (!combine) {
-        if (!confirm(`Create ${eligible.length} draft invoice(s), one per shipment?`)) return;
-        return bulkRun("Invoiced", s => ["shipped", "delivered"].includes(s.status),
-          s => apiFetch(`/api/invoices/from-shipments`, { method: "POST", body: JSON.stringify({ shipment_ids: [s.id], shipping_charge: 0 }) }));
-      }
-      // One invoice per order: group the selected shipments by order.
-      const groups = {};
-      eligible.forEach(s => { (groups[s.order_id] = groups[s.order_id] || []).push(s); });
-      if (!confirm(`Create ${Object.keys(groups).length} draft invoice(s), one per order, covering ${eligible.length} shipment(s)?`)) return;
-      showError(""); showResult("");
-      const made = [], failed = [];
-      for (const list of Object.values(groups)) {
+    function bulkShip() {
+      const ready = selectedShipments().filter(s => (stageOf(s) || {}).key === "ship");
+      if (!ready.length) { showError("Tick the shipments to ship — they need to be picked with packing accepted."); return; }
+      openShipDialog(ready.map(s => s.id));
+    }
+    async function bulkDeliver() {
+      const date = document.getElementById("bulk-delivered-date").value;
+      const res = await bulkRun("Marked delivered (no POD)", s => s.status === "shipped", s => apiFetch(`/api/shipments/${s.id}/delivered`, {
+        method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }),
+      }));
+      moveOn(res);
+      if (res && res.ok.length) offerBilling(res.ok.map(byId));  // delivered -> bill it now?
+    }
+    function bulkInvoice() {
+      const chosen = selectedShipments().filter(s => s.status === "delivered");
+      if (!chosen.length) { showError("Tick the delivered shipments to bill."); return; }
+      offerBilling(chosen);
+    }
+
+    // ---- Ship Now: confirm, carrier and tracking per shipment, then off they go (like Pack & Ship on one) ----
+    function openShipDialog(ids) {
+      const list = ids.map(byId).filter(Boolean);
+      const carriers = [...new Set(shipments.map(s => s.carrier).filter(Boolean))].slice(0, 30);
+      const back = document.createElement("div");
+      back.className = "glass-back";
+      back.id = "ship-dialog";
+      back.addEventListener("click", e => { if (e.target === back) closeShipDialog(); });
+      back.innerHTML = `<div class="glass-panel ship-dialog" role="dialog" aria-modal="true" aria-labelledby="sd-title">
+        <div class="sm-head"><div><h3 id="sd-title">Ship ${list.length} shipment${list.length === 1 ? "" : "s"}</h3>
+            <div class="pr-steps"><span class="done">${icon("check")}Picked</span><span class="done">${icon("check")}Packed</span><span class="on">3 Ship</span></div></div>
+          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeShipDialog()">${icon("x")}</button></div>
+        <p class="muted small" style="margin:0 0 8px;">Stock leaves on-hand as each one ships. Carrier and tracking are optional — they go on the packing list and the POD email.</p>
+        <datalist id="sd-carriers">${carriers.map(c => `<option value="${escapeHtml(c)}">`).join("")}</datalist>
+        <div class="sm-body"><table class="sm-table no-table-tools no-col-bands">
+          <thead><tr><th>Shipment</th><th class="grow">Customer</th><th class="num">Boxes</th><th>Carrier</th><th>Tracking #</th></tr></thead>
+          <tbody>${list.map(s => { const ord = order(s.order_id) || {}; return `<tr data-id="${s.id}">
+            <td><span class="sd-code">${escapeHtml(s.code)}</span></td>
+            <td class="grow">${escapeHtml(customerName(ord.customer_id) || "")}<div class="muted small">${escapeHtml(ord.code || "")}${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</div></td>
+            <td class="num">${s.boxes.length}</td>
+            <td><input type="text" class="sd-carrier" list="sd-carriers" value="${escapeHtml(s.carrier || "")}" placeholder="Carrier"></td>
+            <td><input type="text" class="sd-tracking" value="${escapeHtml(s.tracking_number || "")}" placeholder="Optional"></td></tr>`; }).join("")}</tbody>
+        </table></div>
+        <div class="sm-foot">
+          <div class="sm-box" id="sd-box" aria-hidden="true">${icon("truck")}<span class="sm-count" id="sd-count">0</span></div>
+          <div class="sm-summary">${list.length} shipment${list.length === 1 ? "" : "s"} · ${list.reduce((t, s) => t + s.boxes.length, 0)} boxes</div>
+          <div class="error" id="sd-error"></div>
+          <button type="button" class="secondary" onclick="closeShipDialog()">Cancel</button>
+          <button type="button" class="ship-now lit" id="sd-go" onclick="shipFromDialog()">Ship Now</button>
+        </div></div>`;
+      document.body.appendChild(back);
+      document.body.classList.add("glass-open");
+      back.querySelector("#sd-go").focus();
+    }
+    function closeShipDialog() {
+      const el = document.getElementById("ship-dialog");
+      document.body.classList.remove("glass-open");
+      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
+    }
+    async function shipFromDialog() {
+      const back = document.getElementById("ship-dialog"), go = back.querySelector("#sd-go"), err = back.querySelector("#sd-error");
+      go.disabled = true;
+      go.textContent = "Shipping…";
+      const ok = [], failed = [];
+      for (const tr of back.querySelectorAll("tbody tr")) {
+        const id = parseInt(tr.dataset.id), s = byId(id);
         try {
-          const inv = await apiFetch(`/api/invoices/from-shipments`, { method: "POST", body: JSON.stringify({ shipment_ids: list.map(s => s.id), shipping_charge: 0 }) });
-          made.push(`<a class="link" href="invoices.html?id=${inv.id}">${escapeHtml(inv.code)}</a> (${list.map(s => escapeHtml(s.code)).join(" + ")})`);
-        } catch (e) { failed.push(`${list.map(s => escapeHtml(s.code)).join(" + ")}: ${escapeHtml(e.message)}`); }
+          const carrier = tr.querySelector(".sd-carrier").value.trim(), tracking = tr.querySelector(".sd-tracking").value.trim();
+          if (carrier !== (s.carrier || "") || tracking !== (s.tracking_number || ""))
+            await apiFetch(`/api/shipments/${id}`, { method: "PUT", body: JSON.stringify({ carrier: carrier || null, tracking_number: tracking || null }) });
+          await apiFetch(`/api/shipments/${id}/ship`, { method: "POST" });
+          ok.push(tr);
+        } catch (e) { failed.push(`${escapeHtml(s.code)}: ${escapeHtml(e.message)}`); }
       }
+      if (ok.length) {
+        await flyIntoBox(ok.map(tr => tr.querySelector(".sd-code")), back.querySelector("#sd-box"), back.querySelector("#sd-count"));
+        const done = document.createElement("div");
+        done.className = "sm-done";
+        done.innerHTML = `<div class="sm-done-check ship-truck">${icon("truck")}</div><h3>${ok.length} shipped</h3>
+          <p class="muted">${failed.length ? `${failed.length} couldn't ship — see below` : "Stock has left on-hand · now in Shipped"}</p>`;
+        back.querySelector(".glass-panel").appendChild(done);
+        requestAnimationFrame(() => done.classList.add("show"));
+        await new Promise(r => setTimeout(r, 1200));
+      }
+      if (failed.length && !ok.length) { err.innerHTML = failed.join("<br>"); go.disabled = false; go.textContent = "Ship Now"; return; }
+      closeShipDialog();
       await reloadList();
-      showResult(`Created ${made.length} invoice(s): ${made.join(", ")}`, true);
       if (failed.length) showError(failed.join("<br>"));
+      moveOn({ ok: ok.map(tr => parseInt(tr.dataset.id)), msg: `Shipped: ${ok.length}` });
     }
 
     async function printSelectedLabels() {
@@ -722,12 +811,19 @@
         // History is optional: a missing endpoint shouldn't leave the screen empty.
         apiFetch("/api/stock-items/pack-sizes/history").catch(() => []),
       ]);
+      // where to start: ?stage=, a linked shipment's stage, the last stage used, else the first with work in it
+      const params = new URLSearchParams(location.search), id = parseInt(params.get("id"));
+      let saved = null;
+      try { saved = localStorage.getItem("batch_stage"); } catch {}
+      const count = k => shipments.filter(s => inPlay(s) && STAGES.find(x => x.key === k).test(s)).length;
+      stage = (STAGES.some(x => x.key === params.get("stage")) && params.get("stage"))
+        || (id && byId(id) && (stageOf(byId(id)) || {}).key)
+        || (STAGES.some(x => x.key === saved) && saved)
+        || ["pick", "pack", "ship"].find(count) || "ship";
+      if (id && byId(id)) openCards.add(id);
       renderAll();
-      const id = parseInt(new URLSearchParams(location.search).get("id"));
-      if (id && byId(id)) { openCards.add(id); renderAll(); }
     }
 
-    document.getElementById("view-filter").addEventListener("change", renderAll);
     document.getElementById("search").addEventListener("input", renderAll);
     document.getElementById("select-all").addEventListener("change", e => {
       visibleShipments().forEach(s => e.target.checked ? selected.add(s.id) : selected.delete(s.id));

@@ -1524,10 +1524,10 @@ class ShipmentService:
 
     @staticmethod
     def unpacked(db: Session) -> List[Shipment]:
-        """Non-cancelled, not-yet-invoiced shipments whose boxed quantity doesn't match
-        their quantity -- i.e. still need a packing list / labels."""
+        """Open (new / ready) shipments whose boxed quantity doesn't match their quantity -- still to be
+        packed. Shipped ones are out of the building whatever their box records say."""
         result = []
-        for shipment in db.query(Shipment).filter(Shipment.status.notin_(("invoiced", "cancelled"))).order_by(Shipment.id.desc()).all():
+        for shipment in db.query(Shipment).filter(Shipment.status.in_(ShipmentService.OPEN_STATUSES)).order_by(Shipment.id.desc()).all():
             shipped_by_line, _ = ShipmentService.quantities_by_order_line(shipment)
             boxed_by_line = {}
             for box in shipment.boxes:

@@ -266,6 +266,98 @@ async function deliveredCheckBeforeInvoice(shipments) {
   return true;
 }
 
+// Right after a delivery is recorded: "bill it now?" (managers and up -- invoices are money work). Shipments
+// of the same order go on one invoice. Create flies the shipments into the invoice, ticks, then opens it.
+// Resolves true when it billed (the page is navigating away), false for "Not now".
+async function offerBilling(shipments) {
+  const list = (shipments || []).filter(s => s && s.status === "delivered");
+  if (!list.length || !AuthGuard.hasRole("manager")) return false;
+  const groups = {};
+  list.forEach(s => (groups[s.order_id] = groups[s.order_id] || []).push(s));
+  const sets = Object.values(groups), n = sets.length;
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "glass-back";
+    back.id = "bill-now";
+    const key = e => { if (e.key === "Escape") close(false); };
+    const close = v => {
+      document.removeEventListener("keydown", key);
+      document.body.classList.remove("glass-open");
+      back.classList.add("closing");
+      setTimeout(() => back.remove(), 180);
+      resolve(v);
+    };
+    back.addEventListener("click", e => { if (e.target === back) close(false); });
+    back.innerHTML = `<div class="glass-panel bill-panel" role="dialog" aria-modal="true" aria-labelledby="bn-title">
+      <div class="sm-head"><div><h3 id="bn-title">${icon("checkCircle", "pos")} Delivered — bill it now?</h3>
+          <div class="muted small">${list.length === 1 ? `${escapeHtml(list[0].code)} is delivered.` : `${list.length} shipments are delivered.`}
+            Create the ${n === 1 ? "invoice" : `${n} invoices`} while it's fresh — ${n === 1 ? "it starts" : "they start"} as a draft you review before sending.</div></div>
+        <button type="button" class="icon-btn sm-close" aria-label="Close" data-act="later">${icon("x")}</button></div>
+      <div class="bn-list">${sets.map(g => `<div class="bn-row">${g.map(s => `<span class="bn-chip" data-id="${s.id}">${icon("truck")}${escapeHtml(s.code)}</span>`).join("")}
+          ${g.length > 1 ? `<span class="muted small">same order · one invoice</span>` : ""}</div>`).join("")}</div>
+      <div class="sm-foot">
+        <div class="sm-box" id="bn-box" aria-hidden="true">${icon("receipt")}<span class="sm-count" id="bn-count">0</span></div>
+        <div class="sm-summary"><strong>${n}</strong> draft invoice${n === 1 ? "" : "s"}</div>
+        <div class="error" id="bn-error"></div>
+        <button type="button" class="secondary" data-act="later">Not now</button>
+        <button type="button" class="sm-go" id="bn-go">Create Invoice${n === 1 ? "" : "s"}</button>
+      </div></div>`;
+    document.body.appendChild(back);
+    document.body.classList.add("glass-open");
+    document.addEventListener("keydown", key);
+    back.querySelectorAll('[data-act="later"]').forEach(b => b.addEventListener("click", () => close(false)));
+    const go = back.querySelector("#bn-go");
+    go.focus();
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      go.textContent = "Creating…";
+      const made = [];
+      try {
+        for (const g of sets)
+          made.push(await apiFetch("/api/invoices/from-shipments", { method: "POST", body: JSON.stringify({ shipment_ids: g.map(s => s.id), shipping_charge: 0 }) }));
+      } catch (e) {
+        back.querySelector("#bn-error").textContent = e.message;
+        if (!made.length) { go.disabled = false; go.textContent = `Create Invoice${n === 1 ? "" : "s"}`; return; }
+      }
+      await flyIntoBox([...back.querySelectorAll(".bn-chip")], back.querySelector("#bn-box"), back.querySelector("#bn-count"));
+      const done = document.createElement("div");
+      done.className = "sm-done";
+      done.innerHTML = `<div class="sm-done-check">${icon("receipt")}</div><h3>${made.map(i => escapeHtml(i.code)).join(", ")} created</h3>
+        <p class="muted">${made.length === 1 ? "Opening the invoice…" : "Opening invoices…"}</p>`;
+      back.querySelector(".glass-panel").appendChild(done);
+      requestAnimationFrame(() => done.classList.add("show"));
+      await new Promise(r => setTimeout(r, 1100));
+      resolve(true);
+      location.href = made.length === 1 ? `invoices.html?id=${made[0].id}` : "invoices.html";
+    });
+  });
+}
+
+// Chips fly into a box one by one; the box bounces and counts (Create Shipment, Bill Now, batch Ship).
+function flyIntoBox(chips, box, count) {
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const t = box.getBoundingClientRect(), tx = t.left + t.width / 2, ty = t.top + t.height / 2;
+  box.classList.add("filling");
+  return Promise.all(chips.map((src, i) => new Promise(resolve => {
+    const from = src.getBoundingClientRect();
+    const chip = document.createElement("div");
+    chip.className = "sm-chip";
+    chip.textContent = src.textContent.trim();
+    chip.style.left = `${from.left}px`;
+    chip.style.top = `${from.top}px`;
+    document.body.appendChild(chip);
+    const land = () => { chip.remove(); count.textContent = String(i + 1); box.animate([{ transform: "scale(1)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }], { duration: 260, easing: "ease-out" }); resolve(); };
+    if (reduce) { setTimeout(land, 40 * i); return; }
+    src.style.visibility = "hidden";
+    const dx = tx - (from.left + chip.offsetWidth / 2), dy = ty - (from.top + chip.offsetHeight / 2);
+    chip.animate([
+      { transform: "translate(0, 0) scale(1)", opacity: 1 },
+      { transform: `translate(${dx * 0.55}px, ${dy * 0.35 - 40}px) scale(.85)`, opacity: 1, offset: 0.55 },
+      { transform: `translate(${dx}px, ${dy}px) scale(.25)`, opacity: 0.2 },
+    ], { duration: 620, delay: i * 90, easing: "cubic-bezier(.45,.05,.35,1)", fill: "forwards" }).onfinish = land;
+  })));
+}
+
 // A small choice pop-up: resolves to the clicked button's value (null on Esc / click outside),
 // with the dialog element so the caller can read any inputs in `body` before it closes.
 // askDialog({ title, body: html, buttons: [{ label, value, cls }] }) -> Promise<{ value, el }>

@@ -86,3 +86,24 @@ def test_empty_field_lines_are_dropped():
     ctx = {"customer": {"name": "Acme", "contact": ""}}
     assert fill("{{customer.name}}\nAttn: {{customer.contact}}\nThanks", ctx) == "Acme\nThanks"
     assert fill("<b>{{customer.name}}</b>", {"customer": {"name": "A & B"}}) == "<b>A &amp; B</b>"
+
+
+def test_show_hide_leaves_parts_out():
+    """The designer's checklist: a hidden section (and its parts), a ticked-off field's lines and a hidden column don't print."""
+    from app.services import template_engine, template_starters
+    spec = dict(template_starters.starters("invoice"))["coastal"]
+    groups = {b.get("group") for b in spec["header"]["blocks"] + spec["summary"]["blocks"]}
+    assert {"Logo", "Bill to", "Key facts: Terms", "Totals: Tax", "Notes"} <= groups
+    spec["hidden"] = ["Logo", "Totals"]
+    od = next(b for b in spec["header"]["blocks"] if b.get("group") == "Order details" and "{{order.job_number}}" in (b.get("text") or ""))
+    od["hide_fields"] = ["order.job_number"]
+    spec["table"]["columns"][2]["hidden"] = True
+    v = template_engine.visible_spec(spec)
+    left = [b for k in ("header", "summary") for b in v[k]["blocks"]]
+    assert not any(b["type"] == "image" for b in left)
+    assert not any((b.get("group") or "").startswith("Totals") for b in left)
+    assert "job_number" not in next(b for b in left if b["id"] == od["id"])["text"]
+    assert [c["key"] for c in v["table"]["columns"]] == ["line_no", "item_code_desc", "price", "amount"]
+    ctx = {"order": {"code": "C1", "job_number": "JOB-77"}, "totals": {"subtotal": "$9.00", "total": "$9.00"}, "doc": {"title": "INVOICE"}}
+    text = _text(template_engine.render(spec, ctx, [{"line_no": "1", "item_code": "X", "qty": "5", "price": "$1", "amount": "$5"}]))
+    assert "JOB-77" not in text and "Subtotal" not in text and "C1" in text

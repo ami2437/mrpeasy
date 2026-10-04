@@ -12,8 +12,12 @@ spec = {
 block = {"type": text|image|barcode|qr|rect|line, "x","y","w","h" (inches from the band's top-left),
          "text": "Bill to\n{{customer.name}}", "value": "{{shipment.code}}", "style": {...}}
 Text: {{field}} placeholders; a line whose fields are all empty is dropped ("Attn: {{customer.contact}}").
+Show / hide (the designer's checklist): spec["hidden"] = section names left off ("Logo", or "Totals" for every
+"Totals: ..." part), block["hidden"], block["hide_fields"] = fields whose lines / list rows are left off, and
+column["hidden"] -- visible_spec() applies them before anything is drawn.
 """
 import base64
+import copy
 import io
 import re
 from xml.sax.saxutils import escape
@@ -96,6 +100,42 @@ def fill(text, ctx, markup=True):
         filled = PH.sub(lambda m: (escape(next(it)) if markup else next(it)), line)
         out.append(filled)
     return "\n".join(out)
+
+
+def is_hidden(spec, b):
+    hidden = set(spec.get("hidden") or [])
+    g = b.get("group") or ""
+    return bool(b.get("hidden")) or (g and (g in hidden or g.split(":")[0].strip() in hidden))
+
+
+def drop_field_lines(text, keys):
+    """Leave out every line (or list row) that shows one of these fields."""
+    keys = set(keys or [])
+    if not keys or not text:
+        return text
+    return "\n".join(l for l in str(text).split("\n") if not any(k in keys for k, _ in PH.findall(l)))
+
+
+def visible_spec(spec):
+    """The spec as it prints: hidden sections, blocks, fields and columns taken out."""
+    out = copy.deepcopy(spec or {})
+    for k in ("header", "running", "summary", "footer"):
+        band = out.get(k)
+        if not isinstance(band, dict):
+            continue
+        keep = []
+        for b in band.get("blocks") or []:
+            if is_hidden(out, b):
+                continue
+            if b.get("hide_fields"):
+                for key in ("text", "value"):
+                    if b.get(key):
+                        b[key] = drop_field_lines(b[key], b["hide_fields"])
+            keep.append(b)
+        band["blocks"] = keep
+    if isinstance(out.get("table"), dict):
+        out["table"]["columns"] = [c for c in out["table"].get("columns") or [] if not c.get("hidden")]
+    return out
 
 
 # ---------- one block ----------
@@ -375,6 +415,7 @@ def _canvas_class(spec, ctx, page_w, page_h, margin):
 
 
 def render(spec, ctx, rows, title="Document") -> bytes:
+    spec = visible_spec(spec)
     use_family(spec.get("font"))
     page = spec.get("page") or {}
     pw, ph, m = float(page.get("w", 8.5)) * inch, float(page.get("h", 11)) * inch, float(page.get("margin", 0.5)) * inch
@@ -403,6 +444,7 @@ def render(spec, ctx, rows, title="Document") -> bytes:
 
 def render_labels(spec, contexts) -> bytes:
     """One page per label (box labels, address labels)."""
+    spec = visible_spec(spec)
     use_family(spec.get("font"))
     page = spec.get("page") or {}
     pw, ph, m = float(page.get("w", 6)) * inch, float(page.get("h", 4)) * inch, float(page.get("margin", 0.15)) * inch

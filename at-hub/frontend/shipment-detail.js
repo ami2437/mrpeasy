@@ -83,15 +83,15 @@ function linesSectionHtml(shipment) {
       </tbody>
     </table>
     <div style="margin-top:10px;">
-      ${shipment.status === "new" ? `<button onclick="shipmentAction(${shipment.id}, 'confirm-booking')">Confirm Bookings</button>` : ""}
-      ${picking && !allPicked(shipment) ? `<button onclick="pickEntered(${shipment.id})" title="Records the Pick now quantities (they start at everything left)">Pick</button>` : ""}
+      ${shipment.status === "new" ? `<button class="next-step" onclick="shipmentAction(${shipment.id}, 'confirm-booking')">Confirm Bookings</button>` : ""}
+      ${picking && !allPicked(shipment) ? `<button class="next-step" onclick="pickEntered(${shipment.id})" title="Records the Pick now quantities (they start at everything left)">Pick</button>` : ""}
       ${picking && allPicked(shipment) ? `<span class="pick-done">${icon("checkCircle")}All picked</span>
         ${shipment.packed_at ? `<span class="muted small">Packing accepted by ${escapeHtml(shipment.packed_by || "")}</span>
-          <button class="ship-now" onclick="shipNow(${shipment.id})">Ship Now</button>
+          <button class="ship-now next-step" onclick="shipNow(${shipment.id})">Ship Now</button>
           <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
-        : `<button class="ship-now" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
+        : `<button class="ship-now next-step" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
-      ${shipment.status === "shipped" && AuthGuard.hasRole("manager") ? `<button onclick="shipmentAction(${shipment.id}, 'delivered', {delivered_at: null})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
+      ${shipment.status === "shipped" && AuthGuard.hasRole("manager") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
       ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.hasRole("manager") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
       ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
     </div>
@@ -275,12 +275,19 @@ async function markDelivered(id) {
   errorEl.textContent = "";
   const value = document.getElementById("delivered-date").value;
   try {
-    await apiFetch(`/api/shipments/${id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: value ? `${value}T12:00:00` : null }) });
+    const sh = await apiFetch(`/api/shipments/${id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: value ? `${value}T12:00:00` : null }) });
     await reloadList();
     showDetail(id);
+    offerBilling([sh]);  // delivered -> bill it now?
   } catch (err) {
     errorEl.textContent = err.message;
   }
+}
+
+// Lifecycle "Mark Delivered (no POD)": today, then "bill it now?"
+async function deliverNow(id) {
+  await shipmentAction(id, "delivered", { delivered_at: null });
+  if ((shipmentsById[id] || {}).status === "delivered") offerBilling([shipmentsById[id]]);
 }
 
 async function clearDelivered(id) {

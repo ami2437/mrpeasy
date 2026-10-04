@@ -15,6 +15,7 @@ let sample = { context: {}, rows: [] }, records = [], recordId = null;
 let sel = null;                // { band, id } | { band, table: true } | { band } (band only)
 let zoom = 0.85, zoomFit = true, undoStack = [], redoStack = [];
 let logoUrl = "/api/company/logo";
+let panelTab = "show", lastSel = "";  // right panel: "show" = the show / hide checklist, "edit" = what's selected
 
 const BANDS_DOC = [["header", "Header · page 1"], ["running", "Running header · pages 2+"], ["table", "Line items"], ["summary", "Summary · after the lines"], ["footer", "Footer · every page"]];
 const BANDS_LABEL = [["header", "Label"]];
@@ -181,6 +182,18 @@ function addBlock(kind) {
   changed(); drawCanvas(); drawProps();
 }
 
+// ---------- show / hide (same rules as template_engine.visible_spec) ----------
+const parentOf = grp => grp.split(":")[0].trim();
+function isHidden(s, b) {
+  const h = s.hidden || [];
+  return !!b.hidden || (!!b.group && (h.includes(b.group) || h.includes(parentOf(b.group))));
+}
+function shownText(b, key) {  // the block's text without the lines of fields that are ticked off
+  const hf = b.hide_fields || [], t = String(b[key] || "");
+  if (!hf.length) return t;
+  return t.split("\n").filter(l => ![...l.matchAll(FIELD_RE)].some(m => hf.includes(m[1]))).join("\n");
+}
+
 // ---------- fill {{fields}} like the server does ----------
 function lookup(key) {
   if (key === "page") return "1";
@@ -212,7 +225,7 @@ function fillText(text) {
 // ---------- drawing the page ----------
 function blockEl(b, scale, interactive, bandKey) {
   const st = b.style || {}, el = document.createElement("div");
-  el.className = `blk blk-${b.type}` + (interactive && sel && sel.id === b.id ? " sel" : "");
+  el.className = `blk blk-${b.type}` + (interactive && sel && sel.id === b.id ? " sel" : "") + (isHidden(spec, b) ? " ghost" : "");
   el.dataset.id = b.id;
   el.dataset.band = bandKey;
   Object.assign(el.style, { left: `${b.x * PX * scale}px`, top: `${b.y * PX * scale}px`, width: `${b.w * PX * scale}px`, height: `${b.h * PX * scale}px` });
@@ -233,12 +246,12 @@ function blockEl(b, scale, interactive, bandKey) {
     Object.assign(inner.style, { fontSize: `${fs}px`, lineHeight: st.lh || 1.25, fontWeight: st.bold ? 700 : st.semi ? 600 : 400, fontStyle: st.italic ? "italic" : "normal",
       color: st.color || "#1e293b", textAlign: st.align || "left", textTransform: st.upper ? "uppercase" : "none",
       letterSpacing: st.spacing ? `${st.spacing * PT * scale}px` : "normal", justifyContent: { middle: "center", bottom: "flex-end" }[st.valign] || "flex-start" });
-    inner.innerHTML = `<div>${fillText(b.text)}</div>`;
+    inner.innerHTML = `<div>${fillText(shownText(b, "text"))}</div>`;
     el.appendChild(inner);
   } else if (b.type === "kv") {
     const lw = (st.label_w ?? 0.95) * PX * scale, step = (st.size || 8.8) * (st.lh || 1.7) * PT * scale;
     zoomNow = scale;
-    el.innerHTML = String(b.text || "").split("\n").filter(l => l.includes("|")).map(l => {
+    el.innerHTML = shownText(b, "text").split("\n").filter(l => l.includes("|")).map(l => {
       const [k, ...v] = l.split("|");
       let val = fillText(v.join("|").trim());
       if (!val.replace(/<[^>]+>/g, "").trim()) val = escapeHtml(st.empty || "");
@@ -249,12 +262,12 @@ function blockEl(b, scale, interactive, bandKey) {
   } else if (b.type === "image") {
     el.innerHTML = `<img src="${logoUrl}" alt="" style="object-position:${st.align === "right" ? "right" : st.align === "center" ? "center" : "left"} top">`;
   } else if (b.type === "barcode") {
-    const v = fillText(b.value).replace(/<[^>]+>/g, "");
+    const v = fillText(shownText(b, "value")).replace(/<[^>]+>/g, "");
     el.innerHTML = `<div class="bc-bars"></div>${st.show_text !== false ? `<div class="bc-text" style="font-size:${8 * PT * scale}px">${v}</div>` : ""}`;
   } else if (b.type === "qr") {
     el.innerHTML = `<div class="qr-box"></div>`;
   }
-  if (interactive) {
+  if (interactive && !isHidden(spec, b)) {
     el.addEventListener("pointerdown", e => startDrag(e, b, bandKey, null));
     if (sel && sel.id === b.id) ["nw", "ne", "sw", "se", "e", "s"].forEach(h => {
       const hd = document.createElement("span");
@@ -267,7 +280,7 @@ function blockEl(b, scale, interactive, bandKey) {
 }
 
 function tableEl(t, scale, interactive) {
-  const cols = (t.columns || []).filter(c => c.key), st = t.style || {};
+  const cols = (t.columns || []).filter(c => c.key && !c.hidden), st = t.style || {};
   const width = ((spec.page.w || 8.5) - 2 * (spec.page.margin || 0.5)) * PX * scale;
   const fixed = cols.reduce((s, c) => s + (parseFloat(c.w) || 0) * PX * scale, 0), flex = cols.filter(c => !parseFloat(c.w));
   const share = flex.length ? Math.max(0.6 * PX * scale, (width - fixed) / flex.length) : 0;
@@ -308,7 +321,7 @@ function renderPage(s, scale, interactive) {
     } else {
       const bnd = s[k] || { h: 0, blocks: [] };
       bd.style.height = `${(bnd.h || 0) * PX * scale}px`;
-      (bnd.blocks || []).forEach(b => bd.appendChild(blockEl(b, scale, interactive, k)));
+      (bnd.blocks || []).filter(b => interactive || !isHidden(s, b)).forEach(b => bd.appendChild(blockEl(b, scale, interactive, k)));
       if (interactive) {
         bd.addEventListener("pointerdown", e => { if (e.target === bd) { sel = { band: k }; drawCanvas(); drawProps(); } });
         const grip = document.createElement("div");
@@ -439,6 +452,15 @@ function fieldPicker(target) {
 function drawProps() {
   const el = document.getElementById("props");
   if (!spec) { el.innerHTML = `<p class="muted small" style="margin:0;">What you select on the page — a block, a band, the line items — is edited here.</p>`; return; }
+  const selKey = sel ? JSON.stringify(sel) : "";
+  if (selKey !== lastSel) { lastSel = selKey; if (sel) panelTab = "edit"; }
+  const tabs = `<div class="dz-ptabs"><button class="${panelTab === "show" ? "on" : ""}" onclick="panelTab = 'show'; drawProps()">Show / hide</button>
+    <button class="${panelTab === "edit" ? "on" : ""}" onclick="panelTab = 'edit'; drawProps()">${sel ? "Selected" : "Page"}</button></div>`;
+  if (panelTab === "show") { el.innerHTML = tabs + showHideHtml(); decorateIcons(el); return; }
+  drawEditProps(el);
+  el.insertAdjacentHTML("afterbegin", tabs);
+}
+function drawEditProps(el) {
   const b = blockOf();
   if (b) {
     const st = b.style || {};
@@ -458,6 +480,8 @@ function drawProps() {
           ${field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]]))}${field("Vertical", sel_("style.valign", st.valign || "top", [["top", "Top"], ["middle", "Middle"], ["bottom", "Bottom"]]))}
           ${field("Line height", num("style.lh", st.lh || 1.25, 0.05, 0.8))}${field("Letter spacing", num("style.spacing", st.spacing || 0, 0.5, 0))}</div>
           <div class="pchecks">${chk("style.bold", st.bold, "Bold")}${chk("style.semi", st.semi, "Semibold")}${chk("style.italic", st.italic, "Italic")}${chk("style.upper", st.upper, "UPPERCASE")}${chk("style.fit_wrap", st.fit === "wrap", "Don't shrink to fit")}</div>` : ""}
+      ${field("Section in Show / hide (blocks with the same name show and hide together)", `<input type="text" list="grp-list" value="${escapeHtml(b.group || "")}" data-path="group" oninput="setProp(this)" placeholder="e.g. Signatures">
+          <datalist id="grp-list">${[...new Set(allBlocks().map(x => x.block.group).filter(Boolean))].map(n => `<option value="${escapeHtml(n)}">`).join("")}</datalist>`)}
       ${b.type === "image" ? field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]])) + `<p class="muted small">Shows your company logo (Company Settings).</p>` : ""}
       ${b.type === "barcode" ? `<div class="pchecks">${chk("style.show_text", st.show_text !== false, "Print the value under the bars")}</div>${field("Align", sel_("style.align", st.align || "left", [["left", "Left"], ["center", "Center"], ["right", "Right"]]))}` : ""}
       ${b.type === "line" ? `<div class="pgrid">${field("Thickness (pt)", num("style.border", st.border || 1, 0.1, 0.1))}${field("Color", col("style.color", st.color))}</div>` : ""}
@@ -498,6 +522,63 @@ function drawProps() {
   }
   decorateIcons(el);
 }
+// ---------- the show / hide checklist ----------
+const DECOR = ["rect", "line"];
+function allBlocks() { return bandsOf().flatMap(([k]) => ((spec[k] || {}).blocks || []).map(block => ({ band: k, block }))); }
+function sectionTree() {
+  const secs = [], by = {};
+  for (const { block: b } of allBlocks()) {
+    if (!b.group) continue;
+    const name = parentOf(b.group), part = b.group.includes(":") ? b.group.slice(b.group.indexOf(":") + 1).trim() : null;
+    let sec = by[name];
+    if (!sec) { sec = by[name] = { name, parts: [], fields: [], blocks: [] }; secs.push(sec); }
+    if (part) { if (!sec.parts.includes(part)) sec.parts.push(part); continue; }
+    sec.blocks.push(b);
+    for (const m of `${b.text || ""}\n${b.value || ""}`.matchAll(FIELD_RE))
+      if (!sec.fields.includes(m[1]) && !["page", "pages"].includes(m[1])) sec.fields.push(m[1]);
+  }
+  return secs;
+}
+function showHideHtml() {
+  const secs = sectionTree(), hidden = spec.hidden || [], fl = Object.fromEntries((typeOf().fields || []).map(f => [f.key, f.label]));
+  window._secs = secs;
+  const box = (on, call, label, dis = false) => `<label class="sh-row ${dis ? "dis" : ""}"><input type="checkbox" ${on ? "checked" : ""} ${dis ? "disabled" : ""} onchange="${call}"> <span>${label}</span></label>`;
+  const fieldOff = (sec, key) => sec.blocks.filter(b => (`${b.text || ""}\n${b.value || ""}`).includes(key)).every(b => (b.hide_fields || []).includes(key));
+  const others = allBlocks().filter(({ block: b }) => !b.group && !DECOR.includes(b.type));
+  const kind = { text: "Text", kv: "List", image: "Logo", barcode: "Barcode", qr: "QR code" };
+  return `<p class="muted small sh-help">Untick anything you don't want printed. It disappears from the page and the PDF (shown faded here); tick it to bring it back.</p>
+    ${secs.length ? `<div class="sh-list">${secs.map((sec, i) => {
+      const on = !hidden.includes(sec.name);
+      const subs = sec.parts.map(p => box(on && !hidden.includes(`${sec.name}: ${p}`), `toggleSection(${i}, '${"p" + sec.parts.indexOf(p)}', this.checked)`, escapeHtml(p), !on)).join("")
+        + (sec.fields.length > 1 ? sec.fields.map((f, j) => box(on && !fieldOff(sec, f), `toggleField(${i}, ${j}, this.checked)`, escapeHtml(fl[f] || f), !on)).join("") : "");
+      return `<div class="sh-sec">${box(on, `toggleSection(${i}, '', this.checked)`, `<b>${escapeHtml(sec.name)}</b>`)}${subs ? `<div class="sh-sub">${subs}</div>` : ""}</div>`;
+    }).join("")}</div>` : `<p class="muted small">This template has no sections yet — give blocks a Section name (select a block) to list them here.</p>`}
+    ${spec.table ? `<h4>Line-item columns</h4><div class="sh-list sh-cols">${(spec.table.columns || []).map((c, i) => box(!c.hidden, `toggleColumn(${i}, this.checked)`, escapeHtml(c.header || ((typeOf().columns || []).find(x => x.key === c.key) || {}).label || c.key))).join("")}</div>` : ""}
+    ${others.length ? `<h4>Other blocks</h4><div class="sh-list">${others.map(({ band: bk, block: b }) => box(!b.hidden, `toggleBlock('${bk}', '${b.id}', this.checked)`,
+        `${kind[b.type] || b.type}: ${escapeHtml(String(b.text || b.value || "").replace(/<[^>]+>/g, "").slice(0, 28))}`)).join("")}</div>` : ""}`;
+}
+function toggleSection(i, part, on) {
+  const sec = window._secs[i], name = part ? `${sec.name}: ${sec.parts[+part.slice(1)]}` : sec.name;
+  snapshot();
+  const h = new Set(spec.hidden || []);
+  on ? h.delete(name) : h.add(name);
+  spec.hidden = [...h];
+  changed(); drawCanvas(); drawProps();
+}
+function toggleField(i, j, on) {
+  const sec = window._secs[i], key = sec.fields[j];
+  snapshot();
+  for (const b of sec.blocks) {
+    if (!(`${b.text || ""}\n${b.value || ""}`).includes(key)) continue;
+    const hf = new Set(b.hide_fields || []);
+    on ? hf.delete(key) : hf.add(key);
+    b.hide_fields = [...hf];
+  }
+  changed(); drawCanvas(); drawProps();
+}
+function toggleColumn(i, on) { snapshot(); spec.table.columns[i].hidden = !on; changed(); drawCanvas(); drawProps(); }
+function toggleBlock(bk, id, on) { snapshot(); const b = band(bk).blocks.find(x => x.id === id); if (b) b.hidden = !on; changed(); drawCanvas(); drawProps(); }
+
 function syncGeometryInputs(b) {
   ["x", "y", "w", "h"].forEach(k => { const i = document.querySelector(`#props input[data-path="${k}"]`); if (i) i.value = b[k]; });
 }

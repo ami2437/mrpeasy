@@ -51,6 +51,12 @@
 .hd-nw { left: -5px; top: -5px; cursor: nwse-resize; } .hd-ne { right: -5px; top: -5px; cursor: nesw-resize; }
 .hd-sw { left: -5px; bottom: -5px; cursor: nesw-resize; } .hd-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
 .hd-e { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; } .hd-s { bottom: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
+/* the paper is always white print, whatever the app theme: the app's table look (header fill, striped and
+   hover rows, dark-mode navy) must not leak onto it -- only the template's own inline colors show */
+.sheet { color-scheme: light; }
+.sheet table, .sheet tbody tr, .sheet tbody tr:nth-child(even), .sheet th, .sheet td, .sheet tr:hover td { background: transparent; color: inherit; }
+.sheet table { border: 0; }
+.sheet th, .sheet td { border-bottom: 0; letter-spacing: normal; }
 .tbl table { border-collapse: collapse; table-layout: fixed; }
 .tbl th, .tbl td { vertical-align: top; overflow: hidden; word-break: break-word; }
 .sheet.editing .tbl { cursor: pointer; }
@@ -92,3 +98,17 @@
 .blk-kv { display: flex; flex-direction: column; overflow: hidden; }
 .kv-row { display: flex; align-items: flex-start; line-height: 1.3; }
 .kv-row > span { flex: none; }
+/* show / hide checklist */
+.blk.ghost { opacity: .13; pointer-events: none; }
+.dz-ptabs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; margin: -2px 0 10px; border-radius: 9px; background: var(--surface-3); }
+.dz-ptabs button { border: 0; box-shadow: none; background: transparent; color: var(--text-2); padding: 5px 6px; font-size: 12.5px; font-weight: 600; border-radius: 7px; }
+.dz-ptabs button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(15, 23, 42, .15); }
+.sh-help { margin: 0 0 8px; }
+.sh-list { display: flex; flex-direction: column; gap: 1px; }
+.sh-sec { padding: 3px 0; border-bottom: 1px solid var(--border); }
+.sh-row { display: flex; align-items: center; gap: 7px; margin: 0; padding: 3px 2px; font-size: 13px; text-transform: none; color: var(--text); cursor: pointer; }
+.sh-row input { width: 15px; height: 15px; margin: 0; flex: none; accent-color: var(--accent); }
+.sh-row.dis { opacity: .45; cursor: default; }
+.sh-sub { padding-left: 22px; }
+.sh-sub .sh-row { font-size: 12px; padding: 1px 2px; color: var(--text-2); }
+.sh-cols { display: grid; grid-template-columns: 1fr 1fr; }

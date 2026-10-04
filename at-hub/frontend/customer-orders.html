@@ -798,10 +798,11 @@
       const date = btn.closest(".quick-deliver").querySelector(".qd-date").value;
       btn.disabled = true;
       try {
-        await apiFetch(`/api/shipments/${shipmentId}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }) });
+        const sh = await apiFetch(`/api/shipments/${shipmentId}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }) });
         await loadOrders();
         toast("Marked delivered");
         showDetail(currentOrderId);
+        offerBilling([sh]);  // delivered -> bill it now?
       } catch (e) { btn.disabled = false; document.getElementById("detail-error").textContent = e.message; }
     }
 
