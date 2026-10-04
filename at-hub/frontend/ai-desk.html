@@ -37,7 +37,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("ai");
     document.getElementById("sidebar").innerHTML = renderSidebar("ai-desk.html");
     const KINDS = { customer_po: "Customer PO", vendor_invoice: "Vendor invoice", vendor_order: "Vendor SO / quote", mtr: "MTR / test report", pod: "Proof of delivery", other: "Other" };
     const TARGET_FOR = { customer_po: "customer_order", vendor_invoice: "purchase_order", vendor_order: "purchase_order", mtr: "purchase_order", pod: "shipment", other: "purchase_order" };

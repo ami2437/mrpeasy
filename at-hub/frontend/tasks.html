@@ -37,7 +37,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("admin");
+    AuthGuard.requirePerm("tasks");
     document.getElementById("sidebar").innerHTML = renderSidebar("tasks.html");
     let tasks = [], view = "open", openGroups = new Set();
     async function load() {

@@ -2,11 +2,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import User
 from app.services import backups
 
-router = APIRouter(prefix="/api/backups", tags=["backups"], dependencies=[Depends(require_role("super_admin"))])
+router = APIRouter(prefix="/api/backups", tags=["backups"], dependencies=[Depends(require_perm("backups"))])
 
 
 @router.get("/")

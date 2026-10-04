@@ -11,11 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import (Attachment, Customer, CustomerOrder, Lot, MtrEmail, MtrLink, PurchaseOrder,
                         PurchaseOrderLine, Shipment, ShipmentLine, StockItem, User, Vendor)
 
-router = APIRouter(prefix="/api/mtrs", tags=["mtrs"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/mtrs", tags=["mtrs"], dependencies=[Depends(require_any("stock.view", "orders.view", "shipments.view", "purchasing"))])
 
 
 class LinkRequest(BaseModel):
@@ -123,7 +123,7 @@ def unlinked(db: Session = Depends(get_db)):
             for a in atts if a.id not in linked]
 
 
-@router.get("/purchase-order/{po_id}", dependencies=[Depends(require_role("manager"))])
+@router.get("/purchase-order/{po_id}", dependencies=[Depends(require_perm("mtrs.manage"))])
 def for_purchase_order(po_id: int, db: Session = Depends(get_db)):
     """The PO's MTR files with the line ids each one covers -- drives the linking grid on the PO page."""
     atts = (db.query(Attachment).filter(Attachment.entity_type == "purchase_order", Attachment.entity_id == po_id,
@@ -136,7 +136,7 @@ def for_purchase_order(po_id: int, db: Session = Depends(get_db)):
     } for a in atts]
 
 
-@router.put("/{attachment_id}/links", dependencies=[Depends(require_role("manager"))])
+@router.put("/{attachment_id}/links", dependencies=[Depends(require_perm("mtrs.manage"))])
 def set_links(attachment_id: int, data: LinkRequest, db: Session = Depends(get_db),
               user: User = Depends(get_current_active_user)):
     """Replace the set of PO lines this MTR covers. Lines must be on the PO the MTR is attached to."""

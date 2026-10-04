@@ -79,7 +79,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("shipments.work");
     document.getElementById("sidebar").innerHTML = renderSidebar("pack-shipments.html");
 
     // Globals the shared shipment-detail.js reads.
@@ -98,7 +98,7 @@
     const pendingPallets = {};     // shipmentId -> { pallet#: {weight, dimensions} } from a paste
     let detailOpenId = null;
 
-    const canManage = AuthGuard.hasRole("manager");
+    const canManage = AuthGuard.can("shipments.deliver"), canBill = AuthGuard.can("invoices");
 
     function byId(id) { return shipments.find(s => s.id === id); }
     function cardEl(id) { return document.querySelector(`.ship-card[data-shipment="${id}"]`); }
@@ -204,7 +204,7 @@
           <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">
           <button class="secondary" onclick="printSelectedPackingLists()">Packing Lists</button>`
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>`,
-        delivered: canManage ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
+        delivered: canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
           : `<span class="muted small">A manager creates the invoices.</span>`,
         all: `${print}`,
       }[stage];
@@ -268,7 +268,7 @@
       if (next === "pick") b.push(`<button class="next-step" onclick="pickAllOne(${s.id})">Pick All</button>`);
       if (next === "ship") b.push(`<button class="next-step ship-now" onclick="openShipDialog([${s.id}])">Ship Now</button>`);
       if (next === "shipped" && canManage) b.push(`<button class="next-step" onclick="deliverOne(${s.id})" title="Mark delivered today without a POD">Mark Delivered</button>`);
-      if (next === "delivered" && canManage) b.push(`<button class="next-step" onclick="offerBilling([byId(${s.id})])">Create Invoice</button>`);
+      if (next === "delivered" && canBill) b.push(`<button class="next-step" onclick="offerBilling([byId(${s.id})])">Create Invoice</button>`);
       return b.join("");
     }
 

@@ -26,11 +26,18 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     token = AuthService.create_access_token({"sub": user.username})
+    from app.services.permissions import KEYS, perms_for
+    user.permissions = sorted(perms_for(db, user.role), key=KEYS.index)
+    from app.services.permissions import role_name
+    user.role_name = role_name(db, user.role)
     return {"access_token": token, "token_type": "bearer", "user": user}
 
 
 @router.get("/me", response_model=UserResponse)
-def me(current_user: User = Depends(get_current_active_user)):
+def me(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    from app.services.permissions import KEYS, role_name
+    current_user.permissions = sorted(current_user.permissions, key=KEYS.index)
+    current_user.role_name = role_name(db, current_user.role)
     return current_user
 
 

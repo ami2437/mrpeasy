@@ -6,13 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.services.auth import AuthService
-from app.schemas import ROLES, UserResponse, UserCreate, UserUpdate, PasswordReset
-from app.dependencies import require_role
-from app.models import User
+from app.schemas import UserResponse, UserCreate, UserUpdate, PasswordReset
+from app.dependencies import require_perm, require_any
+from app.models import Role, User
 from app.routes.auth import check_password_strength
 
 router = APIRouter(prefix="/api/users", tags=["users"])
-super_admin = require_role("super_admin")
+super_admin = require_perm("users")
 
 
 def _get(db: Session, user_id: int) -> User:
@@ -41,7 +41,7 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), current: User =
     username = (data.username or "").strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
-    if data.role not in ROLES:
+    if not db.get(Role, data.role):
         raise HTTPException(status_code=400, detail="Invalid role")
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=400, detail=f"Username {username} is already taken")
@@ -66,7 +66,7 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), current: User =
 def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db), current: User = Depends(super_admin)):
     user = _get(db, user_id)
     if data.role is not None:
-        if data.role not in ROLES:
+        if not db.get(Role, data.role):
             raise HTTPException(status_code=400, detail="Invalid role")
         _ensure_super_admin_remains(db, user, next_role=data.role)
         user.role = data.role
@@ -103,5 +103,102 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current: User = Dep
         raise HTTPException(status_code=400, detail="You can't delete your own account")
     _ensure_super_admin_remains(db, user, next_active=False)
     db.delete(user)
+    db.commit()
+    return Response(status_code=204)
+
+
+# ---- roles: named sets of permissions (app/services/permissions.py) ----
+import json
+import re
+from datetime import datetime
+from typing import List
+
+from pydantic import BaseModel
+
+from app.dependencies import get_current_active_user
+from app.services import permissions as P
+
+roles_router = APIRouter(prefix="/api/roles", tags=["roles"])
+
+
+def _role_out(db: Session, r: Role) -> dict:
+    perms = sorted(P.perms_for(db, r.key), key=P.KEYS.index)
+    return {"key": r.key, "name": r.name, "description": r.description, "builtin": bool(r.builtin), "locked": r.key == "super_admin",
+            "permissions": perms, "money": [p for p in perms if p in P.MONEY],
+            "users": db.query(User).filter(User.role == r.key).count(), "updated_by": r.updated_by}
+
+
+@roles_router.get("/catalog")
+def catalog(_: User = Depends(get_current_active_user)):
+    """Every permission, by module -- the grid on the Roles screen."""
+    return [{"key": k, "module": m, "label": l, "money": money} for k, m, l, money, _lowest in P.CATALOG]
+
+
+@roles_router.get("/")
+def list_roles(db: Session = Depends(get_db), _: User = Depends(get_current_active_user)):
+    """Everyone can read the role names (shown on accounts); only Users & Roles can change them."""
+    order = {"super_admin": 0, "admin": 1, "manager": 2, "employee": 3}
+    return [_role_out(db, r) for r in sorted(db.query(Role).all(), key=lambda r: (order.get(r.key, 9), r.name.lower()))]
+
+
+class RoleIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+    permissions: List[str] = []
+
+
+def _clean_perms(perms):
+    bad = [p for p in perms if p not in P.KEYS]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"Unknown permission(s): {', '.join(bad)}")
+    return json.dumps([k for k in P.KEYS if k in set(perms)])
+
+
+@roles_router.post("/")
+def create_role(data: RoleIn, db: Session = Depends(get_db), current: User = Depends(super_admin)):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the role a name")
+    if db.query(Role).filter(Role.name.ilike(name)).first():
+        raise HTTPException(status_code=400, detail=f"There's already a role called {name}")
+    base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "role"
+    key, n = base, 2
+    while db.get(Role, key):
+        key, n = f"{base}_{n}", n + 1
+    r = Role(key=key, name=name, description=(data.description or "").strip() or None, permissions=_clean_perms(data.permissions),
+             builtin=False, updated_by=current.username)
+    db.add(r)
+    db.commit()
+    return _role_out(db, r)
+
+
+@roles_router.put("/{key}")
+def update_role(key: str, data: RoleIn, db: Session = Depends(get_db), current: User = Depends(super_admin)):
+    r = db.get(Role, key)
+    if not r:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if r.key == "super_admin":
+        raise HTTPException(status_code=400, detail="Super admin always has everything, so someone can always manage users")
+    if data.name.strip() and data.name.strip().lower() != r.name.lower() and db.query(Role).filter(Role.name.ilike(data.name.strip())).first():
+        raise HTTPException(status_code=400, detail=f"There's already a role called {data.name.strip()}")
+    r.name = data.name.strip() or r.name
+    r.description = (data.description or "").strip() or None
+    r.permissions = _clean_perms(data.permissions)
+    r.updated_by, r.updated_at = current.username, datetime.utcnow()
+    db.commit()
+    return _role_out(db, r)
+
+
+@roles_router.delete("/{key}", status_code=204)
+def delete_role(key: str, db: Session = Depends(get_db), _: User = Depends(super_admin)):
+    r = db.get(Role, key)
+    if not r:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if r.builtin:
+        raise HTTPException(status_code=400, detail="Built-in roles can be changed but not deleted")
+    n = db.query(User).filter(User.role == key).count()
+    if n:
+        raise HTTPException(status_code=400, detail=f"{n} user(s) still have this role -- give them another role first")
+    db.delete(r)
     db.commit()
     return Response(status_code=204)

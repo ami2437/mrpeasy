@@ -5,11 +5,12 @@ from app.config.database import get_db
 from app.schemas import PodEmailRequest, ShipmentEmailResponse
 from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest, UnshipRequest
 from app.services.crud import ShipmentService
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_any, require_perm
+from app.services.permissions import has
 from app.models import User
 from app.services.pdf import packing_list_pdf
 
-router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(require_any("shipments.view", "shipments.work", "orders.view", "invoices", "pod.upload"))])
 
 
 def with_pods(db: Session, shipments):
@@ -79,7 +80,7 @@ def pod_emails(shipment_id: int, db: Session = Depends(get_db)):
     return db.query(ShipmentEmail).filter(ShipmentEmail.shipment_id == shipment_id).order_by(ShipmentEmail.sent_at.desc()).all()
 
 
-@router.post("/{shipment_id}/email-pod", response_model=ShipmentEmailResponse)
+@router.post("/{shipment_id}/email-pod", response_model=ShipmentEmailResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def email_pod(shipment_id: int, data: PodEmailRequest, db: Session = Depends(get_db),
               current_user: User = Depends(get_current_active_user)):
     """Email the proof-of-delivery files to the customer (e.g. when they say it never arrived)."""
@@ -105,79 +106,79 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
                     headers={"Content-Disposition": f'inline; filename="Packing-List-{shipment.code}.pdf"'})
 
 
-@router.put("/{shipment_id}/boxes", response_model=ShipmentResponse)
+@router.put("/{shipment_id}/boxes", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def set_boxes(shipment_id: int, data: SetBoxesRequest, db: Session = Depends(get_db)):
     """Set the packing-list/box breakdown for this shipment, used to print box labels."""
     return ShipmentService.set_boxes(db, shipment_id, data)
 
 
-@router.put("/{shipment_id}/pallet-weights", response_model=ShipmentResponse)
+@router.put("/{shipment_id}/pallet-weights", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def set_pallet_weights(shipment_id: int, data: SetPalletWeightsRequest, db: Session = Depends(get_db)):
     return ShipmentService.set_pallet_weights(db, shipment_id, data)
 
 
-@router.put("/{shipment_id}", response_model=ShipmentResponse)
+@router.put("/{shipment_id}", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def update_shipment(shipment_id: int, data: ShipmentUpdate, db: Session = Depends(get_db),
                     current_user: User = Depends(get_current_active_user)):
-    if current_user.role == "employee":
+    if not has(current_user, "money.view"):
         data.shipping_cost = ShipmentService.get(db, shipment_id).shipping_cost  # employees don't see or set costs
     return ShipmentService.update(db, shipment_id, data)
 
 
-@router.post("/{shipment_id}/confirm-booking", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/confirm-booking", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def confirm_booking(shipment_id: int, db: Session = Depends(get_db)):
     return ShipmentService.confirm_booking(db, shipment_id)
 
 
-@router.post("/{shipment_id}/pick", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/pick", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def pick(shipment_id: int, data: PickRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Record picked quantities; the shipment ships automatically once every line is fully picked."""
     return ShipmentService.pick(db, shipment_id, data, created_by=current_user.username)
 
 
-@router.post("/{shipment_id}/accept-packing", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/accept-packing", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def accept_packing(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Packing reviewed: Ship is allowed once everything is picked. Unsaved packing is made from pack sizes."""
     return with_pods(db, ShipmentService.accept_packing(db, shipment_id, current_user.username))
 
 
-@router.post("/{shipment_id}/ship", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/ship", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def ship(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Everything picked and packing accepted: stock leaves on-hand and the shipment is shipped."""
     return with_pods(db, ShipmentService.ship(db, shipment_id, current_user.username))
 
 
-@router.post("/{shipment_id}/unbook", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/unbook", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def unbook(shipment_id: int, data: UnbookRequest, db: Session = Depends(get_db)):
     """Release booked, unpicked quantity back to stock (all or part of a line)."""
     return ShipmentService.unbook(db, shipment_id, data)
 
 
-@router.post("/{shipment_id}/cancel", response_model=ShipmentResponse)
+@router.post("/{shipment_id}/cancel", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def cancel_shipment(shipment_id: int, db: Session = Depends(get_db)):
     return ShipmentService.cancel(db, shipment_id)
 
 
-@router.get("/{shipment_id}/undo-plan", dependencies=[Depends(require_role("manager"))])
+@router.get("/{shipment_id}/undo-plan", dependencies=[Depends(require_perm("shipments.undo"))])
 def undo_plan(shipment_id: int, db: Session = Depends(get_db)):
     """What undoing this shipment involves (its invoice and the steps a sent one needs)."""
     return ShipmentService.undo_plan(db, shipment_id)
 
 
-@router.post("/{shipment_id}/unship", response_model=ShipmentResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/{shipment_id}/unship", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.undo"))])
 def unship(shipment_id: int, data: Optional[UnshipRequest] = None, db: Session = Depends(get_db),
            current_user: User = Depends(get_current_active_user)):
     """Undo a sent shipment: stock returns and stays booked so it can be edited or cancelled; its invoice is voided."""
     return ShipmentService.unship(db, shipment_id, created_by=current_user.username, data=data)
 
 
-@router.delete("/{shipment_id}", status_code=204, dependencies=[Depends(require_role("manager"))])
+@router.delete("/{shipment_id}", status_code=204, dependencies=[Depends(require_perm("shipments.undo"))])
 def delete_shipment(shipment_id: int, db: Session = Depends(get_db)):
     ShipmentService.delete(db, shipment_id)
     return Response(status_code=204)
 
 
-@router.post("/{shipment_id}/delivered", response_model=ShipmentResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/{shipment_id}/delivered", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.deliver"))])
 def mark_delivered(shipment_id: int, data: MarkDeliveredRequest, db: Session = Depends(get_db),
                    current_user: User = Depends(get_current_active_user)):
     """Mark delivered by hand (managers and up). Uploading a POD does this automatically."""
@@ -185,6 +186,6 @@ def mark_delivered(shipment_id: int, data: MarkDeliveredRequest, db: Session = D
     return ShipmentService.mark_delivered(db, shipment, data.delivered_at, current_user.username)
 
 
-@router.post("/{shipment_id}/undeliver", response_model=ShipmentResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/{shipment_id}/undeliver", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.undo"))])
 def clear_delivered(shipment_id: int, db: Session = Depends(get_db)):
     return ShipmentService.clear_delivered(db, shipment_id)

@@ -1723,11 +1723,18 @@ class InvoiceService:
         return target
 
     @staticmethod
-    def update(db: Session, invoice_id: int, data) -> Invoice:
-        """Edit line items / free text / due date while still in draft."""
+    def update(db: Session, invoice_id: int, data, by: str = None) -> Invoice:
+        """Edit line items / free text / due date while still in draft. Billing a different quantity than the
+        shipments delivered needs accept_qty_differences; the accepted difference is kept against the order."""
+        from app.services import billing
         invoice = InvoiceService.get(db, invoice_id)
         if invoice.status == "void":
             raise HTTPException(status_code=400, detail="This invoice is void -- it can't be edited")
+        diffs = billing.invoice_differences(db, invoice, [l.model_dump() for l in data.lines]) if data.lines is not None else None
+        if diffs and not getattr(data, "accept_qty_differences", False):
+            raise HTTPException(status_code=400, detail="Billing differs from what was delivered: " + "; ".join(
+                f"#{d['line_no']} {d['item_code']} delivered {d['delivered']:g}, billing {d['billed']:g}" for d in diffs)
+                + " -- accept the difference to save it")
 
         if data.due_date is not None:
             invoice.due_date = data.due_date
@@ -1748,6 +1755,7 @@ class InvoiceService:
                     notes=(line.notes or "").strip() or None,
                     print_notes=line.print_notes is not False,
                 ))
+            billing.record_variances(db, invoice, diffs, by, getattr(data, "qty_note", None))
 
         # A sent/paid invoice can be corrected; its paid status follows the new total.
         db.flush()
@@ -1770,6 +1778,8 @@ class InvoiceService:
         if status == "paid" and invoice.balance > 0.005:  # paid means the payments cover it -- record them first
             raise HTTPException(status_code=400, detail=f"{invoice.balance:,.2f} is still open -- record the payment and it's marked paid automatically")
         if status == "void":
+            from app.services import billing
+            billing.clear_variances(db, invoice)  # a void invoice bills nothing
             invoice.voided_at, invoice.voided_by = datetime.utcnow(), None
             # Its shipments become billable again (they can go on a new or combined invoice).
             for shipment in invoice.shipments:

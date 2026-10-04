@@ -92,7 +92,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("shipments.work");
     document.getElementById("sidebar").innerHTML = renderSidebar("labels.html");
 
     const FIELDS = [

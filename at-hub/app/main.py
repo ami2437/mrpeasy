@@ -23,6 +23,8 @@ db = SessionLocal()
 try:
     seed_admin_user(db)
     ensure_super_admin(db)
+    from app.services.permissions import seed as seed_roles
+    seed_roles(db)
     ProductGroupService.ensure_defaults(db)
     ShipmentService.reconcile_bookings(db)
     backfill_lot_costing(db)
@@ -55,8 +57,8 @@ async def no_stale_frontend(request, call_next):
     return response
 
 
-# Employees never see dollar amounts: any money field in an API response is blanked
-# for them, whatever page or endpoint asked for it.
+# A role without "money.view" never sees dollar amounts: any money field in an API response is
+# blanked for it, whatever page or endpoint asked for it.
 MONEY_KEY = re.compile(r"(price|cost|amount|total|balance|paid|revenue|profit|margin|charge|funding|discount)", re.I)
 
 
@@ -69,7 +71,7 @@ def _scrub(value):
 
 
 @app.middleware("http")
-async def hide_money_from_employees(request, call_next):
+async def hide_money(request, call_next):
     response = await call_next(request)
     auth = request.headers.get("authorization", "")
     if (not request.url.path.startswith("/api/") or not auth.lower().startswith("bearer ")
@@ -81,12 +83,13 @@ async def hide_money_from_employees(request, call_next):
     db = SessionLocal()
     try:
         user = AuthService.get_user_by_username(db, payload.get("sub")) if payload.get("sub") else None
-        role = user.role if user else None
+        from app.services.permissions import perms_for
+        sees_money = bool(user) and "money.view" in perms_for(db, user.role)
     finally:
         db.close()
         READ_ONLY.reset(ro)
     body = b"".join([chunk async for chunk in response.body_iterator])
-    if role == "employee":
+    if not sees_money:
         try:
             body = json.dumps(_scrub(json.loads(body))).encode()
         except ValueError:
@@ -112,15 +115,16 @@ async def who_is_asking(request, call_next):
 
 
 def _bin_user(authorization: str):
-    from app.dependencies import ROLE_RANK
+    from app.services.permissions import perms_for
     payload = AuthService.decode_token((authorization or "").split(" ")[-1]) if authorization else None
     db = SessionLocal()
     try:
         user = AuthService.get_user_by_username(db, payload.get("sub")) if payload else None
+        allowed = bool(user) and "recycle_bin" in perms_for(db, user.role)
     finally:
         db.close()
-    if not user or ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
-        raise HTTPException(status_code=403, detail="The recycle bin needs the manager role")
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Your role doesn't include the recycle bin")
     recycle_bin.current_user.set(user.username)
     return user
 
@@ -245,6 +249,7 @@ app.include_router(company.router)
 app.include_router(landed_costs.router)
 app.include_router(test_data.router)
 app.include_router(users.router)
+app.include_router(users.roles_router)
 app.include_router(attachments.router)
 app.include_router(invoice_funding.router)
 app.include_router(ai_orders.router)

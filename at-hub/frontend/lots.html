@@ -32,7 +32,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("stock.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("lots.html");
 
     let lots = [];

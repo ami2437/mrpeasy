@@ -23,7 +23,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("vendors");
     document.getElementById("sidebar").innerHTML = renderSidebar("vendors.html");
     document.getElementById("contacts").innerHTML = contactCardShell("+ New Vendor");
 

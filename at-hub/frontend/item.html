@@ -40,10 +40,10 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("stock.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("stock-items.html");
     const itemId = parseInt(new URLSearchParams(location.search).get("id"));
-    const isManager = AuthGuard.hasRole("manager");
+    const isManager = AuthGuard.can("stock.edit");
     let item = null;
 
     async function load() {

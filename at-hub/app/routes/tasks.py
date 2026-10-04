@@ -8,10 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Attachment, CustomerOrder, PurchaseOrder, Task, User, Vendor
 
-router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_role("admin"))])
+router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_perm("tasks"))])
 AUTO = "AT-HUB"
 
 
@@ -40,6 +40,18 @@ def _suggestions(db: Session) -> dict:
         if o.id not in with_po and o.po_number:
             out[f"co-po-pdf:{o.code}"] = ("Missing documents", f"Attach the customer PO to {o.code}",
                                           f"PO # {o.po_number}: no PDF found by File Matcher.", f"customer-orders.html?id={o.id}")
+    # billing: an order with nothing left to ship or bill must have billed exactly what shipped
+    from app.services import billing
+    from app.models import BillingVariance, StockItem
+    for row in billing.unbalanced_orders(db):
+        o = row["order"]
+        codes = dict(db.query(StockItem.id, StockItem.code).filter(StockItem.id.in_([r["item_id"] for r in row["lines"]])).all())
+        notes = [v.reason for v in db.query(BillingVariance).filter(BillingVariance.order_id == o.id, BillingVariance.reason.isnot(None)).all()]
+        out[f"billing:{o.code}"] = ("Billing", f"Billing on {o.code} doesn't match what shipped",
+                                    "; ".join(f"#{r['line_no']} {codes.get(r['item_id'], '')}: shipped {r['shipped']:g}, billed {r['billed']:g} "
+                                              f"({'over' if r['billed'] > r['shipped'] else 'under'} by {abs(r['billed'] - r['shipped']):g})" for r in row["lines"])
+                                    + (f". Accepted because: {' / '.join(notes)}" if notes else "")
+                                    + ". Correct it with a credit or a further invoice.", f"customer-orders.html?id={o.id}")
     return out
 
 

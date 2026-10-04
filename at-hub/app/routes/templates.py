@@ -9,13 +9,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Customer, CustomerOrder, DocTemplate, Invoice, PurchaseOrder, Quote, Shipment, User
 from app.services import doc_context, template_engine, template_starters
 from app.services.templates import default_for
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
-admin = [Depends(require_role("admin"))]
+admin = [Depends(require_perm("templates"))]
 CUSTOMER_DOCS = {"invoice", "packing_list", "quote", "box_label"}
 RECORD_MODEL = {"invoice": Invoice, "packing_list": Shipment, "purchase_order": PurchaseOrder, "quote": Quote}
 

@@ -73,9 +73,9 @@
       Object.entries(FIELDS).forEach(([key, id]) => { document.getElementById(id).value = company[key] || ""; });
       showLogo(company.has_logo);
       document.getElementById("c-generic").checked = company.generic_stock_enabled !== false;
-      if (!AuthGuard.hasRole("admin")) {
+      if (!AuthGuard.can("company")) {
         document.querySelectorAll("main input, main textarea, main button").forEach(el => { el.disabled = true; });
-        document.getElementById("saved").textContent = "Only admins can change company settings.";
+        document.getElementById("saved").textContent = "Your role can't change company settings.";
       }
     }
 

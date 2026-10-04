@@ -9,10 +9,11 @@ from app.schemas import (
 )
 from fastapi import Response
 from app.services.crud import StockItemService, InventoryTransactionService, ProductGroupService, price_history
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_any, require_perm
+from app.services.permissions import has
 from app.models import User
 
-router = APIRouter(prefix="/api/stock-items", tags=["stock-items"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/stock-items", tags=["stock-items"], dependencies=[Depends(require_any("stock.view", "orders.view", "shipments.view", "shipments.work", "purchasing", "quotes", "invoices"))])
 
 
 @router.get("/", response_model=list[StockItemResponse])
@@ -20,7 +21,7 @@ def list_items(q: str | None = Query(None), low_stock_only: bool = Query(False),
     return StockItemService.list(db, q=q, low_stock_only=low_stock_only)
 
 
-@router.post("/", response_model=StockItemResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/", response_model=StockItemResponse, dependencies=[Depends(require_perm("stock.edit"))])
 def create_item(data: StockItemCreate, db: Session = Depends(get_db)):
     return StockItemService.create(db, data)
 
@@ -30,14 +31,14 @@ def recent_activity(limit: int = Query(25), db: Session = Depends(get_db)):
     return InventoryTransactionService.recent(db, limit=limit)
 
 
-@router.post("/pack-sizes/bulk", response_model=BulkPackSizeResult)
+@router.post("/pack-sizes/bulk", response_model=BulkPackSizeResult, dependencies=[Depends(require_any("stock.edit", "shipments.work"))])
 def bulk_pack_sizes(data: BulkPackSizeRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Paste-a-list bulk update of default_pack_size by item code. Old sizes are kept in the history."""
     return StockItemService.bulk_set_pack_sizes(db, data.entries, by=current_user.username,
                                                 source=data.source or "bulk paste", reference=data.reference)
 
 
-@router.delete("/pack-sizes/history/{entry_id}", status_code=204)
+@router.delete("/pack-sizes/history/{entry_id}", status_code=204, dependencies=[Depends(require_any("stock.edit", "shipments.work"))])
 def delete_pack_size_history(entry_id: int, db: Session = Depends(get_db)):
     """Remove an old pack size from an item's history (the current default is untouched)."""
     StockItemService.delete_pack_size_history(db, entry_id)
@@ -55,43 +56,43 @@ def list_groups(db: Session = Depends(get_db)):
     return ProductGroupService.list(db)
 
 
-@router.post("/groups/list", response_model=ProductGroupResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/groups/list", response_model=ProductGroupResponse, dependencies=[Depends(require_perm("stock.edit"))])
 def create_group(data: ProductGroupCreate, db: Session = Depends(get_db)):
     return ProductGroupService.create(db, data.name)
 
 
-@router.post("/groups/{group_id}/merge", dependencies=[Depends(require_role("manager"))])
+@router.post("/groups/{group_id}/merge", dependencies=[Depends(require_perm("stock.edit"))])
 def merge_group(group_id: int, into_id: int = Query(...), db: Session = Depends(get_db)):
     """Move all of a group's items into another group and remove it."""
     return ProductGroupService.merge(db, group_id, into_id)
 
 
-@router.delete("/groups/{group_id}", status_code=204, dependencies=[Depends(require_role("manager"))])
+@router.delete("/groups/{group_id}", status_code=204, dependencies=[Depends(require_perm("stock.edit"))])
 def delete_group(group_id: int, db: Session = Depends(get_db)):
     ProductGroupService.delete(db, group_id)
     return Response(status_code=204)
 
 
-@router.get("/{item_id}/price-history", response_model=list[PriceHistoryEntry], dependencies=[Depends(require_role("manager"))])
+@router.get("/{item_id}/price-history", response_model=list[PriceHistoryEntry], dependencies=[Depends(require_perm("money.view"))])
 def item_price_history(item_id: int, db: Session = Depends(get_db)):
     """All sale and purchase prices for this item, newest first."""
     StockItemService.get(db, item_id)
     return price_history(db, item_id)
 
 
-@router.delete("/{item_id}", status_code=204, dependencies=[Depends(require_role("manager"))])
+@router.delete("/{item_id}", status_code=204, dependencies=[Depends(require_perm("stock.edit"))])
 def delete_item(item_id: int, db: Session = Depends(get_db)):
     """Only for an item that was never used; a used one gets 409 'USED|...' and should be archived instead."""
     StockItemService.delete(db, item_id)
     return Response(status_code=204)
 
 
-@router.post("/{item_id}/verify", response_model=StockItemResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/{item_id}/verify", response_model=StockItemResponse, dependencies=[Depends(require_perm("stock.edit"))])
 def verify_item(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return StockItemService.verify(db, item_id, current_user.username)
 
 
-@router.get("/{item_id}/usage", dependencies=[Depends(require_role("manager"))])
+@router.get("/{item_id}/usage", dependencies=[Depends(require_perm("stock.edit"))])
 def item_usage(item_id: int, db: Session = Depends(get_db)):
     """Where the item is used (decides delete vs archive)."""
     from app.services.crud import _item_references
@@ -106,8 +107,8 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{item_id}", response_model=StockItemResponse)
 def update_item(item_id: int, data: StockItemUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    if current_user.role == "employee" and set(data.model_dump(exclude_unset=True)) - {"default_pack_size"}:
-        raise HTTPException(status_code=403, detail="Employees can only change an item's pack size")
+    if not has(current_user, "stock.edit") and (not has(current_user, "shipments.work") or set(data.model_dump(exclude_unset=True)) - {"default_pack_size"}):
+        raise HTTPException(status_code=403, detail="Your role can only change an item's pack size")
     return StockItemService.update(db, item_id, data, created_by=current_user.username)
 
 
@@ -248,14 +249,14 @@ def item_family(item_id: int, db: Session = Depends(get_db)):
     return stock_transfer.family(db, StockItemService.get(db, item_id))
 
 
-@router.post("/{item_id}/transfer-from-parent", dependencies=[Depends(require_role("manager"))])
+@router.post("/{item_id}/transfer-from-parent", dependencies=[Depends(require_perm("stock.edit"))])
 def transfer_from_parent(item_id: int, data: _Qty, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from app.services import stock_transfer
     lots = stock_transfer.from_parent(db, item_id, data.quantity, current_user.username, data.reference, data.source_id)
     return {"lots": [{"id": l.id, "lot_code": l.lot_code, "quantity": l.quantity} for l in lots]}
 
 
-@router.post("/{item_id}/return-to-parent", dependencies=[Depends(require_role("manager"))])
+@router.post("/{item_id}/return-to-parent", dependencies=[Depends(require_perm("stock.edit"))])
 def return_to_parent(item_id: int, data: _Qty, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from app.services import stock_transfer
     return {"returned": stock_transfer.to_parent(db, item_id, data.quantity, current_user.username)}

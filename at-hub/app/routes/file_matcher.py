@@ -17,11 +17,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Attachment, CustomerOrder, PurchaseOrder, User
 from app.routes.attachments import MAX_BYTES, store_file
 
-router = APIRouter(prefix="/api/file-matcher", tags=["file-matcher"], dependencies=[Depends(require_role("super_admin"))])
+router = APIRouter(prefix="/api/file-matcher", tags=["file-matcher"], dependencies=[Depends(require_perm("file_matcher"))])
 
 KINDS = {"customer": ("customer_order", CustomerOrder), "vendor": ("purchase_order", PurchaseOrder)}
 VENDOR_CATEGORIES = {"vendor_invoice", "vendor_quote", "purchase_order", "packing_list", "mtr", "bol", "other"}

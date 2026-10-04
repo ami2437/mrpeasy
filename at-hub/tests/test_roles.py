@@ -1,0 +1,57 @@
+"""Roles and permissions: custom roles mix and match permissions, the server enforces them, money is blanked
+without "money.view", and the built-in roles keep what they had."""
+from app.services import permissions as P
+
+
+def _user(client, admin_headers, role):
+    from app.services.auth import AuthService
+    name = f"u-{role}"
+    client.post("/api/users/", json={"username": name, "password": "Str0ng!Passw0rd#", "role": role}, headers=admin_headers)
+    return {"Authorization": f"Bearer {AuthService.create_access_token({'sub': name})}"}
+
+
+def test_builtin_roles_keep_the_old_ladder(client, admin_headers):
+    roles = {r["key"]: r for r in client.get("/api/roles/", headers=admin_headers).json()}
+    assert {"employee", "manager", "admin", "super_admin", "driver"} <= set(roles)
+    assert "money.view" not in roles["employee"]["permissions"] and "shipments.work" in roles["employee"]["permissions"]
+    assert {"money.view", "invoices", "purchasing"} <= set(roles["manager"]["permissions"]) and "templates" not in roles["manager"]["permissions"]
+    assert set(roles["super_admin"]["permissions"]) == set(P.KEYS)
+    me = client.get("/api/auth/me", headers=admin_headers).json()
+    assert "users" in me["permissions"]
+
+
+def test_custom_role_is_enforced(client, admin_headers, make):
+    a = make.item(price=7)
+    make.stock(a, 5)
+    o = make.order(lines=[(a, 5, 7)])
+    # a manager without money: orders and shipping, no prices, no invoices
+    perms = [p for p in P.defaults_for("manager") if p not in P.MONEY]
+    r = client.post("/api/roles/", json={"name": "Floor Lead", "permissions": perms}, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["key"] == "floor_lead" and r.json()["money"] == []
+    h = _user(client, admin_headers, "floor_lead")
+    order = client.get(f"/api/customer-orders/{o['id']}", headers=h).json()
+    assert order["lines"][0]["unit_price"] is None                      # money blanked
+    assert client.get("/api/invoices/", headers=h).status_code == 403
+    assert client.get(f"/api/stock-items/{a['id']}/price-history", headers=h).status_code == 403
+    assert client.get("/api/stock-items/", headers=h).status_code == 200
+    # the driver preset: shipments + POD only
+    d = _user(client, admin_headers, "driver")
+    assert client.get("/api/shipments/", headers=d).status_code == 200
+    assert client.get("/api/customers/", headers=d).status_code == 200     # the POD page shows who it's for
+    assert client.get("/api/vendors/", headers=d).status_code == 403
+    assert client.get("/api/quotes/", headers=d).status_code == 403
+    assert client.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": []}, headers=d).status_code == 403
+    # give the role money and it sees prices
+    client.put("/api/roles/floor_lead", json={"name": "Floor Lead", "permissions": perms + ["money.view"]}, headers=admin_headers)
+    assert client.get(f"/api/customer-orders/{o['id']}", headers=h).json()["lines"][0]["unit_price"] == 7
+
+
+def test_role_rules(client, admin_headers):
+    assert client.put("/api/roles/super_admin", json={"name": "x", "permissions": []}, headers=admin_headers).status_code == 400
+    assert client.delete("/api/roles/manager", headers=admin_headers).status_code == 400
+    assert client.post("/api/roles/", json={"name": "Bad", "permissions": ["nope"]}, headers=admin_headers).status_code == 400
+    client.post("/api/roles/", json={"name": "Temp Role", "permissions": []}, headers=admin_headers)
+    _user(client, admin_headers, "temp_role")
+    assert client.delete("/api/roles/temp_role", headers=admin_headers).status_code == 400   # still has a user
+    emp = _user(client, admin_headers, "employee")
+    assert client.post("/api/roles/", json={"name": "Sneaky", "permissions": P.KEYS}, headers=emp).status_code == 403

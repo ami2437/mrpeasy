@@ -2,7 +2,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, ROLE_RANK
+from app.dependencies import get_current_active_user
+from app.services.permissions import has
 from app.models import User
 from app.services import ai_docs
 
@@ -16,9 +17,9 @@ def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engine: st
                   db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Scan a vendor invoice, vendor quote/confirmation or a proof of delivery with the local
     model and return suggestions to review. Nothing is saved."""
-    if engine == "claude" and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+    if engine == "claude" and not has(user, "ai"):
         raise HTTPException(status_code=403, detail="Ask Claude (cloud) needs the manager role or higher")
-    if kind != "pod" and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+    if kind != "pod" and not has(user, "ai"):
         raise HTTPException(status_code=403, detail="Scanning vendor documents needs the manager role or higher")
     data = file.file.read()
     if not data:
@@ -31,7 +32,7 @@ def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engine: st
 @router.post("/validate-po/{po_id}")
 def validate_po(po_id: int, claude: bool = True, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Check a PO against the vendor's attached quote / order confirmation (or invoice) with the local AI and Claude."""
-    if ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+    if not has(user, "ai"):
         raise HTTPException(status_code=403, detail="Validating purchase orders needs the manager role")
     from app.services import ai_validate
     return ai_validate.validate_po(db, po_id, use_claude=claude)

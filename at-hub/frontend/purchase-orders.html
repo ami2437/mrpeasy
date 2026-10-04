@@ -81,7 +81,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("purchasing");
     document.getElementById("sidebar").innerHTML = renderSidebar("purchase-orders.html");
 
     let vendors = [];
@@ -846,7 +846,7 @@ Thank you.</textarea>
       const billById = Object.fromEntries(order.bills.map(b => [b.id, b]));
       const openBills = order.bills.filter(b => b.balance > 0.005);
       const today = new Date().toISOString().substring(0, 10);
-      const canDelete = AuthGuard.hasRole("manager");
+      const canDelete = AuthGuard.can("purchasing");
       return `
         <div class="money-line"><span class="ml t-total">PO ${fmtMoney(total)}</span><span class="ml t-billed">billed ${fmtMoney(billed)}</span><span class="ml t-paid">paid ${fmtMoney(paid)}</span><span class="ml ${billed - paid > 0.005 ? "t-owed" : "t-zero"}">owed ${fmtMoney(Math.max(0, billed - paid))}</span><span class="ml ${total - billed > 0.005 ? "t-wait" : "t-zero"}">not billed yet ${fmtMoney(Math.max(0, total - billed))}</span></div>
 

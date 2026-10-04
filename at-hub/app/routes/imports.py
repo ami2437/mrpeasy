@@ -12,11 +12,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import require_role
+from app.dependencies import require_perm, require_any
 from app.models import Customer, StockItem, Vendor
 from app.services.crud import ProductGroupService, generate_code
 
-router = APIRouter(prefix="/api/import", tags=["import"], dependencies=[Depends(require_role("manager"))])
+router = APIRouter(prefix="/api/import", tags=["import"], dependencies=[Depends(require_perm("imports"))])
 
 FIELDS = {
     "items": {

@@ -957,6 +957,38 @@ class ItemAlias(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Role(Base):
+    """A role = a named set of permissions (app/services/permissions.py). Users point at it by key.
+    The four built-in roles start with what each could do before roles were editable; super_admin always has
+    everything (it can't be locked out)."""
+    __tablename__ = "roles"
+
+    key = Column(String, primary_key=True)          # "manager", "driver", "accountant_2"
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    permissions = Column(Text, nullable=False, default="[]")  # JSON list of permission keys
+    builtin = Column(Boolean, nullable=False, default=False)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BillingVariance(Base):
+    """An invoice line billed a different quantity than the shipment delivered, and someone accepted it.
+    Kept against the customer order so it can be put right later (app/services/billing.py). Rows mirror the
+    invoice as last saved; voiding the invoice removes them."""
+    __tablename__ = "billing_variances"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=False, index=True)
+    order_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=False)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
+    delivered_qty = Column(Float, nullable=False)
+    billed_qty = Column(Float, nullable=False)
+    reason = Column(Text, nullable=True)
+    accepted_by = Column(String, nullable=True)
+    accepted_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Task(Base):
     """A to-do for an admin. Manual ones are typed in; suggested ones (key set) are raised by
     TaskService.refresh() from the data -- e.g. "record the payments on PO325370" -- and close

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import ROLE_RANK, get_current_active_user
+from app.dependencies import get_current_active_user
+from app.services.permissions import has
 from app.models import (Attachment, Customer, CustomerOrder, Invoice, InvoiceShipment, MtrLink, PurchaseOrder, Shipment,
                         StockItem, User, Vendor, VendorBill, VendorPayment)
 
@@ -59,7 +60,7 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
     sections.append({"key": "late_orders", "title": "Customer Orders Past Delivery Date", "page": "customer-orders.html",
                      "help": "Not fully shipped and the requested delivery date has passed.", "rows": sorted(late_orders, key=lambda r: -r["days"])})
 
-    if ROLE_RANK.get(user.role, 0) >= ROLE_RANK["manager"]:
+    if has(user, "purchasing"):
         pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("draft", "ordered", "partially_received"))).all()
 
         def po_row(po, extra=None):

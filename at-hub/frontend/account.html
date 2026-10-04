@@ -30,7 +30,7 @@
     const user = AuthGuard.requireLogin();
     document.getElementById("sidebar").innerHTML = renderSidebar("account.html");
     if (user) {
-      document.getElementById("who").textContent = `Signed in as ${user.username}${user.full_name ? ` (${user.full_name})` : ""} · ${ROLE_LABELS[user.role] || user.role}`;
+      document.getElementById("who").textContent = `Signed in as ${user.username}${user.full_name ? ` (${user.full_name})` : ""} · ${escapeHtml(user.role_name || ROLE_LABELS[user.role] || user.role)}`;
       if (user.must_change_password) document.getElementById("force-notice").style.display = "block";
     }
 

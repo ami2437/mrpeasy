@@ -411,19 +411,44 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
             claimed.add((s["shipment_id"], i["cust_ord_id"]))
             db.add(InvoiceShipment(invoice_id=inv.id, shipment_id=shipments[s["shipment_id"]].id))
         inv.shipment_id = shipments[match[0]["shipment_id"]].id if match else None
-        # lines: to the MRPeasy order line when given, else the order's line for that item; shipment from the match
+        # lines: to the MRPeasy order line when given, else the order's lines for that item -- each filled up to
+        # what the matched shipments delivered on it, so an item on two order lines bills both (split like AT-HUB
+        # does: one invoice line per order line). Anything billed beyond that stays on the last line it reached.
+        matched_sh = [shipments[s["shipment_id"]] for s in match]
+        delivered = Counter()
+        for sh_ in matched_sh:
+            for sl in sh_.lines:
+                delivered[sl.order_line_id] += sl.quantity
         for p in sorted(i["products"], key=lambda p: p["ord"] or 0):
+            it, qty, price = items[p["article_id"]], f(p["quantity"]), f(p["item_price"])
             line = co_lines.get(p["co_line_id"])
-            if line is None:
-                cand = lines_by_co_item.get((i["cust_ord_id"], p["article_id"]), [])
-                line = next((l for l, _ in cand if abs(l.unit_price - f(p["item_price"])) < 1e-6), cand[0][0] if cand else None)
-            ship = next((shipments[s["shipment_id"]] for s in match
-                         if any(q["article_id"] == p["article_id"] and f(q["quantity_picked"]) > 0 for q in s["products"])), None)
-            it = items[p["article_id"]]
-            db.add(InvoiceLine(invoice=inv, item_id=it.id, order_line_id=line.id if line else None,
-                               shipment_id=ship.id if ship else None,
-                               description=clean(p["description"]) or f"{it.code} - {it.title}",
-                               quantity=f(p["quantity"]), unit_price=f(p["item_price"])))
+            if line is not None:
+                parts = [(line, qty)]
+            else:
+                cand = [l for l, _ in lines_by_co_item.get((i["cust_ord_id"], p["article_id"]), [])]
+                same = [l for l in cand if abs(l.unit_price - price) < 1e-6] or cand
+                parts, left = [], qty
+                for l in same:
+                    take = min(left, max(0.0, delivered[l.id]))
+                    if take > 1e-9:
+                        parts.append((l, take))
+                        left -= take
+                    if left <= 1e-9:
+                        break
+                if left > 1e-9:
+                    if parts:
+                        parts[-1] = (parts[-1][0], parts[-1][1] + left)
+                    else:
+                        parts.append((same[0] if same else None, left))
+            for line, q in parts:
+                if line is not None:
+                    delivered[line.id] -= q
+                ship = next((sh_ for sh_ in matched_sh if line is not None and any(sl.order_line_id == line.id for sl in sh_.lines)), None)                     or next((shipments[s["shipment_id"]] for s in match
+                             if any(x["article_id"] == p["article_id"] and f(x["quantity_picked"]) > 0 for x in s["products"])), None)
+                db.add(InvoiceLine(invoice=inv, item_id=it.id, order_line_id=line.id if line else None,
+                                   shipment_id=ship.id if ship else None,
+                                   description=clean(p["description"]) or f"{it.code} - {it.title}",
+                                   quantity=q, unit_price=price))
         if status == "paid":
             db.add(InvoicePayment(invoice=inv, amount=round(f(i["total_price"]), 2), paid_date=dt(i["last_payment"]),
                                   note="Imported from MRPeasy (payment detail to be uploaded)", created_by=BY))

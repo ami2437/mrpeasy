@@ -120,7 +120,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("stock.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("stock-items.html");
 
     let items = [];
@@ -136,7 +136,7 @@
       const f = filter.value;
       filter.innerHTML = `<option value="">All product groups</option>` + groups.map(g => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.name)} (${g.item_count})</option>`).join("");
       filter.value = f;
-      const canManage = AuthGuard.hasRole("manager");
+      const canManage = AuthGuard.can("stock.edit");
       document.getElementById("groups-body").innerHTML = groups.map(g => `
         <tr><td>${groupTag({ category: g.name })}</td><td class="num">${g.item_count}</td>
           <td class="nowrap">${canManage ? `<select onchange="if (this.value) mergeGroup(${g.id}, parseInt(this.value), this)" style="width:auto; padding:1px 4px; font-size:12px;">
@@ -349,7 +349,7 @@
     function clearSelection() { selected.clear(); quickEdit = false; renderItems(); }
     function renderBulkBar() {
       const bar = document.getElementById("bulk-bar");
-      const manager = AuthGuard.hasRole("manager");
+      const manager = AuthGuard.can("stock.edit");
       if (!selected.size || !manager) { bar.style.display = "none"; return; }
       const chosen = items.filter(i => selected.has(i.id));
       const unverified = chosen.filter(i => i.created_via === "ai-scan" && !i.verified_by).length;

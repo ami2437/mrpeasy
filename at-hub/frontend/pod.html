@@ -50,7 +50,7 @@
   <div class="sticky-bar" id="sticky" style="display:none;"></div>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("pod.upload");
     document.getElementById("pod-home").href = homePage();
     let shipments = [], orders = [], customers = [];
     let selected = new Set();   // shipment ids the photos will go on

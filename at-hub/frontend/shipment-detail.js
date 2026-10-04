@@ -91,8 +91,8 @@ function linesSectionHtml(shipment) {
           <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
         : `<button class="ship-now next-step" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
-      ${shipment.status === "shipped" && AuthGuard.hasRole("manager") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
-      ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.hasRole("manager") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
+      ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
+      ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.can("shipments.undo") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
       ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
     </div>
     <div id="lifecycle-error" class="error"></div>
@@ -254,7 +254,7 @@ function cancelShipment(id) {
 // Delivered date: set by a POD upload, or by hand (managers and up). It's printed on the invoice.
 function deliverySectionHtml(shipment) {
   if (!["shipped", "delivered", "invoiced"].includes(shipment.status)) return `<p class="muted">Available once the shipment has shipped.</p>`;
-  const canMark = AuthGuard.hasRole("manager");
+  const canMark = AuthGuard.can("shipments.deliver");
   const today = new Date().toISOString().substring(0, 10);
   return `
     ${shipment.delivered_at
@@ -748,7 +748,7 @@ async function showDetail(id) {
     </section><section class="dsec"><h4 class="dsec-title">Delivery</h4>
     ${deliverySectionHtml(shipment)}
 
-    ${AuthGuard.hasRole("manager") ? `</section><section class="dsec"><h4 class="dsec-title">Invoicing</h4>
+    ${AuthGuard.can("invoices") ? `</section><section class="dsec"><h4 class="dsec-title">Invoicing</h4>
     ${shipment.status === "invoiced" ? `
       <p>Invoiced on ${invoicesForShipment.length ? invoicesForShipment.map(inv =>
         `${invoiceChip(inv, { here: shipment.code })} <span class="muted small">${inv.status} · ${fmtMoney(inv.total)}${inv.is_combined
@@ -1018,6 +1018,6 @@ async function openPackSizeManager(onChange) {
 // Status tag for a shipment; an invoiced one also shows its invoice's status (managers).
 function shipmentStatusHtml(s) {
   const tag = `<span class="tag ${s.status}">${s.status}</span>`;
-  if (s.status !== "invoiced" || !s.invoice_code || !AuthGuard.hasRole("manager")) return tag;
+  if (s.status !== "invoiced" || !s.invoice_code || !AuthGuard.can("invoices")) return tag;
   return invoiceChipFromShipment(s);
 }

@@ -50,9 +50,9 @@ Thank you.</textarea>
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("stock.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("mtrs.html");
-    const isManager = AuthGuard.hasRole("manager");
+    const isManager = AuthGuard.can("mtrs.manage");
     let rows = [];
     const fmtDate = d => d ? new Date(d).toLocaleDateString() : "";
 

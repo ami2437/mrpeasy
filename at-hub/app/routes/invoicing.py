@@ -1,20 +1,22 @@
 from fastapi import APIRouter, Depends, Response
+from typing import List
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
     InvoiceResponse, CreateInvoiceRequest, InvoiceUpdateRequest, InvoiceStatusUpdate, InvoicePaymentInput,
     InvoiceEmailRequest, EmailConfigResponse, InvoiceFundingUpdate,
-    CreateCombinedInvoiceRequest, MergeInvoicesRequest, InvoicePrintOptions,
+    CreateCombinedInvoiceRequest, MergeInvoicesRequest, InvoicePrintOptions, InvoiceLineInput,
 )
 from app.services.crud import InvoiceService, InvoicePaymentService
 from app.services import email as email_service
 from app.services.pdf import invoice_pdf
 from app.config.settings import settings
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import User
 
 # Invoicing is manager work: employees ship, they don't bill or see dollar amounts.
-router = APIRouter(prefix="/api/invoices", tags=["invoices"], dependencies=[Depends(require_role("manager"))])
+router = APIRouter(prefix="/api/invoices", tags=["invoices"], dependencies=[Depends(require_perm("invoices"))])
 
 
 @router.get("/", response_model=list[InvoiceResponse])
@@ -95,8 +97,20 @@ def set_print_options(invoice_id: int, data: InvoicePrintOptions, db: Session = 
 
 
 @router.put("/{invoice_id}", response_model=InvoiceResponse)
-def update_invoice(invoice_id: int, data: InvoiceUpdateRequest, db: Session = Depends(get_db)):
-    return InvoiceService.update(db, invoice_id, data)
+def update_invoice(invoice_id: int, data: InvoiceUpdateRequest, db: Session = Depends(get_db),
+                   current_user: User = Depends(get_current_active_user)):
+    return InvoiceService.update(db, invoice_id, data, by=current_user.username)
+
+
+class QtyCheckIn(BaseModel):
+    lines: List[InvoiceLineInput]
+
+
+@router.post("/{invoice_id}/qty-check")
+def qty_check(invoice_id: int, data: QtyCheckIn, db: Session = Depends(get_db)):
+    """Before saving: the lines that would bill more or less than the invoice's shipments delivered."""
+    from app.services import billing
+    return billing.invoice_differences(db, InvoiceService.get(db, invoice_id), [l.model_dump() for l in data.lines])
 
 
 @router.put("/{invoice_id}/status", response_model=InvoiceResponse)
@@ -109,13 +123,13 @@ def record_invoice_payment(invoice_id: int, data: InvoicePaymentInput, db: Sessi
     return InvoicePaymentService.record(db, invoice_id, data, created_by=current_user.username)
 
 
-@router.delete("/{invoice_id}/payments/{payment_id}", response_model=InvoiceResponse, dependencies=[Depends(require_role("manager"))])
+@router.delete("/{invoice_id}/payments/{payment_id}", response_model=InvoiceResponse, dependencies=[Depends(require_perm("invoices"))])
 def remove_invoice_payment(invoice_id: int, payment_id: int, db: Session = Depends(get_db)):
     """Take a recorded payment off (wrong entry, refund, or before undoing the shipment)."""
     return InvoicePaymentService.remove(db, invoice_id, payment_id)
 
 
-@router.put("/{invoice_id}/funding", response_model=InvoiceResponse, dependencies=[Depends(require_role("manager"))])
+@router.put("/{invoice_id}/funding", response_model=InvoiceResponse, dependencies=[Depends(require_perm("invoices.funding"))])
 def set_invoice_funding(invoice_id: int, data: InvoiceFundingUpdate, db: Session = Depends(get_db)):
     """Edit disbursement date / funding amount / discount by hand. Payments aren't touched."""
     invoice = InvoiceService.get(db, invoice_id)

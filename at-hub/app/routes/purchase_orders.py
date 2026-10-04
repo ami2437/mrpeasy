@@ -7,14 +7,14 @@ from app.schemas import (
     PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
     PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput,
 )
-from app.dependencies import require_role
+from app.dependencies import require_perm, require_any
 from app.services.pdf import purchase_order_pdf
 from app.services import email as email_service
 from app.services.crud import PurchaseOrderService, PurchaseOrderPaymentService, VendorBillService, PurchaseOrderChargeService
 from app.dependencies import get_current_active_user
 from app.models import User
 
-router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
+router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(require_perm("purchasing"))])  # no dollar work for employees
 
 
 # ---- PO payments from MRPeasy's Purchase Orders export (CSV) ----
@@ -29,14 +29,14 @@ def _payments_csv(file: UploadFile):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/payments-import/preview", dependencies=[Depends(require_role("admin"))])
+@router.post("/payments-import/preview", dependencies=[Depends(require_perm("payments.import"))])
 def payments_import_preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """What uploading this export would record -- nothing is saved."""
     from app.services import po_payments_csv
     return po_payments_csv.plan(db, _payments_csv(file))
 
 
-@router.post("/payments-import/apply", dependencies=[Depends(require_role("admin"))])
+@router.post("/payments-import/apply", dependencies=[Depends(require_perm("payments.import"))])
 def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from app.services import po_payments_csv
     file.file.seek(0)
@@ -149,7 +149,7 @@ def add_bill(po_id: int, data: VendorBillInput, db: Session = Depends(get_db), c
     return VendorBillService.create(db, po_id, data, created_by=current_user.username)
 
 
-@router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_role("manager"))])
+@router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("purchasing"))])
 def delete_bill(po_id: int, bill_id: int, db: Session = Depends(get_db)):
     return VendorBillService.delete(db, po_id, bill_id)
 

@@ -29,7 +29,7 @@
     </div>
   </main>
   <script>
-    AuthGuard.requireRole("super_admin");
+    AuthGuard.requirePerm("backups");
     document.getElementById("sidebar").innerHTML = renderSidebar("backups.html");
     let copies = [];
     const KIND = { auto: ["Automatic", "draft"], manual: ["Manual", "confirmed"], "pre-restore": ["Before a restore", "overdue"], "pre-import": ["Before an import", "overdue"] };

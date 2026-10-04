@@ -16,9 +16,9 @@
       <h1 class="page-title">Customer Orders</h1>
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
-        <button class="manager-only secondary toolbar-end" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
-        <button class="manager-only" onclick="toggleForm()">+ New Order</button>
-        <button class="ai-btn manager-only" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
+        <button class="secondary toolbar-end" data-perm="quotes" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
+        <button data-perm="orders.edit" onclick="toggleForm()">+ New Order</button>
+        <button class="ai-btn" data-perm="orders.edit" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
     </div>
 
@@ -93,7 +93,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("orders.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("customer-orders.html");
 
     let customers = [];
@@ -213,7 +213,7 @@
     }
     function newItemsHtml(d) {
       const list = newItemSuggestions(d);
-      if (!list.length || !AuthGuard.hasRole("manager")) return "";
+      if (!list.length || !AuthGuard.can("stock.edit")) return "";
       return `<div class="notice"><strong>${list.length} item${list.length === 1 ? "" : "s"} on this PO ${list.length === 1 ? "isn't" : "aren't"} in AT-HUB yet.</strong>
         <table class="compact-table no-table-tools" style="margin:6px 0; max-width:900px;">
           <thead><tr><th></th><th>Code</th><th>Title</th><th>Group</th><th class="num">Price</th><th>How it was named</th></tr></thead>
@@ -585,7 +585,7 @@
       const invoicedAmt = liveInvoices.reduce((sum, i) => sum + i.total, 0);
       const paidAmt = liveInvoices.reduce((sum, i) => sum + i.amount_paid, 0);
       const allShipped = ordered > 0 && shippedQty >= ordered - 1e-9;
-      const done = o.status === "cancelled" || (allShipped && (!AuthGuard.hasRole("manager")
+      const done = o.status === "cancelled" || (allShipped && (!AuthGuard.can("invoices")
         || (liveInvoices.length && invoicedAmt >= orderTotal - 0.01 && paidAmt >= invoicedAmt - 0.01)));
       return { ordered, shippedQty, orderTotal, invoicedAmt, paidAmt, done };
     }
@@ -611,7 +611,7 @@
         <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
         <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>
         <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every order, searchable and filterable">Items</div>
-        ${AuthGuard.hasRole("manager") ? `<div class="tab ${listView === "quotes" ? "active" : ""}" onclick="listView = 'quotes'; renderOrders()" title="Quotations sent to customers">Quotes <span class="muted">(${quotes.filter(q => !["converted", "declined"].includes(q.status)).length})</span></div>` : ""}`;
+        ${AuthGuard.can("quotes") ? `<div class="tab ${listView === "quotes" ? "active" : ""}" onclick="listView = 'quotes'; renderOrders()" title="Quotations sent to customers">Quotes <span class="muted">(${quotes.filter(q => !["converted", "declined"].includes(q.status)).length})</span></div>` : ""}`;
     }
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
@@ -642,7 +642,7 @@
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
           <td colspan="2"></td>
-          <td>${AuthGuard.hasRole("manager") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
+          <td>${AuthGuard.can("orders.edit") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
         return;
       }
       // In-progress orders first (newest first); finished ones fold away below unless expanded or searched for.
@@ -674,8 +674,8 @@
           </td>
           <td>${shipInvoicePairs(orderShipments, orderInvoices)}</td>
           <td class="nowrap">
-            ${o.status === "draft" && AuthGuard.hasRole("manager") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
-            ${o.status !== "cancelled" && AuthGuard.hasRole("manager") ? `<a class="link small" onclick="openProfit(${o.id})">Profit</a>` : ""}
+            ${o.status === "draft" && AuthGuard.can("orders.edit") ? `<a class="link" onclick="confirmOrder(${o.id})">Confirm</a> &nbsp;` : ""}
+            ${o.status !== "cancelled" && AuthGuard.can("money.view") ? `<a class="link small" onclick="openProfit(${o.id})">Profit</a>` : ""}
           </td>
         </tr>
       `;
@@ -819,7 +819,7 @@
       card.style.display = "block";
       const canBook = !["shipped", "invoiced", "cancelled"].includes(order.status)
         && order.lines.some(l => l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9);
-      const isManager = AuthGuard.hasRole("manager");  // employees view orders and ship them, nothing else
+      const isManager = AuthGuard.can("orders.edit");  // without it: view orders and ship them, nothing else
       const editable = isManager && order.status !== "cancelled";
       const canCancel = isManager && order.status !== "cancelled" && order.lines.every(l => l.shipped_quantity === 0 && l.booked_quantity === 0);
       const orderShipments = shipmentsForOrder(order);
@@ -1396,7 +1396,7 @@
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/shipments/"),
         apiFetch("/api/stock-items/"),
-        apiFetch("/api/invoices/").catch(() => []),  // managers only
+        AuthGuard.can("invoices") ? apiFetch("/api/invoices/").catch(() => []) : [],
       ]);
       renderOrders();
     }
@@ -1408,15 +1408,15 @@
         apiFetch("/api/customers/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/shipments/"),
-        apiFetch("/api/invoices/").catch(() => []),
-        apiFetch("/api/purchase-orders/").catch(() => []),
+        AuthGuard.can("invoices") ? apiFetch("/api/invoices/").catch(() => []) : [],
+        AuthGuard.can("purchasing") ? apiFetch("/api/purchase-orders/").catch(() => []) : [],
         apiFetch("/api/customer-orders/"),
       ]);
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
       loadAttachCounts("customer_order").then(renderOrders);  // paperclips fill in a moment later
-      if (AuthGuard.hasRole("manager")) loadQuotes().then(renderOrders);
+      if (AuthGuard.can("quotes")) loadQuotes().then(renderOrders);
       enableLineDrag(document.getElementById("lines-body"));  // new order: lines saved in the order shown
       renderOrders();
       const params = new URLSearchParams(window.location.search);

@@ -12,7 +12,11 @@
   <main>
     <div class="card page-toolbar">
       <h1 class="page-title">Users & Roles</h1>
-      <div class="row toolbar-row">
+      <div class="tabs" id="ur-tabs" style="margin:0 0 10px;">
+        <div class="tab active" data-tab="users" onclick="setTab('users')">Users</div>
+        <div class="tab" data-tab="roles" onclick="setTab('roles')">Roles &amp; Permissions</div>
+      </div>
+      <div class="row toolbar-row users-only">
         <input type="text" id="search" placeholder="Search username, name, or email...">
         <select id="role-filter" style="max-width:180px;"><option value="">All roles</option></select>
         <label class="inline-check"><input type="checkbox" id="show-inactive"> Show deactivated</label>
@@ -20,7 +24,7 @@
       </div>
     </div>
 
-    <div class="card" id="form-card" style="display:none; max-width:720px;">
+    <div class="card users-only" id="form-card" style="display:none; max-width:720px;">
       <h3 style="margin-top:0;">New user</h3>
       <div class="row">
         <div><label>Username</label><input type="text" id="f-username" autocomplete="off"></div>
@@ -42,38 +46,40 @@
       <div id="form-error" class="error"></div>
     </div>
 
-    <div class="card">
-      <h3 style="margin-top:0;">Roles</h3>
-      <table class="compact-table no-table-tools">
-        <tbody>
-          <tr><td><span class="tag role-super_admin">Super admin</span></td><td>Everything, plus this screen: create accounts, assign roles, reset passwords, deactivate users.</td></tr>
-          <tr><td><span class="tag role-admin">Admin</span></td><td>Everything except user management — including company settings and the logo.</td></tr>
-          <tr><td><span class="tag role-manager">Manager</span></td><td>All day-to-day work including pricing, invoices, purchasing, vendors and landed costs, plus undo/delete shipments and managing product groups.</td></tr>
-          <tr><td><span class="tag role-employee">Employee</span></td><td>Shipping floor only: view customer orders, create, pick and pack shipments, proof of delivery, stock items and lots, MTR lookup. No prices, costs, invoices, purchasing or other money work.</td></tr>
-        </tbody>
-      </table>
+    <div class="roles-only" id="roles-pane" style="display:none;">
+      <div class="roles-grid">
+        <aside class="card roles-list"><div class="roles-list-head"><h3>Roles</h3><button class="small-btn" onclick="newRole()" data-icon="plus">New Role</button></div>
+          <div id="roles-list"></div>
+          <p class="muted small" style="margin:10px 2px 0;">A role is a set of permissions; give it to people on the Users tab. The server enforces every permission — hiding a menu is never the only lock.</p></aside>
+        <section class="card role-editor" id="role-editor"></section>
+      </div>
     </div>
 
-    <div class="card">
+    <div class="card users-only">
       <table>
         <thead><tr><th>Username</th><th>Full name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th>Created</th><th></th></tr></thead>
         <tbody id="users-body"><tr><td colspan="8">Loading...</td></tr></tbody>
       </table>
     </div>
 
-    <div class="card" id="detail-card" style="display:none; max-width:720px;"></div>
+    <div class="card users-only" id="detail-card" style="display:none; max-width:720px;"></div>
   </main>
 
   <script>
-    const me = AuthGuard.requireRole("super_admin");
+    const me = AuthGuard.requirePerm("users");
     document.getElementById("sidebar").innerHTML = renderSidebar("users.html");
 
-    const ROLES = ["super_admin", "admin", "manager", "employee"];
-    let users = [];
+    let users = [], roles = [], catalog = [], roleDraft = null;
 
-    const roleOptions = selected => ROLES.map(r => `<option value="${r}" ${r === selected ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
-    document.getElementById("f-role").innerHTML = roleOptions("employee");
-    document.getElementById("role-filter").innerHTML += ROLES.map(r => `<option value="${r}">${ROLE_LABELS[r]}</option>`).join("");
+    const roleName = key => (roles.find(r => r.key === key) || {}).name || ROLE_LABELS[key] || key;
+    const roleTag = key => `<span class="tag role-${["super_admin", "admin", "manager", "employee"].includes(key) ? key : "custom"}">${escapeHtml(roleName(key))}</span>`;
+    const roleOptions = selected => roles.map(r => `<option value="${r.key}" ${r.key === selected ? "selected" : ""}>${escapeHtml(r.name)}</option>`).join("");
+    function fillRoleSelects() {
+      document.getElementById("f-role").innerHTML = roleOptions("employee");
+      const f = document.getElementById("role-filter"), v = f.value;
+      f.innerHTML = `<option value="">All roles</option>` + roles.map(r => `<option value="${r.key}">${escapeHtml(r.name)}</option>`).join("");
+      f.value = v;
+    }
 
     function fmtDateTime(d) { return d ? new Date(d + (d.endsWith("Z") ? "" : "Z")).toLocaleString() : ""; }
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
@@ -112,7 +118,7 @@
           <td><a class="link" onclick="showDetail(${u.id})">${escapeHtml(u.username)}</a>${u.id === me.id ? ` <span class="muted small">(you)</span>` : ""}</td>
           <td>${escapeHtml(u.full_name || "")}</td>
           <td>${escapeHtml(u.email || "")}</td>
-          <td><span class="tag role-${u.role}">${ROLE_LABELS[u.role] || u.role}</span></td>
+          <td>${roleTag(u.role)}</td>
           <td>${u.is_active
             ? (u.must_change_password ? `<span class="tag draft">Must Set Password</span>` : `<span class="tag shipped">Active</span>`)
             : `<span class="tag cancelled">Deactivated</span>`}</td>
@@ -123,8 +129,104 @@
     }
 
     async function load() {
-      users = await apiFetch("/api/users/");
+      [users, roles, catalog] = await Promise.all([apiFetch("/api/users/"), apiFetch("/api/roles/"), catalog.length ? catalog : apiFetch("/api/roles/catalog")]);
+      fillRoleSelects();
       renderUsers();
+      renderRoles();
+    }
+
+    function setTab(t) {
+      document.querySelectorAll("#ur-tabs .tab").forEach(x => x.classList.toggle("active", x.dataset.tab === t));
+      document.querySelectorAll(".users-only").forEach(el => { el.style.display = t === "users" ? "" : "none"; });
+      document.querySelectorAll(".roles-only").forEach(el => { el.style.display = t === "roles" ? "" : "none"; });
+      if (t === "users") { document.getElementById("form-card").style.display = "none"; document.getElementById("detail-card").style.display = "none"; }
+      try { localStorage.setItem("users_tab", t); } catch {}
+    }
+
+    // ---- roles & permissions ----
+    function renderRoles() {
+      document.getElementById("roles-list").innerHTML = roles.map(r => `
+        <div class="role-item ${roleDraft && roleDraft.key === r.key ? "on" : ""}" onclick="editRole('${r.key}')">
+          <div class="role-item-name">${escapeHtml(r.name)}${r.builtin ? ` <span class="muted small">built-in</span>` : ""}</div>
+          <div class="role-item-meta"><span>${r.users} user${r.users === 1 ? "" : "s"}</span><span>${r.permissions.length}/${catalog.length} permissions</span>
+            ${r.money.length ? `<span class="money-chip" title="Money permissions: ${escapeHtml(r.money.join(", "))}">$ ${r.money.length}</span>` : `<span class="nomoney-chip">no money</span>`}</div>
+        </div>`).join("");
+      drawRoleEditor();
+    }
+    function editRole(key) {
+      if (roleDraft && roleDraft.dirty && !confirm("Discard the unsaved changes to this role?")) return;
+      const r = roles.find(x => x.key === key);
+      roleDraft = { key: r.key, name: r.name, description: r.description || "", perms: new Set(r.permissions), builtin: r.builtin, locked: r.locked, users: r.users, dirty: false };
+      renderRoles();
+    }
+    function newRole() {
+      if (roleDraft && roleDraft.dirty && !confirm("Discard the unsaved changes to this role?")) return;
+      roleDraft = { key: null, name: "", description: "", perms: new Set(), builtin: false, locked: false, users: 0, dirty: false };
+      renderRoles();
+      document.getElementById("r-name").focus();
+    }
+    function drawRoleEditor() {
+      const el = document.getElementById("role-editor"), d = roleDraft;
+      if (!d) { el.innerHTML = `<p class="muted" style="margin:0;">Pick a role to see and change what it can do, or make a new one.</p>`; return; }
+      const modules = [...new Set(catalog.map(c => c.module))];
+      const dis = d.locked ? "disabled" : "";
+      el.innerHTML = `
+        <div class="role-head">
+          <div style="flex:1;"><label>Role name</label><input type="text" id="r-name" value="${escapeHtml(d.name)}" ${dis} oninput="roleDraft.name = this.value; roleDirty()" placeholder="e.g. Driver, Accountant, Warehouse Lead"></div>
+          ${!d.key ? `<div style="flex:0 0 220px;"><label>Start from</label><select onchange="copyFrom(this.value)"><option value="">Nothing ticked</option>${roles.map(r => `<option value="${r.key}">${escapeHtml(r.name)}</option>`).join("")}</select></div>` : ""}
+        </div>
+        <label>What it's for</label><input type="text" id="r-desc" value="${escapeHtml(d.description)}" ${dis} oninput="roleDraft.description = this.value; roleDirty()" placeholder="Shown on the roles list">
+        ${d.locked ? `<div class="notice info" style="margin-top:10px;">Super admin always has every permission, so someone can always manage users and roles.</div>` : ""}
+        <div class="perm-summary" id="perm-summary"></div>
+        <div class="perm-grid">${modules.map(m => {
+          const list = catalog.filter(c => c.module === m), on = list.filter(c => d.perms.has(c.key)).length;
+          return `<div class="perm-mod ${m === "Money" ? "money" : ""}"><div class="perm-mod-head">
+              <label class="sh-row"><input type="checkbox" ${on === list.length ? "checked" : ""} ${dis} onchange="toggleModule('${m}', this.checked)"> <b>${escapeHtml(m)}</b></label>
+              <span class="muted small">${on}/${list.length}</span></div>
+            ${list.map(c => `<label class="sh-row perm-row ${c.money ? "is-money" : ""}" title="${escapeHtml(c.key)}"><input type="checkbox" ${d.perms.has(c.key) ? "checked" : ""} ${dis}
+                onchange="togglePerm('${c.key}', this.checked)"> <span>${escapeHtml(c.label)}</span>${c.money ? `<span class="money-chip">$</span>` : ""}</label>`).join("")}</div>`;
+        }).join("")}</div>
+        <div class="role-actions">
+          ${d.locked ? "" : `<button id="r-save" class="${d.dirty ? "next-step" : ""}" onclick="saveRole()">${d.key ? "Save Role" : "Create Role"}</button>`}
+          ${d.key && !d.builtin ? `<button class="danger" onclick="deleteRole('${d.key}')" ${d.users ? `disabled title="${d.users} user(s) have this role"` : ""}>Delete Role</button>` : ""}
+          <span class="muted small">${d.key ? `${d.users} user${d.users === 1 ? "" : "s"} · changes apply the next time they open a page` : ""}</span>
+        </div>
+        <div class="error" id="role-error"></div>`;
+      drawPermSummary();
+      decorateIcons(el);
+    }
+    function drawPermSummary() {
+      const d = roleDraft, money = catalog.filter(c => c.money && d.perms.has(c.key));
+      const el = document.getElementById("perm-summary");
+      el.innerHTML = money.length
+        ? `<span class="money-chip">$</span> <b>Sees money:</b> ${money.map(c => escapeHtml(c.label)).join(" · ")}`
+        : `<span class="nomoney-chip">no money</span> Prices, costs and totals are blanked everywhere for this role.`;
+      el.className = "perm-summary " + (money.length ? "has-money" : "");
+    }
+    function roleDirty() { roleDraft.dirty = true; const b = document.getElementById("r-save"); if (b) b.classList.add("next-step"); }
+    function togglePerm(k, on) { on ? roleDraft.perms.add(k) : roleDraft.perms.delete(k); roleDirty(); drawRoleEditor(); }
+    function toggleModule(m, on) { catalog.filter(c => c.module === m).forEach(c => on ? roleDraft.perms.add(c.key) : roleDraft.perms.delete(c.key)); roleDirty(); drawRoleEditor(); }
+    function copyFrom(key) {
+      const r = roles.find(x => x.key === key);
+      roleDraft.perms = new Set(r ? r.permissions : []);
+      roleDirty(); drawRoleEditor();
+    }
+    async function saveRole() {
+      const d = roleDraft, err = document.getElementById("role-error");
+      err.textContent = "";
+      const body = JSON.stringify({ name: d.name.trim(), description: d.description.trim() || null, permissions: [...d.perms] });
+      try {
+        const r = await apiFetch(d.key ? `/api/roles/${d.key}` : "/api/roles/", { method: d.key ? "PUT" : "POST", body });
+        roleDraft = null;
+        await load();
+        editRole(r.key);
+        toast(`Saved ${r.name}`);
+      } catch (e) { err.textContent = e.message; }
+    }
+    async function deleteRole(key) {
+      if (!confirm("Delete this role?")) return;
+      try { await apiFetch(`/api/roles/${key}`, { method: "DELETE" }); roleDraft = null; await load(); }
+      catch (e) { document.getElementById("role-error").textContent = e.message; }
     }
 
     async function createUser() {
@@ -157,7 +259,7 @@
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       card.innerHTML = `
-        <h3 style="margin-top:0;">${escapeHtml(u.username)} <span class="tag role-${u.role}">${ROLE_LABELS[u.role]}</span>
+        <h3 style="margin-top:0;">${escapeHtml(u.username)} ${roleTag(u.role)}
           ${u.is_active ? "" : `<span class="tag cancelled">Deactivated</span>`}</h3>
         ${message ? `<div class="notice info">${message}</div>` : ""}
         <div class="row">
@@ -237,7 +339,7 @@
     document.getElementById("search").addEventListener("input", renderUsers);
     document.getElementById("role-filter").addEventListener("change", renderUsers);
     document.getElementById("show-inactive").addEventListener("change", renderUsers);
-    if (me) load();
+    if (me) load().then(() => { let t = "users"; try { t = localStorage.getItem("users_tab") || "users"; } catch {} setTab(t); });
   </script>
   </div>
 </body>

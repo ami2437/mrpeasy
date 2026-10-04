@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import User
 from app.schemas import ApplyVendorPaymentRequest, VendorPaymentInput, VendorPaymentResponse
 from app.services.crud import VendorPaymentService
 
-router = APIRouter(prefix="/api/vendor-payments", tags=["vendor-payments"], dependencies=[Depends(require_role("manager"))])
+router = APIRouter(prefix="/api/vendor-payments", tags=["vendor-payments"], dependencies=[Depends(require_perm("vendor_payments"))])
 
 
 @router.get("/", response_model=List[VendorPaymentResponse])

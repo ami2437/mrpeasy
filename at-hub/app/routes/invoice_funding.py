@@ -2,12 +2,12 @@ import json
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import User
 from app.schemas import FundingImportResponse
 from app.services import funding
 
-router = APIRouter(prefix="/api/invoice-funding", tags=["invoice-funding"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
+router = APIRouter(prefix="/api/invoice-funding", tags=["invoice-funding"], dependencies=[Depends(require_perm("invoices.funding"))])  # no dollar work for employees
 
 
 def _rows(file: UploadFile) -> list:
@@ -23,7 +23,7 @@ def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return {"file_name": file.filename, **funding.preview(db, _rows(file))}
 
 
-@router.post("/apply", dependencies=[Depends(require_role("manager"))])
+@router.post("/apply", dependencies=[Depends(require_perm("invoices.funding"))])
 def apply(file: UploadFile = File(...), record_payments: bool = Form(True), db: Session = Depends(get_db),
                 current_user: User = Depends(get_current_active_user)):
     """Set disbursement date / funding amount / discount on each matched invoice and, if
@@ -36,7 +36,7 @@ def imports(db: Session = Depends(get_db)):
     return [_import_out(b) for b in funding.history(db)]
 
 
-@router.post("/imports/{import_id}/rollback", response_model=FundingImportResponse, dependencies=[Depends(require_role("manager"))])
+@router.post("/imports/{import_id}/rollback", response_model=FundingImportResponse, dependencies=[Depends(require_perm("invoices.funding"))])
 def rollback(import_id: int, db: Session = Depends(get_db)):
     return _import_out(funding.rollback(db, import_id))
 

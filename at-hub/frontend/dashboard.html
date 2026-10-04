@@ -28,7 +28,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    if (AuthGuard.requireLogin() && homePage() !== "dashboard.html") location.replace(homePage());  // e.g. drivers: straight to POD
     document.getElementById("sidebar").innerHTML = renderSidebar("dashboard.html");
 
     function fmtDateTime(d) { return d ? new Date(d).toLocaleString() : ""; }
@@ -39,7 +39,7 @@
           apiFetch("/api/stock-items/"),
           apiFetch("/api/stock-items/?low_stock_only=true"),
           apiFetch("/api/customer-orders/"),
-          AuthGuard.hasRole("manager") ? apiFetch("/api/purchase-orders/") : Promise.resolve(null),
+          AuthGuard.can("purchasing") ? apiFetch("/api/purchase-orders/") : Promise.resolve(null),
         ]);
         const openCO = customerOrders.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status)).length;
         const openPO = (purchaseOrders || []).filter(o => !["received", "cancelled"].includes(o.status)).length;

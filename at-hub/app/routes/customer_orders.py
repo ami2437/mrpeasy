@@ -6,12 +6,12 @@ from app.schemas import (
     CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse, LineOrderRequest,
 )
 from app.services.crud import CustomerOrderService, OrderProfitService
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 
-manager = [Depends(require_role("manager"))]  # creating/editing/pricing orders
+manager = [Depends(require_perm("orders.edit"))]  # creating/editing/pricing orders
 from app.models import User
 
-router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"], dependencies=[Depends(require_any("orders.view", "shipments.view", "invoices", "quotes", "pod.upload"))])
 
 
 @router.get("/", response_model=list[CustomerOrderResponse])
@@ -29,7 +29,7 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.get(db, order_id)
 
 
-@router.get("/{order_id}/profit", response_model=OrderProfitResponse, dependencies=manager)
+@router.get("/{order_id}/profit", response_model=OrderProfitResponse, dependencies=[Depends(require_perm("money.view"))])
 def order_profit(order_id: int, db: Session = Depends(get_db)):
     """Revenue vs. lot cost (incl. landed costs) for shipped, booked, and not-yet-booked quantity."""
     return OrderProfitService.calculate(db, order_id)
@@ -89,7 +89,7 @@ def cancel_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.cancel(db, order_id)
 
 
-@router.post("/{order_id}/shipments", response_model=ShipmentResponse)
+@router.post("/{order_id}/shipments", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def create_shipment(order_id: int, data: CreateShipmentRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Create a shipment and book stock into it. Stock leaves on-hand only once the shipment is fully picked."""
     return CustomerOrderService.create_shipment(db, order_id, data, created_by=current_user.username)

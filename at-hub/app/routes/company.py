@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import CompanyProfileResponse, CompanyProfileUpdate
 from app.services.crud import get_company_profile
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 
 router = APIRouter(prefix="/api/company", tags=["company"])
 
@@ -18,7 +18,7 @@ def get_company(db: Session = Depends(get_db)):
     return get_company_profile(db)
 
 
-@router.put("/", response_model=CompanyProfileResponse, dependencies=[Depends(require_role("admin"))])
+@router.put("/", response_model=CompanyProfileResponse, dependencies=[Depends(require_perm("company"))])
 def update_company(data: CompanyProfileUpdate, db: Session = Depends(get_db)):
     profile = get_company_profile(db)
     for key, value in data.dict(exclude_unset=True).items():
@@ -47,7 +47,7 @@ def get_logo(db: Session = Depends(get_db)):
     return Response(data, media_type=media_type, headers={"Cache-Control": "no-cache"})
 
 
-@router.post("/logo", response_model=CompanyProfileResponse, dependencies=[Depends(require_role("admin"))])
+@router.post("/logo", response_model=CompanyProfileResponse, dependencies=[Depends(require_perm("company"))])
 def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if file.content_type not in LOGO_TYPES:
         raise HTTPException(status_code=400, detail="Logo must be a PNG or JPEG image")
@@ -61,7 +61,7 @@ def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return profile
 
 
-@router.delete("/logo", response_model=CompanyProfileResponse, dependencies=[Depends(require_role("admin"))])
+@router.delete("/logo", response_model=CompanyProfileResponse, dependencies=[Depends(require_perm("company"))])
 def delete_logo(db: Session = Depends(get_db)):
     profile = get_company_profile(db)
     profile.logo_data = None

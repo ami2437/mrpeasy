@@ -46,6 +46,8 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     must_change_password: bool = False
+    permissions: List[str] = []  # what the role allows (app/services/permissions.py)
+    role_name: Optional[str] = None
     last_login: Optional[datetime] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -624,6 +626,8 @@ class InvoiceUpdateRequest(BaseModel):
     due_date: Optional[datetime] = None
     free_text: Optional[str] = None
     lines: Optional[List[InvoiceLineInput]] = None
+    accept_qty_differences: bool = False  # billing more / less than the shipments delivered was seen and accepted
+    qty_note: Optional[str] = None        # why (kept with the order's billing record)
 
 
 class CreateCombinedInvoiceRequest(BaseModel):

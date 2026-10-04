@@ -47,7 +47,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("invoices");
     document.getElementById("sidebar").innerHTML = renderSidebar("invoices.html");
 
     let invoices = [];
@@ -415,7 +415,7 @@
 
     // Factoring fields: set by the bulk funding upload, or by hand (managers).
     function fundingSectionHtml(invoice) {
-      const can = AuthGuard.hasRole("manager");
+      const can = AuthGuard.can("invoices.funding");
       const sum = (invoice.funding_amount || 0) + (invoice.funding_discount || 0);
       const off = invoice.funding_amount != null && Math.abs(sum - invoice.total) > 0.009;
       return `
@@ -531,7 +531,7 @@
             <td>${b.id}</td><td>${new Date(b.created_at + (String(b.created_at).endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(b.file_name || "")}</td>
             <td>${escapeHtml(b.created_by || "")}</td><td class="num">${b.updated_count}</td><td class="num">${b.skipped_count}</td>
             <td>${b.record_payments ? "recorded" : "fields only"}</td>
-            <td>${b.rolled_back ? `<span class="tag cancelled">Rolled Back</span>` : AuthGuard.hasRole("manager") ? `<a class="link" onclick="rollbackFunding(${b.id})">Roll back</a>` : ""}</td>
+            <td>${b.rolled_back ? `<span class="tag cancelled">Rolled Back</span>` : AuthGuard.can("invoices.funding") ? `<a class="link" onclick="rollbackFunding(${b.id})">Roll back</a>` : ""}</td>
           </tr>`).join("")}</tbody></table>` : "No uploads yet.";
       } catch (e) { el.textContent = e.message; }
     }
@@ -603,12 +603,21 @@
         ...lineNoteValue(tr),
       }));
       try {
+        // billing more or less than was delivered: say so, and keep the accepted difference on the order
+        const diffs = await apiFetch(`/api/invoices/${id}/qty-check`, { method: "POST", body: JSON.stringify({ lines }) });
+        let accept = null;
+        if (diffs.length) {
+          accept = await askQtyDifferences(diffs);
+          if (!accept) return;
+        }
         await apiFetch(`/api/invoices/${id}`, {
           method: "PUT",
           body: JSON.stringify({
             due_date: document.getElementById("f-due-date").value || null,
             free_text: document.getElementById("f-free-text").value,
             lines,
+            accept_qty_differences: !!accept,
+            qty_note: accept ? accept.note : null,
           }),
         });
         loadInvoices();
@@ -616,6 +625,25 @@
       } catch (err) {
         errorEl.textContent = err.message;
       }
+    }
+
+    // Resolves { note } when the user bills the different quantities anyway, null to go back and fix them.
+    async function askQtyDifferences(diffs) {
+      const rows = diffs.map(d => {
+        const over = d.billed > d.delivered;
+        return `<tr><td class="line-no">#${d.line_no ?? ""}</td><td><strong>${escapeHtml(d.item_code)}</strong></td>
+          <td class="num">${fmtQty(d.delivered)}</td><td class="num">${fmtQty(d.billed)}</td>
+          <td class="${over ? "neg" : "warn-text"}"><strong>${over ? "Over" : "Under"} by ${fmtQty(Math.abs(d.difference))}</strong></td></tr>`;
+      }).join("");
+      const { value, el } = await askDialog({ title: "Billing differs from what was delivered", tone: "warn",
+        body: `<p>This invoice bills a different quantity than its shipment${diffs.length > 1 ? "s" : ""} delivered:</p>
+          <table class="no-table-tools no-col-bands" style="margin:6px 0 10px;"><thead><tr><th>Line</th><th>Item</th><th class="num">Delivered</th><th class="num">Billing</th><th></th></tr></thead>
+          <tbody>${rows}</tbody></table>
+          <label>Why? (kept on the customer order so it can be squared up later)</label>
+          <input type="text" class="qty-note" placeholder="e.g. customer agreed to pay for 5 short-shipped">
+          <p class="muted small" style="margin-top:6px;">Once the order is fully shipped and billed, AT-HUB checks the total billed against what shipped and raises a task if it still doesn't match.</p>`,
+        buttons: [{ label: "Bill These Quantities", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
+      return value === "go" ? { note: el.querySelector(".qty-note").value.trim() } : null;
     }
 
     async function setStatus(id, status) {

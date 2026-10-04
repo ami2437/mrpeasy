@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.dependencies import require_role
+from app.dependencies import require_perm, require_any
 from app.services import ai_orders
 
-router = APIRouter(prefix="/api/ai-orders", tags=["ai-orders"], dependencies=[Depends(require_role("manager"))])  # drafting priced orders is manager work
+router = APIRouter(prefix="/api/ai-orders", tags=["ai-orders"], dependencies=[Depends(require_perm("ai"))])  # drafting priced orders is manager work
 
 MAX_PDF_BYTES = 15 * 1024 * 1024
 

@@ -7,13 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Customer, Quote, QuoteLine, StockItem, User
 from app.services import item_alias, quotes as quote_svc
 from app.services.crud import generate_code
 from app.services.money import line_amount
 
-router = APIRouter(prefix="/api/quotes", tags=["quotes"], dependencies=[Depends(require_role("manager"))])
+router = APIRouter(prefix="/api/quotes", tags=["quotes"], dependencies=[Depends(require_perm("quotes"))])
 STATUSES = ("draft", "sent", "accepted", "declined", "converted")
 
 

@@ -89,7 +89,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("reports");
     document.getElementById("sidebar").innerHTML = renderSidebar("reports.html");
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }

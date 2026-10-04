@@ -1462,3 +1462,37 @@ button.next-step .ico { width: 15px; height: 15px; vertical-align: -2px; }
 .stage-empty { text-align: center; padding: 28px; }
 .ship-dialog { width: min(900px, 100%); }
 .ship-dialog input { padding: 5px 7px; font-size: 13px; }
+.table-tools-btn.tt-icon { display: inline-grid; place-items: center; width: 22px; height: 18px; border-radius: 5px; }
+.table-tools-btn.tt-icon .ico { width: 15px; height: 15px; margin: 0 !important; }
+.table-tools-btn.tt-icon:hover { background: var(--btn2-bg); color: var(--accent); }
+
+/* Users & Roles: the permission grid */
+.tag.role-custom { background: #e0f2fe; color: #075985; }
+html[data-theme="dark"] .tag.role-custom { background: #0c3a52; color: #bae6fd; }
+.roles-grid { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 14px; align-items: start; }
+.roles-grid > .card { margin: 0; }
+.roles-list { padding: 12px; position: sticky; top: 12px; }
+.roles-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.roles-list-head h3 { margin: 0; font-size: 15px; }
+.role-item { padding: 8px 10px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; }
+.role-item:hover { background: var(--surface-2); }
+.role-item.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.role-item-name { font-weight: 600; font-size: 13.5px; }
+.role-item-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 11.5px; color: var(--muted); margin-top: 2px; align-items: center; }
+.money-chip { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px;
+  background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.nomoney-chip { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 17px; background: var(--surface-3); color: var(--muted); }
+html[data-theme="dark"] .money-chip { background: #3a2f0d; color: #fde68a; border-color: #7c5e10; }
+.role-head { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 6px; }
+.perm-summary { margin: 12px 0; padding: 8px 12px; border-radius: 10px; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); }
+.perm-summary.has-money { background: color-mix(in srgb, #f59e0b 10%, var(--surface)); border-color: color-mix(in srgb, #f59e0b 45%, var(--border)); }
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.perm-mod { border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px 6px; background: var(--surface); }
+.perm-mod.money { border-color: color-mix(in srgb, #f59e0b 50%, var(--border)); }
+.perm-mod-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 4px; }
+.perm-row { font-size: 12.5px; color: var(--text-2); align-items: flex-start; }
+.perm-row input { margin-top: 2px !important; }
+.perm-row.is-money span:not(.money-chip) { color: var(--text); }
+.perm-row .money-chip { margin-left: auto; }
+.role-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+@media (max-width: 1100px) { .roles-grid { grid-template-columns: 1fr; } .roles-list { position: static; } }

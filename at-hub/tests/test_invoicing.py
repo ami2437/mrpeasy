@@ -162,3 +162,42 @@ def test_cannot_mark_paid_while_money_is_owed(make, api):
     api.put(f"/api/invoices/{inv['id']}/status", json={"status": "sent"})
     r = api.put(f"/api/invoices/{inv['id']}/status", json={"status": "paid"}, expect=400)
     assert "still open" in r["detail"]
+
+
+def test_billing_a_different_qty_needs_accepting_and_is_tracked(api, client, admin_headers, make):
+    """Billing more or less than delivered is refused until accepted; the accepted difference is kept on the order,
+    and once the order is fully billed a task flags that billed != shipped. A $0 line never counts."""
+    from app.config.database import SessionLocal
+    from app.models import BillingVariance
+    from app.services import billing
+    a, nut = make.item(price=2), make.item(price=0)
+    make.stock(a, 10)
+    make.stock(nut, 10)
+    o = make.order(lines=[(a, 10, 2), (nut, 10, 0)])
+    inv = make.invoice(make.ship(o))
+    lines = [{k: l[k] for k in ("item_id", "order_line_id", "shipment_id", "description", "quantity", "unit_price")} for l in inv["lines"]]
+    for l in lines:
+        if l["item_id"] == a["id"]:
+            l["quantity"] = 12
+        if l["item_id"] == nut["id"]:
+            l["quantity"] = 3   # $0 line: no warning
+    diffs = client.post(f"/api/invoices/{inv['id']}/qty-check", json={"lines": lines}, headers=admin_headers).json()
+    assert [(d["delivered"], d["billed"]) for d in diffs] == [(10, 12)]
+    r = client.put(f"/api/invoices/{inv['id']}", json={"lines": lines}, headers=admin_headers)
+    assert r.status_code == 400 and "delivered 10, billing 12" in r.json()["detail"]
+    r = client.put(f"/api/invoices/{inv['id']}", json={"lines": lines, "accept_qty_differences": True, "qty_note": "agreed extra"}, headers=admin_headers)
+    assert r.status_code == 200
+    db = SessionLocal()
+    v = db.query(BillingVariance).filter(BillingVariance.invoice_id == inv["id"]).one()
+    assert (v.delivered_qty, v.billed_qty, v.reason) == (10, 12, "agreed extra")
+    flagged = {row["order"].id: row["lines"] for row in billing.unbalanced_orders(db)}
+    db.close()
+    assert [(l["shipped"], l["billed"]) for l in flagged[o["id"]]] == [(10, 12)]
+    tasks = client.get("/api/tasks/", headers=admin_headers).json()
+    t = next(t for t in tasks if t["key"] == f"billing:{o['code']}")
+    assert "over by 2" in t["detail"] and "agreed extra" in t["detail"]
+    # voiding the invoice drops the record
+    client.put(f"/api/invoices/{inv['id']}/status", json={"status": "void"}, headers=admin_headers)
+    db = SessionLocal()
+    assert not db.query(BillingVariance).filter(BillingVariance.invoice_id == inv["id"]).count()
+    db.close()

@@ -34,18 +34,27 @@ const AuthGuard = {
     }
     return user;
   },
-  // Roles in increasing order of access; each can do everything below it.
+  // What the user's role allows (Users & Roles -> Roles). The server enforces it; screens only hide what you can't use.
+  // A session saved before roles were editable has no list yet: it falls back to the old built-in defaults
+  // until the background refresh (refreshSessionUser) brings the real one.
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
-  hasRole(minimum) {
+  PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 2, "shipments.view": 1, "shipments.work": 1,
+    "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 2, invoices: 2,
+    "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, imports: 2, ai: 2,
+    recycle_bin: 2, company: 3, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
+  can(perm) {
     const user = this.getUser();
-    return !!user && (this.ROLE_RANK[user.role] || 0) >= this.ROLE_RANK[minimum];
+    if (!user) return false;
+    if (Array.isArray(user.permissions)) return user.permissions.includes(perm);
+    return (this.ROLE_RANK[user.role] || 0) >= (this.PERM_DEFAULT[perm] || 99);
   },
-  // Page guard: send users without the role back to the dashboard.
-  requireRole(minimum) {
+  canAny(...perms) { return perms.some(p => this.can(p)); },
+  // Page guard: without the permission, back to the user's home page.
+  requirePerm(...perms) {
     if (!this.requireLogin()) return null;
-    if (!this.hasRole(minimum)) {
-      alert(`This page needs the ${minimum.replace("_", " ")} role.`);
-      window.location.href = "dashboard.html";
+    if (!this.canAny(...perms)) {
+      alert("Your role doesn't include this page.");
+      window.location.href = homePage();
       return null;
     }
     return this.getUser();
@@ -157,7 +166,7 @@ async function apiUpload(path, form) {
 const PRICE_STEP = "0.00001"; // unit prices/costs are kept to 5 decimal places
 
 // Employees work shipments only and never see dollar amounts (the server blanks them too).
-function hidesMoney() { const u = AuthGuard.getUser(); return !!u && u.role === "employee"; }
+function hidesMoney() { return !!AuthGuard.getUser() && !AuthGuard.can("money.view"); }
 
 // Unit price/cost: $ with up to 5 decimals, at least 2 ($0.21375, $3.50).
 function fmtPrice(n) {
@@ -271,7 +280,7 @@ async function deliveredCheckBeforeInvoice(shipments) {
 // Resolves true when it billed (the page is navigating away), false for "Not now".
 async function offerBilling(shipments) {
   const list = (shipments || []).filter(s => s && s.status === "delivered");
-  if (!list.length || !AuthGuard.hasRole("manager")) return false;
+  if (!list.length || !AuthGuard.can("invoices")) return false;
   const groups = {};
   list.forEach(s => (groups[s.order_id] = groups[s.order_id] || []).push(s));
   const sets = Object.values(groups), n = sets.length;
@@ -610,7 +619,7 @@ async function renderAttachments(container, entityType, entityId, categories, op
     return;
   }
   const me = AuthGuard.getUser() || {};
-  const canDelete = f => f.uploaded_by === me.username || AuthGuard.hasRole("manager");
+  const canDelete = f => f.uploaded_by === me.username || AuthGuard.can("money.view");
   const isImage = f => (f.content_type || "").startsWith("image/");
   const groups = categories.map(c => [c, files.filter(f => f.category === c)]).filter(([, list]) => list.length);
   el.innerHTML = `
@@ -846,41 +855,46 @@ async function openPdf(path) {
 // Grouped like MRPeasy's own sidebar: modules are organized under the
 // business function they belong to (CRM, Procurement, Warehouse), not a
 // flat list of pages.
-// A link's third entry is the minimum role that sees it. Employees get the shipping
-// side only: orders (to ship from), shipments, POD, stock -- no billing or purchasing.
+// A link's third entry is the permission that shows it (any of several, space separated) -- set per role on
+// Users & Roles. A group with no links left isn't shown.
 const NAV_GROUPS = [
-  { label: null, links: [["dashboard.html", "Dashboard"], ["tasks.html", "Tasks", "admin"], ["ai-desk.html", "AI Desk", "manager"]] },
+  { label: null, links: [["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"], ["tasks.html", "Tasks", "tasks"], ["ai-desk.html", "AI Desk", "ai"]] },
   { label: "CRM", links: [
-    ["customers.html", "Customers", "manager"],
-    ["customer-orders.html", "Customer Orders"],
-    ["shipments.html", "Shipments"],
-    ["pack-shipments.html", "Batch Shipments"],
-    ["pod.html", "Proof Of Delivery"],
-    ["labels.html", "On-Demand Labels"],
-    ["invoices.html", "Invoices", "manager"],
+    ["customers.html", "Customers", "customers.view"],
+    ["customer-orders.html", "Customer Orders", "orders.view"],
+    ["shipments.html", "Shipments", "shipments.view"],
+    ["pack-shipments.html", "Batch Shipments", "shipments.work"],
+    ["pod.html", "Proof Of Delivery", "pod.upload"],
+    ["labels.html", "On-Demand Labels", "shipments.work"],
+    ["invoices.html", "Invoices", "invoices"],
   ] },
-  { label: "Procurement", minRole: "manager", links: [
-    ["vendors.html", "Vendors"],
-    ["purchase-orders.html", "Purchase Orders"],
-    ["landed-costs.html", "Landed Costs"],
+  { label: "Procurement", links: [
+    ["vendors.html", "Vendors", "vendors"],
+    ["purchase-orders.html", "Purchase Orders", "purchasing"],
+    ["landed-costs.html", "Landed Costs", "landed_costs"],
   ] },
-  { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
-  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["designer.html", "Template Designer", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
-  { label: "MRP Migrate", minRole: "admin", links: [["mrp-payments.html", "PO Payments Import"], ["file-matcher.html", "File Matcher", "super_admin"]] },
-  { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["backups.html", "Backups"]] },
+  { label: "Warehouse", links: [["stock-items.html", "Stock Items", "stock.view"], ["lots.html", "Lots", "stock.view"], ["mtrs.html", "MTR Library", "stock.view"]] },
+  { label: null, links: [["reports.html", "Reports", "reports"], ["company.html", "Company Settings", "company"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
+  { label: "MRP Migrate", links: [["mrp-payments.html", "PO Payments Import", "payments.import"], ["file-matcher.html", "File Matcher", "file_matcher"]] },
+  { label: "Admin", links: [["users.html", "Users & Roles", "users"], ["backups.html", "Backups", "backups"]] },
 ];
 
-// Where "Home" goes for this user (used by pages without the sidebar, like POD).
-function homePage() { return "dashboard.html"; }
+// Where "Home" goes for this user: the dashboard, or for a POD-only role (drivers) the POD page.
+function homePage() {
+  if (!AuthGuard.getUser()) return "login.html";
+  if (AuthGuard.canAny("orders.view", "stock.view", "invoices", "purchasing")) return "dashboard.html";
+  return AuthGuard.can("pod.upload") ? "pod.html" : AuthGuard.can("shipments.view") ? "shipments.html" : "account.html";
+}
 
 const ROLE_LABELS = { super_admin: "Super Admin", admin: "Admin", manager: "Manager", employee: "Employee" };
 
 function renderSidebar(activePage) {
   const user = AuthGuard.getUser();
-  const groups = NAV_GROUPS.filter(group => !group.minRole || AuthGuard.hasRole(group.minRole)).map(group => {
-    const links = group.links.filter(([, , min]) => !min || AuthGuard.hasRole(min)).map(([href, label]) =>
+  const groups = NAV_GROUPS.map(group => {
+    const links = group.links.filter(([, , perm]) => !perm || AuthGuard.canAny(...perm.split(" "))).map(([href, label]) =>
       `<a href="${href}" class="${href === activePage ? 'active' : ''}">${icon(NAV_ICONS[href])}${label}</a>`
     ).join("");
+    if (!links) return "";
     return `
       <div class="nav-group">
         ${group.label ? `<div class="nav-group-label">${group.label}</div>` : ""}
@@ -895,7 +909,7 @@ function renderSidebar(activePage) {
       <a class="sidebar-find" onclick="QuickFind.open()" title="Find anything (Ctrl+K)">${icon("search") || "⌕"}<span>Search</span><kbd>Ctrl K</kbd></a>
       ${groups}
       <div class="sidebar-footer">
-        ${user ? `<div class="user-line">${escapeHtml(user.full_name || user.username)}<div class="small">${ROLE_LABELS[user.role] || user.role}</div></div>` : ""}
+        ${user ? `<div class="user-line">${escapeHtml(user.full_name || user.username)}<div class="small">${escapeHtml(user.role_name || ROLE_LABELS[user.role] || user.role)}</div></div>` : ""}
         <a href="#" onclick="toggleTheme(); return false;" id="theme-toggle">${icon("moon")}<span>${currentTheme() === "dark" ? "Light Mode" : "Dark Mode"}</span></a>
         <a href="account.html" class="${activePage === "account.html" ? "active" : ""}">${icon("user")}My Account</a>
         <a href="#" onclick="AuthGuard.logout(); return false;">${icon("logout")}Logout</a>
@@ -1073,8 +1087,10 @@ const TableTools = {
     bar.prepend(viewsBtn, viewsMenu);
     // Export: what you see -- shown columns, rows that pass the filters (incl. ones folded past the first 50)
     const exportBtn = document.createElement("a");
-    exportBtn.className = "table-tools-btn";
-    exportBtn.textContent = "Export ▾";
+    exportBtn.className = "table-tools-btn tt-icon";
+    exportBtn.innerHTML = icon("download");
+    exportBtn.title = "Export — CSV, Excel, PDF or copy";
+    exportBtn.setAttribute("aria-label", "Export");
     const exportMenu = document.createElement("div");
     exportMenu.className = "table-tools-menu";
     exportMenu.style.display = "none";
@@ -1408,11 +1424,19 @@ function hideMoneyColumns(root = document) {
   });
 }
 
+// <button data-perm="orders.edit"> (or "a b": any of them) shows only for roles that have it.
+function applyPermGates(root = document) {
+  const els = root.matches && root.matches("[data-perm]") ? [root] : [];
+  (root.querySelectorAll ? root.querySelectorAll("[data-perm]") : []).forEach(el => els.push(el));
+  els.forEach(el => { if (!AuthGuard.canAny(...el.dataset.perm.split(" "))) el.style.display = "none"; });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   if (hidesMoney()) document.body.classList.add("no-money");
   hideMoneyColumns();
+  applyPermGates();
   new MutationObserver(muts => {
-    for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) hideMoneyColumns(n);
+    for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) { hideMoneyColumns(n); applyPermGates(n); }
   }).observe(document.body, { childList: true, subtree: true });
   TableTools.enhanceAll();
   // Detail panels build their tables on the fly -- pick those up too.
@@ -1782,7 +1806,7 @@ applyTheme(currentTheme());  // runs in <head>, before the page paints
 // *suggestion* to fill the form with -- the user still reviews and saves.
 function aiScanButton(kind, callback, opts = {}) {
   const title = opts.title || "Scan a document with AI and pre-fill this form";
-  const cloud = ["vendor_invoice", "vendor_order"].includes(kind) && AuthGuard.hasRole("manager")
+  const cloud = ["vendor_invoice", "vendor_order"].includes(kind) && AuthGuard.can("ai")
     ? ` <button type="button" class="ai-btn cloud" title="For a hard document: read it with Claude (Anthropic, cloud). Your company details and bank numbers are blanked out on this PC first; only that text is sent. About 1-3 cents."
         onclick="aiScan(this, '${kind}', '${callback}', ${opts.poId || "null"}, 'claude')">☁ Ask Claude</button>` : "";
   return `<button type="button" class="ai-btn" data-icon="sparkles" title="${escapeHtml(title)}"
@@ -2078,7 +2102,7 @@ function openItemReplace(anchor, currentItemId, onPick) {
 
 // ---- "Validate with AI": check a saved order / PO against its attached document with several readers ----
 function aiValidateButton(kind, id) {
-  if (!AuthGuard.hasRole("manager")) return "";
+  if (!AuthGuard.can("ai")) return "";
   return `<button class="ai-validate-btn" onclick="runAiValidate('${kind}', ${id}, this)" title="Read the attached ${kind === "po" ? "vendor quote / confirmation" : "customer PO"} with the exact reader, the local AI and Claude, and compare every line with this ${kind === "po" ? "PO" : "order"}">
     <span class="ai-spark">✦</span> Validate with AI</button>`;
 }
@@ -2157,11 +2181,12 @@ const QuickFind = {
   data: null, loadedAt: 0, el: null, results: [], active: 0,
   async load() {
     if (this.data && Date.now() - this.loadedAt < 60000) return this.data;
-    const mgr = AuthGuard.hasRole("manager");
+    const can = (...p) => AuthGuard.canAny(...p);
     const get = (url, ok = true) => ok ? apiFetch(url).catch(() => []) : Promise.resolve([]);
     const [orders, pos, items, customers, vendors, shipments, invoices] = await Promise.all([
-      get("/api/customer-orders/"), get("/api/purchase-orders/", mgr), get("/api/stock-items/"), get("/api/customers/", mgr),
-      get("/api/vendors/", mgr), get("/api/shipments/"), get("/api/invoices/", mgr)]);
+      get("/api/customer-orders/", can("orders.view")), get("/api/purchase-orders/", can("purchasing")), get("/api/stock-items/", can("stock.view")),
+      get("/api/customers/", can("customers.view")), get("/api/vendors/", can("vendors", "purchasing")), get("/api/shipments/", can("shipments.view")),
+      get("/api/invoices/", can("invoices"))]);
     const cname = Object.fromEntries(customers.map(c => [c.id, c.name])), vname = Object.fromEntries(vendors.map(v => [v.id, v.name]));
     this.data = [
       ...orders.map(o => ({ kind: "Order", label: o.code, sub: [cname[o.customer_id], o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`, o.status].filter(Boolean).join(" · "), href: `customer-orders.html?id=${o.id}`, hay: `${o.code} ${o.po_number || ""} ${o.job_number || ""} ${cname[o.customer_id] || ""}` })),

@@ -40,7 +40,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("super_admin");
+    AuthGuard.requirePerm("file_matcher");
     document.getElementById("sidebar").innerHTML = renderSidebar("file-matcher.html");
     const STATUS = {
       match: ["Will attach", "shipped", "Certain match"], attached: ["Already attached", "draft", ""], has_one: ["Has one already", "draft", ""],

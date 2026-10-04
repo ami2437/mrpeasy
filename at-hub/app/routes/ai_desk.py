@@ -17,12 +17,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
-from app.dependencies import get_current_active_user, require_role
+from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Attachment, CustomerOrder, PurchaseOrder, Shipment, User, VendorBill
 from app.routes.attachments import MAX_BYTES, store_file
 from app.routes.file_matcher import _create_bytes, _name_keys, _norm, _read_bytes, _record_keys
 
-router = APIRouter(prefix="/api/ai-desk", tags=["ai-desk"], dependencies=[Depends(require_role("manager"))])
+router = APIRouter(prefix="/api/ai-desk", tags=["ai-desk"], dependencies=[Depends(require_perm("ai"))])
 
 KINDS = {"customer_po": "Customer PO", "vendor_invoice": "Vendor invoice", "vendor_order": "Vendor SO / quote / confirmation",
          "mtr": "Material test report (MTR)", "pod": "Proof of delivery", "other": "Other document"}

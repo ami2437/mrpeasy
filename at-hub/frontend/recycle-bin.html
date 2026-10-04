@@ -30,7 +30,7 @@
   </main>
 
   <script>
-    AuthGuard.requireRole("manager");
+    AuthGuard.requirePerm("recycle_bin");
     document.getElementById("sidebar").innerHTML = renderSidebar("recycle-bin.html");
     let entries = [];
     const TABLE_NAMES = { customer_orders: "order", customer_order_lines: "order line", purchase_orders: "PO", purchase_order_lines: "PO line",

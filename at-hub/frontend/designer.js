@@ -3,7 +3,7 @@
 // summary after the table, footer on every page) holding blocks you drag, resize and style. Text uses
 // {{fields}}; the canvas fills them with a real record so what you see is what prints (the server's
 // renderer draws the same spec -- Preview PDF shows it exactly).
-AuthGuard.requireRole("admin");
+AuthGuard.requirePerm("templates");
 document.getElementById("sidebar").innerHTML = renderSidebar("designer.html");
 
 const PX = 96;                 // canvas pixels per inch at 100%

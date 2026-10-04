@@ -11,7 +11,7 @@ async function openShipModal(orderId) {
     open: Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity) })).filter(x => x.open > 1e-9);
   if (!lines.length) { toast("Nothing left to book on this order"); return; }
   shipModal = { order, lines, sources: {} };
-  const draft = order.status === "draft", canConfirm = AuthGuard.hasRole("manager");
+  const draft = order.status === "draft", canConfirm = AuthGuard.can("orders.edit");
   const back = document.createElement("div");
   back.className = "glass-back";
   back.id = "ship-modal";
@@ -53,7 +53,7 @@ async function openShipModal(orderId) {
   shipModalRefresh();
   // short lines: what generic stock can cover them (58-NUT for 15420-NUT)
   const short = lines.filter(x => x.open > Math.max(0, x.item.available) + 1e-9).map(x => x.item.id);
-  if (short.length && AuthGuard.hasRole("manager")) {
+  if (short.length && AuthGuard.can("orders.edit")) {
     try { shipModal.sources = await apiFetch("/api/stock-items/generic-sources", { method: "POST", body: JSON.stringify({ item_ids: [...new Set(short)] }) }); } catch (e) {}
     document.querySelectorAll("#ship-modal .sm-row").forEach(tr => {
       const x = shipModal.lines[tr.dataset.i], src = (shipModal.sources[x.item.id] || [])[0];
@@ -128,7 +128,7 @@ function shipModalRefresh() {
     + (why ? `<div class="neg small">${escapeHtml(why)}</div>` : "");
   const draft = shipModal.order.status === "draft";
   go.textContent = `${draft ? "Confirm & " : ""}${all && nLines === rows.length ? "Ship All Lines" : `Create Shipment (${nLines})`}`;
-  go.disabled = !nLines || bad || (draft && !AuthGuard.hasRole("manager"));
+  go.disabled = !nLines || bad || (draft && !AuthGuard.can("orders.edit"));
   go.title = why;
 }
 

@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.config.database import get_db
 from app.config.settings import settings
-from app.dependencies import ROLE_RANK, get_current_active_user
+from app.dependencies import get_current_active_user
+from app.services.permissions import has
 from app.models import Attachment, CustomerOrder, MtrLink, PurchaseOrder, Shipment, User
 from app.schemas import AttachmentResponse
 from app.services.crud import ShipmentService
@@ -37,7 +38,7 @@ THUMB_WIDTH = 160
 
 
 def _hides_money(user: User) -> bool:
-    return ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]
+    return not has(user, "money.view")
 
 
 def upload_root() -> Path:
@@ -163,7 +164,7 @@ def retag(attachment_id: int, category: Optional[str] = Form(None), note: Option
           db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Change what kind of document a file is (its tag), or its note."""
     att = _get(db, attachment_id)
-    if att.uploaded_by != user.username and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+    if att.uploaded_by != user.username and not has(user, "money.view"):
         raise HTTPException(status_code=403, detail="Only the uploader or a manager can change this file")
     if category is not None:
         if category not in CATEGORIES.get(att.entity_type, set()):
@@ -215,7 +216,7 @@ def thumbnail(attachment_id: int, db: Session = Depends(get_db), user: User = De
 def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Uploaders can remove their own files; managers and above can remove any."""
     att = _get(db, attachment_id)
-    if att.uploaded_by != user.username and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
+    if att.uploaded_by != user.username and not has(user, "money.view"):
         raise HTTPException(status_code=403, detail="Only the uploader or a manager can delete this file")
     from app.services.recycle_bin import move_to_trash
     move_to_trash(att.stored_name)  # kept until the recycle bin entry is emptied

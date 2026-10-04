@@ -42,7 +42,7 @@
   </main>
 
   <script>
-    AuthGuard.requireLogin();
+    AuthGuard.requirePerm("shipments.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("shipments.html");
 
     let shipments = [];
@@ -75,6 +75,9 @@
       const filtered = shipments.filter(s => matchesSearch(s, q) && (s.status === "cancelled") === cancelledTab && (
         cancelledTab || !statusFilter || (statusFilter === "open" ? ["new", "ready"].includes(s.status) : s.status === statusFilter)
       ));
+      // work waiting on the floor first: ready, then new, then everything that has left
+      const rank = { ready: 0, new: 1, shipped: 2, delivered: 3, invoiced: 4 };
+      filtered.sort((a, b) => (rank[a.status] ?? 5) - (rank[b.status] ?? 5) || b.id - a.id);
       if (!filtered.length) {
         tbody.innerHTML = `<tr><td colspan="11" class="muted">${shipments.length ? (cancelledTab ? "No cancelled shipments." : "No shipments match this search/filter.") : "No shipments yet — create one from a customer order."}</td></tr>`;
         return;
