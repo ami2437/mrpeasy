@@ -492,11 +492,7 @@ function makeSearchable(select) {
   let matches = [], active = 0;
 
   const render = () => {
-    const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
-    matches = Array.from(select.options).filter(o => {
-      const hay = `${o.textContent} ${o.dataset.search || ""}`.toLowerCase();
-      return words.every(w => hay.includes(w));
-    });
+    matches = Array.from(select.options).filter(o => searchMatch(input.value, o.textContent, o.dataset.search));
     active = 0;
     const shown = matches.slice(0, 50);
     list.innerHTML = shown.length
