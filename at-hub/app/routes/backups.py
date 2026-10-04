@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/backups", tags=["backups"], dependencies=[Depend
 def list_all():
     from app.config.settings import settings
     return {"backups": backups.list_backups(), "every_hours": settings.backup_every_hours, "keep": settings.backup_keep,
-            "folder": str(backups.backup_dir())}
+            "folder": str(backups.backup_dir()), "copies": [str(d) for d in backups.copy_dirs()]}
 
 
 @router.post("/")

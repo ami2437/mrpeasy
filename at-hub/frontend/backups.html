@@ -22,8 +22,8 @@
         <strong>Restore</strong> puts AT-HUB back exactly as it was at that moment; the current state is saved first as a <em>pre-restore</em> backup,
         so a restore can itself be undone. Attached files live in the uploads folder (not in the database) and aren't affected.</p>
       <table class="list-fit">
-        <thead><tr><th>Taken</th><th>Kind</th><th class="num">Size</th><th>File</th><th></th></tr></thead>
-        <tbody id="b-body"><tr><td colspan="5">Loading…</td></tr></tbody>
+        <thead><tr><th>Taken</th><th>Kind</th><th class="num">Size</th><th>File</th><th>Copies</th><th></th></tr></thead>
+        <tbody id="b-body"><tr><td colspan="6">Loading…</td></tr></tbody>
       </table>
       <div id="b-msg" class="small" style="margin-top:8px;"></div>
     </div>
@@ -31,18 +31,23 @@
   <script>
     AuthGuard.requireRole("super_admin");
     document.getElementById("sidebar").innerHTML = renderSidebar("backups.html");
+    let copies = [];
     const KIND = { auto: ["Automatic", "draft"], manual: ["Manual", "confirmed"], "pre-restore": ["Before a restore", "overdue"], "pre-import": ["Before an import", "overdue"] };
     async function load() {
       const r = await apiFetch("/api/backups/");
       document.getElementById("b-info").innerHTML = r.every_hours > 0
         ? `Automatic backup every <strong>${r.every_hours} h</strong>, newest ${r.keep} kept · folder <code>${escapeHtml(r.folder)}</code>` : "Automatic backups are off.";
+      document.getElementById("b-info").innerHTML += r.copies.length ? `<br>Also copied to: ${r.copies.map(c => `<code>${escapeHtml(c)}</code>`).join(" · ")}`
+        : `<br><span class="neg">Only one copy: set BACKUP_COPIES in the server's .env to a second place (OneDrive, a network drive).</span>`;
+      copies = r.copies;
       document.getElementById("b-body").innerHTML = r.backups.map(b => {
         const [label, cls] = KIND[b.kind] || [b.kind, "draft"];
         return `<tr><td>${new Date(b.created).toLocaleString()}</td><td><span class="tag ${cls}">${label}</span></td>
           <td class="num">${(b.size / 1048576).toFixed(1)} MB</td><td class="small muted">${escapeHtml(b.name)}</td>
+          <td>${b.copies.map((ok, i) => `<span class="tag ${ok ? "shipped" : "overdue"}" title="${escapeHtml(copies[i] || "")}">${ok ? "✓" : "missing"}</span>`).join(" ") || '<span class="muted small">—</span>'}</td>
           <td class="nowrap"><a class="link small" onclick="download('${b.name}')">Download</a> &nbsp;
             <a class="link small" onclick="restore('${b.name}')">Restore</a> ${trashBtn(`del('${b.name}')`, "Delete this backup")}</td></tr>`;
-      }).join("") || `<tr><td colspan="5" class="muted">No backups yet — click Back Up Now.</td></tr>`;
+      }).join("") || `<tr><td colspan="6" class="muted">No backups yet — click Back Up Now.</td></tr>`;
     }
     const msg = (html) => document.getElementById("b-msg").innerHTML = html;
     async function backupNow() { try { const r = await apiFetch("/api/backups/", { method: "POST" }); msg(`<span class="pos">Saved ${escapeHtml(r.name)}.</span>`); load(); } catch (e) { msg(`<span class="neg">${escapeHtml(e.message)}</span>`); } }

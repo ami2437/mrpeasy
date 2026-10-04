@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     backup_dir: str = "./backups"
     backup_every_hours: float = 6  # automatic database backups; 0 turns them off
+    backup_copies: str = ""  # more folders every backup is also copied to, ";"-separated (OneDrive, a NAS, a USB disk...)
     backup_keep: int = 30  # automatic backups kept (manual and pre-restore ones are kept until deleted)
 
     # Private AI for reading customer PO PDFs into draft orders. Runs on a local Ollama

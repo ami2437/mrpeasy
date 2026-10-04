@@ -3,6 +3,7 @@
 Uses SQLite's online backup API, so a copy is consistent even while AT-HUB is running. Files:
 backups/at_hub-<yyyymmdd-hhmmss>-<kind>.db  (kind: auto | manual | pre-restore). Uploaded files
 (uploads/) are not in the database and are not copied here -- OneDrive / a disk backup covers those."""
+import shutil
 import sqlite3
 import threading
 import time
@@ -24,6 +25,30 @@ def backup_dir() -> Path:
     d = Path(settings.backup_dir).resolve()
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def copy_dirs() -> List[Path]:
+    """Second (third...) places every backup is copied to, so one lost disk never loses them all."""
+    out = []
+    for d in (settings.backup_copies or "").split(";"):
+        if d.strip():
+            out.append(Path(d.strip()).expanduser().resolve())
+    return out
+
+
+def _mirror(f: Path) -> List[str]:
+    """Copy one backup to every copy folder; returns problems (a missing drive never stops the backup)."""
+    problems = []
+    for d in copy_dirs():
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, d / f.name)
+            if f.name.endswith("-auto.db"):
+                for old in sorted(d.glob("at_hub-*-auto.db"))[:-max(1, settings.backup_keep)]:
+                    old.unlink(missing_ok=True)
+        except OSError as e:
+            problems.append(f"{d}: {e}")
+    return problems
 
 
 def _copy(src: Path, dst: Path) -> None:
@@ -48,6 +73,8 @@ def backup_now(kind: str = "manual") -> Path:
         autos = sorted(backup_dir().glob("at_hub-*-auto.db"))
         for old in autos[:-max(1, settings.backup_keep)]:
             old.unlink(missing_ok=True)
+    for p in _mirror(dst):
+        print(f"[backup] copy failed: {p}")
     return dst
 
 
@@ -57,6 +84,7 @@ def list_backups() -> List[dict]:
         parts = f.stem.split("-")
         kind = "-".join(parts[3:]) or "manual"
         out.append({"name": f.name, "size": f.stat().st_size, "kind": kind,
+                    "copies": [(d / f.name).exists() for d in copy_dirs()],
                     "created": datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")})
     return out
 

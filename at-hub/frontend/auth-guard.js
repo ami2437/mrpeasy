@@ -626,7 +626,7 @@ async function openPdf(path) {
 // A link's third entry is the minimum role that sees it. Employees get the shipping
 // side only: orders (to ship from), shipments, POD, stock -- no billing or purchasing.
 const NAV_GROUPS = [
-  { label: null, links: [["dashboard.html", "Dashboard"]] },
+  { label: null, links: [["dashboard.html", "Dashboard"], ["tasks.html", "Tasks", "admin"], ["ai-desk.html", "AI Desk", "manager"]] },
   { label: "CRM", links: [
     ["customers.html", "Customers", "manager"],
     ["customer-orders.html", "Customer Orders"],
@@ -642,8 +642,9 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items"], ["lots.html", "Lots"], ["mtrs.html", "MTR Library"]] },
-  { label: null, minRole: "manager", links: [["ai-desk.html", "AI Desk"], ["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"], ["tasks.html", "Tasks", "admin"]] },
-  { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["file-matcher.html", "File Matcher"], ["backups.html", "Backups"]] },
+  { label: null, minRole: "manager", links: [["reports.html", "Reports"], ["company.html", "Company Settings", "admin"], ["recycle-bin.html", "Recycle Bin", "manager"]] },
+  { label: "MRP Migrate", minRole: "admin", links: [["mrp-payments.html", "PO Payments Import"], ["file-matcher.html", "File Matcher", "super_admin"]] },
+  { label: "Admin", minRole: "super_admin", links: [["users.html", "Users & Roles"], ["backups.html", "Backups"]] },
 ];
 
 // Where "Home" goes for this user (used by pages without the sidebar, like POD).
@@ -1431,7 +1432,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "backups.html": "save",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "backups.html": "save",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [

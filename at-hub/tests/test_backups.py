@@ -14,3 +14,12 @@ def test_backup_and_restore(make, api):
     api.post(f"/api/backups/{r['safety_copy']}/restore")  # and the safety copy undoes it
     assert "Before-Restore Customer" in [x["name"] for x in api.get("/api/customers/")]
     api.post("/api/backups/../at_hub.db/restore", expect=(404, 405))
+
+
+def test_backup_copied_to_second_place(api, tmp_path, monkeypatch):
+    from app.config.settings import settings
+    monkeypatch.setattr(settings, "backup_copies", str(tmp_path / "copy-a") + ";" + str(tmp_path / "copy-b"))
+    name = api.post("/api/backups/")["name"]
+    assert (tmp_path / "copy-a" / name).exists() and (tmp_path / "copy-b" / name).exists()
+    row = next(b for b in api.get("/api/backups/")["backups"] if b["name"] == name)
+    assert row["copies"] == [True, True]

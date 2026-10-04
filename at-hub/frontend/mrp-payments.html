@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — MRPeasy PO Payments</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar"><h1 class="page-title">MRPeasy PO Payments</h1>
+      <span class="muted small">Migration tool — phased out once AT-HUB is the system of record.</span></div>
+    <div class="card" id="payimp-card" >
+      <h3 style="margin-top:0;">Payments from MRPeasy's PO export</h3>
+      <p class="muted small" style="margin-top:0;">In MRPeasy: Procurement → Purchase orders → export the list (CSV). It has <strong>Paid</strong> / <strong>Unpaid</strong> and the
+        payment status of every PO. For each PO, AT-HUB records the difference between MRPeasy's Paid and what's already recorded here — uploading
+        again never double-counts. The export has no payment dates, so each payment is dated at the PO's invoice due date (never later than today).
+        The file is kept, so a fresh MRPeasy import brings these payments back automatically.</p>
+      <div class="row" style="align-items:center;">
+        <input type="file" id="payimp-file" accept=".csv" style="flex:1 1 280px;">
+        <button style="flex:0 0 auto;" onclick="payImport('preview')" data-icon="eye">Preview</button>
+      </div>
+      <div id="payimp-out"></div>
+    </div>
+  </main>
+  <script>
+    AuthGuard.requireRole("admin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("mrp-payments.html");
+    const fmtDate = d => d ? new Date(d).toLocaleDateString() : "";
+    // ---- payments from MRPeasy's PO export ----
+    async function payImport(step) {
+      const f = document.getElementById("payimp-file").files[0], out = document.getElementById("payimp-out");
+      if (!f) { out.innerHTML = `<div class="error">Choose the CSV first.</div>`; return; }
+      const fd = new FormData(); fd.append("file", f, f.name);
+      try {
+        if (step === "apply") {
+          const r = await apiUpload("/api/purchase-orders/payments-import/apply", fd);
+          out.innerHTML = `<div class="notice info"><strong>Recorded ${r.payments} payment${r.payments === 1 ? "" : "s"}, ${fmtMoney(r.amount)}.</strong> Payment tasks on the Tasks page close themselves.</div>`;
+          return;
+        }
+        const rows = await apiUpload("/api/purchase-orders/payments-import/preview", fd);
+        const by = k => rows.filter(r => r.action === k);
+        const add = by("add"), total = add.reduce((s, r) => s + r.add, 0);
+        const tag = { add: ["Will record", "shipped"], ok: ["Already right", "draft"], check: ["Check", "overdue"], skip: ["Not in AT-HUB", "cancelled"] };
+        out.innerHTML = `<div class="money-tiles" style="margin-top:10px;">
+            <div class="mtile t-paid"><span>To record</span><strong>${fmtMoney(total)}</strong><small>${add.length} POs</small></div>
+            <div class="mtile t-zero"><span>Already right</span><strong>${by("ok").length}</strong><small>POs</small></div>
+            <div class="mtile t-wait"><span>Check</span><strong>${by("check").length}</strong><small>more recorded here than MRPeasy</small></div>
+            <div class="mtile t-owed"><span>Not in AT-HUB</span><strong>${by("skip").length}</strong><small>skipped</small></div></div>
+          ${add.length ? `<button onclick="payImport('apply')" data-icon="check">Record ${add.length} Payment${add.length === 1 ? "" : "s"} (${fmtMoney(total)})</button>` : ""}
+          <table class="list-fit" style="margin-top:8px;"><thead><tr><th>PO</th><th>MRPeasy status</th><th class="num">MRPeasy paid</th><th class="num">Recorded here</th><th class="num">To record</th><th>Dated</th><th></th><th>Notes</th></tr></thead>
+          <tbody>${[...add, ...by("check"), ...by("skip"), ...by("ok")].map(r => `<tr>
+            <td>${r.po_id ? `<a class="link" href="purchase-orders.html?id=${r.po_id}" target="_blank">${escapeHtml(r.code)}</a>` : escapeHtml(r.code)}</td>
+            <td>${escapeHtml(r.payment_status || "")}</td><td class="num">${fmtMoney(r.paid)}</td><td class="num">${r.recorded != null ? fmtMoney(r.recorded) : ""}</td>
+            <td class="num">${r.action === "add" ? `<strong>${fmtMoney(r.add)}</strong>` : ""}</td><td>${r.action === "add" ? fmtDate(r.date + "T00:00") : ""}</td>
+            <td><span class="tag ${tag[r.action][1]}">${tag[r.action][0]}</span></td><td class="small muted">${escapeHtml(r.why)}</td></tr>`).join("")}</tbody></table>`;
+      } catch (e) { out.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+    }
+
+  </script>
+</body>
+</html>
