@@ -17,6 +17,41 @@ from app.models import User
 router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
 
 
+# ---- PO payments from MRPeasy's Purchase Orders export (CSV) ----
+from fastapi import File, HTTPException, UploadFile  # noqa: E402
+
+
+async def _payments_csv(file: UploadFile):
+    from app.services import po_payments_csv
+    try:
+        return po_payments_csv.parse(await file.read())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments-import/preview", dependencies=[Depends(require_role("admin"))])
+async def payments_import_preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """What uploading this export would record -- nothing is saved."""
+    from app.services import po_payments_csv
+    return po_payments_csv.plan(db, await _payments_csv(file))
+
+
+@router.post("/payments-import/apply", dependencies=[Depends(require_role("admin"))])
+async def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    from app.services import po_payments_csv
+    await file.seek(0)
+    data = await file.read()
+    try:
+        rows = po_payments_csv.parse(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    result = po_payments_csv.apply(db, rows, current_user.username)
+    db.commit()
+    po_payments_csv.SAVED.parent.mkdir(parents=True, exist_ok=True)
+    po_payments_csv.SAVED.write_bytes(data)  # re-applied by every fresh MRPeasy import
+    return result
+
+
 @router.get("/", response_model=list[PurchaseOrderResponse])
 def list_orders(status: str | None = Query(None), db: Session = Depends(get_db)):
     return PurchaseOrderService.list(db, status=status)

@@ -13,7 +13,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 from app.models import (Attachment, Customer, CustomerOrder, CustomerOrderLine, Invoice, InvoiceLine, ItemAlias, MtrLink,
-                        PurchaseOrder, PurchaseOrderLine, Quote, QuoteLine, Shipment, StockItem, Task, Vendor, VendorItem)
+                        PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, Quote, QuoteLine, Shipment, StockItem, Task, Vendor,
+                        VendorBill, VendorItem)
 
 ENTITY_MODELS = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
 
@@ -155,6 +156,23 @@ def carry_over(db, live_path, rep) -> None:
             cands[0].notes, cands[0].print_notes, n = r["notes"], r["print_notes"] != 0, n + 1
     if n:
         rep.add("carry-over", f"line notes: {n} {S}")
+
+    # ---- 5b. PO payments typed into AT-HUB (the export's own are re-applied by the import) ----
+    n = 0
+    po_by_code = {p.code: p for p in db.query(PurchaseOrder).all()}
+    for r in _rows(live, "select p.code, b.bill_number, x.* from purchase_order_payments x join purchase_orders p on p.id=x.po_id "
+                         "left join vendor_bills b on b.id=x.vendor_bill_id where coalesce(x.reference,'') != 'mrpeasy-po-export' "
+                         "and coalesce(x.created_by,'') != 'mrpeasy-import'"):
+        po = po_by_code.get(r["code"])
+        if not po:
+            continue
+        bill = db.query(VendorBill).filter(VendorBill.po_id == po.id, VendorBill.bill_number == r["bill_number"]).first() if r["bill_number"] else None
+        db.add(PurchaseOrderPayment(po_id=po.id, amount=r["amount"], currency=r["currency"], paid_date=_dt(r["paid_date"]), method=r["method"],
+                                    reference=r["reference"], note=r["note"], vendor_bill_id=bill.id if bill else None,
+                                    created_by=r["created_by"], created_at=_dt(r["created_at"])))
+        n += 1
+    if n:
+        rep.add("carry-over", f"PO payments entered in AT-HUB: {n} {S}")
 
     # ---- 6. quotes (AT-HUB only; a quote converted to an order that no longer exists loses that link) ----
     n = 0

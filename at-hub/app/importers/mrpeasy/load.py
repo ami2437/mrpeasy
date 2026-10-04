@@ -448,6 +448,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     _packing_from_old_backend(db, shipments, items, rep)
     _stock_ledger(db, items, lots, inventory, rep)
     _number_series(db, rep)
+    _po_payments_from_export(db, rep)
     if LIVE_DB.exists():  # files, learned matches, notes... made in AT-HUB since the last import
         from .carry_over import carry_over
         carry_over(db, LIVE_DB, rep)
@@ -601,6 +602,18 @@ def _number_series(db, rep):
             codes += [c for (c,) in db.query(PurchaseOrderLine.planned_lot_code).filter(PurchaseOrderLine.planned_lot_code.isnot(None)).all()]
         nums = [int(c[len(prefix):]) for c in codes if c and c.startswith(prefix) and c[len(prefix):].isdigit() and len(c) - len(prefix) == width]
         rep.add("numbering", f"{key}: next is {prefix}{(max(nums, default=0) + 1):0{width}d}")
+
+
+def _po_payments_from_export(db, rep):
+    """MRPeasy's API has no purchase payments; its PO list export (uploaded once on the Purchase Orders
+    page and kept in import-data) has what was paid per PO."""
+    from app.services import po_payments_csv
+    if not po_payments_csv.SAVED.exists():
+        rep.add("po payments", "No PO export uploaded yet -- PO payments not loaded")
+        return
+    db.flush()
+    r = po_payments_csv.apply(db, po_payments_csv.parse(po_payments_csv.SAVED.read_bytes()), BY)
+    rep.add("po payments", f"{r['payments']} payments, ${r['amount']:,.2f}, from {po_payments_csv.SAVED.name}")
 
 
 def _copy_users_and_company(db, rep):
