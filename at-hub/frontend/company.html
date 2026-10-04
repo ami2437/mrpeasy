@@ -39,6 +39,14 @@
     </div>
 
     <div class="card" style="max-width:720px;">
+      <h3 style="margin-top:0;">Generic stock</h3>
+      <label class="inline-check" style="margin:0;"><input type="checkbox" id="c-generic" onchange="saveGeneric(this.checked)">
+        Specific nuts (15420-NUT) can draw from bulk generic nuts (58-NUT) when booking</label>
+      <p class="muted small">Off: no offers in the Book column and no transfers. Stock already transferred stays as ordinary lots on the specific items.</p>
+      <span id="generic-saved" class="muted small"></span>
+    </div>
+
+    <div class="card" style="max-width:720px;">
       <h3 style="margin-top:0;">Invoice email</h3>
       <div id="email-status" class="muted">Checking…</div>
     </div>
@@ -49,6 +57,7 @@
         and one untouched test order ready to book, ship, invoice and profit-check. Once you use the test order, this makes a fresh one
         and tops stock back up. With <code>TEST_DATA_ENABLED=true</code> in <code>.env</code> it also runs at every server start.</p>
       <button onclick="prepareTestData()" id="test-btn">Prepare Test Order</button>
+      <button class="secondary" onclick="prepareGenericTest()" id="test-gen-btn" title="TEST-GEN-916-NUT received on a PO, two 9/16 nuts that draw from it, and a draft order whose nut lines are short">Prepare Generic Nut Test</button>
       <div id="test-result" style="margin-top:10px;"></div>
     </div>
   </main>
@@ -63,10 +72,19 @@
       const company = await apiFetch("/api/company/");
       Object.entries(FIELDS).forEach(([key, id]) => { document.getElementById(id).value = company[key] || ""; });
       showLogo(company.has_logo);
+      document.getElementById("c-generic").checked = company.generic_stock_enabled !== false;
       if (!AuthGuard.hasRole("admin")) {
         document.querySelectorAll("main input, main textarea, main button").forEach(el => { el.disabled = true; });
         document.getElementById("saved").textContent = "Only admins can change company settings.";
       }
+    }
+
+    async function saveGeneric(on) {
+      const msg = document.getElementById("generic-saved");
+      try {
+        await apiFetch("/api/company/", { method: "PUT", body: JSON.stringify({ generic_stock_enabled: on }) });
+        msg.textContent = on ? "Generic stock is on." : "Generic stock is off.";
+      } catch (err) { msg.textContent = err.message; document.getElementById("c-generic").checked = !on; }
     }
 
     function showLogo(hasLogo) {
@@ -134,6 +152,19 @@ SMTP_PASSWORD=your-app-password
 SMTP_FROM=billing@yourdomain.com
 SMTP_SECURITY=starttls</pre>
            <div style="margin-top:6px;">For Gmail / Google Workspace, create an App Password (Google Account → Security → App passwords) and use it as SMTP_PASSWORD.</div>`;
+    }
+
+    async function prepareGenericTest() {
+      const btn = document.getElementById("test-gen-btn"), out = document.getElementById("test-result");
+      btn.disabled = true;
+      out.innerHTML = `<span class="muted">Working…</span>`;
+      try {
+        const r = await apiFetch("/api/test-data/generic-nuts", { method: "POST" });
+        out.innerHTML = `<div class="notice info">${r.order_created ? "Created generic nut test order" : "Generic nut test order ready:"}
+          <a class="link" href="customer-orders.html?id=${r.order_id}">${escapeHtml(r.order_code)}</a>${r.po_code ? ` · generic nuts received on ${escapeHtml(r.po_code)}` : ""}
+          <div class="muted small" style="margin-top:4px;">Products: ${r.items.map(escapeHtml).join(", ")}</div></div>`;
+      } catch (err) { out.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
+      finally { btn.disabled = false; }
     }
 
     async function prepareTestData() {

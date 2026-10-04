@@ -154,12 +154,17 @@ def movements(item_id: int, limit: int = Query(500, ge=1, le=5000), db: Session 
     item = StockItemService.get(db, item_id)
     txs = (db.query(InventoryTransaction).filter(InventoryTransaction.item_id == item_id)
            .order_by(InventoryTransaction.created_at.desc(), InventoryTransaction.id.desc()).limit(limit).all())
-    lots = {l.id: l.lot_code for l in db.query(Lot).filter(Lot.id.in_({t.lot_id for t in txs if t.lot_id}))} if txs else {}
+    lots = {l.id: l for l in db.query(Lot).filter(Lot.id.in_({t.lot_id for t in txs if t.lot_id}))} if txs else {}
     balance = item.on_hand or 0
     out = []
     for t in txs:
+        lot = lots.get(t.lot_id)
+        src = lot.parent_lot if lot is not None and lot.parent_lot_id else None  # drawn from generic stock
         out.append({"id": t.id, "date": t.created_at.isoformat() if t.created_at else None, "type": t.type,
-                    "quantity": t.quantity_delta, "balance": round(balance, 4), "lot": lots.get(t.lot_id),
+                    "quantity": t.quantity_delta, "balance": round(balance, 4), "lot": lot.lot_code if lot else None,
+                    "unit_cost": lot.unit_cost if lot else None,
+                    "from_item_id": src.item_id if src else None, "from_item_code": src.item.code if src and src.item else None,
+                    "from_lot": src.lot_code if src else None,
                     "reference": t.reference, "note": t.note, "by": t.created_by})
         balance -= t.quantity_delta
     total_in = sum(t.quantity_delta for t in txs if t.quantity_delta > 0)
@@ -175,6 +180,22 @@ from pydantic import BaseModel as _BM  # noqa: E402
 class _Qty(_BM):
     quantity: float
     reference: Optional[str] = None
+    source_id: Optional[int] = None  # generic item to draw from (default: the linked one)
+
+
+class _Ids(_BM):
+    item_ids: list[int]
+
+
+@router.post("/generic-sources")
+def generic_sources(data: _Ids, db: Session = Depends(get_db)):
+    """For the order screen's Book column: {item_id: [generic items it can draw from, best first]} (empty when switched off)."""
+    from app.models import StockItem
+    from app.services import stock_transfer
+    if not stock_transfer.enabled(db):
+        return {}
+    items = db.query(StockItem).filter(StockItem.id.in_(set(data.item_ids))).all()
+    return {i.id: s for i in items if (s := stock_transfer.sources(db, i))}
 
 
 @router.get("/{item_id}/family")
@@ -186,7 +207,7 @@ def item_family(item_id: int, db: Session = Depends(get_db)):
 @router.post("/{item_id}/transfer-from-parent", dependencies=[Depends(require_role("manager"))])
 def transfer_from_parent(item_id: int, data: _Qty, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from app.services import stock_transfer
-    lots = stock_transfer.from_parent(db, item_id, data.quantity, current_user.username, data.reference)
+    lots = stock_transfer.from_parent(db, item_id, data.quantity, current_user.username, data.reference, data.source_id)
     return {"lots": [{"id": l.id, "lot_code": l.lot_code, "quantity": l.quantity} for l in lots]}
 
 

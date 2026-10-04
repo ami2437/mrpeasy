@@ -121,6 +121,7 @@ class StockItemCreate(InputModel):
     reorder_point: Optional[float] = 0
     default_pack_size: Optional[int] = None
     created_via: Optional[str] = None  # "ai-scan" when made from a scanned PO
+    is_generic: bool = False  # bulk stock other items draw from (e.g. 5/8-11 2H nuts bought by the 100,000)
 
 
 class StockItemUpdate(InputModel):
@@ -138,6 +139,7 @@ class StockItemUpdate(InputModel):
     adjustment_lot_code: Optional[str] = None  # optional; a LOT-##### number is generated otherwise
     adjustment_note: Optional[str] = None
     parent_item_id: Optional[int] = None  # generic item to draw stock from; 0 clears it
+    is_generic: Optional[bool] = None
 
 
 class StockItemResponse(BaseModel):
@@ -161,6 +163,8 @@ class StockItemResponse(BaseModel):
     updated_at: datetime
 
     parent_item_id: Optional[int] = None
+    is_generic: bool = False
+
     class Config:
         from_attributes = True
 
@@ -305,6 +309,9 @@ class LineBookingSource(BaseModel):
     lot_code: Optional[str] = None
     source: str
     reference: Optional[str] = None
+    from_item_id: Optional[int] = None
+    from_item_code: Optional[str] = None
+    from_lot_code: Optional[str] = None
     quantity: float
 
 
@@ -384,6 +391,7 @@ class LineOrderRequest(BaseModel):
 class BookLineRequest(BaseModel):
     line_id: int
     quantity: float
+    draw_from_item_id: Optional[int] = None  # generic item to transfer any shortfall from, in the same step
 
     @field_validator("quantity")
     @classmethod
@@ -1093,6 +1101,7 @@ class CompanyProfileUpdate(BaseModel):
     website: Optional[str] = None
     tax_id: Optional[str] = None
     invoice_notes: Optional[str] = None
+    generic_stock_enabled: Optional[bool] = None
 
 
 class CompanyProfileResponse(CompanyProfileUpdate):

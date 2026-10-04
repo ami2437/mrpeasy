@@ -41,6 +41,7 @@ class StockItem(Base):
     unit = Column(String, nullable=True)
     category = Column(String, nullable=True, index=True)  # product group name (see ProductGroup)
     parent_item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True, index=True)  # generic item it draws stock from (15420-NUT <- bulk 5/8 2H nut)
+    is_generic = Column(Boolean, nullable=False, default=False)  # bulk stock (58-NUT) that specific items of the same size/spec draw from
     created_via = Column(String, nullable=True)  # "ai-scan": made from a scanned customer PO -- worth a second look
     verified_by = Column(String, nullable=True)  # "who, when" a person checked an ai-scan item; until then it can't be picked
     barcode = Column(String, nullable=True, index=True)
@@ -94,6 +95,8 @@ class Lot(Base):
     source_reference = Column(String, nullable=True)  # e.g. PO code
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     parent_lot_id = Column(Integer, ForeignKey("lots.id"), nullable=True, index=True)  # transferred from this generic item's lot
+    parent_lot = relationship("Lot", remote_side="Lot.id", foreign_keys=[parent_lot_id])
+    item = relationship("StockItem", foreign_keys=[item_id], viewonly=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     @property
@@ -311,11 +314,16 @@ class CustomerOrderLine(Base):
         for sl in self._active_shipment_lines():
             lot = sl.lot
             key = lot.id if lot else None
+            parent = lot.parent_lot if lot is not None and lot.parent_lot_id else None
             entry = by_lot.setdefault(key, {
                 "lot_id": key,
                 "lot_code": lot.lot_code if lot else None,
                 "source": (lot.source if lot else None) or "manual",
                 "reference": lot.source_reference if lot else None,
+                # drawn from generic stock: the generic item + lot it came from (acts like the supplier)
+                "from_item_id": parent.item_id if parent else None,
+                "from_item_code": parent.item.code if parent and parent.item else None,
+                "from_lot_code": parent.lot_code if parent else None,
                 "quantity": 0,
             })
             entry["quantity"] += sl.quantity
@@ -780,6 +788,7 @@ class CompanyProfile(Base):
     tax_id = Column(String, nullable=True)
     invoice_notes = Column(Text, nullable=True)  # payment instructions / terms printed at the bottom of every invoice
     logo_data = Column(Text, nullable=True)  # data: URL (base64 PNG/JPEG) -- printed on invoices, packing lists, labels
+    generic_stock_enabled = Column(Boolean, nullable=False, default=True)  # off = no generic-stock offers or draws (quick rollback)
 
     @property
     def has_logo(self) -> bool:

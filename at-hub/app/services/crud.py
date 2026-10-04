@@ -384,6 +384,10 @@ class StockItemService:
         if "parent_item_id" in updates:
             from app.services.stock_transfer import check_parent
             updates["parent_item_id"] = check_parent(db, item, updates["parent_item_id"])
+        if updates.get("is_generic") is False and db.query(StockItem).filter(StockItem.parent_item_id == item.id).first():
+            raise HTTPException(status_code=400, detail=f"Items draw stock from {item.code} -- unlink them first (their item pages)")
+        if updates.get("is_generic") and (updates.get("parent_item_id") or (item.parent_item_id and "parent_item_id" not in updates)):
+            raise HTTPException(status_code=400, detail="A generic item can't itself draw from another item")
 
         for key, value in updates.items():
             setattr(item, key, value)
@@ -978,6 +982,15 @@ class CustomerOrderService:
 
             lots_with_free = ShipmentService.free_lot_quantities(db, item.id)
             total_free = sum(free for _, free in lots_with_free)
+            draw_from = getattr(req, "draw_from_item_id", None)
+            if total_free + 1e-9 < req.quantity and draw_from:
+                # Short, and the user chose a generic item to cover it: transfer exactly the shortfall
+                # (new -T lots, cost carried), then book as usual. Rolls back with the shipment on any error.
+                from app.services import stock_transfer
+                stock_transfer.draw(db, item, draw_from, round(req.quantity - total_free), created_by,
+                                    reference=f"{shipment.code} for {order.code}", commit=False)
+                lots_with_free = ShipmentService.free_lot_quantities(db, item.id)
+                total_free = sum(free for _, free in lots_with_free)
             if total_free + 1e-9 < req.quantity:
                 raise HTTPException(
                     status_code=400,

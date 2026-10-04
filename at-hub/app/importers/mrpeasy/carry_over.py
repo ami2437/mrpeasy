@@ -5,7 +5,7 @@ stays the same across imports -- order / PO / shipment / invoice codes, item cod
 names, an order line's line #, a PO line's position among lines of the same item -- never by database id.
 
 Carried: attached files (+ which PO lines an MTR covers), learned item matches, line notes (+ "print"),
-vendor part # links made in AT-HUB, File Matcher / scan picks. Files themselves stay in uploads/ untouched;
+vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links. Files themselves stay in uploads/ untouched;
 only their database rows move. Anything whose record no longer exists is reported, not guessed.
 """
 import sqlite3
@@ -135,6 +135,22 @@ def carry_over(db, live_path, rep) -> None:
             n += 1
     if n:
         rep.add("carry-over", f"vendor part # links made in AT-HUB: {n} {S}")
+
+    # ---- 4b. generic stock: which items are bulk generic stock, and which specific items draw from which ----
+    # (transferred lots themselves don't carry: the import rebuilds stock from MRPeasy)
+    new_items = {i.code: i for i in db.query(StockItem).all()}
+    flags = links = 0
+    for r in _rows(live, "select code, is_generic, parent_item_id from stock_items where is_generic = 1 or parent_item_id is not null"):
+        it = new_items.get(r["code"])
+        if not it:
+            continue
+        if r["is_generic"] and not it.is_generic:
+            it.is_generic, flags = True, flags + 1
+        parent = new_items.get(live_item.get(r["parent_item_id"]))
+        if parent and not it.parent_item_id and parent.id != it.id:
+            it.parent_item_id, parent.is_generic, links = parent.id, True, links + 1
+    if flags or links:
+        rep.add("carry-over", f"generic stock: {flags} generic item(s), {links} draw link(s) {S}")
 
     # ---- 5. line notes ----
     n = 0

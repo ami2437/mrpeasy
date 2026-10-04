@@ -216,7 +216,12 @@
       const el = document.getElementById("movements");
       try {
         const m = await apiFetch(`/api/stock-items/${itemId}/movements`);
-        const typeTag = t => `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : "draft"}">${escapeHtml(t)}</span>`;
+        const typeTag = t => `<span class="tag ${t === "receipt" ? "shipped" : t === "shipment" ? "confirmed" : t === "transfer" ? "transfer" : "draft"}">${escapeHtml(t)}</span>`;
+        // a draw from generic stock: the generic item and its lot act like the supplier
+        const refCell = t => t.from_item_code && t.quantity > 0
+          ? `From <a class="link" href="item.html?id=${t.from_item_id}">${escapeHtml(t.from_item_code)}</a> <span class="muted">lot ${escapeHtml(t.from_lot || "")}</span>`
+          : t.type === "transfer" && t.quantity < 0 && t.reference ? `To <a class="link" onclick="openItemByCode('${escapeHtml(t.reference)}')">${escapeHtml(t.reference)}</a>`
+          : escapeHtml(t.reference || "");
         el.className = "";
         el.innerHTML = `<div class="stat-row">
             <div class="stat"><div class="stat-label">Total in</div><div class="stat-value pos">+${fmtQty(m.total_in)}</div></div>
@@ -224,48 +229,75 @@
             <div class="stat"><div class="stat-label">Movements</div><div class="stat-value">${m.movements.length}</div></div>
           </div>
           <div class="table-scroll" style="max-height:60vh;"><table class="compact-table">
-            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th class="num">Unit cost</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
             <tbody>${m.movements.map(t => `<tr>
               <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${typeTag(t.type)}</td>
               <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
-              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td>${escapeHtml(t.reference || "")}</td>
+              <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td class="num">${t.unit_cost != null && !hidesMoney() ? fmtPrice(t.unit_cost) : ""}</td><td>${refCell(t)}</td>
               <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")
-              || `<tr><td colspan="8" class="muted">No movements yet.</td></tr>`}</tbody>
+              || `<tr><td colspan="9" class="muted">No movements yet.</td></tr>`}</tbody>
           </table></div>`;
       } catch (err) { el.innerHTML = `<span class="error">${escapeHtml(err.message)}</span>`; }
     }
 
-    // ---- generic stock: this item draws from a bulk generic item, or is one ----
+    // ---- generic stock: this item is bulk generic stock (58-NUT), or a specific item that draws from one ----
     let allItems = null;
+    async function openItemByCode(code) {
+      allItems = allItems || await apiFetch("/api/stock-items/");
+      const it = allItems.find(i => i.code === code);
+      if (it) location.href = `item.html?id=${it.id}`;
+    }
     async function loadFamily() {
       const card = document.getElementById("family-card"), el = document.getElementById("family");
       if (!isManager) return;
       card.style.display = "";
       const fam = await apiFetch(`/api/stock-items/${itemId}/family`);
-      if (fam.children.length) {
-        el.innerHTML = `<p class="muted small" style="margin-top:0;">This is a <strong>generic item</strong>: these items draw stock from it by transfer.</p>
-          <table class="compact-table"><thead><tr><th>Item</th><th>Title</th><th class="num">On hand</th><th class="num">Booked</th></tr></thead><tbody>
-          ${fam.children.map(k => `<tr><td><a class="link" href="item.html?id=${k.id}">${escapeHtml(k.code)}</a></td><td class="small">${escapeHtml(k.title)}</td>
-            <td class="num">${fmtQty(k.on_hand)}</td><td class="num">${fmtQty(k.booked)}</td></tr>`).join("")}</tbody></table>`;
+      if (!fam.enabled) {
+        el.innerHTML = `<p class="muted" style="margin:0;">Generic stock is switched off in <a class="link" href="company.html">Company Settings</a>.</p>`;
+        return;
+      }
+      const genericBox = `<label class="inline-check" style="margin:0 0 10px;"><input type="checkbox" id="fam-generic" ${fam.is_generic ? "checked" : ""} onchange="setGeneric(this.checked)">
+        This is <strong>generic bulk stock</strong> — specific items of the same size and spec draw from it</label>`;
+      const kidRows = list => list.map(k => `<tr><td><a class="link" href="item.html?id=${k.id}">${escapeHtml(k.code)}</a></td><td class="small">${escapeHtml(k.title)}</td>
+          <td class="num">${fmtQty(k.on_hand)}</td><td class="num">${fmtQty(k.booked)}</td></tr>`).join("");
+      if (fam.is_generic) {
+        el.innerHTML = genericBox + `<p class="muted small" style="margin-top:0;"><strong>${fmtQty(fam.free)}</strong> free. When an order line for a matching item is short,
+            its Book column offers to draw the shortfall from here; the transfer makes lots named after this item's lots (<code>L00512-T1</code>) with the same cost, PO and MTR.</p>
+          <h4 style="margin:8px 0 4px;">Drawing from it (${fam.children.length})</h4>
+          ${fam.children.length ? `<table class="compact-table"><thead><tr><th>Item</th><th>Title</th><th class="num">On hand</th><th class="num">Booked</th></tr></thead><tbody>${kidRows(fam.children)}</tbody></table>`
+            : `<p class="muted small">None yet — the first draw links the item here.</p>`}
+          ${fam.matching.length ? `<details style="margin-top:8px;"><summary class="small">Same size and spec, not linked yet (${fam.matching.length})</summary>
+            <table class="compact-table"><thead><tr><th>Item</th><th>Title</th><th class="num">On hand</th><th class="num">Booked</th></tr></thead><tbody>${kidRows(fam.matching)}</tbody></table></details>` : ""}
+          <div id="fam-error" class="error"></div>`;
         return;
       }
       allItems = allItems || await apiFetch("/api/stock-items/");
-      const opts = allItems.filter(i => i.id !== itemId && !i.parent_item_id).map(i => `<option value="${i.id}" ${fam.parent && fam.parent.id === i.id ? "selected" : ""}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
-      el.innerHTML = `<p class="muted small" style="margin-top:0;">For items like <strong>15420-NUT</strong> that use generic stock bought in bulk (e.g. 5/8" 2H nuts):
-          pick the generic item, then <strong>transfer</strong> what's needed. Transferred stock gets lots named after the generic lot (<code>L00512-T1</code>),
-          keeps its cost and traces to the same PO and MTR.</p>
-        <div class="row" style="max-width:760px;">
-          <div style="flex:3;"><label>Draws stock from</label><select id="fam-parent" data-searchable><option value="">— none —</option>${opts}</select></div>
-          <div style="flex:0 0 auto;"><button class="secondary" onclick="saveParent()">Save</button></div>
-        </div>
-        ${fam.parent ? `<div class="panel" style="margin-top:10px;">
-          <strong><a class="link" href="item.html?id=${fam.parent.id}">${escapeHtml(fam.parent.code)}</a></strong> has <strong>${fmtQty(fam.parent.free)}</strong> free.
-          <div class="row" style="margin-top:6px; max-width:620px;">
-            <div style="flex:0 0 140px;"><label>Quantity</label><input type="number" step="1" min="1" id="fam-qty"></div>
-            <div style="flex:0 0 auto;"><button onclick="famMove('transfer-from-parent')">Transfer From ${escapeHtml(fam.parent.code)}</button></div>
-            ${fam.transferred_free > 0 ? `<div style="flex:0 0 auto;"><button class="secondary" onclick="famMove('return-to-parent')" title="Up to ${fmtQty(fam.transferred_free)} transferred and not booked">Return To Generic</button></div>` : ""}
-          </div></div>` : ""}
+      const opts = allItems.filter(i => i.id !== itemId && !i.parent_item_id).map(i => `<option value="${i.id}" ${fam.parent_item_id === i.id ? "selected" : ""}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("");
+      el.innerHTML = genericBox + `
+        <p class="muted small" style="margin-top:0;">Generic items this one can draw from — the linked one first, then any marked generic with the same size, thread and grade.
+          Order lines short on stock offer this in the Book column; you can also transfer here.</p>
+        ${fam.sources.length ? `<table class="compact-table" style="max-width:900px;"><thead><tr><th>Generic item</th><th>Match</th><th class="num">Free</th><th class="num">Cost</th><th>Transfer</th></tr></thead><tbody>
+          ${fam.sources.map(g => `<tr><td><a class="link" href="item.html?id=${g.id}">${escapeHtml(g.code)}</a><div class="muted small">${escapeHtml(g.title)}</div></td>
+            <td class="small"><span class="tag ${g.match === "check" ? "draft" : "shipped"}">${g.match}</span><div class="muted">${escapeHtml(g.why)}</div></td>
+            <td class="num">${fmtQty(g.free)}</td><td class="num">${g.cost != null ? fmtPrice(g.cost) : ""}</td>
+            <td class="nowrap"><input type="number" step="1" min="1" class="qty-input fam-qty" data-src="${g.id}" style="width:90px;">
+              <button class="secondary small-btn" onclick="famTransfer(${g.id}, '${escapeHtml(g.code)}')">Transfer</button></td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted small">No generic item matches. Mark the bulk item as generic stock (its page), or link one below.</p>`}
+        ${fam.transferred_free > 0 ? `<p class="small" style="margin:8px 0 0;">${fmtQty(fam.transferred_free)} transferred and not booked ·
+          <input type="number" step="1" min="1" max="${fam.transferred_free}" id="fam-return" class="qty-input" style="width:90px;" value="${fam.transferred_free}">
+          <button class="secondary small-btn" onclick="famReturn()">Return To Generic</button></p>` : ""}
+        <details style="margin-top:10px;"><summary class="small">Link to a generic item by hand</summary>
+          <div class="row" style="max-width:760px;">
+            <div style="flex:3;"><label>Draws stock from</label><select id="fam-parent" data-searchable><option value="">— none —</option>${opts}</select></div>
+            <div style="flex:0 0 auto;"><button class="secondary" onclick="saveParent()">Save</button></div>
+          </div></details>
         <div id="fam-error" class="error"></div>`;
+    }
+    async function setGeneric(on) {
+      try {
+        await apiFetch(`/api/stock-items/${itemId}`, { method: "PUT", body: JSON.stringify({ is_generic: on }) });
+        toast(on ? "Marked as generic stock" : "No longer generic stock"); allItems = null; loadFamily();
+      } catch (e) { document.getElementById("fam-error").textContent = e.message; document.getElementById("fam-generic").checked = !on; }
     }
     async function saveParent() {
       try {
@@ -273,11 +305,19 @@
         toast("Saved"); allItems = null; loadFamily();
       } catch (e) { document.getElementById("fam-error").textContent = e.message; }
     }
-    async function famMove(kind) {
-      const q = parseFloat(document.getElementById("fam-qty").value);
+    async function famTransfer(srcId, code) {
+      const q = parseFloat(document.querySelector(`.fam-qty[data-src="${srcId}"]`).value);
       try {
-        await apiFetch(`/api/stock-items/${itemId}/${kind}`, { method: "POST", body: JSON.stringify({ quantity: q }) });
-        toast(kind === "transfer-from-parent" ? `Transferred ${fmtQty(q)}` : `Returned ${fmtQty(q)}`);
+        await apiFetch(`/api/stock-items/${itemId}/transfer-from-parent`, { method: "POST", body: JSON.stringify({ quantity: q, source_id: srcId }) });
+        toast(`Transferred ${fmtQty(q)} from ${code}`);
+        await load();
+      } catch (e) { document.getElementById("fam-error").textContent = e.message; }
+    }
+    async function famReturn() {
+      const q = parseFloat(document.getElementById("fam-return").value);
+      try {
+        await apiFetch(`/api/stock-items/${itemId}/return-to-parent`, { method: "POST", body: JSON.stringify({ quantity: q }) });
+        toast(`Returned ${fmtQty(q)}`);
         await load();
       } catch (e) { document.getElementById("fam-error").textContent = e.message; }
     }
