@@ -25,6 +25,9 @@
       <div class="stage-hint muted small" id="stage-hint"></div>
       <div class="filters">
         <input type="text" id="search" placeholder="Search shipment, order, customer, PO or item #...">
+        <label id="period-wrap" class="check-label" style="display:none;">Shipped within
+          <select id="period" onchange="renderAll()" style="width:auto;padding:5px 6px;font-size:13px;">
+            <option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">a year</option><option value="0">any time</option></select></label>
         <a class="link small" onclick="expandAll(true)">Expand all</a>
         <a class="link small" onclick="expandAll(false)">Collapse all</a>
         <span class="pack-tools">
@@ -190,10 +193,13 @@
       { key: "shipped", label: "Shipped", test: s => s.status === "shipped",
         hint: "On the truck. A driver's POD marks it delivered automatically; managers can <b>Mark Delivered</b> by hand.",
         empty: "Nothing out for delivery." },
-      { key: "delivered", label: "Delivered · to bill", test: s => s.status === "delivered",
+      { key: "delivered", label: "To bill", test: s => s.status === "delivered",
         hint: "Delivered and not invoiced yet. <b>Create Invoices</b> — shipments of the same order share one invoice.",
         empty: "Everything delivered has been invoiced." },
-      { key: "all", label: "Everything", test: s => true, hint: "Every shipment, invoiced ones included. Pick a stage to act on them.", empty: "No shipments yet." },
+      { key: "done", label: "Completed", test: s => s.status === "invoiced", history: true,
+        hint: "Shipped and invoiced — here to <b>reprint</b>: packing lists, labels and Send / Print. Shipments packed before AT-HUB get labels from today's pack sizes (nothing on them changes).",
+        empty: "Nothing completed in this period — widen <b>Shipped within</b> or search." },
+      { key: "all", label: "All", history: true, test: s => true, hint: "Every shipment, invoiced ones included. Pick a stage to act on them.", empty: "No shipments yet." },
     ];
     let stage = null;
     function stageOf(s) { return STAGES.find(st => st.key !== "all" && st.test(s)) || null; }
@@ -201,7 +207,10 @@
     function visibleShipments() {
       const q = document.getElementById("search").value.trim();
       const st = STAGES.find(x => x.key === stage);
-      return shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q));
+      const days = st.history ? parseInt(document.getElementById("period").value) : 0;
+      const since = days ? Date.now() - days * 864e5 : 0;
+      return shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q)
+        && (!since || q || !["invoiced", "delivered"].includes(s.status) || new Date(s.ship_date || s.created_at).getTime() >= since));
     }
     function drawStages() {
       const counts = Object.fromEntries(STAGES.map(st => [st.key, shipments.filter(s => inPlay(s) && st.test(s)).length]));
@@ -211,6 +220,7 @@
           ${escapeHtml(x.label)}${x.key !== "all" ? `<span class="stage-count ${counts[x.key] ? "" : "zero"}">${counts[x.key]}</span>` : ""}</button>`).join("");
       document.getElementById("stage-hint").innerHTML = st.hint;
       document.querySelectorAll(".pack-tools").forEach(el => { el.style.display = ["pick", "pack", "ship", "all"].includes(stage) ? "" : "none"; });
+      document.getElementById("period-wrap").style.display = st.history ? "" : "none";
       drawStageActions();
     }
     function setStage(key, keepSelection = false) {
@@ -237,6 +247,7 @@
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>`,
         delivered: (canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
           : `<span class="muted small">A manager creates the invoices.</span>`) + `<button class="secondary" onclick="openDocsDialog('shipments')">${icon("mail")} Send / Print</button>`,
+        done: `${print}`,
         all: `${print}`,
       }[stage];
       document.getElementById("stage-actions").innerHTML = html;
@@ -717,7 +728,15 @@
       if (!chosen.length) { showError("Tick at least one shipment to print labels."); return; }
       const fresh = await Promise.all(chosen.map(s => apiFetch(`/api/shipments/${s.id}`)));
       const unpacked = fresh.filter(s => !s.boxes.length);
-      if (unpacked.length) { showError(`Not packed yet, so no labels: ${unpacked.map(s => s.code).join(", ")}. Save their packing first.`); return; }
+      const open = unpacked.filter(s => ["new", "ready"].includes(s.status));
+      if (open.length) { showError(`Not packed yet, so no labels: ${open.map(s => s.code).join(", ")}. Accept their packing first.`); return; }
+      if (unpacked.length) {  // left before AT-HUB had their packing: labels from today's pack sizes, nothing saved
+        const { value } = await askDialog({ title: "Some shipments have no saved packing", tone: "warn",
+          body: `<p>${unpacked.map(s => `<strong>${escapeHtml(s.code)}</strong>`).join(", ")} shipped before AT-HUB recorded packing. Their labels will use <b>today's pack sizes</b> — the shipments themselves don't change.</p>`,
+          buttons: [{ label: "Print Labels", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value === "go") openPdf(`/api/bulk/documents.pdf?shipment_ids=${chosen.map(s => s.id).join(",")}&kinds=labels`);
+        return;
+      }
       const labels = fresh.flatMap(s => {
         const ord = order(s.order_id) || {};
         return s.boxes.map(b => ({

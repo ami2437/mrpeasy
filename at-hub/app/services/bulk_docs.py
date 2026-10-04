@@ -25,15 +25,20 @@ KINDS = {"packing_list": "Packing list", "labels": "Box labels", "invoice": "Inv
 
 # ---------- documents ----------
 def labels_pdf(db: Session, shipment: Shipment) -> Optional[bytes]:
-    """The shipment's box labels as a PDF: the customer's / default box-label template, else the classic one."""
+    """The shipment's box labels as a PDF: the customer's / default box-label template, else the classic one.
+    A shipment that left without saved packing (imported from MRPeasy) gets labels from today's pack sizes --
+    nothing is saved on it."""
     from app.services import template_engine, template_starters
     from app.services.doc_context import label_context
     from app.services.templates import default_for
-    if not shipment.boxes:
-        return None
+    boxes = list(shipment.boxes)
+    if not boxes:
+        if shipment.status in ShipmentService.OPEN_STATUSES:
+            return None  # still being packed: accept the packing first
+        boxes = ShipmentService.default_boxes(db, shipment)
     order = db.get(CustomerOrder, shipment.order_id)
     cust = db.get(Customer, order.customer_id) if order else None
-    boxes = sorted(shipment.boxes, key=lambda b: b.box_number or 0)
+    boxes = sorted(boxes, key=lambda b: (b.order_line_id or 0, b.box_number or 0)) if not shipment.boxes else sorted(boxes, key=lambda b: b.box_number or 0)
     labels = []
     for n, b in enumerate(boxes, 1):
         item = db.get(StockItem, b.item_id)
@@ -93,8 +98,11 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
         if "labels" in kinds:
             if sh.boxes:
                 g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf", "detail": f"{len(sh.boxes)} labels"})
+            elif sh.status in ShipmentService.OPEN_STATUSES:
+                g["warnings"].append(f"{sh.code} isn't packed yet -- no labels")
             else:
-                g["warnings"].append(f"{sh.code} isn't packed -- no labels")
+                g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf", "detail": "from current pack sizes"})
+                g["warnings"].append(f"{sh.code} has no saved packing -- its labels use today's pack sizes")
         if "invoice" in kinds:
             inv = _invoice_of(db, sh)
             if inv and inv.id not in [i["id"] for i in g["invoices"]]:

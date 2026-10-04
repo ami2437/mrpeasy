@@ -1563,3 +1563,7 @@ html[data-theme="dark"] .warn-text { color: #fbbf24; }
 .docs-warn { margin-top: 6px; color: #b45309; }
 html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 #inv-table tr.row-selected td { background: var(--accent-soft) !important; }
+.stage-tab { padding: 7px 10px; }
+.stage-tabs { gap: 2px; }
+#period-wrap { flex: 0 0 auto; white-space: nowrap; margin: 0; }
+#period-wrap select { width: auto !important; min-width: 0; display: inline-block; }
