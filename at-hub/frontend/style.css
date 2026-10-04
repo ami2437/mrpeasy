@@ -1575,3 +1575,19 @@ html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 .sort-filters { justify-content: flex-start; }
 .sort-filters > label, #period-wrap { flex: 0 0 auto !important; width: auto !important; }
 .sort-filters select, #period-wrap select { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; max-width: 220px; }
+
+/* Cancel / delete an order: the steps */
+.remove-panel { width: min(640px, 100%); }
+.ro-steps { list-style: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.ro-step { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 13.5px; }
+.ro-mark { flex: none; width: 22px; height: 22px; border-radius: 999px; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--surface-3); color: var(--text-2); }
+.ro-text { flex: 1; }
+.ro-state { flex: none; font-size: 12px; color: var(--muted); }
+.ro-state .ico { width: 16px; height: 16px; margin: 0 !important; color: #15803d; }
+.ro-step.blocked { border-color: #fcd34d; background: color-mix(in srgb, #f59e0b 8%, var(--surface)); }
+.ro-step.blocked .ro-mark { background: #f59e0b; color: #fff; }
+.ro-step.done { border-color: #86efac; } .ro-step.done .ro-mark { background: #16a34a; color: #fff; }
+.ro-step.failed { border-color: #fca5a5; } .ro-step.failed .ro-mark { background: #dc2626; color: #fff; }
+.ro-step.skipped { opacity: .55; }
+.ro-opt { display: inline-flex; margin: 0 0 0 8px; text-transform: none; font-size: 12.5px; }

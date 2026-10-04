@@ -632,7 +632,7 @@
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
           <td colspan="2"></td>
-          <td>${AuthGuard.can("orders.edit") ? `<a class="link neg" onclick="deleteOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
+          <td>${AuthGuard.can("orders.edit") ? `<a class="link neg" onclick="openRemoveOrder(${o.id})">Delete</a>` : ""}</td></tr>`).join("");
         return;
       }
       // In-progress orders first (newest first); finished ones fold away below unless expanded or searched for.
@@ -982,8 +982,7 @@
         <div class="btn-row">
           ${order.status !== "cancelled" && isManager ? `<button onclick="showProfit(${order.id})">Calculate Profit</button>` : ""}
           ${isManager ? `<button class="secondary" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}
-          ${canCancel ? `<button class="danger" onclick="cancelOrder(${order.id})">Cancel Order</button>` : ""}
-          ${order.status === "cancelled" && isManager ? `<button class="danger" onclick="deleteOrder(${order.id})">Delete Order</button>` : ""}
+          ${isManager ? `<button class="danger" onclick="openRemoveOrder(${order.id})" title="Steps it through: void and delete its invoices, undo and delete its shipments, cancel, delete">${order.status === "cancelled" ? "Delete Order…" : "Cancel / Delete Order…"}</button>` : ""}
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
@@ -1246,6 +1245,95 @@
         showDetail(orderId);
       } catch (err) {
         errorEl.textContent = err.message;
+      }
+    }
+
+    // ---- Cancel / Delete: the steps in the way, done in order (like undoing a shipment) ----
+    let removePlan = null;
+    async function openRemoveOrder(orderId) {
+      try { removePlan = await apiFetch(`/api/customer-orders/${orderId}/removal-plan`); } catch (e) { alert(e.message); return; }
+      const p = removePlan, cancelled = p.status === "cancelled";
+      const steps = [];
+      p.invoices.forEach(i => {
+        if (i.blocked) steps.push({ kind: "blocked", text: `<b>${escapeHtml(i.code)}</b> — ${escapeHtml(i.blocked)}`, link: `invoices.html?id=${i.id}` });
+        else if (i.steps.length) steps.push({ kind: "invoice", id: i.id, ops: i.steps, text: `<b>${escapeHtml(i.code)}</b> (${escapeHtml(i.status)}${i.sent && i.status !== "void" ? ", sent" : ""}, ${fmtMoney(i.total)}) — ${i.steps.includes("void") ? "void it, then delete it" : "delete it"}` });
+      });
+      p.shipments.filter(s => s.steps.length).forEach(s => steps.push({ kind: "shipment", id: s.id, ops: s.steps,
+        text: `<b>${escapeHtml(s.code)}</b> (${escapeHtml(s.status)}) — ${s.steps.includes("unship") ? "undo the ship (stock comes back), then delete it" : "delete it (its booked stock is released)"}` }));
+      if (!cancelled) steps.push({ kind: "cancel", text: `Cancel <b>${escapeHtml(p.code)}</b>` });
+      steps.push({ kind: "delete", text: `Delete <b>${escapeHtml(p.code)}</b> — it goes to the Recycle Bin and can be restored`, optional: true });
+      const needsReason = p.invoices.some(i => i.steps.includes("void"));
+      const blocked = steps.some(s => s.kind === "blocked");
+      const back = document.createElement("div");
+      back.className = "glass-back";
+      back.id = "remove-order";
+      back.addEventListener("click", e => { if (e.target === back) closeRemoveOrder(); });
+      back.innerHTML = `<div class="glass-panel remove-panel" role="dialog" aria-modal="true" aria-labelledby="ro-title">
+        <div class="sm-head"><div><h3 id="ro-title">${cancelled ? "Delete" : "Cancel / delete"} ${escapeHtml(p.code)}</h3>
+            <div class="muted small">These steps run in this order. Nothing happens until you click the button.</div></div>
+          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeRemoveOrder()">${icon("x")}</button></div>
+        <ol class="ro-steps">${steps.map((s, i) => `<li class="ro-step ${s.kind === "blocked" ? "blocked" : ""}" data-i="${i}">
+            <span class="ro-mark">${s.kind === "blocked" ? "!" : i + 1}</span>
+            <span class="ro-text">${s.text}${s.link ? ` · <a class="link" href="${s.link}">open it</a>` : ""}
+              ${s.optional ? `<label class="inline-check ro-opt"><input type="checkbox" id="ro-delete" checked> delete it too</label>` : ""}</span>
+            <span class="ro-state"></span></li>`).join("")}</ol>
+        ${needsReason ? `<label>Why the sent invoice${p.invoices.filter(i => i.steps.includes("void")).length > 1 ? "s are" : " is"} cancelled (kept on the invoice)</label>
+          <input type="text" id="ro-reason" value="Order ${escapeHtml(p.code)} cancelled">
+          <label class="inline-check"><input type="checkbox" id="ro-told"> The customer has been / will be told the invoice is cancelled</label>` : ""}
+        ${blocked ? `<div class="notice">Something needs doing by hand first (marked <b>!</b>) — open it, fix it, then come back.</div>` : ""}
+        <div class="error" id="ro-error"></div>
+        <div class="sm-foot"><span style="flex:1;"></span>
+          <button type="button" class="secondary" onclick="closeRemoveOrder()">Close</button>
+          <button type="button" class="danger" id="ro-go" onclick="runRemoveOrder()" ${blocked ? "disabled" : ""}>Do All Steps</button></div></div>`;
+      document.body.appendChild(back);
+      document.body.classList.add("glass-open");
+      window._roSteps = steps;
+    }
+    function closeRemoveOrder() {
+      const el = document.getElementById("remove-order");
+      document.body.classList.remove("glass-open");
+      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
+    }
+    async function runRemoveOrder() {
+      const steps = window._roSteps, p = removePlan, err = document.getElementById("ro-error"), go = document.getElementById("ro-go");
+      const reasonEl = document.getElementById("ro-reason");
+      if (reasonEl && !document.getElementById("ro-told").checked) { err.textContent = "Tick that the customer has been / will be told -- a sent invoice is being cancelled."; return; }
+      const reason = reasonEl ? reasonEl.value.trim() : "";
+      const alsoDelete = document.getElementById("ro-delete").checked;
+      err.textContent = "";
+      go.disabled = true;
+      const mark = (i, html, cls) => { const li = document.querySelector(`#remove-order .ro-step[data-i="${i}"]`); li.classList.add(cls); li.querySelector(".ro-state").innerHTML = html; };
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        if (s.kind === "delete" && !alsoDelete) { mark(i, "skipped", "skipped"); continue; }
+        mark(i, "…", "doing");
+        try {
+          if (s.kind === "invoice") {
+            if (s.ops.includes("void")) await apiFetch(`/api/invoices/${s.id}/status`, { method: "PUT", body: JSON.stringify({ status: "void", reason }) });
+            await apiFetch(`/api/invoices/${s.id}`, { method: "DELETE" });
+          } else if (s.kind === "shipment") {
+            if (s.ops.includes("unship")) await apiFetch(`/api/shipments/${s.id}/unship`, { method: "POST", body: JSON.stringify({ reason, customer_notified: true, combined_ok: true }) });
+            await apiFetch(`/api/shipments/${s.id}`, { method: "DELETE" });
+          } else if (s.kind === "cancel") {
+            await apiFetch(`/api/customer-orders/${p.order_id}/cancel`, { method: "POST" });
+          } else if (s.kind === "delete") {
+            await apiFetch(`/api/customer-orders/${p.order_id}`, { method: "DELETE" });
+          }
+          mark(i, icon("check"), "done");
+        } catch (e) {
+          mark(i, "✕", "failed");
+          err.textContent = `${e.message} -- stopped here; the steps above are done.`;
+          go.textContent = "Try Again";
+          go.disabled = false;
+          await loadOrders();
+          return;
+        }
+      }
+      await loadOrders();
+      if (alsoDelete) {
+        setTimeout(() => { closeRemoveOrder(); document.getElementById("detail-card").style.display = "none"; undoableDelete(`Deleted ${p.code}`, loadOrders); }, 700);
+      } else {
+        setTimeout(() => { closeRemoveOrder(); showDetail(p.order_id); toast(`${p.code} cancelled`); }, 700);
       }
     }
 

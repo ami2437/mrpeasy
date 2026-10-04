@@ -927,6 +927,31 @@ class CustomerOrderService:
         return order
 
     @staticmethod
+    def removal_plan(db: Session, order_id: int) -> dict:
+        """Everything in the way of cancelling / deleting an order, in the order it has to go:
+        its invoices (void, then delete), its shipments (un-ship, then delete), then cancel and delete."""
+        order = CustomerOrderService.get(db, order_id)
+        invoices = []
+        for inv in db.query(Invoice).filter(Invoice.order_id == order.id).order_by(Invoice.id).all():
+            sent = inv.status != "draft" or bool(inv.emails)
+            block = (f"{len(inv.payments)} payment(s) recorded ({', '.join(f'${p.amount:,.2f}' for p in inv.payments)}) -- remove them on the invoice first"
+                     if inv.payments else "invoice funding recorded -- clear it on the invoice first" if (inv.funding_amount or inv.disbursement_date) else None)
+            invoices.append({"id": inv.id, "code": inv.code, "status": inv.status, "total": inv.total, "sent": sent,
+                             "steps": [] if block else (["delete"] if inv.status == "void" or not sent else ["void", "delete"]), "blocked": block})
+        shipments = []
+        for sh in db.query(Shipment).filter(Shipment.order_id == order.id).order_by(Shipment.id).all():
+            if sh.status == "cancelled":
+                shipments.append({"id": sh.id, "code": sh.code, "status": sh.status, "steps": [], "note": "goes with the order"})
+                continue
+            shipments.append({"id": sh.id, "code": sh.code, "status": sh.status, "delivered": bool(sh.delivered_at),
+                              "steps": (["unship", "delete"] if sh.status in ShipmentService.SHIPPED_STATUSES else ["delete"])})
+        blocked = [i["code"] + ": " + i["blocked"] for i in invoices if i["blocked"]]
+        return {"order_id": order.id, "code": order.code, "status": order.status, "invoices": invoices, "shipments": shipments,
+                "blocked": blocked, "can_cancel_now": order.status != "cancelled" and not any(l.shipped_quantity or l.booked_quantity for l in order.lines),
+                "can_delete_now": order.status == "cancelled" and all(s["status"] == "cancelled" for s in shipments)
+                                  and all(i["status"] == "void" for i in invoices)}
+
+    @staticmethod
     def release_quote(db: Session, order: CustomerOrder) -> None:
         """The order a quote was converted into is cancelled / deleted: the quote goes back to how it was."""
         from app.models import Quote
@@ -945,8 +970,11 @@ class CustomerOrderService:
         shipments = db.query(Shipment).filter(Shipment.order_id == order.id).all()
         if any(s.status != "cancelled" for s in shipments):
             raise HTTPException(status_code=400, detail="This order has shipments that weren't cancelled, so it can't be deleted")
-        if db.query(Invoice).filter(Invoice.order_id == order.id).first():
-            raise HTTPException(status_code=400, detail="An invoice was made for this order, so it can't be deleted")
+        live = [i.code for i in db.query(Invoice).filter(Invoice.order_id == order.id, Invoice.status != "void").all()]
+        if live:
+            raise HTTPException(status_code=400, detail=f"{', '.join(live)} still bill this order -- void or delete {'it' if len(live) == 1 else 'them'} first")
+        for inv in db.query(Invoice).filter(Invoice.order_id == order.id).all():  # void ones go with the order
+            delete_invoice(db, inv.id, commit=False)
         for s in shipments:
             _remove_attachments(db, "shipment", s.id)
             db.delete(s)
@@ -1775,7 +1803,7 @@ class InvoiceService:
         return invoice
 
     @staticmethod
-    def set_status(db: Session, invoice_id: int, status: str) -> Invoice:
+    def set_status(db: Session, invoice_id: int, status: str, reason: Optional[str] = None) -> Invoice:
         if status not in ("sent", "paid", "void"):
             raise HTTPException(status_code=400, detail="status must be sent, paid, or void")
         invoice = InvoiceService.get(db, invoice_id)
@@ -1787,6 +1815,8 @@ class InvoiceService:
             from app.services import billing
             billing.clear_variances(db, invoice)  # a void invoice bills nothing
             invoice.voided_at, invoice.voided_by = datetime.utcnow(), None
+            if reason and reason.strip():
+                invoice.void_reason = reason.strip()
             # Its shipments become billable again (they can go on a new or combined invoice).
             for shipment in invoice.shipments:
                 if shipment.status == "invoiced":
@@ -1795,6 +1825,43 @@ class InvoiceService:
         db.commit()
         db.refresh(invoice)
         return invoice
+
+
+def _invoice_delete_blocker(invoice) -> Optional[str]:
+    """Why this invoice can't be deleted yet, or None. Void ones can; so can drafts that never went out."""
+    if invoice.payments:
+        return f"{invoice.code} has {len(invoice.payments)} payment(s) recorded -- remove them first"
+    if invoice.funding_amount or invoice.disbursement_date:
+        return f"{invoice.code} has invoice funding recorded -- clear it first"
+    if invoice.status == "void":
+        return None
+    if invoice.status == "draft" and not invoice.emails:
+        return None
+    return f"{invoice.code} was sent to the customer -- void it first (that keeps a record that it was cancelled)"
+
+
+def delete_invoice(db: Session, invoice_id: int, commit: bool = True) -> None:
+    """Delete a void invoice, or a draft that never went out. Its shipments become billable again. Row by row
+    (not bulk), so the Recycle Bin keeps the whole invoice -- lines, links, email log -- and can restore it."""
+    from app.models import BillingVariance, InvoiceEmail, InvoicePayment
+    invoice = InvoiceService.get(db, invoice_id)
+    why = _invoice_delete_blocker(invoice)
+    if why:
+        raise HTTPException(status_code=400, detail=why)
+    for shipment in invoice.shipments:
+        if shipment.status == "invoiced":
+            shipment.status = "delivered" if shipment.delivered_at else "shipped"
+    for model in (InvoiceShipment, InvoiceLine, BillingVariance, InvoiceEmail):
+        for row in db.query(model).filter(model.invoice_id == invoice.id).all():
+            db.delete(row)
+    _remove_attachments(db, "invoice", invoice.id)
+    # all in one flush, so the Recycle Bin entry holds the invoice with its lines and links; the links are deleted
+    # as rows above, so the invoice's shipments collection is marked empty (no second delete of the same rows)
+    from sqlalchemy.orm.attributes import set_committed_value
+    set_committed_value(invoice, "shipments", [])
+    db.delete(invoice)
+    if commit:
+        db.commit()
 
 
 class InvoicePaymentService:

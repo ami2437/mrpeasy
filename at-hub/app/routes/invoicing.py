@@ -124,12 +124,20 @@ def billing_check(invoice_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{invoice_id}/status", response_model=InvoiceResponse)
 def set_invoice_status(invoice_id: int, data: InvoiceStatusUpdate, db: Session = Depends(get_db)):
-    return InvoiceService.set_status(db, invoice_id, data.status)
+    return InvoiceService.set_status(db, invoice_id, data.status, reason=data.reason)
 
 
 @router.post("/{invoice_id}/payments", response_model=InvoiceResponse)
 def record_invoice_payment(invoice_id: int, data: InvoicePaymentInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return InvoicePaymentService.record(db, invoice_id, data, created_by=current_user.username)
+
+
+@router.delete("/{invoice_id}", status_code=204)
+def delete_invoice(invoice_id: int, db: Session = Depends(get_db)):
+    """Delete a void invoice, or a draft that never went out (it goes to the Recycle Bin)."""
+    from app.services.crud import delete_invoice as _delete
+    _delete(db, invoice_id)
+    return Response(status_code=204)
 
 
 @router.delete("/{invoice_id}/payments/{payment_id}", response_model=InvoiceResponse, dependencies=[Depends(require_perm("invoices"))])

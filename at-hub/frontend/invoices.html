@@ -330,6 +330,8 @@
           <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
           ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
           ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
+          ${(invoice.status === "void" || (invoice.status === "draft" && !(invoice.emails || []).length)) && !invoice.payments.length
+            ? `<button class="danger" onclick="deleteInvoice(${invoice.id})" title="${invoice.status === "void" ? "Remove the voided invoice" : "A draft that never went out"} -- it goes to the Recycle Bin">Delete</button>` : ""}
           <label class="check-label" title="$0 lines are left off the PDF unless this is ticked">
             <input type="checkbox" ${invoice.print_zero_lines ? "checked" : ""} onchange="setPrintZero(${invoice.id}, this.checked)">
             Print $0 Lines${zeroLines ? ` <span class="muted small">(${zeroLines} on this invoice)</span>` : ""}</label>
@@ -701,6 +703,17 @@
           <p class="muted small" style="margin-top:6px;">Once the order is fully shipped and billed, AT-HUB checks the total billed against what shipped and raises a task if it still doesn't match.</p>`,
         buttons: [{ label: "Bill These Quantities", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
       return value === "go" ? { note: el.querySelector(".qty-note").value.trim() } : null;
+    }
+
+    async function deleteInvoice(id) {
+      const inv = invoices.find(x => x.id === id) || {};
+      if (!confirm(`Delete ${inv.code || "this invoice"}?${inv.status === "draft" ? " Its shipments can be invoiced again." : ""}\n\nIt goes to the Recycle Bin, where it can be restored.`)) return;
+      try {
+        await apiFetch(`/api/invoices/${id}`, { method: "DELETE" });
+        document.getElementById("detail-card").style.display = "none";
+        await loadInvoices();
+        if (typeof undoableDelete === "function") undoableDelete(`Deleted ${inv.code || "the invoice"}`, loadInvoices);
+      } catch (e) { alert(e.message); }
     }
 
     async function setStatus(id, status) {

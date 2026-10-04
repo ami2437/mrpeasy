@@ -29,6 +29,12 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.get(db, order_id)
 
 
+@router.get("/{order_id}/removal-plan", dependencies=[Depends(require_perm("orders.edit"))])
+def removal_plan(order_id: int, db: Session = Depends(get_db)):
+    """What has to go before this order can be cancelled / deleted -- the steps the Cancel / Delete pop-up runs."""
+    return CustomerOrderService.removal_plan(db, order_id)
+
+
 @router.get("/{order_id}/billing", dependencies=[Depends(require_perm("invoices"))])
 def order_billing(order_id: int, db: Session = Depends(get_db)):
     """Per order line: ordered, shipped, billed across every invoice -- and the accepted differences with reasons."""

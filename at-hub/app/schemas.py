@@ -648,6 +648,7 @@ class InvoicePrintOptions(BaseModel):
 
 class InvoiceStatusUpdate(BaseModel):
     status: str  # sent | paid | void
+    reason: Optional[str] = None  # why it's voided (kept on the invoice)
 
 
 class InvoicePaymentInput(BaseModel):
