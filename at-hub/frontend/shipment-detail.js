@@ -33,26 +33,49 @@ const STATUS_HELP = {
   cancelled: "Cancelled — bookings were released back to stock.",
 };
 
+// Bookings confirmed (in the Create Shipment pop-up, or with Confirm Bookings) are locked: no unbook boxes
+// until "Change Bookings". Per order line: ordered, shipped before, this shipment, and what's left after it.
+const unbookOpen = {};  // shipment id -> unbook boxes shown on a ready (locked) shipment
 function linesSectionHtml(shipment) {
-  const picking = shipment.status === "ready";
-  const open = ["new", "ready"].includes(shipment.status);
+  const ready = shipment.status === "ready";
+  const isShipped = ["shipped", "delivered", "invoiced"].includes(shipment.status);
+  const locked = ready && !unbookOpen[shipment.id];
+  const picking = ready && locked;  // changing bookings hides picking
+  const open = shipment.status === "new" || (ready && !locked);
+  const ord = order(shipment.order_id);
+  const sorted = shipment.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
+  const group = {};  // order line id -> { first row id, rows, this shipment qty }
+  sorted.forEach(l => { const g = group[l.order_line_id] ??= { first: l.id, n: 0, qty: 0 }; g.n++; g.qty += l.quantity; });
+  const olOf = id => (ord && ord.lines.find(x => x.id === id)) || null;
   return `
-    <h4>Items</h4>
-    <table class="fit-table">
-      <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th><th class="num">Booked</th><th class="num">Picked</th>${picking ? "<th>Pick now</th>" : ""}${open ? "<th>Unbook</th>" : ""}</tr></thead>
-      <tbody>
-        ${shipment.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id).map(l => {
-          const left = Math.max(0, l.quantity - l.picked_quantity);
+    <h4 style="display:flex; align-items:center; gap:10px;">Items
+      ${ready ? (locked ? `<span class="lock-tag" title="Booked quantities are confirmed. Change Bookings to unbook.">${icon("lock")}Bookings locked</span>
+        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>`
+        : `<button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = false; showDetail(${shipment.id})">Done Changing</button>`) : ""}</h4>
+    <table class="fit-table ship-lines">
+      <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th>
+        <th class="num" title="Quantity on the order line">Ordered</th>
+        <th class="num" title="Shipped on earlier shipments of this order">Shipped before</th>
+        <th class="num" title="Booked into this shipment">This shipment</th><th class="num">Picked</th>
+        <th class="num" title="Still to ship on the order line once this shipment has gone">Left after this</th>
+        ${picking ? "<th>Pick now</th>" : ""}${open ? "<th>Unbook</th>" : ""}</tr></thead>
+      <tbody oninput="refreshLeftAfter()">
+        ${sorted.map(l => {
+          const left = Math.max(0, l.quantity - l.picked_quantity), g = group[l.order_line_id], ol = olOf(l.order_line_id), first = g.first === l.id;
+          const before = ol ? Math.max(0, ol.shipped_quantity - (isShipped ? g.qty : 0)) : null;
+          const after = ol ? Math.max(0, ol.quantity - before - g.qty) : null;
+          const span = g.n > 1 ? ` rowspan="${g.n}"` : "";
           return `
-          <tr>
-            <td class="line-no">#${l.line_no ?? ""}</td>
-            <td class="grow">${itemLabel(l.item_id)}</td>
+          <tr data-ol="${l.order_line_id}">
+            ${first ? `<td class="line-no"${span}>#${l.line_no ?? ""}</td><td class="grow"${span}>${itemLabel(l.item_id)}</td>` : ""}
             <td>${lotCode(l.lot_id)}</td>
-            <td class="num">${fmtQty(l.quantity)}</td>
+            ${first ? `<td class="num"${span}>${ol ? fmtQty(ol.quantity) : ""}</td><td class="num muted"${span}>${before != null ? fmtQty(before) : ""}</td>` : ""}
+            <td class="num"><strong>${fmtQty(l.quantity)}</strong></td>
             <td class="num">${fmtQty(l.picked_quantity)}${l.picked_quantity >= l.quantity ? " ✓" : ""}</td>
+            ${first ? `<td class="num left-after"${span} data-after="${after ?? ""}">${after == null ? "" : after > 0 ? `<strong>${fmtQty(after)}</strong>` : `<span class="pos">0 ✓</span>`}</td>` : ""}
             ${picking ? `<td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>` : ""}
             ${open ? `<td class="nowrap">${left > 0 ? `
-              <input type="number" step="1" min="1" max="${left}" value="${left}" id="unbook-${l.id}" class="qty-input">
+              <input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" data-ol="${l.order_line_id}" title="Blank = all ${left}">
               <button class="small-btn secondary" onclick="unbookLine(${shipment.id}, ${l.id})">Unbook</button>` : `<span class="muted small">Picked</span>`}</td>` : ""}
           </tr>
         `;
@@ -67,11 +90,22 @@ function linesSectionHtml(shipment) {
       ` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
       ${shipment.status === "shipped" && AuthGuard.hasRole("manager") ? `<button onclick="shipmentAction(${shipment.id}, 'delivered', {delivered_at: null})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
-      ${["shipped", "delivered", "invoiced"].includes(shipment.status) ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
+      ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.hasRole("manager") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
       ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
     </div>
     <div id="lifecycle-error" class="error"></div>
   `;
+}
+
+// While unbooking: "Left after this" grows by what the unbook boxes would release.
+function refreshLeftAfter() {
+  document.querySelectorAll(".ship-lines .left-after").forEach(td => {
+    if (td.dataset.after === "") return;
+    const back = [...document.querySelectorAll(`.unbook-qty[data-ol="${td.closest("tr").dataset.ol}"]`)].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+    const open = document.querySelector(".unbook-qty") !== null;
+    const after = parseFloat(td.dataset.after) + (open ? back : 0);
+    td.innerHTML = after > 0 ? `<strong>${fmtQty(after)}</strong>${open && back ? `<div class="muted small">if unbooked</div>` : ""}` : `<span class="pos">0 ✓</span>`;
+  });
 }
 
 async function shipmentAction(id, action, body) {
@@ -98,7 +132,8 @@ function pickEntered(id) {
 }
 
 async function unbookLine(shipmentId, lineId) {
-  const qty = parseFloat(document.getElementById(`unbook-${lineId}`).value);
+  const box = document.getElementById(`unbook-${lineId}`);
+  const qty = box.value.trim() === "" ? parseFloat(box.placeholder) : parseFloat(box.value);
   if (!Number.isInteger(qty) || qty <= 0) {
     document.getElementById("lifecycle-error").textContent = "Unbook quantity must be a whole number greater than 0.";
     return;
@@ -159,9 +194,94 @@ async function clearDelivered(id) {
   }
 }
 
-function unshipShipment(id) {
-  if (!confirm("Undo this shipment? Stock goes back to its lots and stays booked; the shipment returns to New so you can unbook, change, cancel or delete it. (An invoiced shipment needs its invoice voided first.)")) return;
-  shipmentAction(id, "unship");
+// Undo Ship: stock goes back and stays booked; the shipment's invoice is voided with it. A draft
+// invoice just gets a heads-up; a sent one walks through the steps first (payments, customer, reason).
+async function unshipShipment(id) {
+  let plan;
+  try { plan = await apiFetch(`/api/shipments/${id}/undo-plan`); }
+  catch (e) { document.getElementById("lifecycle-error").textContent = e.message; return; }
+  const what = `Stock goes back to its lots and stays booked; ${plan.code} returns to New so you can unbook, change, cancel or delete it.`
+    + (plan.pods ? ` Its proof of delivery (${plan.pods} file${plan.pods === 1 ? "" : "s"}) stays on record.` : "");
+  if (!plan.invoice || !plan.steps.length) {
+    const { value } = await askDialog({ title: `Undo ${plan.code}?`, tone: plan.invoice ? "warn" : "",
+      body: `<p>${what}</p>${plan.invoice ? `<p><strong>Draft invoice ${escapeHtml(plan.invoice.code)}</strong> (${fmtMoney(plan.invoice.total)}) is voided with it — it was never sent.</p>` : ""}`,
+      buttons: [{ label: plan.invoice ? `Void ${plan.invoice.code} & Undo Shipment` : "Undo Shipment", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (value === "go") shipmentAction(id, "unship", {});
+    return;
+  }
+  undoWizard(id, plan, what);
+}
+
+let undoWhat = "", undoPaidRemoved = false;
+function undoWizard(id, plan, what, paymentsRemoved = false) {
+  undoWhat = what;
+  undoPaidRemoved = paymentsRemoved;
+  const inv = plan.invoice, has = k => plan.steps.includes(k);
+  let back = document.getElementById("undo-wizard");
+  if (!back) {
+    back = document.createElement("div");
+    back.id = "undo-wizard";
+    back.className = "modal-backdrop";
+    back.onclick = e => { if (e.target === back) back.remove(); };
+    document.body.appendChild(back);
+  }
+  const sentTo = inv.emails.length ? `emailed to ${escapeHtml(inv.emails[inv.emails.length - 1].to)} on ${fmtDate(inv.emails[inv.emails.length - 1].sent_at)}` : `marked ${escapeHtml(inv.status)}`;
+  const mail = inv.customer_email ? `mailto:${encodeURIComponent(inv.customer_email)}?subject=${encodeURIComponent(`Invoice ${inv.code} cancelled`)}&body=${encodeURIComponent(`Hello,
+
+Please disregard invoice ${inv.code} (${fmtMoney(inv.total)}). It has been cancelled and a corrected invoice will follow once the shipment is re-sent.
+
+Thank you.`)}` : "";
+  let n = 0;
+  const step = (done, title, body) => `<li class="undo-step ${done ? "done" : ""}"><span class="undo-num">${done ? "✓" : ++n}</span><div><strong>${title}</strong>${body}</div></li>`;
+  back.innerHTML = `<div class="modal ask-dialog warn" style="max-width:620px;">
+    <h3 style="margin:0 0 6px;">Undo ${escapeHtml(plan.code)} — invoice ${escapeHtml(inv.code)} was sent</h3>
+    <p class="muted small" style="margin-top:0;">${what} ${escapeHtml(inv.code)} (${fmtMoney(inv.total)}) was ${sentTo}, so it's voided with the undo — finish these steps first.</p>
+    <ol class="undo-steps">
+      ${has("remove_payments") || paymentsRemoved ? step(!inv.payments.length, "Remove the payments recorded on it",
+        inv.payments.length ? `<div class="small">${inv.payments.map(p => `${fmtMoney(p.amount)} ${p.method ? escapeHtml(p.method) : ""} ${p.reference ? `· ${escapeHtml(p.reference)}` : ""} ${fmtDate(p.paid_date)}
+          <a class="link" onclick="undoRemovePayment(${id}, ${inv.id}, ${p.id})">Remove</a>`).join("<br>")}
+          <div class="muted">Refund or re-apply the money to the corrected invoice outside AT-HUB as needed.</div></div>` : `<div class="small muted">Done.</div>`) : ""}
+      ${has("notify_customer") ? step(false, "Tell the customer it's cancelled",
+        `<div class="small">${mail ? `<a class="link" href="${mail}">Email ${escapeHtml(inv.customer_email)}</a> · ` : ""}<a class="link" href="invoices.html?id=${inv.id}" target="_blank">Open ${escapeHtml(inv.code)}</a></div>
+         <label class="inline-check small undo-check" style="margin:4px 0 0;"><input type="checkbox" id="undo-told" onchange="undoCheck()"> The customer has been told (or will be) to disregard ${escapeHtml(inv.code)}</label>`) : ""}
+      ${has("reason") ? step(false, "Why it's being cancelled", `<input type="text" id="undo-reason" placeholder="E.g. wrong quantity shipped -- re-shipping" oninput="undoCheck()" style="margin-top:4px;">`) : ""}
+      ${has("combined") ? step(false, `It also bills ${escapeHtml(inv.combined_with.join(", "))}`,
+        `<label class="inline-check small undo-check" style="margin:4px 0 0;"><input type="checkbox" id="undo-combined" onchange="undoCheck()"> Un-invoice ${escapeHtml(inv.combined_with.join(", "))} too (they can go on a new invoice)</label>`) : ""}
+    </ol>
+    <div class="btn-row" style="margin-top:14px;">
+      <button class="danger" id="undo-go" disabled onclick="undoGo(${id})">Void ${escapeHtml(inv.code)} &amp; Undo Shipment</button>
+      <button class="secondary" onclick="document.getElementById('undo-wizard').remove()">Cancel</button></div>
+    <div id="undo-error" class="error"></div></div>`;
+  back.dataset.payments = inv.payments.length;
+  decorateIcons(back);
+  undoCheck();
+}
+function undoCheck() {
+  const box = id => { const el = document.getElementById(id); return !el || el.checked; };
+  const reason = document.getElementById("undo-reason");
+  const ok = document.getElementById("undo-wizard").dataset.payments === "0" && box("undo-told") && box("undo-combined") && (!reason || reason.value.trim());
+  document.getElementById("undo-go").disabled = !ok;
+}
+async function undoRemovePayment(id, invoiceId, paymentId) {
+  if (!confirm("Remove this payment from the invoice?")) return;
+  try {
+    await apiFetch(`/api/invoices/${invoiceId}/payments/${paymentId}`, { method: "DELETE" });
+    const plan = await apiFetch(`/api/shipments/${id}/undo-plan`);
+    undoWizard(id, plan, undoWhat, true);
+  } catch (e) { document.getElementById("undo-error").textContent = e.message; }
+}
+async function undoGo(id) {
+  const val = el => document.getElementById(el);
+  try {
+    await apiFetch(`/api/shipments/${id}/unship`, { method: "POST", body: JSON.stringify({
+      reason: val("undo-reason") ? val("undo-reason").value.trim() : null,
+      customer_notified: val("undo-told") ? val("undo-told").checked : false,
+      combined_ok: val("undo-combined") ? val("undo-combined").checked : false }) });
+    document.getElementById("undo-wizard").remove();
+    toast("Shipment undone — its invoice is void");
+    await reloadList();
+    showDetail(id);
+  } catch (e) { val("undo-error").textContent = e.message; }
 }
 
 async function deleteShipment(id) {
@@ -452,18 +572,6 @@ async function showDetail(id) {
     <section class="dsec">${linesSectionHtml(shipment)}
 
     ${shipment.status !== "cancelled" ? `
-    </section><section class="dsec"><h4 class="dsec-title">Carrier</h4>
-    <div class="carrier-grid">
-      <div><label>Carrier</label><input type="text" id="s-carrier" value="${escapeHtml(shipment.carrier || "")}" placeholder="E.g. UPS, FedEx Freight"></div>
-      <div><label>Tracking Number</label><input type="text" id="s-tracking" value="${escapeHtml(shipment.tracking_number || "")}"></div>
-      ${hidesMoney() ? `<input type="hidden" id="s-cost" value="">` : `<div class="money-field" title="What we pay the carrier"><label>Shipping Cost</label><input type="number" step="0.01" min="0" id="s-cost" value="${shipment.shipping_cost ?? ""}"></div>`}
-    </div>
-    <div class="carrier-notes"><label>Notes</label><textarea id="s-notes" rows="2">${escapeHtml(shipment.notes || "")}</textarea></div>
-    <button class="secondary" onclick="saveShipmentInfo(${shipment.id})" style="margin-top:8px;">Save Carrier Info</button>
-    <div id="info-error" class="error"></div>
-    ` : ""}
-
-    ${shipment.status !== "cancelled" ? `
     </section><section class="dsec"><h4 class="dsec-title">Packing
       ${shipment.boxes.length
         ? `<span class="tag shipped">packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}</span>`
@@ -510,6 +618,18 @@ async function showDetail(id) {
       <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
     </div>
     <div id="packing-error" class="error"></div>
+    ` : ""}
+
+    ${shipment.status !== "cancelled" ? `
+    </section><section class="dsec"><h4 class="dsec-title">Carrier</h4>
+    <div class="carrier-grid">
+      <div><label>Carrier</label><input type="text" id="s-carrier" value="${escapeHtml(shipment.carrier || "")}" placeholder="E.g. UPS, FedEx Freight"></div>
+      <div><label>Tracking Number</label><input type="text" id="s-tracking" value="${escapeHtml(shipment.tracking_number || "")}"></div>
+      ${hidesMoney() ? `<input type="hidden" id="s-cost" value="">` : `<div class="money-field" title="What we pay the carrier"><label>Shipping Cost</label><input type="number" step="0.01" min="0" id="s-cost" value="${shipment.shipping_cost ?? ""}"></div>`}
+    </div>
+    <div class="carrier-notes"><label>Notes</label><textarea id="s-notes" rows="2">${escapeHtml(shipment.notes || "")}</textarea></div>
+    <button class="secondary" onclick="saveShipmentInfo(${shipment.id})" style="margin-top:8px;">Save Carrier Info</button>
+    <div id="info-error" class="error"></div>
     ` : ""}
 
     </section><section class="dsec"><h4 class="dsec-title">Proof of delivery &amp; documents</h4>

@@ -70,3 +70,16 @@ def test_email_quote(make, api, monkeypatch):
     assert r["status"] == "sent" and r["emails"][0]["to"] == "buyer@cust.com"
     assert sent[0][1] == ["buyer@cust.com"]
     assert any(p.get_filename() == f"Quote-{q['code']}.pdf" for p in sent[0][0].iter_attachments())
+
+
+def test_cancelled_order_puts_quote_back(make, api):
+    c = make.customer()
+    q = api.post("/api/quotes/", json={"customer_id": c["id"], "lines": [{"item_id": make.item()["id"], "quantity": 5, "unit_price": 2}]})
+    api.put(f"/api/quotes/{q['id']}/status", json={"status": "sent"})
+    r = api.post(f"/api/quotes/{q['id']}/convert", json={})
+    assert api.get(f"/api/quotes/{q['id']}")["status"] == "converted"
+    api.post(f"/api/customer-orders/{r['order_id']}/cancel")
+    back = api.get(f"/api/quotes/{q['id']}")
+    assert back["status"] == "sent" and back["order_id"] is None
+    r2 = api.post(f"/api/quotes/{q['id']}/convert", json={})  # can be converted again
+    assert r2["order_id"] != r["order_id"]

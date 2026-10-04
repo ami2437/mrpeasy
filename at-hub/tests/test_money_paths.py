@@ -9,7 +9,8 @@ def test_unship_puts_stock_back_and_is_blocked_once_invoiced(make, api):
     sh = make.ship(o)
     assert api.get(f"/api/stock-items/{a['id']}")["on_hand"] == 0
     inv = make.invoice(sh)
-    api.post(f"/api/shipments/{sh['id']}/unship", expect=400)          # an invoice bills it
+    api.put(f"/api/invoices/{inv['id']}/status", json={"status": "sent"})
+    api.post(f"/api/shipments/{sh['id']}/unship", expect=400)          # a sent invoice bills it (steps first)
     api.put(f"/api/invoices/{inv['id']}/status", json={"status": "void"})
     api.post(f"/api/shipments/{sh['id']}/unship")
     assert api.get(f"/api/stock-items/{a['id']}")["on_hand"] == 10

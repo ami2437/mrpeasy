@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
   <script src="quotes.js"></script>
+  <script src="ship-modal.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -101,6 +102,7 @@
     let shipments = [];
     let invoices = [];
     let currentOrderId = null;
+    let currentOrder = null;  // the order open in the detail card (the Create Shipment pop-up reads it)
     let poIdByCode = {};  // booking source links: lot.source_reference is a PO code
 
     function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
@@ -628,7 +630,7 @@
       document.getElementById("items-view").style.display = listView === "items" ? "" : "none";
       const legend = document.getElementById("status-legend");
       legend.innerHTML = ["cancelled", "quotes"].includes(listView) ? "" : statusLegend(listView === "items"
-        ? ["not_booked", "partially_booked", "booked", "partially_shipped", "shipped"] : ["draft", "confirmed", "partially_shipped", "shipped", "invoiced"], "renderOrders");
+        ? ["not_booked", "partially_booked", "booked", "partially_shipped", "shipped"] : ["draft", "confirmed", "partially_shipped", "shipped", "invoiced", "complete"], "renderOrders");
       document.getElementById("list-card").style.setProperty("--legend-h", `${legend.offsetHeight}px`);
       if (listView === "items") { renderItemLines(q); return; }
       if (listView === "quotes") { renderQuotes(q); return; }
@@ -667,7 +669,7 @@
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
           <td class="num">${fmtMoney(o.lines.reduce((sum, l) => sum + lineAmount(l.quantity, l.unit_price), 0))}</td>
-          <td>${statusIcon(o.status === "confirmed" && shippedQty > 0 && shippedQty < ordered - 1e-9 ? "partially_shipped" : o.status)}</td>
+          <td>${statusIcon(done ? "complete" : o.status === "confirmed" && shippedQty > 0 && shippedQty < ordered - 1e-9 ? "partially_shipped" : o.status)}</td>
           <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>
             ${progressBar("Shipped", pct, "ship", `${fmtQty(shippedQty)} of ${fmtQty(ordered)} units shipped`)}
@@ -695,60 +697,6 @@
         if (reopen) { await showDetail(id); toast("Order confirmed"); }
         return true;
       } catch (err) { alert(err.message); return false; }
-    }
-
-    // Generic stock in the Book column: a line short on a specific nut (15420-NUT) offers to draw the
-    // shortfall from matching bulk stock (58-NUT). Ticked = Create Shipment transfers it and books it in one step.
-    let genericSources = {};
-    async function loadGenericOffers() {
-      const cells = [...document.querySelectorAll("#order-lines-body .gen-offer")];
-      const short = cells.filter(c => parseFloat(c.dataset.open) > parseFloat(c.dataset.free) + 1e-9);
-      if (!short.length || !AuthGuard.hasRole("manager")) return;
-      try {
-        genericSources = await apiFetch("/api/stock-items/generic-sources", { method: "POST", body: JSON.stringify({
-          item_ids: [...new Set(short.map(c => parseInt(c.closest("td").querySelector(".book-qty").dataset.item)))] }) });
-      } catch (e) { return; }
-      short.forEach(c => {
-        const td = c.closest("td"), input = td.querySelector(".book-qty"), srcs = genericSources[input.dataset.item] || [];
-        if (!srcs.length) return;
-        const open = parseFloat(c.dataset.open), free = parseFloat(c.dataset.free), best = srcs[0];
-        const auto = best.match !== "check";  // a finish left unstated: the user ticks it after a look
-        if (auto) input.value = Math.floor(Math.min(open, free + best.free));  // book the whole line: the generic covers it
-        c.innerHTML = `<label class="gen-draw" title="${escapeHtml(best.why)}"><input type="checkbox" class="draw-on" ${auto ? "checked" : ""} onchange="genericDrawToggle(this)">
-            +<strong class="draw-qty"></strong> from</label>
-          ${srcs.length > 1 ? `<select class="draw-src" onchange="genericOfferUpdate(this.closest('td'))">${srcs.map(g => `<option value="${g.id}">${escapeHtml(g.code)} (${fmtQty(g.free)})</option>`).join("")}</select>`
-            : `<a class="link draw-src-link" href="item.html?id=${best.id}" target="_blank" title="${escapeHtml(best.title)}">${escapeHtml(best.code)}</a><input type="hidden" class="draw-src" value="${best.id}">`}
-          <div class="draw-note small"></div>`;
-        genericOfferUpdate(td);
-      });
-    }
-    // Ticking books the whole line (generic covers the rest); unticking books only what's free.
-    function genericDrawToggle(box) {
-      const td = box.closest("td"), c = td.querySelector(".gen-offer"), input = td.querySelector(".book-qty");
-      const src = (genericSources[input.dataset.item] || []).find(g => g.id === parseInt(c.querySelector(".draw-src").value)) || { free: 0 };
-      const open = parseFloat(c.dataset.open), free = parseFloat(c.dataset.free);
-      input.value = Math.floor(box.checked ? Math.min(open, free + src.free) : Math.min(open, free));
-      c.dataset.need = "";
-      genericOfferUpdate(td);
-    }
-    function genericOfferUpdate(td) {
-      const c = td.querySelector(".gen-offer"), input = td.querySelector(".book-qty");
-      if (!c || !c.querySelector(".draw-src")) return;
-      const srcs = genericSources[input.dataset.item] || [], src = srcs.find(g => g.id === parseInt(c.querySelector(".draw-src").value)) || {};
-      const need = Math.max(0, Math.ceil((parseFloat(input.value) || 0) - parseFloat(c.dataset.free)));
-      const on = c.querySelector(".draw-on").checked;
-      const open = parseFloat(c.dataset.open), free = parseFloat(c.dataset.free);
-      const shown = need > 0 ? need : Math.max(0, Math.ceil(open - free));  // unticked: show what ticking would draw
-      c.querySelector(".draw-qty").textContent = fmtQty(shown);
-      c.querySelector(".draw-note").innerHTML = need > (src.free || 0) ? `<span class="neg">only ${fmtQty(src.free || 0)} free in ${escapeHtml(src.code || "")}</span>`
-        : src.match === "check" ? `<span class="muted">${on ? "" : "tick to use · "}check the finish</span>`
-        : on ? (need > 0 ? `<span class="muted">drawn on Create Shipment</span>` : "") : need > 0 ? `<span class="neg">short ${fmtQty(need)}</span>` : "";
-    }
-    // What createShipment sends for a line: the generic item to cover the shortfall, if ticked.
-    function drawFromFor(lineId) {
-      const input = document.querySelector(`.book-qty[data-line="${lineId}"]`), c = input && input.closest("td").querySelector(".gen-offer");
-      if (!c || !c.querySelector(".draw-on") || !c.querySelector(".draw-on").checked) return null;
-      return (parseFloat(input.value) || 0) > parseFloat(c.dataset.free) + 1e-9 ? parseInt(c.querySelector(".draw-src").value) : null;
     }
 
     function itemAvailable(id) {
@@ -814,7 +762,7 @@
           return `<div class="cell-entry"><a class="tag source-generic" href="item.html?id=${b.from_item_id}" title="Transferred from generic stock ${escapeHtml(b.from_item_code)}, lot ${escapeHtml(b.from_lot_code || "")}">↪ ${escapeHtml(b.from_item_code)}</a><div class="muted small">${escapeHtml(b.lot_code || "")} · ${fmtQty(b.quantity)}</div></div>`;
         const src = b.source === "purchase" && b.reference
           ? `<a class="link" href="purchase-orders.html?id=${poIdByCode[b.reference] || ""}">${escapeHtml(b.reference)}</a>`
-          : `<span class="tag source-manual" title="${b.source === "adjustment" ? "Stock added by a manual adjustment (not from a PO)" : ""}">${b.source === "adjustment" ? "Adj" : escapeHtml(b.source)}</span>`;
+          : `<span class="tag source-manual" title="${b.source === "adjustment" ? "Stock added by hand (a stock adjustment / count), not received on a PO" : ""}">${b.source === "adjustment" ? `${icon("sliders")}Manual stock` : escapeHtml(b.source)}</span>`;
         return `<div class="cell-entry">${src}<div class="muted small">${b.lot_code ? escapeHtml(b.lot_code) : "no lot"} · ${fmtQty(b.quantity)}</div></div>`;
       }).join("");
     }
@@ -842,6 +790,25 @@
       }).join(", ");
     }
 
+    // Shipments on an order: delivered date, or (shipped, managers) a date + one click to mark it delivered without a POD.
+    function quickDeliverCell(s, isManager) {
+      if (s.delivered_at) return `${icon("checkCircle", "pos")} ${fmtDate(s.delivered_at)}${s.pods && s.pods.length ? ` <span class="muted small">· POD</span>` : ""}`;
+      if (!["shipped", "invoiced"].includes(s.status) || !isManager) return `<span class="muted">—</span>`;
+      const today = new Date().toISOString().substring(0, 10), min = s.ship_date ? s.ship_date.substring(0, 10) : "";
+      return `<span class="quick-deliver"><input type="date" class="qd-date" value="${min > today ? min : today}" ${min ? `min="${min}"` : ""}>
+        <button class="small-btn confirm-btn" onclick="quickDeliver(${s.id}, this)" title="Mark delivered on this date (no POD needed)">Delivered</button></span>`;
+    }
+    async function quickDeliver(shipmentId, btn) {
+      const date = btn.closest(".quick-deliver").querySelector(".qd-date").value;
+      btn.disabled = true;
+      try {
+        await apiFetch(`/api/shipments/${shipmentId}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: date ? `${date}T12:00:00` : null }) });
+        await loadOrders();
+        toast("Marked delivered");
+        showDetail(currentOrderId);
+      } catch (e) { btn.disabled = false; document.getElementById("detail-error").textContent = e.message; }
+    }
+
     function itemLabel(id) {
       const i = items.find(i => i.id === id);
       return i ? `${i.code} — ${i.title}` : id;
@@ -850,6 +817,7 @@
     async function showDetail(id) {
       const order = await apiFetch(`/api/customer-orders/${id}`);
       currentOrderId = order.id;
+      currentOrder = order;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const canBook = !["shipped", "invoiced", "cancelled"].includes(order.status)
@@ -909,7 +877,6 @@
             <th class="grow">Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>
             <th class="num">Booked</th><th title="Lot each booked unit comes from: a purchase order receipt or a manual stock adjustment">Booking source</th><th class="num">Shipped</th><th class="num" title="Ordered minus shipped: still to ship">Remaining</th><th>Status</th>
             <th>Shipments</th><th>Invoices</th>
-            ${canBook ? `<th title="Quantity to book into a new shipment">Book</th>` : ""}
           </tr></thead>
           <tbody id="order-lines-body" oninput="recalcLines('order-lines-body', 'order-total'); refreshPriceDeltas(this)">
             ${order.lines.map(l => {
@@ -935,9 +902,6 @@
                 <td>${lineShipmentsHtml(l)}</td>
                 <td>${lineInvoicesHtml(l)}</td>
 
-                ${canBook ? `<td>${openQty > 0
-                  ? `<input type="number" step="1" min="0" class="book-qty qty-input" data-line="${l.id}" data-item="${l.item_id}" oninput="genericOfferUpdate(this.closest('td'))" value="${Math.floor(Math.min(openQty, Math.max(0, itemAvailable(l.item_id))))}"><div class="muted small">${fmtQty(itemAvailable(l.item_id))} free</div><div class="gen-offer" data-open="${openQty}" data-free="${Math.max(0, itemAvailable(l.item_id))}"></div>`
-                  : `<span class="muted small">Allocated</span>`}</td>` : ""}
               </tr>
             `;
             }).join("")}
@@ -947,7 +911,7 @@
             <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
             <td colspan="2"></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.shipped_quantity, 0))}</td>
             <td class="num">${fmtQty(order.lines.reduce((s, l) => s + Math.max(0, l.quantity - l.shipped_quantity), 0))}</td>
-            <td colspan="${3 + (canBook ? 1 : 0)}"></td>
+            <td colspan="3"></td>
           </tr></tfoot>
         </table>
         </div>
@@ -964,20 +928,21 @@
         <div id="lines-error" class="error"></div>
 
         ${canBook ? `
-          <h4 style="margin-top:20px;">Create shipment</h4>
-          <p class="muted">Books the quantities entered above from stock into a new shipment. Nothing leaves on-hand yet —
-            on the shipment, confirm the bookings, then pick; it ships once everything is picked.</p>
-          <button onclick="createShipment(${order.id})">Create Shipment &amp; Book Items</button>
+          <div class="ship-cta">
+            <button class="ship-cta-btn" data-icon="package" onclick="openShipModal(${order.id})">Create Shipment</button>
+            <span class="muted small">Pick the lines and quantities to book — all of them by default — then pack it on the shipment screen.</span>
+          </div>
         ` : ""}
         <div id="detail-error" class="error"></div>
 
         <h4 style="margin-top:20px;">Shipments (${orderShipments.length})</h4>
         ${orderShipments.length ? `
           <table>
-            <thead><tr><th>Code</th><th>Created</th><th>Ship date</th><th>Items</th><th>Status</th></tr></thead>
+            <thead><tr><th>Code</th><th>Created</th><th>Ship date</th><th>Items</th><th>Status</th><th>Delivered</th></tr></thead>
             <tbody>${orderShipments.map(s => `
               <tr><td><a class="link" href="shipments.html?id=${s.id}">${s.code}</a></td><td>${fmtDate(s.created_at)}</td><td>${fmtDate(s.ship_date)}</td>
-                  <td>${shipmentItemsSummary(s)}</td><td><span class="tag ${s.status}">${s.status}</span></td></tr>
+                  <td>${shipmentItemsSummary(s)}</td><td><span class="tag ${s.status}">${s.status}</span></td>
+                  <td class="nowrap">${quickDeliverCell(s, isManager)}</td></tr>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">None yet.</p>`}
@@ -1018,7 +983,6 @@
         </div>
       `;
       refreshPriceDeltas(card);
-      loadGenericOffers();
       if (editable) {
         enableLineDrag(document.getElementById("order-lines-body"), ids => saveLineOrder(order.id, ids));
         // a line saves itself when its qty, price or date is changed -- no Save link
@@ -1295,43 +1259,6 @@
         undoableDelete(`Deleted ${o ? o.code : "the order"}`, loadOrders);
       } catch (err) {
         alert(err.message);
-      }
-    }
-
-    async function createShipment(orderId) {
-      const errorEl = document.getElementById("detail-error");
-      errorEl.textContent = "";
-      const entries = Array.from(document.querySelectorAll(".book-qty"))
-        .map(el => ({ line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0, draw_from_item_id: drawFromFor(el.dataset.line) }));
-      if (entries.some(l => !Number.isInteger(l.quantity) || l.quantity < 0)) {
-        errorEl.textContent = "Book quantities must be whole numbers.";
-        return;
-      }
-      const lines = entries.filter(l => l.quantity > 0);
-      if (!lines.length) {
-        errorEl.textContent = "Enter a quantity to book on at least one line.";
-        return;
-      }
-      const ord = orders.find(o => o.id === orderId);
-      if (ord && ord.status === "draft") {
-        const canConfirm = AuthGuard.hasRole("manager");
-        const { value } = await askDialog({ title: "Order not confirmed", tone: "warn",
-          body: `<p><strong>${escapeHtml(ord.code)}</strong> is still a draft. An order has to be confirmed before stock is booked into a shipment.</p>
-            ${canConfirm ? "" : `<p class="muted">Ask a manager to confirm it.</p>`}`,
-          buttons: canConfirm ? [{ label: "Confirm Order & Create Shipment", value: "confirm", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }]
-                              : [{ label: "OK", value: null, cls: "secondary" }] });
-        if (value !== "confirm") return;
-        try { await apiFetch(`/api/customer-orders/${orderId}/confirm`, { method: "POST" }); }
-        catch (err) { errorEl.textContent = err.message; return; }
-      }
-      try {
-        const shipment = await apiFetch(`/api/customer-orders/${orderId}/shipments`, {
-          method: "POST",
-          body: JSON.stringify({ lines }),
-        });
-        window.location.href = `shipments.html?id=${shipment.id}`;
-      } catch (err) {
-        errorEl.textContent = err.message;
       }
     }
 

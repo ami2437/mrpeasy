@@ -653,6 +653,9 @@ class Invoice(Base):
     invoice_date = Column(DateTime, default=datetime.utcnow)
     due_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | sent | paid | void
+    void_reason = Column(Text, nullable=True)  # why it was voided (e.g. its shipment was undone)
+    voided_at = Column(DateTime, nullable=True)
+    voided_by = Column(String, nullable=True)
     free_text = Column(Text, nullable=True)
     # Factoring / funding report fields (the portal's custom_570/571/572), filled by the
     # bulk funding upload or by hand. funding_amount + funding_discount should equal the total.
@@ -968,6 +971,7 @@ class Quote(Base):
     customer_ref = Column(String, nullable=True)  # their RFQ # / email subject
     notes = Column(Text, nullable=True)  # printed on the quote
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)  # once converted
+    status_before_convert = Column(String, nullable=True)  # restored if the order is cancelled / deleted
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

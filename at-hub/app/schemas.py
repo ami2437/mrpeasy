@@ -662,6 +662,9 @@ class InvoiceResponse(BaseModel):
     invoice_date: datetime
     due_date: Optional[datetime] = None
     status: str
+    void_reason: Optional[str] = None
+    voided_at: Optional[datetime] = None
+    voided_by: Optional[str] = None
     free_text: Optional[str] = None
     disbursement_date: Optional[datetime] = None
     funding_amount: Optional[float] = None
@@ -837,6 +840,13 @@ class VendorBillResponse(VendorBillInput):
 
 class MarkDeliveredRequest(BaseModel):
     delivered_at: Optional[datetime] = None  # default: now
+
+
+class UnshipRequest(BaseModel):
+    """Undoing a shipment voids its invoice. A sent invoice needs the steps done first."""
+    reason: Optional[str] = None  # why the invoice is cancelled (required when it was sent)
+    customer_notified: bool = False  # the customer has been / will be told the invoice is cancelled
+    combined_ok: bool = False  # the invoice also bills other shipments: they become un-invoiced too
 
 
 class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):

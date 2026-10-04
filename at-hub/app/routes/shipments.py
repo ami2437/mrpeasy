@@ -1,8 +1,9 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import PodEmailRequest, ShipmentEmailResponse
-from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest
+from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest, UnshipRequest
 from app.services.crud import ShipmentService
 from app.dependencies import get_current_active_user, require_role
 from app.models import User
@@ -145,10 +146,17 @@ def cancel_shipment(shipment_id: int, db: Session = Depends(get_db)):
     return ShipmentService.cancel(db, shipment_id)
 
 
+@router.get("/{shipment_id}/undo-plan", dependencies=[Depends(require_role("manager"))])
+def undo_plan(shipment_id: int, db: Session = Depends(get_db)):
+    """What undoing this shipment involves (its invoice and the steps a sent one needs)."""
+    return ShipmentService.undo_plan(db, shipment_id)
+
+
 @router.post("/{shipment_id}/unship", response_model=ShipmentResponse, dependencies=[Depends(require_role("manager"))])
-def unship(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Undo a sent shipment: stock returns and stays booked so it can be edited or cancelled."""
-    return ShipmentService.unship(db, shipment_id, created_by=current_user.username)
+def unship(shipment_id: int, data: Optional[UnshipRequest] = None, db: Session = Depends(get_db),
+           current_user: User = Depends(get_current_active_user)):
+    """Undo a sent shipment: stock returns and stays booked so it can be edited or cancelled; its invoice is voided."""
+    return ShipmentService.unship(db, shipment_id, created_by=current_user.username, data=data)
 
 
 @router.delete("/{shipment_id}", status_code=204, dependencies=[Depends(require_role("manager"))])

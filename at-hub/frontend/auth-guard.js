@@ -1403,6 +1403,8 @@ const ICON_PATHS = {
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   thumbsUp: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
@@ -1416,6 +1418,7 @@ const STATUS_ICONS = {
   partially_booked: ["half", "Partly booked"], booked: ["package", "Booked into a shipment"],
   partially_shipped: ["half", "Partly shipped"], shipped: ["check", "Shipped"], delivered: ["checkCircle", "Delivered"],
   invoiced: ["receipt", "Invoiced"], paid: ["dollar", "Paid"], cancelled: ["x", "Cancelled"],
+  complete: ["dd", "All done — shipped, invoiced & paid"],
 };
 // Icons or words: a per-user switch (the legend's "Show words" / "Show icons" link)
 function statusAsText() { try { return localStorage.getItem("at_hub_status_view") === "text"; } catch (e) { return false; } }
@@ -1432,7 +1435,7 @@ function statusLegend(keys, rerender) {
 function statusIcon(status) {
   const [ico, label] = STATUS_ICONS[status] || [null, (status || "").replace(/_/g, " ")];
   if (!ico || statusAsText()) return `<span class="tag ${escapeHtml(status || "")}">${escapeHtml(label)}</span>`;
-  return `<span class="st-ico st-${escapeHtml(status)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ico === "half" ? "" : icon(ico)}<span class="sr-only">${escapeHtml((status || "").replace(/_/g, " "))}</span></span>`;
+  return `<span class="st-ico st-${escapeHtml(status)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ico === "half" ? "" : ico === "dd" ? `<b class="dd">$$</b>` : icon(ico)}<span class="sr-only">${escapeHtml((status || "").replace(/_/g, " "))}</span></span>`;
 }
 
 // ---- Item code autocorrect: '15420-NUTS' / '15385 - Nut' -> '15420-NUT', with Undo to keep what was typed.

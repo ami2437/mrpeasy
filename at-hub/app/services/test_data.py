@@ -96,7 +96,7 @@ def ensure_test_data(db: Session) -> dict:
     created = order is None
     if created:
         order = CustomerOrderService.create(db, CustomerOrderCreate(
-            customer_id=customer.id, po_number="TEST-PO", job_number="TEST-JOB",
+            customer_id=customer.id, po_number="TEST-PO", job_number="TEST-JOB", allow_duplicate=True,
             notes="Auto-created test order -- safe to ship, invoice, or cancel. A fresh one is created when this one is used.",
             lines=[CustomerOrderLineCreate(item_id=items[code].id, quantity=order_qty, unit_price=sell)
                    for code, _, _, _, sell, _, order_qty in TEST_ITEMS],
@@ -157,7 +157,7 @@ def ensure_generic_test_data(db: Session) -> dict:
     created = order is None
     if created:
         order = CustomerOrderService.create(db, CustomerOrderCreate(
-            customer_id=customer.id, po_number="TEST-GENERIC", job_number="TEST-JOB-GEN",
+            customer_id=customer.id, po_number="TEST-GENERIC", job_number="TEST-JOB-GEN", allow_duplicate=True,
             notes="Generic nut test: the nut lines are short -- the Book column offers to draw from TEST-GEN-916-NUT.",
             lines=[CustomerOrderLineCreate(item_id=bolt.id, quantity=2500, unit_price=1.95),
                    CustomerOrderLineCreate(item_id=items["TEST-91612-NUT"].id, quantity=2500, unit_price=0),

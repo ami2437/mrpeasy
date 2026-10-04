@@ -911,9 +911,18 @@ class CustomerOrderService:
         if any(l.booked_quantity > 0 for l in order.lines):
             raise HTTPException(status_code=400, detail="Cancel this order's open shipments first -- they still hold booked stock")
         order.status = "cancelled"
+        CustomerOrderService.release_quote(db, order)
         db.commit()
         db.refresh(order)
         return order
+
+    @staticmethod
+    def release_quote(db: Session, order: CustomerOrder) -> None:
+        """The order a quote was converted into is cancelled / deleted: the quote goes back to how it was."""
+        from app.models import Quote
+        for q in db.query(Quote).filter(Quote.order_id == order.id).all():
+            q.status = q.status_before_convert if q.status_before_convert in ("draft", "sent", "accepted", "declined") else "accepted"
+            q.order_id, q.status_before_convert = None, None
 
     @staticmethod
     def delete(db: Session, order_id: int) -> None:
@@ -934,6 +943,7 @@ class CustomerOrderService:
         for row in db.query(MtrEmail).filter(MtrEmail.order_id == order.id).all():
             db.delete(row)
         _remove_attachments(db, "customer_order", order.id)
+        CustomerOrderService.release_quote(db, order)
         db.flush()
         db.delete(order)
         db.commit()
@@ -1210,17 +1220,65 @@ class ShipmentService:
         return shipment
 
     @staticmethod
-    def unship(db: Session, shipment_id: int, created_by: str) -> Shipment:
+    def undo_plan(db: Session, shipment_id: int) -> dict:
+        """What undoing this shipment involves: its live invoice (voided with it) and the steps a sent
+        invoice needs first -- remove payments, tell the customer, give a reason, accept combined shipments."""
+        from app.models import Attachment
+        shipment = ShipmentService.get(db, shipment_id)
+        inv = InvoiceService.live_invoice_for_shipment(db, shipment.id)
+        pods = db.query(Attachment).filter(Attachment.entity_type == "shipment", Attachment.entity_id == shipment.id,
+                                           Attachment.category == "pod").count()
+        plan = {"shipment_id": shipment.id, "code": shipment.code, "status": shipment.status, "pods": pods,
+                "delivered_at": shipment.delivered_at, "invoice": None, "steps": []}
+        if inv:
+            sent = inv.status != "draft" or bool(inv.emails)
+            others = [s.code for s in inv.shipments if s.id != shipment.id]
+            cust = db.query(Customer).filter(Customer.id == inv.customer_id).first()
+            plan["invoice"] = {
+                "id": inv.id, "code": inv.code, "status": inv.status, "total": inv.total, "sent": sent,
+                "emails": [{"to": e.to_address, "sent_at": e.sent_at} for e in inv.emails],
+                "payments": [{"id": p.id, "amount": p.amount, "paid_date": p.paid_date, "method": p.method, "reference": p.reference}
+                             for p in inv.payments],
+                "combined_with": others, "customer_email": cust.invoice_email if cust else None}
+            if inv.payments:
+                plan["steps"].append("remove_payments")
+            if sent:
+                plan["steps"] += ["notify_customer", "reason"]
+            if others:
+                plan["steps"].append("combined")
+        return plan
+
+    @staticmethod
+    def unship(db: Session, shipment_id: int, created_by: str, data=None) -> Shipment:
         """Undo a shipped shipment: stock comes back to its lots/on-hand and stays booked,
         and the shipment returns to "new" so lines can be unbooked, edited, or cancelled.
-        An invoiced shipment must have its invoice voided first."""
+        Its invoice is voided with it -- a draft one straight away; a sent one only once the
+        steps are done (payments removed, customer told, reason given). Proof of delivery
+        files stay on the shipment."""
         shipment = ShipmentService.get(db, shipment_id)
-        if shipment.status == "invoiced":
-            live = InvoiceService.live_invoice_for_shipment(db, shipment.id)
-            if live:
-                raise HTTPException(status_code=400, detail=f"Shipment is invoiced on {live.code} -- void that invoice first")
-        elif shipment.status not in ("shipped", "delivered"):
+        live = InvoiceService.live_invoice_for_shipment(db, shipment.id)
+        if shipment.status not in ("shipped", "delivered", "invoiced"):
             raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only shipped shipments can be un-shipped")
+        if live:
+            reason = ((data.reason if data else None) or "").strip()
+            sent = live.status != "draft" or bool(live.emails)
+            if live.payments:
+                raise HTTPException(status_code=400, detail=f"{live.code} has ${sum(p.amount for p in live.payments):,.2f} in payments -- "
+                                                            "remove them first (step 1), then undo the shipment")
+            if sent and not (data and data.customer_notified and reason):
+                raise HTTPException(status_code=400, detail=f"{live.code} was sent to the customer -- tick that they've been told "
+                                                            "it's cancelled and give a reason before undoing the shipment")
+            others = [s for s in live.shipments if s.id != shipment.id]
+            if others and not (data and data.combined_ok):
+                raise HTTPException(status_code=400, detail=f"{live.code} also bills {', '.join(s.code for s in others)} -- "
+                                                            "voiding it un-invoices them too; confirm that first")
+            for s in live.shipments:
+                if s.status == "invoiced":
+                    s.status = "delivered" if s.delivered_at else "shipped"
+            live.status, live.voided_at, live.voided_by = "void", datetime.utcnow(), created_by
+            live.void_reason = reason or f"Draft voided: shipment {shipment.code} was undone"
+            db.flush()
+            db.refresh(shipment)
         for line in shipment.lines:
             lot = db.query(Lot).filter(Lot.id == line.lot_id).first() if line.lot_id else None
             item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
@@ -1255,8 +1313,18 @@ class ShipmentService:
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status in ShipmentService.SHIPPED_STATUSES:
             raise HTTPException(status_code=400, detail="Un-ship this shipment before deleting it")
-        if db.query(InvoiceShipment).filter(InvoiceShipment.shipment_id == shipment.id).first():
-            raise HTTPException(status_code=400, detail="An invoice references this shipment, so it can't be deleted")
+        if InvoiceService.live_invoice_for_shipment(db, shipment.id):
+            raise HTTPException(status_code=400, detail="An invoice bills this shipment -- void it first")
+        # Voided invoices keep their lines (and so their history); only the link to this shipment goes.
+        db.query(InvoiceShipment).filter(InvoiceShipment.shipment_id == shipment.id).delete()
+        db.query(InvoiceLine).filter(InvoiceLine.shipment_id == shipment.id).update({InvoiceLine.shipment_id: None})
+        db.query(Invoice).filter(Invoice.shipment_id == shipment.id).update({Invoice.shipment_id: None})
+        # Proof of delivery stays on record, on the order, in case a question ever comes up.
+        from app.models import Attachment
+        for att in db.query(Attachment).filter(Attachment.entity_type == "shipment", Attachment.entity_id == shipment.id,
+                                               Attachment.category == "pod").all():
+            att.entity_type, att.entity_id = "customer_order", shipment.order_id
+            att.note = f"From deleted shipment {shipment.code}" + (f" -- {att.note}" if att.note else "")
         if shipment.status in ShipmentService.OPEN_STATUSES:
             for line in shipment.lines:
                 item = db.query(StockItem).filter(StockItem.id == line.item_id).first()
@@ -1643,6 +1711,7 @@ class InvoiceService:
         if status == "paid" and invoice.balance > 0.005:  # paid means the payments cover it -- record them first
             raise HTTPException(status_code=400, detail=f"{invoice.balance:,.2f} is still open -- record the payment and it's marked paid automatically")
         if status == "void":
+            invoice.voided_at, invoice.voided_by = datetime.utcnow(), None
             # Its shipments become billable again (they can go on a new or combined invoice).
             for shipment in invoice.shipments:
                 if shipment.status == "invoiced":
@@ -1654,6 +1723,21 @@ class InvoiceService:
 
 
 class InvoicePaymentService:
+    @staticmethod
+    def remove(db: Session, invoice_id: int, payment_id: int) -> Invoice:
+        invoice = InvoiceService.get(db, invoice_id)
+        p = db.query(InvoicePayment).filter(InvoicePayment.id == payment_id, InvoicePayment.invoice_id == invoice.id).first()
+        if not p:
+            raise HTTPException(status_code=404, detail="Payment not found on this invoice")
+        db.delete(p)
+        db.flush()
+        db.refresh(invoice)
+        if invoice.status == "paid" and invoice.balance > 0.005:
+            invoice.status = "sent"
+        db.commit()
+        db.refresh(invoice)
+        return invoice
+
     @staticmethod
     def record(db: Session, invoice_id: int, data, created_by: str) -> Invoice:
         invoice = InvoiceService.get(db, invoice_id)

@@ -109,6 +109,12 @@ def record_invoice_payment(invoice_id: int, data: InvoicePaymentInput, db: Sessi
     return InvoicePaymentService.record(db, invoice_id, data, created_by=current_user.username)
 
 
+@router.delete("/{invoice_id}/payments/{payment_id}", response_model=InvoiceResponse, dependencies=[Depends(require_role("manager"))])
+def remove_invoice_payment(invoice_id: int, payment_id: int, db: Session = Depends(get_db)):
+    """Take a recorded payment off (wrong entry, refund, or before undoing the shipment)."""
+    return InvoicePaymentService.remove(db, invoice_id, payment_id)
+
+
 @router.put("/{invoice_id}/funding", response_model=InvoiceResponse, dependencies=[Depends(require_role("manager"))])
 def set_invoice_funding(invoice_id: int, data: InvoiceFundingUpdate, db: Session = Depends(get_db)):
     """Edit disbursement date / funding amount / discount by hand. Payments aren't touched."""

@@ -97,3 +97,13 @@ def test_bolt_with_nut_never_draws_from_generic_nuts():
     assert match(spec("5/8-11 A194-2H HEX NUT"), g) == "check"
     assert match(spec("7/8-9 A194 2H HVY HEX NUT HDG WAX DIPPED"), spec("7/8-9 A194 2H HVY HEX NUT HDG")) is None  # wax-dipped differs
     assert match(spec("5/8-11 A194 2H HVY HEX NUT MECH GALV"), g) is None  # mech galv is not HDG
+
+
+def test_generic_test_order_renewed_once_used(make, api):
+    r = api.post("/api/test-data/generic-nuts")
+    o = api.get(f"/api/customer-orders/{r['order_id']}")
+    api.post(f"/api/customer-orders/{o['id']}/confirm")
+    bolt = o["lines"][0]
+    api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": bolt["id"], "quantity": 10}]})  # used now
+    r2 = api.post("/api/test-data/generic-nuts")
+    assert r2["order_created"] and r2["order_id"] != r["order_id"]  # same TEST PO # is fine for test orders

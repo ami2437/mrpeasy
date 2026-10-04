@@ -19,7 +19,7 @@
     </div>
     <div class="card">
       <div class="row" style="align-items:center;">
-        <input type="text" id="search" placeholder="Search shipment code, order code, carrier, or tracking #...">
+        <input type="text" id="search" placeholder="Search shipment, order, PO #, carrier, or tracking #...">
         <select id="status-filter" style="max-width:200px;">
           <option value="">All statuses</option>
           <option value="open">Open (new + ready)</option>
@@ -33,8 +33,8 @@
     </div>
     <div class="card">
       <table class="list-fit">
-        <thead><tr><th>Code</th><th>Order</th><th>Created</th><th>Ship date</th><th>Delivered</th><th>Picked</th><th>Carrier</th><th>Tracking</th><th>POD</th><th>Status</th></tr></thead>
-        <tbody id="shipments-body"><tr><td colspan="10">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th>Order</th><th>PO #</th><th>Created</th><th>Ship date</th><th>Delivered</th><th>Picked</th><th>Carrier</th><th>Tracking</th><th>POD</th><th>Status</th></tr></thead>
+        <tbody id="shipments-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -59,6 +59,7 @@
       q = q.toLowerCase();
       return s.code.toLowerCase().includes(q)
         || orderCode(s.order_id).toLowerCase().includes(q)
+        || ((order(s.order_id) || {}).po_number || "").toLowerCase().includes(q)
         || (s.carrier || "").toLowerCase().includes(q)
         || (s.tracking_number || "").toLowerCase().includes(q);
     }
@@ -75,13 +76,14 @@
         cancelledTab || !statusFilter || (statusFilter === "open" ? ["new", "ready"].includes(s.status) : s.status === statusFilter)
       ));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="10" class="muted">${shipments.length ? (cancelledTab ? "No cancelled shipments." : "No shipments match this search/filter.") : "No shipments yet — create one from a customer order."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">${shipments.length ? (cancelledTab ? "No cancelled shipments." : "No shipments match this search/filter.") : "No shipments yet — create one from a customer order."}</td></tr>`;
         return;
       }
       tbody.innerHTML = filtered.map(s => `
         <tr class="${s.invoice_combined ? "row-combined" : ""}">
           <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
           <td>${orderCode(s.order_id)}</td>
+          <td>${escapeHtml((order(s.order_id) || {}).po_number || "")}</td>
           <td>${fmtDate(s.created_at)}</td>
           <td>${fmtDate(s.ship_date)}</td>
           <td>${fmtDate(s.delivered_at)}</td>

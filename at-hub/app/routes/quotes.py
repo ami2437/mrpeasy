@@ -192,7 +192,7 @@ def convert(quote_id: int, data: ConvertIn, db: Session = Depends(get_db), user:
         notes=f"From quote {q.code}" + (f" ({q.customer_ref})" if q.customer_ref else ""),
         lines=[schemas.CustomerOrderLineCreate(item_id=l.item_id, quantity=l.quantity, unit_price=l.unit_price, notes=l.notes)
                for l in q.lines]), user.username)
-    q.status, q.order_id = "converted", order.id
+    q.status_before_convert, q.status, q.order_id = q.status, "converted", order.id
     db.commit()
     return {"order_id": order.id, "order": order.code, "quote": _out(db, q)}
 
