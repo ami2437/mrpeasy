@@ -160,7 +160,7 @@ def _files_for(db: Session, g: dict) -> List[tuple]:
         seen.add(a["name"])
         if a["kind"] == "packing_list":
             sh = next(ShipmentService.get(db, s["id"]) for s in g["shipments"] if a["name"] == f"Packing-List-{s['code']}.pdf")
-            files.append((packing_list_pdf(db, sh), a["name"], "application/pdf"))
+            files.append((packing_list_pdf(db, sh, include_pallets=any(b.pallet_number for b in sh.boxes)), a["name"], "application/pdf"))
         elif a["kind"] == "labels":
             sh = next(ShipmentService.get(db, s["id"]) for s in g["shipments"] if a["name"] == f"Labels-{s['code']}.pdf")
             pdf = labels_pdf(db, sh)

@@ -723,6 +723,7 @@ async function showDetail(id) {
       <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
       <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
       <label class="inline-check"><input type="checkbox" id="pl-pallets" ${shipment.boxes.some(b => b.pallet_number) ? "checked" : ""}> Pallet info</label>
+      <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-pallet-boxes"> Boxes per pallet</label>
       <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
       <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
     </div>
@@ -852,7 +853,8 @@ function printPackingList(shipmentId) {
   const pallets = document.getElementById("pl-pallets")?.checked ?? false;
   const lots = document.getElementById("pl-lots")?.checked ?? false;
   const notes = document.getElementById("pl-notes")?.checked ?? true;
-  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}`);
+  const palletBoxes = document.getElementById("pl-pallet-boxes")?.checked ?? false;
+  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}&pallet_boxes=${palletBoxes}`);
 }
 
 async function createInvoice(shipmentId) {

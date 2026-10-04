@@ -444,13 +444,16 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
 
 # ---- packing list ----
 def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True, include_pallets: bool = False,
-                     include_lots: bool = False, show_notes: bool = True) -> bytes:
+                     include_lots: bool = False, show_notes: bool = True, include_pallet_boxes: bool = False) -> bytes:
     """include_boxes adds the per-line box breakdown; include_pallets adds a Pallet # column
-    plus the pallet weight/dimensions section; include_lots adds the Lot # column -- all chosen
-    by the user at print time."""
+    plus the pallet weight/dimensions section; include_lots adds the Lot # column; include_pallet_boxes adds the
+    box count per pallet -- all chosen by the user at print time. Lines follow the customer order, each nut
+    under its bolt and on its bolt's pallet (app/services/nut_pairing.py)."""
+    from app.services.nut_pairing import line_order, pallets_by_line
     order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
     designed = _designed(db, "packing_list", shipment, order.customer_id if order else None, include_boxes=include_boxes,
-                         include_pallets=include_pallets, include_lots=include_lots, show_notes=show_notes)
+                         include_pallets=include_pallets, include_lots=include_lots, show_notes=show_notes,
+                         include_pallet_boxes=include_pallet_boxes)
     if designed:
         return designed
     company = get_company_profile(db)
@@ -508,8 +511,11 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         return "\n".join(out)
     show_previous = bool(previous)
 
+    codes = {i: it.code for i, it in items.items()}
+    eff_pallets = pallets_by_line(shipment, codes)
+    ordered = [ol.id for ol in line_order(list(order_lines.values()), lambda ol: codes.get(ol.item_id, ""))]
     rows, total_units, box_texts = [], 0, []
-    for line_id in sorted(shipped_by_line, key=lambda i: (order_lines[i].line_no or 0, i)):
+    for line_id in ordered:
         ol, shipped = order_lines[line_id], shipped_by_line[line_id]
         item = items.get(ol.item_id)
         backordered = max(0, ol.quantity - ol.shipped_quantity - ol.booked_quantity)
@@ -518,8 +524,7 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
             if b.order_line_id == line_id:
                 by_qty[b.quantity_in_box] = by_qty.get(b.quantity_in_box, 0) + 1
         boxes = "\n".join(f"{n} Box × {qty(q)}" for q, n in sorted(by_qty.items(), reverse=True)) or "—"
-        line_pallets = ", ".join(dict.fromkeys(b.pallet_number for b in shipment.boxes
-                                               if b.order_line_id == line_id and b.pallet_number)) or "—"
+        line_pallets = ", ".join(eff_pallets.get(line_id, [])) or "—"
         row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), described(item.title if item else "", ol, show_notes)]
         if include_lots:
             row.append(p(", ".join(dict.fromkeys(lots_by_line.get(line_id, []))) or "—", "td_muted"))
@@ -554,8 +559,8 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
     story.append(_data_table(headers, rows, widths, right_cols=num_cols))
 
     pallets = {}
-    for b in shipment.boxes:
-        key = b.pallet_number or "Unassigned"
+    for b in sorted(shipment.boxes, key=lambda b: (ordered.index(b.order_line_id) if b.order_line_id in ordered else 9999, b.box_number or 0)):
+        key = b.pallet_number or (eff_pallets.get(b.order_line_id) or ["Unassigned"])[0]  # a nut rides on its bolt's pallet
         entry = pallets.setdefault(key, {"items": [], "boxes": 0})
         code = items[b.item_id].code if b.item_id in items else str(b.item_id)
         if code not in entry["items"]:
@@ -583,11 +588,12 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
             info = next((pw for pw in shipment.pallets if pw.pallet_number == key), None)
             if key == "Unassigned":
                 continue
-            prow.append([key, p(", ".join(entry["items"]), "td"), str(entry["boxes"]),
-                         f"{info.weight:,.1f}" if info and info.weight else "—", (info.dimensions if info else None) or "—"])
+            prow.append([key, p(", ".join(entry["items"]), "td")] + ([str(entry["boxes"])] if include_pallet_boxes else [])
+                        + [f"{info.weight:,.1f}" if info and info.weight else "—", (info.dimensions if info else None) or "—"])
+        heads = ["Pallet #", "Items"] + (["Boxes"] if include_pallet_boxes else []) + ["Weight (lbs)", "Dimensions (L x W x H in)"]
+        widths = [1.0 * inch, 3.8 * inch if not include_pallet_boxes else 3.0 * inch] + ([0.8 * inch] if include_pallet_boxes else []) + [1.1 * inch, 1.4 * inch]
         story += [Spacer(1, 16), p("PALLETS", "label"), Spacer(1, 4),
-                  _data_table(["Pallet #", "Items", "Boxes", "Weight (lbs)", "Dimensions (L x W x H in)"], prow,
-                              [1.0 * inch, 3.0 * inch, 0.8 * inch, 1.1 * inch, 1.4 * inch], right_cols=(2, 3))]
+                  _data_table(heads, prow, widths, right_cols=(2, 3) if include_pallet_boxes else (2,))]
 
     story += _notes_box([("NOTES", shipment.notes)])
 

@@ -54,6 +54,7 @@
       <div class="small muted pack-tools" style="margin-top:6px;">Packing list prints:
         <label class="inline-check"><input type="checkbox" id="pl-all-boxes" checked> Box details</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-pallets" checked> Pallet info</label>
+        <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-all-pallet-boxes"> Boxes per pallet</label>
         <label class="inline-check"><input type="checkbox" id="pl-all-lots"> Lot #</label>
         <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-all-notes" checked> Line notes</label>
       </div>
@@ -633,7 +634,7 @@
       if ((stageOf(byId(id)) || {}).key === "pack") { openCards.add(id); renderAll(); showResult(`${byId(id).code} picked — accept its packing next.`); }
     }
     function plQuery() {
-      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}&notes=${document.getElementById("pl-all-notes").checked}`;
+      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}&notes=${document.getElementById("pl-all-notes").checked}&pallet_boxes=${document.getElementById("pl-all-pallet-boxes").checked}`;
     }
     function packingListOne(id) { openPdf(`/api/shipments/${id}/packing-list.pdf?${plQuery()}`); }
 

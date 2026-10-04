@@ -51,6 +51,15 @@ IGNORED_CUSTOM = {"custom_748", "custom_775", "custom_766", "custom_218"}  # not
 
 
 # ---------- small helpers ----------
+def ord_key(p):
+    """A line's position on its document. MRPeasy sends it as text ("1", "2", ... "10"): sort it as a number, or
+    "10" comes before "2" and the order's lines come out scrambled."""
+    try:
+        return (0, int(float(p.get("ord") or 0)), p.get("line_id") or 0)
+    except (TypeError, ValueError):
+        return (1, 0, p.get("line_id") or 0)
+
+
 def f(v) -> float:
     try:
         return float(v or 0)
@@ -201,7 +210,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         db.add(po)
         pos[o["pur_ord_id"]] = po
         used_lots = set()
-        for p in sorted(o["products"], key=lambda p: p["ord"] or 0):
+        for p in sorted(o["products"], key=ord_key):
             line = PurchaseOrderLine(po=po, mrp_id=p["line_id"], item_id=items[p["article_id"]].id, quantity=f(p["quantity"]),
                                      unit_cost=f(p["item_price"]), vendor_item_code=vcode.get((o["vendor_id"], p["article_id"])),
                                      vendor_description=clean(p["description"]))
@@ -299,7 +308,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
             created_at=dt(o["created"]))
         db.add(co)
         cos[o["cust_ord_id"]] = co
-        for n, p in enumerate(sorted(o["products"], key=lambda p: p["ord"] or 0), start=1):
+        for n, p in enumerate(sorted(o["products"], key=ord_key), start=1):
             line = CustomerOrderLine(order=co, mrp_id=p["line_id"], line_no=n, item_id=items[p["article_id"]].id,
                                      quantity=f(p["quantity"]), unit_price=f(p["item_price"]),
                                      delivery_date=dt(p["delivery_date"]), shipped_quantity=0)
@@ -419,7 +428,7 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
         for sh_ in matched_sh:
             for sl in sh_.lines:
                 delivered[sl.order_line_id] += sl.quantity
-        for p in sorted(i["products"], key=lambda p: p["ord"] or 0):
+        for p in sorted(i["products"], key=ord_key):
             it, qty, price = items[p["article_id"]], f(p["quantity"]), f(p["item_price"])
             line = co_lines.get(p["co_line_id"])
             if line is not None:
@@ -571,6 +580,13 @@ def _packing_from_old_backend(db, shipments, items, rep):
         db.add(ShipmentBox(shipment=sh, order_line_id=co_line.id if co_line else None, item_id=it.id,
                            box_number=box_no, quantity_in_box=qty, lot_code=lots, pallet_number=pallet))
         n_box += 1
+    # the old backend left nut boxes without a pallet (its packing list showed them on the bolt's): store that
+    db.flush()
+    from app.services.nut_pairing import fill_nut_pallets
+    codes = {i.id: i.code for i in items.values()}
+    n_nut = sum(fill_nut_pallets(sh, codes) for sh in sh_by_code.values() if sh.boxes)
+    if n_nut:
+        rep.add("packing", f"{n_nut} nut boxes put on their bolt's pallet (as the old packing lists showed them)")
     for code, pallet, weight, dims in old.execute("select shipment_code, pallet_number, weight, dimensions from pallet_weights"):
         if code in sh_by_code:
             db.add(PalletWeight(shipment=sh_by_code[code], pallet_number=pallet, weight=weight, dimensions=dims))

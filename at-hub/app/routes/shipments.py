@@ -52,7 +52,8 @@ def list_unpacked(db: Session = Depends(get_db)):
 
 
 @router.get("/packing-lists.pdf")
-def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, db: Session = Depends(get_db)):
+def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, pallet_boxes: bool = False,
+                  db: Session = Depends(get_db)):
     """Several packing lists in one PDF (batch screen): ?ids=3,7,9."""
     from io import BytesIO
     from pypdf import PdfReader, PdfWriter
@@ -60,7 +61,8 @@ def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: boo
     for raw in ids.split(","):
         if raw.strip().isdigit():
             shipment = ShipmentService.get(db, int(raw))
-            pdf = packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes)
+            pdf = packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
+                                   include_pallet_boxes=pallet_boxes)
             for page in PdfReader(BytesIO(pdf)).pages:
                 writer.add_page(page)
     out = BytesIO()
@@ -99,10 +101,12 @@ def email_pod(shipment_id: int, data: PodEmailRequest, db: Session = Depends(get
 
 
 @router.get("/{shipment_id}/packing-list.pdf")
-def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, db: Session = Depends(get_db)):
+def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, pallet_boxes: bool = False,
+                 db: Session = Depends(get_db)):
     """?boxes= / ?pallets= / ?lots= choose whether box breakdown, pallet info and lot #s print on the list."""
     shipment = ShipmentService.get(db, shipment_id)
-    return Response(packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes), media_type="application/pdf",
+    return Response(packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
+                                     include_pallet_boxes=pallet_boxes), media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="Packing-List-{shipment.code}.pdf"'})
 
 

@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from .load import LIVE_DB, address_text, dt, f
+from .load import LIVE_DB, address_text, dt, f, ord_key
 
 APP = "http://localhost:8010"
 
@@ -83,7 +83,7 @@ def sample(snapshot: Path, n: int = 4, seed=None) -> Path:
         ], ["Item", "Qty", "Unit price", "Shipped"], [
             ((p["item_code"], items_by_id[by_mrp[p["line_id"]]["item_id"]]["code"]), (_q(p["quantity"]), _q(by_mrp[p["line_id"]]["quantity"])),
              (_m(p["item_price"]), _m(by_mrp[p["line_id"]]["unit_price"])), (_q(p["shipped"]), _q(by_mrp[p["line_id"]]["shipped_quantity"])))
-            for p in sorted(o["products"], key=lambda p: p["ord"] or 0)])
+            for p in sorted(o["products"], key=ord_key)])
 
     # --- purchase orders
     for o in rnd.sample(snap("purchase_orders"), min(n, len(snap("purchase_orders")))):
@@ -102,7 +102,7 @@ def sample(snapshot: Path, n: int = 4, seed=None) -> Path:
             ((p["item_code"], items_by_id[lines[p["line_id"]]["item_id"]]["code"]), (_q(p["quantity"]), _q(lines[p["line_id"]]["quantity"])),
              (f"{f(p['item_price']):.5f}", f"{lines[p['line_id']]['unit_cost']:.5f}"),
              (p["lot_code"] or "", lots.get(lines[p["line_id"]]["id"]) or (f"{lines[p['line_id']]['planned_lot_code']} (expected)" if lines[p["line_id"]]["planned_lot_code"] else "")))
-            for p in sorted(o["products"], key=lambda p: p["ord"] or 0)])
+            for p in sorted(o["products"], key=ord_key)])
 
     # --- shipments
     for s in rnd.sample(snap("shipments"), min(n, len(snap("shipments")))):
@@ -143,7 +143,7 @@ def sample(snapshot: Path, n: int = 4, seed=None) -> Path:
             ("Shipments (inferred)", "(MRPeasy doesn't link these)", ships or "—"),
         ], ["Item", "Qty", "Unit price"], [
             ((p["item_code"], items_by_id[l["item_id"]]["code"] if l["item_id"] else ""), (_q(p["quantity"]), _q(l["quantity"])), (_m(p["item_price"]), _m(l["unit_price"])))
-            for p, l in zip(sorted(i["products"], key=lambda p: p["ord"] or 0), sorted(lines, key=lambda l: l["id"]))])
+            for p, l in zip(sorted(i["products"], key=ord_key), sorted(lines, key=lambda l: l["id"]))])
 
     # --- stock items (only ones with stock, so there's something to compare)
     inv_rows = [r for r in snap("inventory") if f(r["quantity"])]

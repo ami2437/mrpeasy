@@ -1492,6 +1492,12 @@ class ShipmentService:
                 lot_code=box.lot_code,
                 pallet_number=box.pallet_number,
             ))
+        db.flush()
+        db.refresh(shipment)
+        # a nut left without a pallet goes on its bolt's -- so its labels say so too
+        from app.services.nut_pairing import fill_nut_pallets
+        codes = {i.id: i.code for i in db.query(StockItem).filter(StockItem.id.in_({b.item_id for b in shipment.boxes})).all()}
+        fill_nut_pallets(shipment, codes)
         db.commit()
         db.refresh(shipment)
         return shipment

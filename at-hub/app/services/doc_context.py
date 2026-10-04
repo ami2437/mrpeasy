@@ -198,8 +198,11 @@ def _packing_list(db, sh: Shipment, opt):
     for sl, s in earlier:
         e = previous.setdefault(sl.order_line_id, {}).setdefault(s.id, {"code": s.code, "qty": 0, "when": s.delivered_at or s.ship_date})
         e["qty"] += sl.quantity
+    from app.services.nut_pairing import line_order, pallets_by_line
+    codes = {i: it.code for i, it in items.items()}
+    eff_pallets = pallets_by_line(sh, codes)
     rows = []
-    for lid in sorted(by_line, key=lambda i: (ols[i].line_no or 0, i)):
+    for lid in [ol.id for ol in line_order(list(ols.values()), lambda ol: codes.get(ol.item_id, ""))]:
         ol = ols[lid]
         it = items.get(ol.item_id)
         counts = {}
@@ -212,9 +215,9 @@ def _packing_list(db, sh: Shipment, opt):
                      "backorder": qty(back) if back else "—",
                      "previous": "\n".join(f"{e['code']}: {qty(e['qty'])}" + (f" · {date(e['when'])}" if e["when"] else "") for e in previous.get(lid, {}).values()),
                      "boxes": "\n".join(f"{n} × {qty(q)}" for q, n in sorted(counts.items(), reverse=True)) or "—",
-                     "pallet": ", ".join(dict.fromkeys(b.pallet_number for b in sh.boxes if b.order_line_id == lid and b.pallet_number)),
+                     "pallet": ", ".join(eff_pallets.get(lid, [])),
                      "check": ""})
-    pallets = sorted({b.pallet_number for b in sh.boxes if b.pallet_number})
+    pallets = sorted({p for ps in eff_pallets.values() for p in ps})
     weight = sum(p.weight or 0 for p in sh.pallets)
     ship_to = (order.ship_to_address if order else None)
     from app.services.concurrency import REQUEST_BASE
