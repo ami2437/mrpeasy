@@ -43,7 +43,7 @@
         <span class="pack-tools">
           <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openSetPackSizes()" title="One grid of every item on the ticked shipments: type, paste, copy from a shipment or apply a preset">Set Pack Sizes</button>
           <label class="check-label" title="How the pack size boxes are pre-filled before you change them">Pre-fill <select id="pack-rule" onchange="setPackRule(this.value)" style="width:auto;max-width:190px;"></select></label>
-          <a class="link small" onclick="togglePastePanel('pack')">Paste Pack Sizes</a>
+          <button class="secondary small-btn" style="flex:0 0 auto;" onclick="togglePastePanel('pack')" title="Paste item # and pack size (space, tab or comma) to fill the ticked / shown shipments">Paste Pack Sizes</button>
           <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
           <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
         </span>
@@ -75,7 +75,7 @@
           </div>
         </div>
         <div class="muted small">
-          <p style="margin-top:0;">Two columns copied from Excel (tab or comma separated, header optional): <strong>Item # · Pack Size</strong>.</p>
+          <p style="margin-top:0;">Two columns — <strong>Item # · Pack Size</strong> — separated by a space, tab or comma (copied from Excel works). Header row optional.</p>
           <p>Applies to the <strong>selected</strong> shipments, or every shipment shown if none are selected. Start a row with a shipment code
             (e.g. <code>SH-0012</code>) to aim it at one shipment.</p>
           <p>The new size becomes the item's default; the previous one is kept in its history (see <a class="link" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</a>).</p>
@@ -869,7 +869,7 @@
       let lineHits = 0;
 
       document.getElementById(`paste-${kind}-text`).value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
-        let cols = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+        let cols = splitPasteRow(row, kind === "pack");  // pallet rows: tab / comma only (dimensions have spaces)
         let only = null;
         if (byCode[cols[0].toLowerCase()]) { only = byCode[cols[0].toLowerCase()]; cols = cols.slice(1); }
         const [code, a, b, c] = cols;
@@ -938,7 +938,7 @@
       const item = itemObj(itemId) || {};
       return new Promise(resolve => {
         const back = document.createElement("div");
-        back.className = "modal-backdrop";
+        back.className = "modal-backdrop over-glass";
         const done = v => { document.removeEventListener("keydown", onKey); back.remove(); resolve(v); };
         const onKey = e => { if (e.key === "Escape") done(null); };
         back.innerHTML = `<div class="modal pack-uses" role="dialog" aria-modal="true">
@@ -1050,13 +1050,13 @@
           </select></label>
           <a class="link small" id="sp-del-preset" style="display:none;" onclick="spDeletePreset()">Delete this preset</a>
           <span class="spacer"></span>
-          <a class="link small" onclick="document.getElementById('sp-paste-wrap').hidden = !document.getElementById('sp-paste-wrap').hidden; document.getElementById('sp-paste').focus()">Paste from Excel</a>
+          <a class="link small" onclick="document.getElementById('sp-paste-wrap').hidden = !document.getElementById('sp-paste-wrap').hidden">Hide / show paste box</a>
           <a class="link small" onclick="spClear()">Clear all</a>
         </div>
-        <div id="sp-paste-wrap" hidden class="sp-paste">
-          <textarea id="sp-paste" rows="4" placeholder="Item#&#9;Pack Size&#10;16713&#9;50&#10;15420&#9;100"></textarea>
-          <div class="btn-row"><button type="button" class="secondary" onclick="spPaste()">Fill The Grid</button>
-            <span class="muted small">Two columns copied from Excel (tab or comma): Item # · Pack size. Header row optional.</span></div>
+        <div id="sp-paste-wrap" class="sp-paste">
+          <label class="small"><b>Paste item # and pack size</b> — one item per line, separated by a space, tab or comma (straight from Excel works). A header row is fine.</label>
+          <textarea id="sp-paste" rows="4" placeholder="Item #   Pack size&#10;16713   50&#10;15420   100"></textarea>
+          <div class="btn-row"><button type="button" class="secondary" onclick="spPaste()">Fill The Grid</button></div>
         </div>
         <div class="sm-body"><table class="sm-table no-table-tools no-col-bands" id="sp-table">
           <thead><tr><th>Item</th><th class="grow">Description</th><th class="num">Ships</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Now</th></tr></thead>
@@ -1141,7 +1141,7 @@
       const byCode = Object.fromEntries(sp.list.map(r => [normCode(itemCode(r.item_id)), r.item_id]));
       const map = {}, missing = [];
       document.getElementById("sp-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
-        const [code, size] = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+        const cols = splitPasteRow(row), code = cols[0], size = cols[cols.length - 1];
         const n = parseInt(String(size || "").replace(/[^\d]/g, ""));
         if (!code || !n) return;  // header or blank
         const id = byCode[normCode(code)];

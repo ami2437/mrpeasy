@@ -1612,3 +1612,5 @@ html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 .sp-foot { flex-wrap: wrap; gap: 10px; }
 .sp-panel .sp-src { max-width: 230px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sp-panel .sp-boxes { white-space: nowrap; }
+.modal-backdrop.over-glass { z-index: 170; }
+.sp-paste label { display: block; margin-bottom: 4px; text-transform: none; }

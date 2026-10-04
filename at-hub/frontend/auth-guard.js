@@ -383,6 +383,14 @@ function flyIntoBox(chips, box, count) {
   })));
 }
 
+// One pasted row -> columns: tab-separated (Excel), else comma, else spaces. Item #s never contain spaces.
+function splitPasteRow(row, allowSpaces = true) {
+  const t = String(row || "").trim();
+  if (t.includes("\t")) return t.split("\t").map(c => c.trim());
+  if (t.includes(",")) return t.split(",").map(c => c.trim());
+  return allowSpaces ? t.split(/\s+/) : [t];
+}
+
 // A small choice pop-up: resolves to the clicked button's value (null on Esc / click outside),
 // with the dialog element so the caller can read any inputs in `body` before it closes.
 // askDialog({ title, body: html, buttons: [{ label, value, cls }] }) -> Promise<{ value, el }>
@@ -390,6 +398,7 @@ function askDialog({ title, body = "", buttons = [], tone = "" }) {
   return new Promise(resolve => {
     const back = document.createElement("div");
     back.className = "modal-backdrop";
+    if (document.body.classList.contains("glass-open")) back.classList.add("over-glass");  // asked from inside a glass window: show above it
     back.innerHTML = `<div class="modal ask-dialog ${tone}" role="dialog" aria-modal="true"><h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
       <div class="ask-body">${body}</div>
       <div class="btn-row" style="margin-top:14px;">${buttons.map((b, i) => `<button type="button" class="${b.cls || ""}" data-i="${i}">${escapeHtml(b.label)}</button>`).join("")}</div></div>`;
