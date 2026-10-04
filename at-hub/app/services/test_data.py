@@ -165,3 +165,75 @@ def ensure_generic_test_data(db: Session) -> dict:
         ), created_by=ACTOR)  # left as a draft: confirm it on the order screen
     return {"order_id": order.id, "order_code": order.code, "order_created": created, "po_code": po_code,
             "items": [code for code, *_ in GENERIC_TEST]}
+
+
+# ---- pack-size test orders: real items (with packing history), two TEST customers, a booked shipment each ----
+PACK_TEST_CUSTOMERS = [
+    dict(name="TEST Pack — Tulsa Yard", contact_name="Pat Tester", email="test-pack-tulsa@example.com",
+         address="1 Test Yard Rd\nTulsa, OK 74107"),
+    dict(name="TEST Pack — Beasley Plant", contact_name="Sam Tester", email="test-pack-beasley@example.com",
+         address="2 Test Plant Way\nBeasley, TX 77417"),
+]
+PACK_TEST_PREFIX = "TEST-PK-"
+
+
+def make_pack_test_orders(db: Session, n_orders: int = 10, lines_per_order: int = 15, seed: int = 7) -> dict:
+    """n confirmed TEST orders of ~lines_per_order real items each (bolts with their nuts), alternating between two TEST
+    customers, each with a shipment booking every line -- they land in Bulk Operations -> To pick. Quantities are
+    mixes of full boxes and part boxes at each item's known pack size, so the box splits are worth checking.
+    Safe to run again: numbering carries on (TEST-PK-11...)."""
+    import random
+    from datetime import datetime, timedelta
+    from app.models import ShipmentBox
+    from app.schemas import BookLineRequest, CreateShipmentRequest
+    from app.services.crud import ShipmentService
+    from app.services.pack_sizes import usage
+
+    rnd = random.Random(seed + db.query(CustomerOrder).filter(CustomerOrder.po_number.like(f"{PACK_TEST_PREFIX}%")).count())
+    custs = [_get_or_create_party(db, Customer, dict(c, shipping_address=c["address"])) for c in PACK_TEST_CUSTOMERS]
+    packed = {i for i, in db.query(ShipmentBox.item_id).distinct()}
+    items = [i for i in db.query(StockItem).order_by(StockItem.code).all()
+             if not i.code.upper().startswith("TEST") and not getattr(i, "is_generic", False) and (i.available or 0) >= 300
+             and (i.id in packed or i.default_pack_size)]
+    by_code = {i.code: i for i in items}
+    uses = usage(db, [i.id for i in items], limit=1)
+    known = lambda i: (uses.get(i.id) or [{}])[0].get("pack_size") or i.default_pack_size or 100
+    free = {i.id: i.available for i in items}
+    # bolts travel with their nut (15420 + 15420-NUT), like the real orders
+    groups = []
+    for i in items:
+        if i.code.upper().endswith(("-NUT", "-NUTS")):
+            continue
+        nut = by_code.get(f"{i.code}-NUT") or by_code.get(f"{i.code}-NUTS")
+        groups.append([i, nut] if nut else [i])
+    made = []
+    start = db.query(CustomerOrder).filter(CustomerOrder.po_number.like(f"{PACK_TEST_PREFIX}%")).count()
+    for k in range(n_orders):
+        no = start + k + 1
+        cust = custs[k % len(custs)]
+        rnd.shuffle(groups)
+        lines, used = [], set()
+        for g in groups:
+            if len(lines) + len(g) > lines_per_order:
+                continue
+            base = known(g[0])
+            qty = base * rnd.randint(1, 6) + rnd.choice([0, 0, rnd.randint(1, max(1, base - 1))])
+            if any(free[x.id] < qty for x in g) or any(x.id in used for x in g):
+                continue
+            for x in g:
+                lines.append(CustomerOrderLineCreate(item_id=x.id, quantity=qty, unit_price=round(x.selling_price or 0, 4)))
+                free[x.id] -= qty
+                used.add(x.id)
+            if len(lines) >= lines_per_order:
+                break
+        order = CustomerOrderService.create(db, CustomerOrderCreate(
+            customer_id=cust.id, po_number=f"{PACK_TEST_PREFIX}{no:02d}", job_number=f"TEST-JOB-{no:02d}", allow_duplicate=True,
+            delivery_date=datetime.utcnow() + timedelta(days=7 + no % 14), ship_to_address=cust.address,
+            notes="TEST order for pack-size testing -- safe to pack, ship or cancel.", lines=lines,
+        ), created_by=ACTOR)
+        CustomerOrderService.confirm(db, order.id)
+        db.refresh(order)
+        sh = CustomerOrderService.create_shipment(db, order.id, CreateShipmentRequest(
+            lines=[BookLineRequest(line_id=l.id, quantity=l.quantity) for l in order.lines]), created_by=ACTOR)
+        made.append({"order": order.code, "po": order.po_number, "customer": cust.name, "lines": len(order.lines), "shipment": sh.code})
+    return {"orders": made}

@@ -960,6 +960,22 @@ async function openPdf(path) {
   }
 }
 
+// Downloads a server-made file (e.g. a ZIP of one PDF per shipment) -- fetched with the auth header, saved under `filename`.
+async function downloadFile(path, filename) {
+  const response = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+  if (!response.ok) {
+    let detail = `Download failed (${response.status})`;
+    try { detail = (await response.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 // Grouped like MRPeasy's own sidebar: modules are organized under the
 // business function they belong to (CRM, Procurement, Warehouse), not a
 // flat list of pages.

@@ -1,5 +1,6 @@
+import json
 import re
-from typing import Optional
+from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -11,7 +12,9 @@ from fastapi import Response
 from app.services.crud import StockItemService, InventoryTransactionService, ProductGroupService, price_history
 from app.dependencies import get_current_active_user, require_any, require_perm
 from app.services.permissions import has
-from app.models import User
+from app.models import PackSizePreset, User
+from pydantic import BaseModel
+from sqlalchemy import func
 
 router = APIRouter(prefix="/api/stock-items", tags=["stock-items"], dependencies=[Depends(require_any("stock.view", "orders.view", "shipments.view", "shipments.work", "purchasing", "quotes", "invoices"))])
 
@@ -49,6 +52,86 @@ def delete_pack_size_history(entry_id: int, db: Session = Depends(get_db)):
 def pack_size_history(item_id: int | None = Query(None), db: Session = Depends(get_db)):
     """Every pack size change, newest first (one item with ?item_id=)."""
     return StockItemService.pack_size_history(db, item_id)
+
+
+# ---- pack-size memory (app/services/pack_sizes.py) and presets ----
+class PackRuleIn(BaseModel):
+    rule: str
+
+
+class PresetIn(BaseModel):
+    name: str
+    customer_id: Optional[int] = None
+    sizes: Dict[str, int]  # item code -> pack size
+
+
+def _preset_out(p: PackSizePreset) -> dict:
+    return {"id": p.id, "name": p.name, "customer_id": p.customer_id, "sizes": json.loads(p.sizes or "{}"),
+            "created_by": p.created_by, "updated_at": p.updated_at}
+
+
+@router.get("/pack-sizes/usage")
+def pack_size_usage(item_ids: str = Query(""), limit: int = Query(10), db: Session = Depends(get_db)):
+    """What each item was actually packed at, newest first: {item_id: [{pack_size, shipment, order, customer, date}]}."""
+    from app.services import pack_sizes
+    ids = [int(x) for x in item_ids.split(",") if x.strip().isdigit()]
+    return pack_sizes.usage(db, ids or None, limit=max(1, min(limit, 50)))
+
+
+@router.get("/pack-sizes/rule")
+def get_pack_rule(db: Session = Depends(get_db)):
+    from app.services import pack_sizes
+    return {"rule": pack_sizes.current_rule(db), "rules": {k: {"label": a, "help": b} for k, (a, b) in pack_sizes.RULES.items()}}
+
+
+@router.put("/pack-sizes/rule", dependencies=[Depends(require_any("stock.edit", "shipments.deliver"))])
+def set_pack_rule(data: PackRuleIn, db: Session = Depends(get_db)):
+    from app.services import pack_sizes
+    from app.services.crud import get_company_profile
+    if data.rule not in pack_sizes.RULES:
+        raise HTTPException(status_code=400, detail=f"Unknown rule {data.rule}")
+    get_company_profile(db).pack_size_rule = data.rule
+    db.commit()
+    return {"rule": data.rule}
+
+
+@router.get("/pack-sizes/presets")
+def list_presets(db: Session = Depends(get_db)):
+    return [_preset_out(p) for p in db.query(PackSizePreset).order_by(PackSizePreset.name).all()]
+
+
+def _clean_preset(data: PresetIn) -> tuple:
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the preset a name")
+    sizes = {k.strip(): int(v) for k, v in data.sizes.items() if k.strip() and v and int(v) > 0}
+    if not sizes:
+        raise HTTPException(status_code=400, detail="A preset needs at least one item with a pack size")
+    return name, sizes
+
+
+@router.post("/pack-sizes/presets", dependencies=[Depends(require_any("stock.edit", "shipments.work"))])
+def create_preset(data: PresetIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    name, sizes = _clean_preset(data)
+    p = db.query(PackSizePreset).filter(func.lower(PackSizePreset.name) == name.lower()).first()
+    if p:  # same name: update it (the screen asks first)
+        p.sizes, p.customer_id = json.dumps(sizes), data.customer_id
+    else:
+        p = PackSizePreset(name=name, customer_id=data.customer_id, sizes=json.dumps(sizes), created_by=current_user.username)
+        db.add(p)
+    db.commit()
+    db.refresh(p)
+    return _preset_out(p)
+
+
+@router.delete("/pack-sizes/presets/{preset_id}", status_code=204, dependencies=[Depends(require_any("stock.edit", "shipments.work"))])
+def delete_preset(preset_id: int, db: Session = Depends(get_db)):
+    p = db.get(PackSizePreset, preset_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    db.delete(p)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/groups/list", response_model=list[ProductGroupResponse])

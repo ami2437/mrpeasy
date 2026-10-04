@@ -77,6 +77,20 @@ class PackSizeHistory(Base):
     changed_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PackSizePreset(Base):
+    """A named set of pack sizes ("Hudson Tulsa - pallets") to apply to many shipments at once.
+    Optionally tied to a customer, so their orders offer it first."""
+    __tablename__ = "pack_size_presets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    sizes = Column(Text, nullable=False, default="{}")  # JSON {item code: pack size}
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Lot(Base):
     __tablename__ = "lots"
 
@@ -632,6 +646,7 @@ class ShipmentBox(Base):
     quantity_in_box = Column(Float, nullable=False)
     lot_code = Column(String, nullable=True)
     pallet_number = Column(String, nullable=True)  # grouping for the packing list / freight -- not printed on the label itself
+    pack_size = Column(Integer, nullable=True)  # the size this line was packed at (a one-box line can't show it otherwise)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -812,6 +827,8 @@ class CompanyProfile(Base):
     invoice_notes = Column(Text, nullable=True)  # payment instructions / terms printed at the bottom of every invoice
     logo_data = Column(Text, nullable=True)  # data: URL (base64 PNG/JPEG) -- printed on invoices, packing lists, labels
     generic_stock_enabled = Column(Boolean, nullable=False, default=True)  # off = no generic-stock offers or draws (quick rollback)
+    # How the packing screens pre-fill pack sizes (app/services/pack_sizes.py RULES): smart | customer | last | default
+    pack_size_rule = Column(String, nullable=True, default="smart")
 
     @property
     def has_logo(self) -> bool:

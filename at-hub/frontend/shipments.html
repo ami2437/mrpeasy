@@ -81,8 +81,8 @@
       tbody.innerHTML = filtered.map(s => `
         <tr class="${s.invoice_combined ? "row-combined" : ""}">
           <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
-          <td>${orderCode(s.order_id)}</td>
-          <td>${escapeHtml((order(s.order_id) || {}).po_number || "")}</td>
+          <td><a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(orderCode(s.order_id))}</a></td>
+          <td>${(order(s.order_id) || {}).po_number ? `<a class="link" href="customer-orders.html?id=${s.order_id}" title="Open the order">${escapeHtml(order(s.order_id).po_number)}</a>` : ""}</td>
           <td>${fmtDate(s.created_at)}</td>
           <td>${fmtDate(s.ship_date)}</td>
           <td>${fmtDate(s.delivered_at)}</td>

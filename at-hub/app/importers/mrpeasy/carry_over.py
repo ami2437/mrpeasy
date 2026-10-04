@@ -5,7 +5,7 @@ stays the same across imports -- order / PO / shipment / invoice codes, item cod
 names, an order line's line #, a PO line's position among lines of the same item -- never by database id.
 
 Carried: attached files (+ which PO lines an MTR covers), learned item matches, line notes (+ "print"),
-vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links, pack sizes (+ history),
+vendor part # links made in AT-HUB, File Matcher / scan picks, generic-stock flags and links, pack sizes (+ history, presets),
 quotes, tasks, roles and Template Designer layouts. (Users and the company profile are copied by load.py.) Files themselves stay in uploads/ untouched;
 only their database rows move. Anything whose record no longer exists is reported, not guessed.
 """
@@ -13,7 +13,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime
 
-from app.models import (Attachment, Customer, CustomerOrder, CustomerOrderLine, Invoice, InvoiceLine, ItemAlias, MtrLink,
+from app.models import (Attachment, Customer, CustomerOrder, CustomerOrderLine, Invoice, InvoiceLine, ItemAlias, MtrLink, PackSizePreset,
                         PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, Quote, QuoteLine, Shipment, StockItem, Task, Vendor,
                         VendorBill, VendorItem)
 
@@ -261,6 +261,15 @@ def carry_over(db, live_path, rep) -> None:
             n += 1
     if n:
         rep.add("carry-over", f"pack size history: {n} {S}")
+
+    # ---- 11. pack size presets (item codes inside; a customer's preset follows the customer by name) ----
+    n = 0
+    for r in _rows(live, "select * from pack_size_presets"):
+        db.add(PackSizePreset(name=r["name"], customer_id=cust_by_name.get(live_cust.get(r["customer_id"])), sizes=r["sizes"],
+                              created_by=r["created_by"], created_at=_dt(r["created_at"]), updated_at=_dt(r["updated_at"])))
+        n += 1
+    if n:
+        rep.add("carry-over", f"pack size presets: {n} {S}")
 
     live.close()
     db.flush()

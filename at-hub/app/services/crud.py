@@ -1182,7 +1182,9 @@ class ShipmentService:
 
     @staticmethod
     def default_boxes(db: Session, shipment: Shipment) -> list:
-        """Boxes by each order line's pack size (the item's default; no pack size = one box), as the packing screen proposes."""
+        """Boxes by each order line's pre-filled pack size (app/services/pack_sizes.py: the customer's / last packed size or
+        the item default; none = one box), as the packing screen proposes."""
+        from app.services import pack_sizes
         out, qty = [], {}
         first = {}
         for l in shipment.lines:
@@ -1190,13 +1192,13 @@ class ShipmentService:
             first.setdefault(l.order_line_id, l)
         for ol_id, total in qty.items():
             l = first[ol_id]
-            item = db.query(StockItem).filter(StockItem.id == l.item_id).first()
-            pack = int((item.default_pack_size if item else None) or 0) or int(total)
+            known = pack_sizes.size_for_line(db, shipment, l.item_id)
+            pack = int(known or 0) or int(total)
             n, left = 0, total
             while left > 1e-9:
                 n += 1
                 out.append(ShipmentBox(shipment_id=shipment.id, order_line_id=ol_id, item_id=l.item_id, box_number=n,
-                                       quantity_in_box=min(pack, left)))
+                                       quantity_in_box=min(pack, left), pack_size=pack if known else None))
                 left -= pack
         return out
 
@@ -1519,6 +1521,7 @@ class ShipmentService:
                 quantity_in_box=box.quantity_in_box,
                 lot_code=box.lot_code,
                 pallet_number=box.pallet_number,
+                pack_size=box.pack_size,
             ))
         db.flush()
         db.refresh(shipment)

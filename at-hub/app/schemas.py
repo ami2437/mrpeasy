@@ -473,6 +473,7 @@ class ShipmentBoxInput(InputModel):
     quantity_in_box: float
     lot_code: Optional[str] = None
     pallet_number: Optional[str] = None
+    pack_size: Optional[int] = None  # the size the line was packed at (pack-size memory)
 
 
 class ShipmentBoxResponse(ShipmentBoxInput):

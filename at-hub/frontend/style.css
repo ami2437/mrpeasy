@@ -1591,3 +1591,24 @@ html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 .ro-step.failed { border-color: #fca5a5; } .ro-step.failed .ro-mark { background: #dc2626; color: #fff; }
 .ro-step.skipped { opacity: .55; }
 .ro-opt { display: inline-flex; margin: 0 0 0 8px; text-transform: none; font-size: 12.5px; }
+
+/* ---- pack-size memory: source of a pre-filled size, recent packings, Set Pack Sizes grid ---- */
+.pack-src { font-size: 11px; color: var(--text-2); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pack-src.src-customer { color: var(--accent); }
+.pack-src.src-none { color: var(--text-3, #94a3b8); }
+.pack-hints .link .ico { width: 12px; height: 12px; vertical-align: -2px; }
+.pack-uses { width: min(720px, 96vw); }
+.pack-uses .pu-row { cursor: pointer; }
+.pack-uses .pu-row:hover td { background: var(--accent-soft); }
+.pack-uses .pu-mine td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.sp-panel { width: min(1000px, 100%); }
+.sp-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; }
+.sp-tools select { width: auto; max-width: min(520px, 70vw); }
+.sp-tools .spacer, .sp-foot .spacer { flex: 1; }
+.sp-paste { margin: 0 0 8px; }
+.sp-paste textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.sp-panel .sp-val { width: 84px; }
+.sp-panel tr.sp-changed td { background: var(--accent-soft); }
+.sp-foot { flex-wrap: wrap; gap: 10px; }
+.sp-panel .sp-src { max-width: 230px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-panel .sp-boxes { white-space: nowrap; }

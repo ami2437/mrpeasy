@@ -19,3 +19,11 @@ def ensure(db: Session = Depends(get_db)):
 def generic_nuts(db: Session = Depends(get_db)):
     """Generic stock test set: TEST-GEN-916-NUT received on a PO, two 9/16 nuts that draw from it, and a draft order."""
     return ensure_generic_test_data(db)
+
+
+@router.post("/pack-orders")
+def pack_orders(n: int = 10, lines: int = 15, db: Session = Depends(get_db)):
+    """Pack-size test set: n confirmed TEST orders (two TEST customers, real items with packing history, ~lines each),
+    each with a shipment booked and waiting in Bulk Operations -> To pick."""
+    from app.services.test_data import make_pack_test_orders
+    return make_pack_test_orders(db, max(1, min(n, 30)), max(1, min(lines, 40)))

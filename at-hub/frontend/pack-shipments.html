@@ -41,6 +41,8 @@
         <a class="link small" onclick="expandAll(true)">Expand all</a>
         <a class="link small" onclick="expandAll(false)">Collapse all</a>
         <span class="pack-tools">
+          <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openSetPackSizes()" title="One grid of every item on the ticked shipments: type, paste, copy from a shipment or apply a preset">Set Pack Sizes</button>
+          <label class="check-label" title="How the pack size boxes are pre-filled before you change them">Pre-fill <select id="pack-rule" onchange="setPackRule(this.value)" style="width:auto;max-width:190px;"></select></label>
           <a class="link small" onclick="togglePastePanel('pack')">Paste Pack Sizes</a>
           <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
           <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
@@ -170,22 +172,6 @@
       return formatBoxCounts(byQty);
     }
 
-    // Every pack size we know for an item: the current default first, then earlier ones.
-    function knownPackSizes(itemId) {
-      const item = itemObj(itemId) || {};
-      const sizes = [];
-      if (item.default_pack_size) sizes.push(item.default_pack_size);
-      packHistory.filter(h => h.item_id === itemId).forEach(h => {
-        [h.pack_size, h.previous_pack_size].forEach(v => { if (v && !sizes.includes(v)) sizes.push(v); });
-      });
-      return sizes;
-    }
-    function packHistoryTitle(itemId) {
-      const rows = packHistory.filter(h => h.item_id === itemId);
-      if (!rows.length) return "No pack size changes recorded yet";
-      return rows.map(h => `${new Date(h.changed_at).toLocaleDateString()}: ${h.previous_pack_size ?? "—"} → ${h.pack_size ?? "—"} (${h.source || ""}${h.changed_by ? `, ${h.changed_by}` : ""})`).join("\n");
-    }
-
     // ---- filtering ----
     function matches(s, q) {
       const ord = order(s.order_id) || {};
@@ -298,7 +284,7 @@
     function drawStageActions() {
       const today = new Date().toISOString().substring(0, 10);
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
-        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>`
+        <button class="secondary" onclick="printSelectedPackingLists()" title="Every selected packing list -- one PDF, or one file each">Packing Lists</button>`
         + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;
       const html = {
         pick: `<button class="next-step" onclick="bulkPickAll()">${icon("check")} Pick All</button>
@@ -306,12 +292,10 @@
         pack: `<button class="next-step" onclick="bulkSavePacking()" title="Saves the boxes and pallets as shown and accepts the packing">${icon("package")} Accept Packing</button>${print}`,
         ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}`,
         shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
-          <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">
-          <button class="secondary" onclick="printSelectedPackingLists()">Packing Lists</button>
-          <button class="secondary" onclick="openDocsDialog('shipments')">${icon("mail")} Send / Print</button>`
-          : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>`,
+          <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">${print}`
+          : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>${print}`,
         delivered: (canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
-          : `<span class="muted small">A manager creates the invoices.</span>`) + `<button class="secondary" onclick="openDocsDialog('shipments')">${icon("mail")} Send / Print</button>`,
+          : `<span class="muted small">A manager creates the invoices.</span>`) + print,
         done: `${print}`,
         all: `${print}`,
       }[stage];
@@ -331,10 +315,25 @@
           <span class="caret">▶</span>
           <span class="code">${escapeHtml(s.code)}${drafts[s.id] ? `<span class="dirty-dot" title="Unsaved packing changes">●</span>` : ""}</span>
           <span class="nowrap">${shipmentStatusHtml(s)}</span>
-          <span class="who" title="${escapeHtml(customerName(ord.customer_id))}">${escapeHtml(ord.code || "")} · <strong>${escapeHtml(customerName(ord.customer_id) || "")}</strong>${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</span>
+          <span class="who" title="${escapeHtml(customerName(ord.customer_id))}">${orderLinkHtml(ord, ord.code)} · <strong>${escapeHtml(customerName(ord.customer_id) || "")}</strong>${ord.po_number ? ` · ${orderLinkHtml(ord, `PO ${ord.po_number}`)}` : ""}</span>
           <span class="meta hide-sm">${nLines} line${nLines === 1 ? "" : "s"} · ${fmtQty(units)} units${pallets ? ` · ${pallets} pallet${pallets === 1 ? "" : "s"}` : ""} · ${podCellHtml(s)}</span>
           <span class="tag ${packed ? "shipped" : "draft"}">${packed ? `Packed · ${s.boxes.length} box${s.boxes.length === 1 ? "" : "es"}` : "Not Packed"}</span>
         </div>`;
+    }
+
+    // order # / PO # open the order (without opening or closing the card)
+    function orderLinkHtml(ord, text) {
+      return ord && ord.id ? `<a class="link" href="customer-orders.html?id=${ord.id}" onclick="event.stopPropagation()" title="Open order ${escapeHtml(ord.code || "")}">${escapeHtml(text || "")}</a>` : escapeHtml(text || "");
+    }
+
+    // Under each pack size box: where the pre-filled size came from, and the item's recent packings.
+    function packHintHtml(s, e) {
+      const saved = s.boxes.some(b => b.order_line_id === e.order_line_id);
+      const sug = (packSuggest[s.id] || {})[e.order_line_id];
+      const label = saved ? "Saved packing" : sug ? sug.label : "";
+      const src = saved ? "saved" : sug ? sug.source : "none";
+      return `<div class="pack-hints"><span class="pack-src src-${src}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+        <a class="link small" onclick="pickFromUses(this, ${e.item_id}, ${(order(s.order_id) || {}).customer_id || "null"})" title="What this item was packed at lately">${icon("clock")} Recent</a></div>`;
     }
 
     function lineRowsHtml(s) {
@@ -344,8 +343,6 @@
         const pack = d.pack ?? packSizeFor(s, e);
         const pallet = d.pallet ?? linePallet(s, e.order_line_id);
         const picked = s.lines.filter(l => l.order_line_id === e.order_line_id).reduce((t, l) => t + l.picked_quantity, 0);
-        const sizes = knownPackSizes(e.item_id);
-        const item = itemObj(e.item_id) || {};
         const savedSplit = boxBreakdownFor(s, e.order_line_id);
         return `
           <tr data-line="${e.order_line_id}" data-item="${e.item_id}" data-qty="${e.qty}" ${d.dirty ? 'data-dirty="1"' : ""}>
@@ -355,8 +352,7 @@
             <td class="num">${fmtQty(picked)}${picked >= e.qty ? " ✓" : ""}</td>
             <td>
               <input type="number" step="1" min="1" class="bp-pack qty-input" value="${pack}" oninput="lineEdited(this)">
-              ${sizes.length ? `<div class="pack-hints" title="${escapeHtml(packHistoryTitle(e.item_id))}">${sizes.map(v =>
-                `<span class="pack-chip ${v === item.default_pack_size ? "current" : ""}" onclick="pickPackSize(this, ${v})">${v}${v === item.default_pack_size ? " Default" : ""}</span>`).join("")}<a class="link small" onclick="showPackSizeHistory(${e.item_id})">History</a></div>` : ""}
+              ${packHintHtml(s, e)}
             </td>
             <td class="box-preview">${d.dirty || !savedSplit ? splitText(e.qty, pack) : savedSplit}</td>
             <td><input type="text" class="pallet-input" value="${escapeHtml(pallet)}" placeholder="Optional" oninput="lineEdited(this, true)"></td>
@@ -473,10 +469,14 @@
       if (palletChanged) renderPallets(id);
       markDirtyHead(id);
     }
-    function pickPackSize(chip, value) {
-      const input = chip.closest("td").querySelector(".bp-pack");
+    function pickPackSize(el, value) {
+      const input = el.closest("td").querySelector(".bp-pack");
       input.value = value;
       lineEdited(input);
+    }
+    async function pickFromUses(el, itemId, customerId) {
+      const v = await showPackUses(itemId, customerId);
+      if (v) pickPackSize(el, v);
     }
     function markDirtyHead(id) {
       const code = cardEl(id)?.querySelector(".ship-head .code");
@@ -566,13 +566,14 @@
         const savedQty = saved.reduce((t, b) => t + b.quantity_in_box, 0);
         if (tr.dataset.dirty !== "1" && saved.length && Math.abs(savedQty - qty) < 1e-6) {
           saved.forEach(b => boxes.push({ order_line_id: lineId, item_id: itemId, box_number: n++, quantity_in_box: b.quantity_in_box,
-            lot_code: b.lot_code, pallet_number: b.pallet_number }));
+            lot_code: b.lot_code, pallet_number: b.pallet_number, pack_size: b.pack_size ?? null }));
           return;
         }
         const pack = parseInt(tr.querySelector(".bp-pack").value) || qty;
         const pallet = tr.querySelector(".pallet-input").value.split(",")[0].trim() || null;
         calculateBoxes(qty, pack).forEach(b => boxes.push({ order_line_id: lineId, item_id: itemId, box_number: n++,
-          quantity_in_box: b.quantity_in_box, lot_code: lotCodesFor(s, lineId) || null, pallet_number: pallet }));
+          quantity_in_box: b.quantity_in_box, lot_code: lotCodesFor(s, lineId) || null, pallet_number: pallet,
+          pack_size: parseInt(tr.querySelector(".bp-pack").value) || null }));
       });
       return boxes;
     }
@@ -798,10 +799,14 @@
       if (unpacked.length) {  // left before AT-HUB had their packing: labels from today's pack sizes, nothing saved
         const { value } = await askDialog({ title: "Some shipments have no saved packing", tone: "warn",
           body: `<p>${unpacked.map(s => `<strong>${escapeHtml(s.code)}</strong>`).join(", ")} shipped before AT-HUB recorded packing. Their labels will use <b>today's pack sizes</b> — the shipments themselves don't change.</p>`,
-          buttons: [{ label: "Print Labels", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
-        if (value === "go") openPdf(`/api/bulk/documents.pdf?shipment_ids=${chosen.map(s => s.id).join(",")}&kinds=labels`);
-        return;
+          buttons: [{ label: "Continue", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
       }
+      const mode = await askOneOrEach("Labels", chosen.length);
+      if (!mode) return;
+      const ids = chosen.map(s => s.id).join(",");
+      if (mode === "each") return downloadZip(`/api/bulk/documents.pdf?shipment_ids=${ids}&kinds=labels&split=true`, "Labels.zip");
+      if (unpacked.length) { openPdf(`/api/bulk/documents.pdf?shipment_ids=${ids}&kinds=labels`); return; }
       const labels = fresh.flatMap(s => {
         const ord = order(s.order_id) || {};
         return s.boxes.map(b => ({
@@ -813,11 +818,28 @@
       printBoxLabels(labels, "Batch Labels");
     }
 
-    function printSelectedPackingLists() {
+    async function printSelectedPackingLists() {
       showError("");
       const chosen = selectedShipments();
       if (!chosen.length) { showError("Tick at least one shipment."); return; }
-      openPdf(`/api/shipments/packing-lists.pdf?ids=${chosen.map(s => s.id).join(",")}&${plQuery()}`);
+      const mode = await askOneOrEach("Packing lists", chosen.length);
+      if (!mode) return;
+      const path = `/api/shipments/packing-lists.pdf?ids=${chosen.map(s => s.id).join(",")}&${plQuery()}`;
+      if (mode === "each") return downloadZip(`${path}&split=true`, "Packing-Lists.zip");
+      openPdf(path);
+    }
+    // Several shipments' documents: all in one PDF, or a ZIP with one file per shipment? (one shipment: no question)
+    async function askOneOrEach(what, n) {
+      if (n < 2) return "one";
+      const { value } = await askDialog({ title: `${what} for ${n} shipments`,
+        body: `<p>Print them all as <b>one combined PDF</b>, or download <b>one file per shipment</b> (a ZIP — each file named by its shipment #)?</p>`,
+        buttons: [{ label: "One Combined PDF", value: "one", cls: "confirm-btn" }, { label: "One File Per Shipment (ZIP)", value: "each", cls: "secondary" },
+                  { label: "Cancel", value: null, cls: "secondary" }] });
+      return value;
+    }
+    async function downloadZip(path, name) {
+      toast("Preparing the files…");
+      try { await downloadFile(path, name); } catch (e) { showError(escapeHtml(e.message)); toast(e.message); }
     }
 
     // ---- paste: Item # / Pack size / Pallet # / Weight / Dimensions ----
@@ -903,6 +925,319 @@
       out.innerHTML = `<ul class="result-list">${msgs.map(m => `<li>${m}</li>`).join("")}</ul>`;
     }
 
+    // ---- pack-size memory: recent packings of an item (pick one to use it) ----
+    const usageCache = {};
+    async function packUses(itemId) {
+      if (!usageCache[itemId]) usageCache[itemId] = (await apiFetch(`/api/stock-items/pack-sizes/usage?item_ids=${itemId}&limit=12`))[itemId] || [];
+      return usageCache[itemId];
+    }
+    // Resolves to the chosen size, or null.
+    async function showPackUses(itemId, customerId) {
+      let uses = [];
+      try { uses = await packUses(itemId); } catch {}
+      const item = itemObj(itemId) || {};
+      return new Promise(resolve => {
+        const back = document.createElement("div");
+        back.className = "modal-backdrop";
+        const done = v => { document.removeEventListener("keydown", onKey); back.remove(); resolve(v); };
+        const onKey = e => { if (e.key === "Escape") done(null); };
+        back.innerHTML = `<div class="modal pack-uses" role="dialog" aria-modal="true">
+          <h3 style="margin:0 0 4px;">${escapeHtml(item.code || "")} — recent packings</h3>
+          <p class="muted small" style="margin:0 0 8px;">${escapeHtml(item.title || "")}. Click a row to use that size.</p>
+          ${uses.length ? `<table class="fit-table no-table-tools no-col-bands"><thead><tr><th class="num">Size</th><th>Packed</th><th>Shipment</th><th>Order</th><th class="grow">Customer</th></tr></thead><tbody>
+            ${uses.map(u => `<tr class="pu-row ${customerId && u.customer_id === customerId ? "pu-mine" : ""}" data-v="${u.pack_size}">
+              <td class="num"><b>${u.pack_size}</b>${u.sure ? "" : ` <span class="muted small" title="Packed as a single box, so the real pack size may have been bigger">1 box</span>`}</td>
+              <td>${fmtDate(u.date)}</td><td>${escapeHtml(u.shipment)}</td><td>${escapeHtml(u.order)}${u.po ? ` · PO ${escapeHtml(u.po)}` : ""}</td>
+              <td class="grow">${escapeHtml(u.customer || "")}${customerId && u.customer_id === customerId ? ` <span class="tag confirmed">This customer</span>` : ""}</td></tr>`).join("")}
+          </tbody></table>` : `<p class="muted">Not packed in AT-HUB yet.</p>`}
+          <div class="btn-row" style="margin-top:12px;">
+            ${item.default_pack_size ? `<button type="button" class="secondary" data-v="${item.default_pack_size}">Use Item Default (${item.default_pack_size})</button>` : ""}
+            <button type="button" class="secondary" data-close="1">Close</button></div></div>`;
+        back.addEventListener("click", e => {
+          if (e.target === back || e.target.closest("[data-close]")) return done(null);
+          const hit = e.target.closest("[data-v]");
+          if (hit) done(parseInt(hit.dataset.v));
+        });
+        document.addEventListener("keydown", onKey);
+        document.body.appendChild(back);
+      });
+    }
+
+    // ---- the pre-fill rule (company-wide) ----
+    let packRule = "smart", packRuleHelp = {};
+    async function loadPackRule() {
+      const sel = document.getElementById("pack-rule");
+      try {
+        const r = await apiFetch("/api/stock-items/pack-sizes/rule");
+        packRule = r.rule;
+        sel.innerHTML = Object.entries(r.rules).map(([k, x]) => `<option value="${k}" title="${escapeHtml(x.help)}">${escapeHtml(x.label)}</option>`).join("");
+        sel.value = packRule;
+        sel.title = r.rules[packRule].help;
+        packRuleHelp = Object.fromEntries(Object.entries(r.rules).map(([k, x]) => [k, x.help]));
+      } catch { sel.closest("label").style.display = "none"; }
+      sel.disabled = !(AuthGuard.can("stock.edit") || AuthGuard.can("shipments.deliver"));
+      if (sel.disabled) sel.title = "A manager sets how pack sizes are pre-filled";
+    }
+    async function setPackRule(rule) {
+      try {
+        await apiFetch("/api/stock-items/pack-sizes/rule", { method: "PUT", body: JSON.stringify({ rule }) });
+        packRule = rule;
+        document.getElementById("pack-rule").title = packRuleHelp[rule] || "";
+        await refreshPackSuggestions();
+        renderAll();
+        toast("Pack sizes now pre-fill: " + (packRuleHelp[rule] || rule));
+      } catch (e) { showError(escapeHtml(e.message)); document.getElementById("pack-rule").value = packRule; }
+    }
+
+    // ---- presets: a named set of pack sizes ----
+    let presets = [];
+    async function loadPresets() { try { presets = await apiFetch("/api/stock-items/pack-sizes/presets"); } catch { presets = []; } }
+
+    // ---- Set Pack Sizes: one row per item across the ticked shipments ----
+    let sp = null;
+    const normCode = c => String(c || "").trim().toLowerCase().replace(/-nuts$/, "-nut");
+    // what a line shows now: typed / unsaved draft / saved / pre-filled
+    function currentPack(s, e) {
+      const tr = cardEl(s.id)?.querySelector(`.ship-body tr[data-line="${e.order_line_id}"]`);
+      if (tr) return parseInt(tr.querySelector(".bp-pack").value) || null;
+      const d = ((drafts[s.id] || {}).lines || {})[e.order_line_id];
+      return (d && d.pack) || packSizeFor(s, e);
+    }
+    function openSetPackSizes() {
+      showError("");
+      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status));
+      const shippedToo = selectedShipments().length - chosen.length;
+      if (!chosen.length) { showError("Tick the shipments to set pack sizes for — ones that haven't shipped yet."); return; }
+      const rows = {};
+      chosen.forEach(s => shippedByLine(s).forEach(e => {
+        const r = rows[e.item_id] = rows[e.item_id] || { item_id: e.item_id, lines: [], ships: new Set(), qty: 0 };
+        r.lines.push({ s, e });
+        r.ships.add(s.id);
+        r.qty += e.qty;
+      }));
+      const list = Object.values(rows).sort((a, b) => String(itemCode(a.item_id)).localeCompare(String(itemCode(b.item_id)), undefined, { numeric: true }));
+      list.forEach(r => {
+        const cur = [...new Set(r.lines.map(({ s, e }) => currentPack(s, e)))];
+        r.value = cur.length === 1 ? (cur[0] || "") : "";
+        r.mixed = cur.length > 1 ? cur.filter(Boolean) : null;
+        const src = [...new Set(r.lines.map(({ s, e }) => s.boxes.some(b => b.order_line_id === e.order_line_id) ? "Saved packing"
+          : ((packSuggest[s.id] || {})[e.order_line_id] || {}).label).filter(Boolean))];
+        r.source = src.length === 1 ? src[0] : src.length ? "Differs by shipment" : "";
+      });
+      const custIds = [...new Set(chosen.map(s => (order(s.order_id) || {}).customer_id).filter(Boolean))];
+      sp = { chosen, list, custId: custIds.length === 1 ? custIds[0] : null };
+      const chosenIds = new Set(chosen.map(s => s.id));
+      const sources = shipments.filter(s => s.boxes.length && !chosenIds.has(s.id) && s.status !== "cancelled")
+        .sort((a, b) => ((order(b.order_id) || {}).customer_id === sp.custId) - ((order(a.order_id) || {}).customer_id === sp.custId) || when(b) - when(a))
+        .slice(0, 40);
+      const back = document.createElement("div");
+      back.className = "glass-back";
+      back.id = "sp-dialog";
+      back.addEventListener("click", e => { if (e.target === back) closeSetPack(); });
+      back.innerHTML = `<div class="glass-panel sp-panel" role="dialog" aria-modal="true" aria-labelledby="sp-title">
+        <div class="sm-head"><div><h3 id="sp-title">Set pack sizes</h3>
+            <div class="muted small">${list.length} item${list.length === 1 ? "" : "s"} on ${chosen.length} shipment${chosen.length === 1 ? "" : "s"}
+              (${escapeHtml(chosen.map(s => s.code).slice(0, 6).join(", "))}${chosen.length > 6 ? "…" : ""})${shippedToo ? ` · ${shippedToo} already shipped, left out` : ""}</div></div>
+          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeSetPack()">${icon("x")}</button></div>
+        <div class="sp-tools">
+          <label class="check-label">Fill from <select id="sp-fill" onchange="spFill(this.value)">
+            <option value="">Choose…</option>
+            <option value="suggested">Pre-filled sizes (${escapeHtml((document.getElementById("pack-rule").selectedOptions[0] || {}).textContent || "rule")} rule)</option>
+            <option value="default">Item defaults</option>
+            ${presets.length ? `<optgroup label="Presets">${presets.map(p => `<option value="preset:${p.id}">${escapeHtml(p.name)}${p.customer_id ? ` — ${escapeHtml(customerName(p.customer_id))}` : ""}</option>`).join("")}</optgroup>` : ""}
+            ${sources.length ? `<optgroup label="Copy from a packed shipment">${sources.map(s => { const o = order(s.order_id) || {};
+              return `<option value="ship:${s.id}">${escapeHtml(s.code)} · ${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""} · ${escapeHtml(customerName(o.customer_id) || "")} · ${fmtDate(s.packed_at || s.ship_date || s.created_at)}</option>`; }).join("")}</optgroup>` : ""}
+          </select></label>
+          <a class="link small" id="sp-del-preset" style="display:none;" onclick="spDeletePreset()">Delete this preset</a>
+          <span class="spacer"></span>
+          <a class="link small" onclick="document.getElementById('sp-paste-wrap').hidden = !document.getElementById('sp-paste-wrap').hidden; document.getElementById('sp-paste').focus()">Paste from Excel</a>
+          <a class="link small" onclick="spClear()">Clear all</a>
+        </div>
+        <div id="sp-paste-wrap" hidden class="sp-paste">
+          <textarea id="sp-paste" rows="4" placeholder="Item#&#9;Pack Size&#10;16713&#9;50&#10;15420&#9;100"></textarea>
+          <div class="btn-row"><button type="button" class="secondary" onclick="spPaste()">Fill The Grid</button>
+            <span class="muted small">Two columns copied from Excel (tab or comma): Item # · Pack size. Header row optional.</span></div>
+        </div>
+        <div class="sm-body"><table class="sm-table no-table-tools no-col-bands" id="sp-table">
+          <thead><tr><th>Item</th><th class="grow">Description</th><th class="num">Ships</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Now</th></tr></thead>
+          <tbody>${list.map((r, i) => { const it = itemObj(r.item_id) || {}; return `<tr data-i="${i}" data-item="${r.item_id}">
+            <td class="nowrap"><b>${escapeHtml(it.code || "")}</b></td>
+            <td class="grow small">${escapeHtml(it.title || "")}</td>
+            <td class="num" title="${r.lines.length} line${r.lines.length === 1 ? "" : "s"}">${r.ships.size}</td>
+            <td class="num">${fmtQty(r.qty)}</td>
+            <td class="nowrap"><input type="number" min="1" step="1" class="qty-input sp-val" value="${r.value}" placeholder="${r.mixed ? escapeHtml(r.mixed.join(" / ")) : ""}" oninput="spRow(this)">
+              <a class="link small" title="Recent packings of this item" onclick="spUses(this)">${icon("clock")}</a></td>
+            <td class="sp-boxes small"></td>
+            <td class="small muted sp-src" title="${escapeHtml(r.mixed ? `Mixed: ${r.mixed.join(" / ")}` : r.source)}">${r.mixed ? `<span class="neg">Mixed: ${escapeHtml(r.mixed.join(" / "))}</span>` : escapeHtml(r.source)}</td></tr>`; }).join("")}</tbody>
+        </table></div>
+        <div id="sp-msg" class="small"></div>
+        <div class="error" id="sp-error"></div>
+        <div class="sm-foot sp-foot">
+          <label class="inline-check" title="Each item's default pack size becomes this size (the old one stays in its history)"><input type="checkbox" id="sp-save-default"> Also make these the items' default</label>
+          <label class="inline-check" title="Save the boxes and accept the packing on these shipments straight away"><input type="checkbox" id="sp-accept"> Accept packing now</label>
+          <span class="spacer"></span>
+          <button type="button" class="secondary" onclick="spSavePreset()">Save As Preset…</button>
+          <button type="button" class="secondary" onclick="closeSetPack()">Cancel</button>
+          <button type="button" class="next-step" onclick="spApply()">Apply To ${chosen.length} Shipment${chosen.length === 1 ? "" : "s"}</button>
+        </div></div>`;
+      document.body.appendChild(back);
+      document.body.classList.add("glass-open");
+      back.querySelectorAll(".sp-val").forEach(spRow);
+      decorateIcons(back);
+    }
+    function closeSetPack() {
+      const el = document.getElementById("sp-dialog");
+      document.body.classList.remove("glass-open");
+      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
+      sp = null;
+    }
+    // live box count for a row: boxes over all its lines at this size
+    function spRow(input) {
+      const tr = input.closest("tr"), r = sp.list[+tr.dataset.i], v = parseInt(input.value) || 0;
+      const n = v ? r.lines.reduce((t, { e }) => t + calculateBoxes(e.qty, v).length, 0) : 0;
+      tr.querySelector(".sp-boxes").textContent = v ? `${n} box${n === 1 ? "" : "es"}` : "";
+      tr.classList.toggle("sp-changed", String(v || "") !== String(r.value || ""));
+    }
+    function spSet(map, label) {  // {item_id: size}
+      let n = 0;
+      document.querySelectorAll("#sp-table tbody tr").forEach(tr => {
+        const v = map[tr.dataset.item];
+        if (!v) return;
+        const inp = tr.querySelector(".sp-val");
+        inp.value = v;
+        spRow(inp);
+        n++;
+      });
+      document.getElementById("sp-msg").innerHTML = `${escapeHtml(label)}: filled <b>${n}</b> of ${sp.list.length} items.${n < sp.list.length ? " The rest kept what they had." : ""}`;
+    }
+    async function spFill(v) {
+      document.getElementById("sp-del-preset").style.display = v.startsWith("preset:") ? "" : "none";
+      const map = {};
+      if (v === "suggested") {
+        sp.list.forEach(r => { const sizes = [...new Set(r.lines.map(({ s, e }) => ((packSuggest[s.id] || {})[e.order_line_id] || {}).size).filter(Boolean))];
+          if (sizes.length === 1) map[r.item_id] = sizes[0]; });
+        spSet(map, "Pre-filled sizes");
+      } else if (v === "default") {
+        sp.list.forEach(r => { const d = (itemObj(r.item_id) || {}).default_pack_size; if (d) map[r.item_id] = d; });
+        spSet(map, "Item defaults");
+      } else if (v.startsWith("preset:")) {
+        const p = presets.find(x => x.id === +v.slice(7));
+        const byCode = Object.fromEntries(Object.entries(p.sizes).map(([c, n]) => [normCode(c), n]));
+        sp.list.forEach(r => { const n = byCode[normCode(itemCode(r.item_id))]; if (n) map[r.item_id] = n; });
+        spSet(map, `Preset “${p.name}”`);
+      } else if (v.startsWith("ship:")) {
+        const src = byId(+v.slice(5));
+        const byItem = {};
+        src.boxes.forEach(b => { const k = b.item_id; byItem[k] = Math.max(byItem[k] || 0, b.pack_size || b.quantity_in_box); });
+        sp.list.forEach(r => { if (byItem[r.item_id]) map[r.item_id] = byItem[r.item_id]; });
+        spSet(map, `Copied from ${src.code}`);
+      }
+    }
+    function spClear() {
+      document.querySelectorAll("#sp-table .sp-val").forEach(inp => { inp.value = ""; spRow(inp); });
+      document.getElementById("sp-msg").textContent = "";
+    }
+    function spPaste() {
+      const byCode = Object.fromEntries(sp.list.map(r => [normCode(itemCode(r.item_id)), r.item_id]));
+      const map = {}, missing = [];
+      document.getElementById("sp-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
+        const [code, size] = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+        const n = parseInt(String(size || "").replace(/[^\d]/g, ""));
+        if (!code || !n) return;  // header or blank
+        const id = byCode[normCode(code)];
+        if (id) map[id] = n; else missing.push(code);
+      });
+      spSet(map, "Pasted");
+      if (missing.length) document.getElementById("sp-msg").insertAdjacentHTML("beforeend", ` <span class="neg">Not on these shipments: ${escapeHtml(missing.join(", "))}.</span>`);
+    }
+    async function spUses(a) {
+      const tr = a.closest("tr");
+      const v = await showPackUses(+tr.dataset.item, sp.custId);
+      if (v) { const inp = tr.querySelector(".sp-val"); inp.value = v; spRow(inp); }
+    }
+    function spValues() {
+      const out = {};
+      document.querySelectorAll("#sp-table tbody tr").forEach(tr => { const v = parseInt(tr.querySelector(".sp-val").value); if (v > 0) out[tr.dataset.item] = v; });
+      return out;
+    }
+    async function spSavePreset() {
+      const vals = spValues(), err = document.getElementById("sp-error");
+      if (!Object.keys(vals).length) { err.textContent = "Fill in some pack sizes first."; return; }
+      const custOpts = [...new Set(shipments.map(s => (order(s.order_id) || {}).customer_id).filter(Boolean))];
+      const { value, el } = await askDialog({ title: "Save these pack sizes as a preset",
+        body: `<label class="small">Name<input type="text" id="sp-pname" placeholder="e.g. Hudson Tulsa — pallets" style="width:100%;margin-top:4px;"></label>
+          <label class="small" style="display:block;margin-top:10px;">Customer (optional — their orders list it first)
+            <select id="sp-pcust" style="width:100%;margin-top:4px;"><option value="">Any customer</option>
+            ${custOpts.map(id => `<option value="${id}" ${id === sp.custId ? "selected" : ""}>${escapeHtml(customerName(id))}</option>`).join("")}</select></label>
+          <p class="muted small">${Object.keys(vals).length} item sizes. A preset with the same name is replaced.</p>`,
+        buttons: [{ label: "Save Preset", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      const name = el.querySelector("#sp-pname").value.trim(), cust = el.querySelector("#sp-pcust").value;
+      if (!name) { err.textContent = "Give the preset a name."; return; }
+      try {
+        const sizes = Object.fromEntries(Object.entries(vals).map(([id, n]) => [itemCode(+id), n]));
+        await apiFetch("/api/stock-items/pack-sizes/presets", { method: "POST", body: JSON.stringify({ name, customer_id: cust ? +cust : null, sizes }) });
+        await loadPresets();
+        err.textContent = "";
+        document.getElementById("sp-msg").innerHTML = `Preset <b>${escapeHtml(name)}</b> saved — pick it under <b>Fill from</b> next time.`;
+      } catch (e) { err.textContent = e.message; }
+    }
+    async function spDeletePreset() {
+      const v = document.getElementById("sp-fill").value, p = presets.find(x => `preset:${x.id}` === v);
+      if (!p) return;
+      const { value } = await askDialog({ title: `Delete the preset “${p.name}”?`, body: "<p>Pack sizes already applied stay as they are.</p>",
+        buttons: [{ label: "Delete Preset", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      try {
+        await apiFetch(`/api/stock-items/pack-sizes/presets/${p.id}`, { method: "DELETE" });
+        await loadPresets();
+        const opt = document.querySelector(`#sp-fill option[value="${v}"]`);
+        if (opt) opt.remove();
+        document.getElementById("sp-fill").value = "";
+        document.getElementById("sp-del-preset").style.display = "none";
+      } catch (e) { document.getElementById("sp-error").textContent = e.message; }
+    }
+    async function spApply() {
+      const vals = spValues(), err = document.getElementById("sp-error");
+      if (!Object.keys(vals).length) { err.textContent = "Fill in at least one pack size."; return; }
+      const saveDefault = document.getElementById("sp-save-default").checked, accept = document.getElementById("sp-accept").checked;
+      const chosen = sp.chosen;
+      let lines = 0;
+      const touched = new Set();
+      chosen.forEach(s => {
+        if (!openCards.has(s.id)) { openCards.add(s.id); cardEl(s.id)?.classList.add("open"); }
+        const card = ensureBody(s.id);
+        if (!card) return;
+        card.querySelectorAll(".ship-body tr[data-line]").forEach(tr => {
+          const v = vals[tr.dataset.item], inp = tr.querySelector(".bp-pack");
+          if (!v || parseInt(inp.value) === v) return;  // unchanged lines keep their saved boxes
+          inp.value = v;
+          lineEdited(inp);
+          lines++;
+          touched.add(s.id);
+        });
+      });
+      const msgs = [`Pack sizes set on <b>${lines}</b> line${lines === 1 ? "" : "s"} across <b>${touched.size}</b> shipment${touched.size === 1 ? "" : "s"}`
+        + `${lines ? "" : " — everything already had those sizes"}.`];
+      closeSetPack();
+      if (saveDefault) {
+        try {
+          const res = await apiFetch("/api/stock-items/pack-sizes/bulk", { method: "POST", body: JSON.stringify({
+            entries: Object.entries(vals).map(([id, n]) => ({ code: itemCode(+id), pack_size: n })), source: "set pack sizes",
+            reference: chosen.map(s => s.code).slice(0, 20).join(", ") }) });
+          [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
+          if (res.applied.length) msgs.push(`New item default for ${res.applied.length} item(s).`);
+        } catch (e) { msgs.push(`<span class="neg">Couldn't save item defaults: ${escapeHtml(e.message)}</span>`); }
+      }
+      if (accept) {
+        const res = await bulkRun("Packing accepted", s => chosen.some(c => c.id === s.id), s => savePackingFor(s.id));
+        moveOn(res);
+        if (res) msgs.push(escapeHtml(res.msg));
+      } else msgs.push("Check the boxes on the cards, then <b>Accept Packing</b>.");
+      showResult(msgs.join(" "), true);
+    }
+
+
     // ---- areas: Shipments | Invoices (more to come) ----
     let invoicesAll = null;
     const invSelected = new Set();
@@ -971,15 +1306,21 @@
         <div id="dd-step">
           <div class="docs-opts">
             ${area === "invoices" ? opt("invoice", "Invoice", true, "the invoice PDF", canInv) + opt("packing_list", "Packing lists", false, "of the invoice's shipments", shipDocs)
+                + opt("labels", "Box labels", false, "of the invoice's shipments", shipDocs)
               : opt("packing_list", "Packing lists", true, "one per shipment", shipDocs) + opt("labels", "Box labels", false, "PDF, your box-label template", shipDocs)
                 + opt("invoice", "Invoices", canInv, "the shipment's invoice, if it has one", canInv) + opt("pod", "Proof of delivery", false, "photos / PDFs uploaded for it", shipDocs)}
           </div>
-          ${area === "shipments" ? `<div class="docs-group"><span class="muted small">Emails:</span>
-            <label class="inline-check"><input type="radio" name="dd-group" value="order" checked> One per order</label>
-            <label class="inline-check"><input type="radio" name="dd-group" value="shipment"> One per shipment</label></div>` : ""}
+          <div class="docs-group"><span class="muted small">Emails:</span>
+            ${(area === "shipments" ? [["shipment", "One per shipment"], ["order", "One per order"], ["customer", "One per customer"]]
+                : [["invoice", "One per invoice"], ["customer", "One per customer"]]).map(([v, l]) =>
+              `<label class="inline-check"><input type="radio" name="dd-group" value="${v}" ${v === docsPref("group", area === "shipments" ? "order" : "invoice") ? "checked" : ""}> ${l}</label>`).join("")}</div>
+          <div class="docs-group"><span class="muted small">Files in each email:</span>
+            ${[["separate", "Separate files"], ["combined", "One combined PDF"]].map(([v, l]) =>
+              `<label class="inline-check"><input type="radio" name="dd-attach" value="${v}" ${v === docsPref("attach", "separate") ? "checked" : ""}> ${l}</label>`).join("")}</div>
           <div class="error" id="dd-error"></div>
-          <div class="sm-foot"><span class="muted small" style="flex:1;">Print makes one PDF of everything; Email lets you check each message before anything is sent.</span>
-            <button type="button" class="secondary" onclick="docsPrint()">${icon("printer")} Print / Download</button>
+          <div class="sm-foot"><span class="muted small" style="flex:1;">Email lets you check each message before anything is sent.</span>
+            <button type="button" class="secondary" onclick="docsPrint(false)" title="Everything in one PDF to print">${icon("printer")} Print (One PDF)</button>
+            <button type="button" class="secondary" onclick="docsPrint(true)" title="A ZIP with one file per document, named by shipment / invoice #">Download (One File Each)</button>
             <button type="button" class="next-step" onclick="docsPreview()">${icon("mail")} Preview Emails</button></div>
         </div></div>`;
       document.body.appendChild(back);
@@ -992,14 +1333,21 @@
       if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
     }
     function docsKinds() { return [...document.querySelectorAll("#docs-dialog .docs-kind:checked")].map(c => c.value); }
+    function docsPref(k, dflt) { try { return localStorage.getItem(`bulk_docs_${k}`) || dflt; } catch { return dflt; } }
     function docsBody() {
-      const g = document.querySelector('#docs-dialog input[name="dd-group"]:checked');
-      return { shipment_ids: docsReq.shipment_ids, invoice_ids: docsReq.invoice_ids, kinds: docsKinds(), group_by: g ? g.value : "order" };
+      const g = document.querySelector('#docs-dialog input[name="dd-group"]:checked'), a = document.querySelector('#docs-dialog input[name="dd-attach"]:checked');
+      try { if (g) localStorage.setItem("bulk_docs_group", g.value); if (a) localStorage.setItem("bulk_docs_attach", a.value); } catch {}
+      return { shipment_ids: docsReq.shipment_ids, invoice_ids: docsReq.invoice_ids, kinds: docsKinds(), group_by: g ? g.value : "order",
+               attach: a ? a.value : "separate" };
     }
-    function docsPrint() {
-      const b = docsBody();
+    function docsPrint(split) {
+      const b = docsReq.body || docsBody();
       if (!b.kinds.length) { document.getElementById("dd-error").textContent = "Tick at least one kind of document."; return; }
-      openPdf(`/api/bulk/documents.pdf?shipment_ids=${b.shipment_ids.join(",")}&invoice_ids=${b.invoice_ids.join(",")}&kinds=${b.kinds.join(",")}`);
+      const path = `/api/bulk/documents.pdf?shipment_ids=${b.shipment_ids.join(",")}&invoice_ids=${b.invoice_ids.join(",")}&kinds=${b.kinds.join(",")}`;
+      if (split) {
+        downloadFile(`${path}&split=true`, "Documents.zip").catch(e => { document.getElementById("dd-error").textContent = e.message; });
+        toast("Preparing the files…");
+      } else openPdf(path);
     }
     async function docsPreview() {
       const b = docsBody(), err = document.getElementById("dd-error");
@@ -1022,14 +1370,17 @@
               <label>Subject</label><input type="text" class="de-subject" value="${escapeHtml(g.subject)}">
             </div>
             <details><summary class="small">Message</summary><textarea class="de-body" rows="7">${escapeHtml(g.body)}</textarea></details>
-            <div class="docs-atts">${g.attachments.map(a => `<span class="docs-att">${icon(kindIcon[a.kind] || "file")}${escapeHtml(a.name)}</span>`).join("") || `<span class="muted small">Nothing to attach</span>`}</div>
+            <div class="docs-atts">${!g.attachments.length ? `<span class="muted small">Nothing to attach</span>`
+              : g.attach === "combined" && g.attachments.length > 1
+                ? `<span class="docs-att" title="${escapeHtml(g.attachments.map(a => a.name).join("\n"))}">${icon("file")}${escapeHtml(g.combined_name)}</span><span class="muted small">one PDF with ${g.attachments.length} documents${g.attachments.some(a => a.kind === "pod") ? " (POD photos stay separate)" : ""}</span>`
+                : g.attachments.map(a => `<span class="docs-att">${icon(kindIcon[a.kind] || "file")}${escapeHtml(a.name)}</span>`).join("")}</div>
             ${g.warnings.length ? `<div class="docs-warn small">${g.warnings.map(escapeHtml).join(" · ")}</div>` : ""}
           </div>`).join("")}</div>
         <div class="error" id="dd-error"></div>
         <div class="sm-foot">
           <div class="sm-box" id="dd-box" aria-hidden="true">${icon("mail")}<span class="sm-count" id="dd-count">0</span></div>
           <span class="muted small" style="flex:1;" id="dd-summary"></span>
-          <button type="button" class="secondary" onclick="docsPrint()">${icon("printer")} Print Instead</button>
+          <button type="button" class="secondary" onclick="docsPrint(false)">${icon("printer")} Print Instead</button>
           <button type="button" class="ship-now" id="dd-send" onclick="docsSend()" ${res.email_ready ? "" : "disabled"}>Send</button>
         </div>`;
       document.querySelectorAll("#docs-dialog .de-send").forEach(c => c.addEventListener("change", docsCount));
@@ -1075,8 +1426,15 @@
     }
 
     // ---- loading ----
+    // Pre-filled pack sizes for every open shipment (refreshed after packing is accepted -- that's new memory).
+    async function refreshPackSuggestions() {
+      Object.keys(packSuggest).forEach(k => delete packSuggest[k]);
+      Object.keys(usageCache).forEach(k => delete usageCache[k]);
+      await loadPackSuggestions(shipments.filter(s => ["new", "ready"].includes(s.status)).map(s => s.id));
+    }
     async function reloadList() {
       shipments = await apiFetch("/api/shipments/");
+      await refreshPackSuggestions();
       fillCustomerFilter();
       // Saved shipments re-render from the server; forget selections that no longer exist.
       [...selected].forEach(id => { if (!byId(id)) selected.delete(id); });
@@ -1098,6 +1456,7 @@
         // History is optional: a missing endpoint shouldn't leave the screen empty.
         apiFetch("/api/stock-items/pack-sizes/history").catch(() => []),
       ]);
+      await Promise.all([refreshPackSuggestions(), loadPackRule(), loadPresets()]);
       fillCustomerFilter();
       loadPrefs();
       // where to start: ?stage=, a linked shipment's stage, the last stage used, else the first with work in it

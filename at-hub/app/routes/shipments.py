@@ -53,22 +53,27 @@ def list_unpacked(db: Session = Depends(get_db)):
 
 @router.get("/packing-lists.pdf")
 def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, pallet_boxes: bool = False,
-                  db: Session = Depends(get_db)):
-    """Several packing lists in one PDF (batch screen): ?ids=3,7,9."""
-    from io import BytesIO
-    from pypdf import PdfReader, PdfWriter
-    writer = PdfWriter()
+                  split: bool = False, db: Session = Depends(get_db)):
+    """Several packing lists (batch screen): ?ids=3,7,9 -- one PDF, or with ?split=true a ZIP of one PDF each."""
+    from app.services.bulk_docs import merge_pdfs, zip_files
+    files = []
     for raw in ids.split(","):
         if raw.strip().isdigit():
             shipment = ShipmentService.get(db, int(raw))
-            pdf = packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
-                                   include_pallet_boxes=pallet_boxes)
-            for page in PdfReader(BytesIO(pdf)).pages:
-                writer.add_page(page)
-    out = BytesIO()
-    writer.write(out)
-    return Response(out.getvalue(), media_type="application/pdf",
+            files.append((packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
+                                           include_pallet_boxes=pallet_boxes), f"Packing-List-{shipment.code}.pdf", "application/pdf"))
+    if split:
+        return Response(zip_files(files), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="Packing-Lists.zip"'})
+    return Response(merge_pdfs(files), media_type="application/pdf",
                     headers={"Content-Disposition": 'inline; filename="Packing-Lists.pdf"'})
+
+
+@router.get("/pack-suggestions")
+def pack_suggestions(ids: str, db: Session = Depends(get_db)):
+    """The pack size each line of these shipments pre-fills, and why: {shipment_id: {order_line_id: {size, source, label}}}."""
+    from app.services import pack_sizes
+    return pack_sizes.suggestions_for_shipments(db, [int(x) for x in ids.split(",") if x.strip().isdigit()])
 
 
 @router.get("/{shipment_id}", response_model=ShipmentResponse)

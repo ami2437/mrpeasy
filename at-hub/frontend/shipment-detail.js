@@ -5,6 +5,14 @@
 // and onShipmentDetailClose. Only one detail is open at a time (element ids are fixed).
 let SHIPMENT_DETAIL_CONTAINER = "detail-card";
 let onShipmentDetailClose = null;
+// Pack-size memory: {shipment id: {order line id: {size, source, label}}} from /api/shipments/pack-suggestions
+// (the customer's / last packed size or the item default, by the rule chosen on Bulk Operations).
+const packSuggest = {};
+async function loadPackSuggestions(ids) {
+  ids = [...new Set(ids)].filter(Boolean);
+  if (!ids.length) return;
+  try { Object.assign(packSuggest, await apiFetch(`/api/shipments/pack-suggestions?ids=${ids.join(",")}`)); } catch {}
+}
 
 function detailContainer() { return document.getElementById(SHIPMENT_DETAIL_CONTAINER); }
 function closeShipmentDetail() {
@@ -476,7 +484,9 @@ function boxRowHtmlList(boxes) {
 // Pack size shown per line: the largest saved box, else the item's default, else the whole quantity.
 function packSizeFor(shipment, entry) {
   const saved = shipment.boxes.filter(b => b.order_line_id === entry.order_line_id);
-  if (saved.length) return Math.max(...saved.map(b => b.quantity_in_box));
+  if (saved.length) return saved.find(b => b.pack_size)?.pack_size || Math.max(...saved.map(b => b.quantity_in_box));
+  const sug = (packSuggest[shipment.id] || {})[entry.order_line_id];
+  if (sug && sug.size) return sug.size;
   const item = itemObj(entry.item_id);
   return item && item.default_pack_size ? item.default_pack_size : entry.qty;
 }
@@ -661,7 +671,8 @@ function lotCodeForLine(orderLineId) {
 }
 
 async function showDetail(id) {
-  const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => [])]);
+  const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => []),
+    packSuggest[id] ? null : loadPackSuggestions([id])]);
   const invoicesForShipment = allInvoices.filter(inv => (inv.shipment_ids || [inv.shipment_id]).includes(id) && inv.status !== "void");
   // Other shipments of this order that shipped and aren't billed yet -- can go on the same invoice.
   const combinable = shipments.filter(s => s.order_id === shipment.order_id && s.id !== shipment.id
@@ -674,7 +685,8 @@ async function showDetail(id) {
 
   card.innerHTML = `
     <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
-    <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>
+    <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>${ord && ord.po_number
+      ? ` · PO <a class="link" href="customer-orders.html?id=${shipment.order_id}">${escapeHtml(ord.po_number)}</a>` : ""}
       — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
     <p>${STATUS_HELP[shipment.status] || ""}</p>
 
@@ -802,7 +814,9 @@ function addBoxRow() {
 }
 
 function collectBoxes() {
+  const packOf = lineId => parseInt((document.querySelector(`.pack-size-input[data-line="${lineId}"]`) || {}).value) || null;
   return Array.from(document.querySelectorAll("#box-rows tr")).map(tr => ({
+    pack_size: packOf(parseInt(tr.querySelector(".box-line").value)),
     order_line_id: parseInt(tr.querySelector(".box-line").value),
     item_id: parseInt(tr.querySelector(".box-line").selectedOptions[0].dataset.item),
     box_number: parseInt(tr.querySelector(".box-number").value) || 1,

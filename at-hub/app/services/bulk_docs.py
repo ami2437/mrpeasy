@@ -1,10 +1,11 @@
 """Bulk Operations -> Send / Print Documents: for many shipments (or invoices) at once, the packing lists, box labels,
-invoices and proofs of delivery -- emailed to each customer (one email per order, or per shipment) or merged into
-one PDF to print.
+invoices and proofs of delivery -- emailed to each customer (one email per shipment, per order or per customer; files
+attached separately or merged into one PDF) or printed as one PDF / downloaded as a ZIP of one file each.
 
     plan(db, ...)     -> the emails it would send: recipient, subject, message, attachments, warnings (nothing sent)
     send(db, ...)     -> sends them (the screen may have edited recipient / subject / message per email)
     merged_pdf(db, ...) -> every chosen document of every chosen record in one PDF
+    split_zip(db, ...)  -> the same documents, one file each, in a ZIP
 
 Invoices that go out are logged and a draft becomes sent, exactly as when sent from the invoice screen; every email
 is logged on its shipments too."""
@@ -63,13 +64,58 @@ def pod_files(db: Session, shipment: Shipment) -> List[tuple]:
     return out
 
 
+def merge_pdfs(files: List[tuple]) -> bytes:
+    """[(bytes, name, type)] -> one PDF of every PDF among them, in order."""
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+    for data, name, ctype in files:
+        if ctype == "application/pdf" or name.lower().endswith(".pdf"):
+            for page in PdfReader(io.BytesIO(data)).pages:
+                writer.add_page(page)
+    if not writer.pages:
+        raise HTTPException(status_code=400, detail="None of the chosen documents exist for these records yet")
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def zip_files(files: List[tuple]) -> bytes:
+    """[(bytes, name, type)] -> a ZIP, one entry each (a repeated name gets " (2)")."""
+    import zipfile
+    if not files:
+        raise HTTPException(status_code=400, detail="None of the chosen documents exist for these records yet")
+    out, used = io.BytesIO(), {}
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for data, name, _ in files:
+            n = used[name] = used.get(name, 0) + 1
+            stem, dot, ext = name.rpartition(".")
+            z.writestr(name if n == 1 else (f"{stem} ({n}).{ext}" if dot else f"{name} ({n})"), data)
+    return out.getvalue()
+
+
+def _combined_name(g: dict) -> str:
+    kinds = {a["kind"] for a in g["attachments"] if a["kind"] != "pod"}
+    what = ("Packing-Lists" if kinds == {"packing_list"} else "Labels" if kinds == {"labels"}
+            else "Invoices" if kinds == {"invoice"} else "Documents")
+    if len(g["pos"]) == 1:
+        ref = f"PO-{g['pos'][0]}"
+    elif len(g["orders"]) == 1:
+        ref = g["orders"][0]
+    else:
+        ref = g["customer"]
+    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in str(ref or "")).strip("-")
+    return f"{what}-{safe}.pdf" if safe else f"{what}.pdf"
+
+
 # ---------- grouping ----------
 def _invoice_of(db, sh):
     return InvoiceService.live_invoice_for_shipment(db, sh.id)
 
 
 def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: List[str], group_by: str = "order",
-         can_invoice: bool = True) -> List[dict]:
+         can_invoice: bool = True, attach: str = "separate") -> List[dict]:
+    """group_by: shipment | order | customer (all of a customer's chosen records in one email).
+    attach: separate (one file per document) | combined (the PDFs merged into one file; photos stay separate)."""
     kinds = [k for k in kinds if k in KINDS]
     if not kinds:
         raise HTTPException(status_code=400, detail="Pick at least one kind of document")
@@ -84,14 +130,25 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
             g = groups[key] = {"key": key, "order_id": order.id if order else None, "order": order.code if order else "",
                                "po": order.po_number if order else "", "customer_id": cust.id if cust else None,
                                "customer": cust.name if cust else "", "shipments": [], "invoices": [], "attachments": [], "warnings": [],
-                               "_cust": cust}
+                               "orders": [], "pos": [], "_cust": cust}
+        if order and order.code not in g["orders"]:
+            g["orders"].append(order.code)
+            if order.po_number and order.po_number not in g["pos"]:
+                g["pos"].append(order.po_number)
         return g
+
+    def key_for(order, cust, own):
+        if group_by == "customer" and cust:
+            return f"customer-{cust.id}"
+        if group_by == "order" and order:
+            return f"order-{order.id}"
+        return own
 
     for sid in dict.fromkeys(shipment_ids or []):
         sh = ShipmentService.get(db, sid)
         order = db.get(CustomerOrder, sh.order_id)
         cust = db.get(Customer, order.customer_id) if order else None
-        g = group_for(f"order-{order.id}" if group_by == "order" and order else f"shipment-{sh.id}", order, cust)
+        g = group_for(key_for(order, cust, f"shipment-{sh.id}"), order, cust)
         g["shipments"].append({"id": sh.id, "code": sh.code})
         if "packing_list" in kinds:
             g["attachments"].append({"kind": "packing_list", "name": f"Packing-List-{sh.code}.pdf"})
@@ -122,13 +179,16 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
             continue
         order = db.get(CustomerOrder, inv.order_id) if inv.order_id else None
         cust = db.get(Customer, inv.customer_id)
-        g = group_for(f"invoice-{inv.id}", order, cust)
+        g = group_for(key_for(order, cust, f"invoice-{inv.id}") if group_by == "customer" else f"invoice-{inv.id}", order, cust)
         g["invoices"].append({"id": inv.id, "code": inv.code, "status": inv.status})
         g["attachments"].append({"kind": "invoice", "name": f"{inv.code}.pdf"})
         for sh in inv.shipments:
             g["shipments"].append({"id": sh.id, "code": sh.code})
             if "packing_list" in kinds:
                 g["attachments"].append({"kind": "packing_list", "name": f"Packing-List-{sh.code}.pdf"})
+            if "labels" in kinds:  # an invoiced shipment has left: saved boxes, else today's pack sizes
+                g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf",
+                                         "detail": f"{len(sh.boxes)} labels" if sh.boxes else "from current pack sizes"})
 
     out = []
     for g in groups.values():
@@ -140,7 +200,11 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
         what = [KINDS[k].lower() + ("s" if k in ("packing_list",) and len(g["shipments"]) > 1 else "")
                 for k in ("invoice", "packing_list", "labels", "pod") if any(a["kind"] == k for a in g["attachments"])]
         docs = ", ".join(what[:-1]) + (" and " if len(what) > 1 else "") + (what[-1] if what else "documents")
-        ref = f"your PO {g['po']}" if g["po"] else (g["order"] or ", ".join(s["code"] for s in g["shipments"]))
+        if len(g["orders"]) > 1:
+            g["order"], g["po"] = ", ".join(g["orders"]), ", ".join(g["pos"])
+            ref = f"your POs {g['po']}" if len(g["pos"]) > 1 else (f"your PO {g['po']}" if g["po"] else f"orders {g['order']}")
+        else:
+            ref = f"your PO {g['po']}" if g["po"] else (g["order"] or ", ".join(s["code"] for s in g["shipments"]))
         g["subject"] = f"{docs[:1].upper()}{docs[1:]} for {ref}" + (f" · {company.name}" if company.name else "")
         sh_codes = ", ".join(s["code"] for s in g["shipments"])
         g["body"] = (f"Hi {cust.contact_name or cust.name if cust else 'there'},\n\nPlease find attached the {docs} for {ref}"
@@ -148,6 +212,9 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
                      + "\n".join(x for x in [company.name, company.email, company.phone] if x))
         g["cc"] = ""
         g["ready"] = bool(g["attachments"])
+        g["attach"] = "combined" if attach == "combined" else "separate"
+        if g["attach"] == "combined":
+            g["combined_name"] = _combined_name(g)
         out.append(g)
     return out
 
@@ -172,6 +239,10 @@ def _files_for(db: Session, g: dict) -> List[tuple]:
     if any(a["kind"] == "pod" for a in g["attachments"]):
         for s in g["shipments"]:
             files += pod_files(db, ShipmentService.get(db, s["id"]))
+    if g.get("attach") == "combined":
+        pdfs = [f for f in files if f[2] == "application/pdf" or f[1].lower().endswith(".pdf")]
+        if len(pdfs) > 1:
+            files = [(merge_pdfs(pdfs), g.get("combined_name") or "Documents.pdf", "application/pdf")] + [f for f in files if f not in pdfs]
     return files
 
 
@@ -217,15 +288,16 @@ def send(db: Session, groups: List[dict], edits: Dict[str, dict], sent_by: str) 
 
 def merged_pdf(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: List[str], can_invoice: bool) -> bytes:
     """Every chosen document, record by record, in one PDF to print (PDF proofs of delivery included)."""
-    from pypdf import PdfReader, PdfWriter
-    writer = PdfWriter()
+    return merge_pdfs([f for g in plan(db, shipment_ids, invoice_ids, kinds, group_by="shipment", can_invoice=can_invoice)
+                       for f in _files_for(db, g)])
+
+
+def split_zip(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: List[str], can_invoice: bool) -> bytes:
+    """The same documents, one file each (photos too), in a ZIP."""
+    seen, files = set(), []
     for g in plan(db, shipment_ids, invoice_ids, kinds, group_by="shipment", can_invoice=can_invoice):
-        for data, name, ctype in _files_for(db, g):
-            if ctype == "application/pdf" or name.lower().endswith(".pdf"):
-                for page in PdfReader(io.BytesIO(data)).pages:
-                    writer.add_page(page)
-    if not writer.pages:
-        raise HTTPException(status_code=400, detail="None of the chosen documents exist for these records yet")
-    out = io.BytesIO()
-    writer.write(out)
-    return out.getvalue()
+        for f in _files_for(db, g):
+            if f[1] not in seen:  # an invoice covering two shipments comes once
+                seen.add(f[1])
+                files.append(f)
+    return zip_files(files)
