@@ -275,11 +275,12 @@
 
     function drawStages() {
       // while searching / filtering, each tab counts its matches -- so a job # in another stage is one click away
-      const counts = Object.fromEntries(STAGES.map(st => [st.key, searching() ? visibleShipments(st.key).length : shipments.filter(s => inPlay(s) && st.test(s)).length]));
+      // history tabs (Completed, All) count what "Shipped within" shows, so the number always matches the list
+      const counts = Object.fromEntries(STAGES.map(st => [st.key, searching() || st.history ? visibleShipments(st.key).length : shipments.filter(s => inPlay(s) && st.test(s)).length]));
       const st = STAGES.find(x => x.key === stage);
       document.getElementById("stage-tabs").innerHTML = STAGES.map((x, i) => `${i && x.key !== "all" ? `<span class="stage-arrow" aria-hidden="true">›</span>` : ""}
         <button role="tab" aria-selected="${x.key === stage}" class="stage-tab ${x.key === stage ? "on" : ""} ${x.key === "all" ? "stage-all" : ""}" onclick="setStage('${x.key}')">
-          ${escapeHtml(x.label)}${x.key !== "all" ? `<span class="stage-count ${counts[x.key] ? "" : "zero"}">${counts[x.key]}</span>` : ""}</button>`).join("");
+          ${escapeHtml(x.label)}${x.key !== "all" ? `<span class="stage-count ${counts[x.key] ? "" : "zero"}" title="${x.history ? "Shipped within the period chosen below" : ""}">${counts[x.key]}</span>` : ""}</button>`).join("");
       document.getElementById("stage-hint").innerHTML = st.hint;
       document.querySelectorAll(".pack-tools").forEach(el => { el.style.display = ["pick", "pack", "ship", "all"].includes(stage) ? "" : "none"; });
       document.getElementById("period-wrap").style.display = st.history ? "" : "none";
