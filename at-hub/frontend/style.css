@@ -1410,3 +1410,14 @@ button.ship-now.lit { animation: ship-glow 1.6s ease-in-out infinite; }
 .sm-done.show .ship-truck .ico { animation: truck-go 1s ease-in .2s both; }
 @keyframes truck-go { 0% { transform: translateX(0); } 60% { transform: translateX(4px); } 100% { transform: translateX(46px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { button.ship-now.lit, .sm-done.show .ship-truck .ico { animation: none; } }
+
+/* ---- several people at once: presence + "someone saved" bar on a record, conflict pop-up ---- */
+.presence-bar { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 7px 12px; margin: 0 0 10px; border-radius: 10px; font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); }
+.presence-bar.changed { background: color-mix(in srgb, #f59e0b 13%, transparent); border-color: color-mix(in srgb, #f59e0b 45%, transparent); }
+.presence-who, .presence-changed { display: inline-flex; align-items: center; gap: 6px; }
+.presence-changed .ico { color: #b45309; }
+.presence-avatar { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 10px; font-weight: 700;
+  color: #fff; background: linear-gradient(135deg, #6366f1, #2f6fed); box-shadow: 0 0 0 2px var(--surface); margin-right: -4px; }
+.presence-avatar:last-of-type { margin-right: 2px; }
+.conflict-list { margin: 4px 0 0; padding-left: 18px; color: var(--text-2); }

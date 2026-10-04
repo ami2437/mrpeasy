@@ -21,26 +21,26 @@ router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], depe
 from fastapi import File, HTTPException, UploadFile  # noqa: E402
 
 
-async def _payments_csv(file: UploadFile):
+def _payments_csv(file: UploadFile):
     from app.services import po_payments_csv
     try:
-        return po_payments_csv.parse(await file.read())
+        return po_payments_csv.parse(file.file.read())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/payments-import/preview", dependencies=[Depends(require_role("admin"))])
-async def payments_import_preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def payments_import_preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """What uploading this export would record -- nothing is saved."""
     from app.services import po_payments_csv
-    return po_payments_csv.plan(db, await _payments_csv(file))
+    return po_payments_csv.plan(db, _payments_csv(file))
 
 
 @router.post("/payments-import/apply", dependencies=[Depends(require_role("admin"))])
-async def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from app.services import po_payments_csv
-    await file.seek(0)
-    data = await file.read()
+    file.file.seek(0)
+    data = file.file.read()
     try:
         rows = po_payments_csv.parse(data)
     except ValueError as e:

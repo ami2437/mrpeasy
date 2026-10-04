@@ -283,15 +283,15 @@ def scan_names(req: NamesRequest, db: Session = Depends(get_db)):
     return {"folder": None, "files": _plan_names(db, [(str(f.get("file", "")), int(f.get("size") or 0)) for f in req.files], req.kind)}
 
 
-async def _blob(f: UploadFile) -> bytes:
-    data = await f.read()
+def _blob(f: UploadFile) -> bytes:
+    data = f.file.read()
     if not data or len(data) > MAX_BYTES:
         raise HTTPException(status_code=400, detail=f"{f.filename}: empty or larger than 25 MB")
     return data
 
 
 @router.post("/attach-upload")
-async def attach_upload(kind: str = Form(...), all_names: str = Form(...), rels: str = Form(...), category: Optional[str] = Form(None),
+def attach_upload(kind: str = Form(...), all_names: str = Form(...), rels: str = Form(...), category: Optional[str] = Form(None),
                         files: List[UploadFile] = File(...), db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """all_names: every PDF in the picked folder ([{file, size}]) so "one file per order" is judged on the
     whole folder; rels: the relative path of each uploaded file, in order. Re-checked here."""
@@ -306,7 +306,7 @@ async def attach_upload(kind: str = Form(...), all_names: str = Form(...), rels:
             continue
         name = PATHSEP.split(rel)[-1]
         cat = "customer_po" if kind == "customer" else _vendor_category(name, category)
-        store_file(db, entity_type, r["record_id"], cat, name, "application/pdf", await _blob(up),
+        store_file(db, entity_type, r["record_id"], cat, name, "application/pdf", _blob(up),
                    "Matched by number in file name (File Matcher)", user.username)
         done.append({"file": rel, "record": r["record"], "record_id": r["record_id"], "category": cat})
     db.commit()
@@ -314,11 +314,11 @@ async def attach_upload(kind: str = Form(...), all_names: str = Form(...), rels:
 
 
 @router.post("/read-upload")
-async def read_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
-    return _read_bytes(db, kind, await _blob(file), PATHSEP.split(rel)[-1], rel)
+def read_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
+    return _read_bytes(db, kind, _blob(file), PATHSEP.split(rel)[-1], rel)
 
 
 @router.post("/create-upload")
-async def create_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db),
+def create_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db),
                         user: User = Depends(get_current_active_user)):
-    return _create_bytes(db, kind, await _blob(file), PATHSEP.split(rel)[-1], rel, user)
+    return _create_bytes(db, kind, _blob(file), PATHSEP.split(rel)[-1], rel, user)

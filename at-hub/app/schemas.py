@@ -254,6 +254,9 @@ VendorCreate, VendorUpdate = CustomerCreate, CustomerUpdate  # same contact card
 
 class PartyResponse(BaseModel):
     id: int
+    row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
+    row_updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
     code: Optional[str] = None  # vendors: V-0001
     name: str
     contact_name: Optional[str] = None
@@ -336,6 +339,9 @@ class CustomerOrderLineResponse(BaseModel):
 
 class CustomerOrderResponse(BaseModel):
     id: int
+    row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
+    row_updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
     code: str
     customer_id: int
     order_date: datetime
@@ -526,6 +532,9 @@ class PackSizeHistoryEntry(BaseModel):
 
 class ShipmentResponse(BaseModel):
     id: int
+    row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
+    row_updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
     code: str
     order_id: int
     ship_date: Optional[datetime] = None
@@ -657,6 +666,9 @@ class InvoicePaymentResponse(InvoicePaymentInput):
 
 class InvoiceResponse(BaseModel):
     id: int
+    row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
+    row_updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
     code: str
     customer_id: int
     order_id: Optional[int] = None
@@ -864,6 +876,9 @@ class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
 
 class PurchaseOrderResponse(BaseModel):
     id: int
+    row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
+    row_updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
     code: str
     vendor_id: int
     order_date: datetime

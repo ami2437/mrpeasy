@@ -48,10 +48,10 @@ def get_logo(db: Session = Depends(get_db)):
 
 
 @router.post("/logo", response_model=CompanyProfileResponse, dependencies=[Depends(require_role("admin"))])
-async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if file.content_type not in LOGO_TYPES:
         raise HTTPException(status_code=400, detail="Logo must be a PNG or JPEG image")
-    data = await file.read()
+    data = file.file.read()
     if len(data) > MAX_LOGO_BYTES:
         raise HTTPException(status_code=400, detail="Logo must be 1 MB or smaller")
     profile = get_company_profile(db)

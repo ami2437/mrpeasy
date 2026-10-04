@@ -1,1 +1,3 @@
 pdf-samples/
+*.db-wal
+*.db-shm

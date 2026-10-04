@@ -96,7 +96,7 @@ def attachment_counts(entity_type: str = Query(...), db: Session = Depends(get_d
 
 
 @router.post("/", response_model=List[AttachmentResponse])
-async def upload(entity_type: str = Form(...), entity_id: int = Form(...), category: str = Form("other"),
+def upload(entity_type: str = Form(...), entity_id: int = Form(...), category: str = Form("other"),
                  note: Optional[str] = Form(None), files: List[UploadFile] = File(...),
                  also_entity_ids: Optional[str] = Form(None),
                  db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
@@ -127,7 +127,7 @@ async def upload(entity_type: str = Form(...), entity_id: int = Form(...), categ
         ext = os.path.splitext(name)[1].lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status_code=400, detail=f"{name}: file type {ext or '(none)'} isn't allowed")
-        data = await f.read()
+        data = f.file.read()
         if len(data) > MAX_BYTES:
             raise HTTPException(status_code=400, detail=f"{name} is larger than 25 MB")
         if not data:

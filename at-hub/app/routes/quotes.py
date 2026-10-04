@@ -43,7 +43,7 @@ def _out(db: Session, q: Quote) -> dict:
              for l in q.lines]
     return {"id": q.id, "code": q.code, "customer_id": q.customer_id, "customer": cust.name if cust else "", "status": q.status,
             "quote_date": q.quote_date, "valid_until": q.valid_until, "customer_ref": q.customer_ref, "notes": q.notes,
-            "order_id": q.order_id, "created_by": q.created_by, "lines": lines, "total": round(sum(l["amount"] for l in lines), 2),
+            "order_id": q.order_id, "created_by": q.created_by, "lines": lines, "row_version": q.row_version or 1, "updated_by": q.updated_by, "total": round(sum(l["amount"] for l in lines), 2),
             "customer_email": cust.email_for("quote") if cust else None, "customer_contact": cust.contact_name if cust else None,
             "emails": [{"to": e.to_address, "cc": e.cc_address, "subject": e.subject, "sent_by": e.sent_by,
                         "sent_at": e.sent_at.isoformat() if e.sent_at else None} for e in q.emails]}

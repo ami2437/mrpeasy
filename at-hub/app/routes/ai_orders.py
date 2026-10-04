@@ -16,12 +16,12 @@ def ai_status():
 
 
 @router.post("/extract")
-async def extract(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def extract(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Read a customer PO PDF with the local model and return a draft order to review.
     Nothing is saved -- the order is created only when the user confirms the draft."""
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Upload a PDF")
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(data) > MAX_PDF_BYTES:

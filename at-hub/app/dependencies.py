@@ -13,13 +13,24 @@ ROLE_RANK = {"employee": 1, "manager": 2, "admin": 3, "super_admin": 4}
 
 
 async def get_current_active_user(
-    db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> User:
+    """The signed-in user, looked up in a short read-only session of its own -- so it never holds the write
+    lock a change request takes (see app/services/concurrency.py)."""
+    from app.config.database import SessionLocal
+    from app.services.concurrency import READ_ONLY
     payload = AuthService.decode_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    user = AuthService.get_user_by_username(db, payload.get("sub"))
+    token = READ_ONLY.set(True)
+    db = SessionLocal()
+    try:
+        user = AuthService.get_user_by_username(db, payload.get("sub"))
+        if user is not None:
+            db.expunge(user)  # its loaded fields stay usable after the session closes
+    finally:
+        db.close()
+        READ_ONLY.reset(token)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user

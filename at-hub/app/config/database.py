@@ -2,9 +2,12 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from app.config.settings import settings
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 15} if settings.database_url.startswith("sqlite") else {}
 engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+from app.services.concurrency import setup_sqlite  # noqa: E402  (WAL, write lock per change request, version stamps)
+setup_sqlite(engine)
 
 
 def get_db():

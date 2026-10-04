@@ -39,8 +39,8 @@ Document:
 """
 
 
-async def _blob(f: UploadFile) -> bytes:
-    data = await f.read()
+def _blob(f: UploadFile) -> bytes:
+    data = f.file.read()
     if not data or len(data) > MAX_BYTES:
         raise HTTPException(status_code=400, detail=f"{f.filename}: empty or larger than 25 MB")
     return data
@@ -94,16 +94,16 @@ def _find(db: Session, kind_of_record: str, text: str, name: str, extra=()) -> l
 
 
 @router.post("/analyze")
-async def analyze(file: UploadFile = File(...), instruction: str = Form(""), kind: str = Form(""), db: Session = Depends(get_db)):
+def analyze(file: UploadFile = File(...), instruction: str = Form(""), kind: str = Form(""), db: Session = Depends(get_db)):
     try:
-        return await _analyze(file, instruction, kind, db)
+        return _analyze(file, instruction, kind, db)
     except HTTPException as e:  # AI offline, unreadable PDF...: report it on the file's card
         return {"file": file.filename, "kind": kind or "other", "kind_label": KINDS.get(kind, "Other document"), "kind_why": "",
                 "summary": "", "target": None, "actions": [], "problems": [str(e.detail)]}
 
 
-async def _analyze(file: UploadFile, instruction: str, kind: str, db: Session):
-    data, name = await _blob(file), file.filename or "document"
+def _analyze(file: UploadFile, instruction: str, kind: str, db: Session):
+    data, name = _blob(file), file.filename or "document"
     text = _text(data, name)
     if kind not in KINDS:
         kind, why = _classify(db, data, name, text, instruction)
@@ -198,9 +198,9 @@ def _resolve(db: Session, rec_type: str, code: str):
 
 
 @router.post("/apply")
-async def apply(file: UploadFile = File(...), action: str = Form(...), kind: str = Form(...), target_type: str = Form(""),
+def apply(file: UploadFile = File(...), action: str = Form(...), kind: str = Form(...), target_type: str = Form(""),
                 target_code: str = Form(""), bill: str = Form("{}"), db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
-    data, name = await _blob(file), file.filename or "document"
+    data, name = _blob(file), file.filename or "document"
     if action == "create_order":
         return {"done": "created", **_create_bytes(db, "customer", data, name, name, user)}
     if action == "create_po":

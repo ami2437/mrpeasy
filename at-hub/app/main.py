@@ -76,12 +76,15 @@ async def hide_money_from_employees(request, call_next):
             or "application/json" not in response.headers.get("content-type", "")):
         return response
     payload = AuthService.decode_token(auth[7:]) or {}
+    from app.services.concurrency import READ_ONLY
+    ro = READ_ONLY.set(True)  # on the event loop: a read that must never wait for the write lock
     db = SessionLocal()
     try:
         user = AuthService.get_user_by_username(db, payload.get("sub")) if payload.get("sub") else None
         role = user.role if user else None
     finally:
         db.close()
+        READ_ONLY.reset(ro)
     body = b"".join([chunk async for chunk in response.body_iterator])
     if role == "employee":
         try:
@@ -182,15 +185,19 @@ async def record_activity(request, call_next):
         kind, rec_id, rest = m.group(1), int(m.group(2)), (m.group(3) or "")
         if rest.startswith("profit") or rest.endswith(".pdf") or rest.startswith("email"):
             return response
-        db = SessionLocal()
-        try:
-            db.add(ActivityLog(entity_type="customer_order" if kind == "customer-orders" else "purchase_order", entity_id=rec_id,
-                               method=request.method, action=rest, detail=body.decode("utf-8", "replace")[:2000] or None, by=who))
-            db.commit()
-        except Exception:
-            db.rollback()
-        finally:
-            db.close()
+
+        def write():  # in a worker thread: waiting for the write lock must never block the event loop
+            db = SessionLocal()
+            try:
+                db.add(ActivityLog(entity_type="customer_order" if kind == "customer-orders" else "purchase_order", entity_id=rec_id,
+                                   method=request.method, action=rest, detail=body.decode("utf-8", "replace")[:2000] or None, by=who))
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        from starlette.concurrency import run_in_threadpool
+        await run_in_threadpool(write)
     return response
 
 
@@ -259,6 +266,70 @@ from app.routes import backups as backups_routes  # noqa: E402
 app.include_router(backups_routes.router)
 from app.services.backups import start_scheduler  # noqa: E402
 start_scheduler()
+
+# ---- several people at once (app/services/concurrency.py): write lock per change request, stale-version
+# check (409 CONFLICT), presence. Added last, so it runs first for every request.
+from app.services import concurrency  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+@app.middleware("http")
+async def concurrency_guard(request, call_next):
+    write = request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path.startswith("/api/")
+    auth = request.headers.get("authorization", "")
+    user = (AuthService.decode_token(auth[7:]) or {}).get("sub") if auth.lower().startswith("bearer ") else None
+    t_write, t_user = concurrency.WRITE_REQUEST.set({"committed": False} if write else None), concurrency.CURRENT_USER.set(user)
+    try:
+        expected = request.headers.get("x-row-version")
+        m = concurrency.RECORD_PATH.match(request.url.path) if write and expected and not request.headers.get("x-force-save") else None
+        if m:
+            ro = concurrency.READ_ONLY.set(True)  # on the event loop: read only, never wait for the write lock
+            db = SessionLocal()
+            try:
+                rec = concurrency.current_version(db, m.group(1), int(m.group(2)))
+                if rec is not None and str(rec.row_version or 1) != expected.strip():
+                    who, when = rec.updated_by or "someone", rec.row_updated_at
+                    label = getattr(rec, "code", None) or getattr(rec, "name", None) or f"#{rec.id}"
+                    return JSONResponse(status_code=409, content={
+                        "detail": f"CONFLICT|{label} was changed by {who}{' at ' + when.strftime('%H:%M') + ' UTC' if when else ''} "
+                                  f"while you had it open -- your change wasn't saved.",
+                        "conflict": {"record": label, "by": who, "at": when.isoformat() + "Z" if when else None,
+                                     "version": rec.row_version, "collection": m.group(1), "id": rec.id}})
+            finally:
+                db.close()
+                concurrency.READ_ONLY.reset(ro)
+        return await call_next(request)
+    finally:
+        concurrency.WRITE_REQUEST.reset(t_write)
+        concurrency.CURRENT_USER.reset(t_user)
+
+
+@app.post("/api/presence")
+def presence(data: dict, authorization: str = Header(None)):
+    """A record screen's heartbeat: {key: "customer-orders/158", leave?: true}. Returns who else has it open
+    and the record's current version (so the screen knows when someone else saved it)."""
+    payload = AuthService.decode_token((authorization or "").split(" ")[-1]) if authorization else None
+    user = (payload or {}).get("sub")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    key = str(data.get("key") or "")
+    m = re.match(r"^(" + "|".join(concurrency.VERSIONED) + r")/(\d+)$", key)
+    if not m:
+        raise HTTPException(status_code=400, detail="Unknown record")
+    if data.get("leave"):
+        concurrency.leave(key, user)
+        return {"others": []}
+    others = concurrency.heartbeat(key, user)
+    ro = concurrency.READ_ONLY.set(True)  # a read: never takes the write lock
+    db = SessionLocal()
+    try:
+        rec = concurrency.current_version(db, m.group(1), int(m.group(2)))
+        return {"others": others, "version": rec.row_version if rec else None, "updated_by": rec.updated_by if rec else None,
+                "updated_at": rec.row_updated_at.isoformat() + "Z" if rec and rec.row_updated_at else None}
+    finally:
+        db.close()
+        concurrency.READ_ONLY.reset(ro)
+
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
 if frontend_dir.exists():

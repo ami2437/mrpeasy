@@ -52,10 +52,21 @@ const AuthGuard = {
   },
 };
 
+// ---- several people at once: every record screen remembers the version it loaded and sends it with a
+// change (X-Row-Version). If someone else saved in between, the server refuses (409) and the conflict pop-up
+// says who and what -- Reload to see it, or Save Mine Anyway.
+const recordVersions = {};  // "customer-orders/158" -> row_version
+function recordKey(path) {
+  const m = String(path).match(/^\/api\/(customer-orders|purchase-orders|shipments|invoices|quotes|customers|vendors)\/(\d+)(?=[/?]|$)/);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
 async function apiFetch(path, options = {}) {
   const token = AuthGuard.getToken();
   const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const method = (options.method || "GET").toUpperCase(), key = recordKey(path);
+  if (method !== "GET" && key && recordVersions[key] != null && !headers["X-Force-Save"]) headers["X-Row-Version"] = String(recordVersions[key]);
 
   const response = await fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
 
@@ -68,6 +79,18 @@ async function apiFetch(path, options = {}) {
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
 
+  if (response.status === 409 && data && data.conflict) {
+    const choice = await conflictDialog(data.conflict);
+    if (choice === "force") return apiFetch(path, Object.assign({}, options, { headers: Object.assign({}, options.headers || {}, { "X-Force-Save": "1" }) }));
+    if (choice === "reload") { location.reload(); return new Promise(() => {}); }
+    throw new Error("Not saved -- someone else changed it first. Reload to see their changes.");
+  }
+  if (response.ok && key) {
+    const id = parseInt(key.split("/")[1]);
+    if (data && !Array.isArray(data) && data.row_version != null && data.id === id) recordVersions[key] = data.row_version;
+    else if (method !== "GET") delete recordVersions[key];  // changed, version unknown now: don't check until it's loaded again
+  }
+
   if (!response.ok) {
     const detail = (data && data.detail) ? data.detail : `Request failed (${response.status})`;
     if (Array.isArray(detail)) {
@@ -77,6 +100,41 @@ async function apiFetch(path, options = {}) {
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return data;
+}
+
+// "edited Job #, Notes" / "changed a line" / "added a line" -- one activity-log row in words
+function activitySummary(r) {
+  const nice = k => ({ po_number: "Customer PO #", job_number: "Job #", delivery_date: "delivery date", customer_po_date: "PO date",
+    ship_to_address: "ship-to", customer_id: "customer", vendor_id: "vendor", expected_date: "required-by date", vendor_so_number: "vendor SO #",
+    unit_price: "price", unit_cost: "cost", quantity: "quantity" }[k] || k.replace(/_/g, " "));
+  let fields = [];
+  try { fields = Object.keys(JSON.parse(r.detail || "{}")).map(nice); } catch (e) {}
+  const what = (r.action || "").replace(/\/\d+/g, "");
+  if (!what) return r.method === "PUT" ? `edited ${fields.join(", ") || "the details"}` : r.method.toLowerCase();
+  const verb = { POST: "added", PUT: "changed", DELETE: "removed" }[r.method] || r.method.toLowerCase();
+  const noun = { lines: "a line", "line-order": "the line order", charges: "a charge", bills: "a vendor invoice", payments: "a payment" }[what] || what.replace(/-/g, " ");
+  const done = { "line-order": "re-ordered the lines", confirm: "confirmed it", cancel: "cancelled it", receive: "received items",
+    "duplicate-po-ok": "OK'd the duplicate PO #", shipments: "created a shipment" }[what];
+  return done || `${verb} ${noun}${fields.length && r.method === "PUT" ? ` (${fields.join(", ")})` : ""}`;
+}
+
+async function conflictDialog(c) {
+  let changes = "";
+  const kind = { "customer-orders": "customer_order", "purchase-orders": "purchase_order" }[c.collection];
+  if (kind) {
+    try {
+      const rows = await (await fetch(`${API_BASE}/api/activity/${kind}/${c.id}`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } })).json();
+      const recent = (rows || []).slice(0, 4);
+      if (recent.length) changes = `<div class="small" style="margin-top:6px;"><strong>Their recent changes</strong><ul class="conflict-list">${recent.map(r =>
+        `<li>${escapeHtml(r.by || "")} · ${new Date((r.at || "") + (String(r.at).endsWith("Z") ? "" : "Z")).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${escapeHtml(activitySummary(r))}</li>`).join("")}</ul></div>`;
+    } catch (e) {}
+  }
+  const when = c.at ? new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const { value } = await askDialog({ title: `${c.record} was just changed`, tone: "warn",
+    body: `<p><strong>${escapeHtml(c.by)}</strong> saved ${escapeHtml(c.record)}${when ? ` at ${when}` : ""} while you had it open, so <strong>your change wasn't saved</strong> -- nothing was overwritten.</p>${changes}
+      <p class="muted small">Reload to see their version and redo your change, or save yours over theirs.</p>`,
+    buttons: [{ label: "Reload", value: "reload", cls: "" }, { label: "Save Mine Anyway", value: "force", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  return value;
 }
 
 // POST a FormData (file upload). apiFetch forces JSON; the browser must set the multipart boundary.
@@ -1720,11 +1778,64 @@ function aiVendorChips(cands, selectId) {
     // The record's id goes into the address (?id=…), so Back from a page it links to comes back to it.
     if (typeof window.showDetail === "function") {
       const orig = window.showDetail;
-      window.showDetail = function (id, ...rest) { recId = id; if (open) setUrl(id, true); return orig.call(this, id, ...rest); };
+      window.showDetail = function (id, ...rest) {
+        recId = id;
+        if (open) setUrl(id, true);
+        const done = orig.call(this, id, ...rest);
+        Promise.resolve(done).then(() => presence.start());
+        return done;
+      };
     }
     const urlFor = id => { const u = new URL(location.href); if (id) u.searchParams.set("id", id); else u.searchParams.delete("id"); return u.pathname + u.search + u.hash; };
     const setUrl = (id, replace) => history[replace ? "replaceState" : "pushState"]({ record: true, id }, "", urlFor(id));
-    window.setRecordId = id => { recId = id; if (open) setUrl(id, true); };  // records drawn without showDetail (a quote)
+    window.setRecordId = id => { recId = id; if (open) setUrl(id, true); presence.start(); };  // records drawn without showDetail (a quote)
+    // presence: who else has this record open, and whether someone else saved it meanwhile
+    const COLLECTION = { "customer-orders.html": "customer-orders", "purchase-orders.html": "purchase-orders",
+                         "shipments.html": "shipments", "invoices.html": "invoices" }[location.pathname.split("/").pop()];
+    const presence = {
+      key: null, timer: null,
+      start() {
+        const key = open && recId && COLLECTION ? `${COLLECTION}/${recId}` : null;
+        if (key === this.key) return;
+        this.stop();
+        this.key = key;
+        if (!key) return;
+        this.beat();
+        this.timer = setInterval(() => { if (!document.hidden) this.beat(); }, 15000);
+      },
+      stop() {
+        if (this.timer) clearInterval(this.timer);
+        if (this.key) fetch(`${API_BASE}/api/presence`, { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` },
+          body: JSON.stringify({ key: this.key, leave: true }) }).catch(() => {});
+        this.timer = this.key = null;
+        const bar = card.querySelector(":scope > .presence-bar");
+        if (bar) bar.remove();
+      },
+      async beat() {
+        const key = this.key;
+        let r;
+        try { r = await apiFetch("/api/presence", { method: "POST", body: JSON.stringify({ key }) }); } catch (e) { return; }
+        if (key !== this.key) return;
+        const me = (AuthGuard.getUser() || {}).username;
+        const mine = recordVersions[key];
+        const changed = r.version != null && mine != null && r.version !== mine && r.updated_by && r.updated_by !== me;
+        let bar = card.querySelector(":scope > .presence-bar");
+        if (!r.others.length && !changed) { if (bar) bar.remove(); return; }
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.className = "presence-bar";
+          const back = card.querySelector(":scope > .record-backbar");
+          back ? back.after(bar) : card.prepend(bar);
+        }
+        bar.classList.toggle("changed", !!changed);
+        bar.innerHTML = (r.others.length ? `<span class="presence-who">${r.others.map(u => `<b class="presence-avatar" title="${escapeHtml(u)}">${escapeHtml(u.slice(0, 2).toUpperCase())}</b>`).join("")}
+            ${escapeHtml(r.others.join(", "))} ${r.others.length === 1 ? "is" : "are"} also viewing this</span>` : "")
+          + (changed ? `<span class="presence-changed">${icon("info")}<strong>${escapeHtml(r.updated_by)}</strong> saved changes${r.updated_at ? ` at ${new Date(r.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+            <a class="link" onclick="presenceReload()">Reload to see them</a></span>` : "");
+      },
+    };
+    window.presenceReload = () => { if (recId && typeof window.showDetail === "function") window.showDetail(recId); };
+    window.addEventListener("beforeunload", () => presence.stop());
     const ensureBar = () => {
       if (card.querySelector(":scope > .record-backbar")) return;
       card.insertAdjacentHTML("afterbegin", `<div class="record-backbar"><a class="link" onclick="closeRecordPage()">← Back to ${escapeHtml(listName)}</a></div>`);
@@ -1735,6 +1846,7 @@ function aiVendorChips(cands, selectId) {
       if (visible === open) return;
       open = visible;
       main.classList.toggle("record-mode", open);
+      presence[open ? "start" : "stop"]();
       if (open) {
         window.scrollTo({ top: 0 });
         if (!(history.state && history.state.record)) {

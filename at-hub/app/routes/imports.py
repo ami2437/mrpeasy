@@ -117,8 +117,8 @@ def _plan(kind: str, parsed: Dict[str, Any], db: Session) -> List[Dict[str, Any]
 
 
 @router.post("/{kind}/preview")
-async def preview(kind: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    parsed = _parse(kind, await file.read())
+def preview(kind: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    parsed = _parse(kind, file.file.read())
     plan = _plan(kind, parsed, db)
     return {"columns": {f: parsed["header"][i] for f, i in parsed["mapping"].items()},
             "ignored": [h for i, h in enumerate(parsed["header"]) if i not in parsed["mapping"].values()],
@@ -126,8 +126,8 @@ async def preview(kind: str, file: UploadFile = File(...), db: Session = Depends
 
 
 @router.post("/{kind}/apply")
-async def apply(kind: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    parsed = _parse(kind, await file.read())
+def apply(kind: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    parsed = _parse(kind, file.file.read())
     plan = _plan(kind, parsed, db)
     model, key = MODEL[kind], KEY[kind]
     existing = {(getattr(r, key) or "").strip().lower(): r for r in db.query(model).all()}

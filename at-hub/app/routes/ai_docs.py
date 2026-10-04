@@ -12,7 +12,7 @@ MAX_BYTES = 15 * 1024 * 1024
 
 
 @router.post("/extract")
-async def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engine: str = Form("local"), file: UploadFile = File(...),
+def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engine: str = Form("local"), file: UploadFile = File(...),
                   db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Scan a vendor invoice, vendor quote/confirmation or a proof of delivery with the local
     model and return suggestions to review. Nothing is saved."""
@@ -20,7 +20,7 @@ async def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engi
         raise HTTPException(status_code=403, detail="Ask Claude (cloud) needs the manager role or higher")
     if kind != "pod" and ROLE_RANK.get(user.role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Scanning vendor documents needs the manager role or higher")
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(data) > MAX_BYTES:

@@ -1101,15 +1101,18 @@ Thank you.</textarea>
       const errorEl = document.getElementById("detail-error");
       errorEl.textContent = "";
       try {
-        await apiFetch(`/api/purchase-orders/${poId}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            vendor_id: parseInt(document.getElementById("e-vendor").value),
-            expected_date: document.getElementById("e-expected").value || null,
-            vendor_so_number: document.getElementById("e-vendor-so").value.trim() || null,
-            notes: document.getElementById("e-notes").value,
-          }),
-        });
+        // Only the fields actually changed are sent, so a save never puts back someone else's newer value.
+        const was = currentOrder && currentOrder.id === poId ? currentOrder : {};
+        const now = {
+          vendor_id: parseInt(document.getElementById("e-vendor").value),
+          expected_date: document.getElementById("e-expected").value || null,
+          vendor_so_number: document.getElementById("e-vendor-so").value.trim() || null,
+          notes: document.getElementById("e-notes").value,
+        };
+        const before = { vendor_id: was.vendor_id, expected_date: was.expected_date ? String(was.expected_date).substring(0, 10) : null,
+          vendor_so_number: was.vendor_so_number || null, notes: was.notes || "" };
+        const changes = Object.fromEntries(Object.entries(now).filter(([k, v]) => (v ?? "") !== (before[k] ?? "")));
+        if (Object.keys(changes).length) await apiFetch(`/api/purchase-orders/${poId}`, { method: "PUT", body: JSON.stringify(changes) });
         loadOrders();
         showDetail(poId);
       } catch (err) {

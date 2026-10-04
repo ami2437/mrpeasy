@@ -195,6 +195,9 @@ class Customer(ContactCardMixin, Base):
     __tablename__ = "customers"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     name = Column(String, nullable=False)
     contact_name = Column(String, nullable=True)
     email = Column(String, nullable=True)
@@ -210,6 +213,9 @@ class Vendor(ContactCardMixin, Base):
     __tablename__ = "vendors"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, nullable=True, index=True)  # V-0001, assigned on create; keys the vendor part # mapping
     name = Column(String, nullable=False)
     contact_name = Column(String, nullable=True)
@@ -226,6 +232,9 @@ class CustomerOrder(Base):
     __tablename__ = "customer_orders"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, nullable=False, index=True)  # CO-0001
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     order_date = Column(DateTime, default=datetime.utcnow)
@@ -334,6 +343,9 @@ class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, nullable=False, index=True)  # PO-0001
     vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False)
     order_date = Column(DateTime, default=datetime.utcnow)
@@ -561,6 +573,9 @@ class Shipment(Base):
     __tablename__ = "shipments"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, nullable=False, index=True)  # SH-0001
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=False, index=True)
     ship_date = Column(DateTime, nullable=True)  # set when the shipment actually ships
@@ -648,6 +663,9 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, nullable=False, index=True)  # INV-0001
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)
@@ -965,6 +983,9 @@ class Quote(Base):
     __tablename__ = "quotes"
 
     id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
+    row_updated_at = Column(DateTime, nullable=True)  # when / by whom it last changed
+    updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, index=True, nullable=False)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
     status = Column(String, nullable=False, default="draft")  # draft | sent | accepted | declined | converted

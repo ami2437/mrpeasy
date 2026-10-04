@@ -997,18 +997,22 @@
       const errorEl = document.getElementById("detail-error");
       errorEl.textContent = "";
       try {
-        await apiFetch(`/api/customer-orders/${orderId}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            customer_id: parseInt(document.getElementById("e-customer").value),
-            delivery_date: document.getElementById("e-delivery").value || null,
-            po_number: document.getElementById("e-po-number").value || null,
-            job_number: document.getElementById("e-job-number").value || null,
-            customer_po_date: document.getElementById("e-po-date").value || null,
-            ship_to_address: document.getElementById("e-ship-to").value || null,
-            notes: document.getElementById("e-notes").value,
-          }),
-        });
+        // Only the fields actually changed are sent, so a save never puts back someone else's newer value.
+        const was = currentOrder && currentOrder.id === orderId ? currentOrder : {};
+        const day = v => v ? String(v).substring(0, 10) : null;
+        const now = {
+          customer_id: parseInt(document.getElementById("e-customer").value),
+          delivery_date: document.getElementById("e-delivery").value || null,
+          po_number: document.getElementById("e-po-number").value || null,
+          job_number: document.getElementById("e-job-number").value || null,
+          customer_po_date: document.getElementById("e-po-date").value || null,
+          ship_to_address: document.getElementById("e-ship-to").value || null,
+          notes: document.getElementById("e-notes").value,
+        };
+        const before = { customer_id: was.customer_id, delivery_date: day(was.delivery_date), po_number: was.po_number || null, job_number: was.job_number || null,
+          customer_po_date: day(was.customer_po_date), ship_to_address: was.ship_to_address || null, notes: was.notes || "" };
+        const changes = Object.fromEntries(Object.entries(now).filter(([k, v]) => (v ?? "") !== (before[k] ?? "")));
+        if (Object.keys(changes).length) await apiFetch(`/api/customer-orders/${orderId}`, { method: "PUT", body: JSON.stringify(changes) });
         // Lines edited in the table are saved too (each line still has its own Save link).
         const failed = [];
         for (const row of document.querySelectorAll("#order-lines-body tr[data-line]")) {

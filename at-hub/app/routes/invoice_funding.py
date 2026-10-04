@@ -10,25 +10,25 @@ from app.services import funding
 router = APIRouter(prefix="/api/invoice-funding", tags=["invoice-funding"], dependencies=[Depends(require_role("manager"))])  # no dollar work for employees
 
 
-async def _rows(file: UploadFile) -> list:
-    data = await file.read()
+def _rows(file: UploadFile) -> list:
+    data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     return funding.read_rows(data, file.filename)
 
 
 @router.post("/preview")
-async def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Check a factor's funding report against our invoices without changing anything."""
-    return {"file_name": file.filename, **funding.preview(db, await _rows(file))}
+    return {"file_name": file.filename, **funding.preview(db, _rows(file))}
 
 
 @router.post("/apply", dependencies=[Depends(require_role("manager"))])
-async def apply(file: UploadFile = File(...), record_payments: bool = Form(True), db: Session = Depends(get_db),
+def apply(file: UploadFile = File(...), record_payments: bool = Form(True), db: Session = Depends(get_db),
                 current_user: User = Depends(get_current_active_user)):
     """Set disbursement date / funding amount / discount on each matched invoice and, if
     record_payments, record funding + discount as payments. Existing values are never overwritten."""
-    return {"file_name": file.filename, **funding.apply(db, file.filename, await _rows(file), record_payments, current_user.username)}
+    return {"file_name": file.filename, **funding.apply(db, file.filename, _rows(file), record_payments, current_user.username)}
 
 
 @router.get("/imports", response_model=list[FundingImportResponse])

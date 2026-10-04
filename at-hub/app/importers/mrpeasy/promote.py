@@ -17,6 +17,18 @@ def promote():
     if not sqlite3.connect(TARGET_DB).execute("select count(*) from number_series").fetchone()[0]:
         raise SystemExit("at_hub_import.db doesn't look like a finished import -- run dryrun again")
     if LIVE_DB.exists():
+        # AT-HUB runs SQLite in WAL mode: fold the journal into the file and drop it, so neither the backup
+        # nor the new database picks up the other's leftover at_hub.db-wal / -shm.
+        try:
+            con = sqlite3.connect(LIVE_DB)
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            con.execute("PRAGMA journal_mode=DELETE")
+            con.close()
+        except sqlite3.OperationalError:
+            raise SystemExit("at_hub.db is in use -- stop AT-HUB first, then run promote again")
+        for side in (LIVE_DB.with_name(LIVE_DB.name + "-wal"), LIVE_DB.with_name(LIVE_DB.name + "-shm")):
+            if side.exists():
+                side.unlink()
         backup = LIVE_DB.with_name(f"at_hub.backup-{datetime.now():%Y%m%d-%H%M%S}.db")
         try:
             LIVE_DB.rename(backup)
