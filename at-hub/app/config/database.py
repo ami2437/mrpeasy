@@ -3,7 +3,10 @@ from sqlalchemy.orm import sessionmaker
 from app.config.settings import settings
 
 connect_args = {"check_same_thread": False, "timeout": 15} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# SQLite connections are cheap, and one request can hold two or three at once (sign-in lookup, the money filter,
+# the page itself): a big pool, so a busy floor (tests/race_check.py: 24 people at once) never waits for one.
+pool_args = {"pool_size": 30, "max_overflow": 70, "pool_timeout": 60} if settings.database_url.startswith("sqlite") else {}
+engine = create_engine(settings.database_url, connect_args=connect_args, **pool_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 from app.services.concurrency import setup_sqlite  # noqa: E402  (WAL, write lock per change request, version stamps)

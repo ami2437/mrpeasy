@@ -811,6 +811,23 @@
       return i ? `${i.code} — ${i.title}` : id;
     }
 
+    // Billed vs shipped on each line, across every shipment and invoice of the order (only when they differ).
+    async function drawOrderBilling(order) {
+      const el = document.getElementById("order-billing");
+      if (!el || !AuthGuard.can("invoices")) return;
+      let b;
+      try { b = await apiFetch(`/api/customer-orders/${order.id}/billing`); } catch (e) { return; }
+      const off = b.lines.filter(l => Math.abs(l.billed - l.shipped) > 1e-6 && (l.unit_price || l.billed > 1e-6) && l.billed > 1e-6);
+      if (!off.length && !b.accepted.length) { el.innerHTML = ""; return; }
+      const code = id => (items.find(i => i.id === id) || {}).code || "";
+      el.innerHTML = `<div class="notice billing-off" style="margin-top:14px;"><strong>Billing doesn't match what shipped</strong>
+        <ul>${off.map(l => { const d = l.billed - l.shipped, why = b.accepted.filter(a => a.order_line_id === l.order_line_id);
+          return `<li>#${l.line_no ?? ""} <strong>${escapeHtml(code(l.item_id))}</strong>: ordered ${fmtQty(l.ordered)}, shipped ${fmtQty(l.shipped)}, billed ${fmtQty(l.billed)}
+            — <span class="${d > 0 ? "neg" : "warn-text"}">${d > 0 ? "over" : "under"}-billed by ${fmtQty(Math.abs(d))}</span>
+            ${why.map(a => `<span class="muted">· ${escapeHtml(a.invoice || "")}${a.reason ? `: “${escapeHtml(a.reason)}”` : ""} (${escapeHtml(a.by || "")})</span>`).join(" ")}</li>`; }).join("")}</ul>
+        <span class="muted small">Square it up with a credit or a further invoice — once the order is fully billed AT-HUB raises a task if it still differs.</span></div>`;
+    }
+
     async function showDetail(id) {
       const order = await apiFetch(`/api/customer-orders/${id}`);
       currentOrderId = order.id;
@@ -931,6 +948,7 @@
           </div>
         ` : ""}
         <div id="detail-error" class="error"></div>
+        <div id="order-billing"></div>
 
         <h4 style="margin-top:20px;">Shipments (${orderShipments.length})</h4>
         ${orderShipments.length ? `
@@ -979,6 +997,7 @@
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
       `;
+      drawOrderBilling(order);
       refreshPriceDeltas(card);
       if (editable) {
         enableLineDrag(document.getElementById("order-lines-body"), ids => saveLineOrder(order.id, ids));

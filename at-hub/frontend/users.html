@@ -124,8 +124,18 @@
             : `<span class="tag cancelled">Deactivated</span>`}</td>
           <td>${fmtDateTime(u.last_login) || `<span class="muted">Never</span>`}</td>
           <td>${fmtDate(u.created_at)}${u.created_by ? ` <span class="muted small">By ${escapeHtml(u.created_by)}</span>` : ""}</td>
-          <td><a class="link" onclick="showDetail(${u.id})">Manage</a></td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${u.id})">Manage</a>${u.is_active && u.id !== me.id ? ` · <a class="link" onclick="viewAs(${u.id})" title="See AT-HUB exactly as ${escapeHtml(u.username)} does -- read-only">View as</a>` : ""}</td>
         </tr>`).join("");
+    }
+
+    // View as: switch to their view (read-only); the banner at the top brings you back.
+    async function viewAs(id) {
+      try {
+        const r = await apiFetch(`/api/users/${id}/view-as`, { method: "POST" });
+        localStorage.setItem("at_hub_view_as_back", JSON.stringify({ token: AuthGuard.getToken(), user: AuthGuard.getUser() }));
+        AuthGuard.setSession(r.access_token, r.user);
+        location.href = homePage();
+      } catch (e) { alert(e.message); }
     }
 
     async function load() {

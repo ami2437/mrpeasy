@@ -132,6 +132,18 @@ def leave(key: str, user: str) -> None:
         _PRESENCE.get(key, {}).pop(user, None)
 
 
+_RECORD_LOCKS = {}  # "customer-orders/158" -> asyncio.Lock (one server process)
+
+
+def record_lock(key: str):
+    """A versioned save holds this from its version check until its change is committed."""
+    import asyncio
+    lock = _RECORD_LOCKS.get(key)
+    if lock is None:
+        lock = _RECORD_LOCKS[key] = asyncio.Lock()
+    return lock
+
+
 RECORD_PATH = re.compile(r"^/api/(" + "|".join(VERSIONED) + r")/(\d+)(?:/|$)")
 
 

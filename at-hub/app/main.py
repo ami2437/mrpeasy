@@ -1,5 +1,6 @@
 import json
 import re
+from fastapi.responses import JSONResponse
 from pathlib import Path
 from fastapi import Header, HTTPException, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# "View as" (Users & Roles): a super admin sees AT-HUB as someone else does, but can't change anything with that
+# token -- reads only, plus the background calls that change nothing.
+VIEW_AS_OK = re.compile(r"^/api/(presence|invoices/\d+/qty-check|stock-items/generic-sources)$")
+
+
+@app.middleware("http")
+async def view_as_is_read_only(request, call_next):
+    auth = request.headers.get("authorization", "")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and auth.lower().startswith("bearer ") and request.url.path.startswith("/api/"):
+        payload = AuthService.decode_token(auth[7:]) or {}
+        if payload.get("view_as_by") and not VIEW_AS_OK.match(request.url.path):
+            return JSONResponse(status_code=403, content={"detail": f"You're viewing as {payload.get('sub')} -- read-only. "
+                                                                    "Go back to your own account to make changes."})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -291,25 +308,34 @@ async def concurrency_guard(request, call_next):
         expected = request.headers.get("x-row-version")
         m = concurrency.RECORD_PATH.match(request.url.path) if write and expected and not request.headers.get("x-force-save") else None
         if m:
-            ro = concurrency.READ_ONLY.set(True)  # on the event loop: read only, never wait for the write lock
-            db = SessionLocal()
-            try:
-                rec = concurrency.current_version(db, m.group(1), int(m.group(2)))
-                if rec is not None and str(rec.row_version or 1) != expected.strip():
-                    who, when = rec.updated_by or "someone", rec.row_updated_at
-                    label = getattr(rec, "code", None) or getattr(rec, "name", None) or f"#{rec.id}"
-                    return JSONResponse(status_code=409, content={
-                        "detail": f"CONFLICT|{label} was changed by {who}{' at ' + when.strftime('%H:%M') + ' UTC' if when else ''} "
-                                  f"while you had it open -- your change wasn't saved.",
-                        "conflict": {"record": label, "by": who, "at": when.isoformat() + "Z" if when else None,
-                                     "version": rec.row_version, "collection": m.group(1), "id": rec.id}})
-            finally:
-                db.close()
-                concurrency.READ_ONLY.reset(ro)
+            # Saves to the same record queue up through check + save: the second one then sees the first one's new
+            # version and gets the conflict pop-up instead of overwriting it (found by tests/race_check.py).
+            async with concurrency.record_lock(f"{m.group(1)}/{m.group(2)}"):
+                return await _versioned_write(request, call_next, m, expected)
         return await call_next(request)
     finally:
         concurrency.WRITE_REQUEST.reset(t_write)
         concurrency.CURRENT_USER.reset(t_user)
+
+
+async def _versioned_write(request, call_next, m, expected):
+    """The record still has the version the screen loaded? Save. Someone saved first? 409 naming who and when."""
+    ro = concurrency.READ_ONLY.set(True)  # on the event loop: read only, never wait for the write lock
+    db = SessionLocal()
+    try:
+        rec = concurrency.current_version(db, m.group(1), int(m.group(2)))
+        if rec is not None and str(rec.row_version or 1) != expected.strip():
+            who, when = rec.updated_by or "someone", rec.row_updated_at
+            label = getattr(rec, "code", None) or getattr(rec, "name", None) or f"#{rec.id}"
+            return JSONResponse(status_code=409, content={
+                "detail": f"CONFLICT|{label} was changed by {who}{' at ' + when.strftime('%H:%M') + ' UTC' if when else ''} "
+                          f"while you had it open -- your change wasn't saved.",
+                "conflict": {"record": label, "by": who, "at": when.isoformat() + "Z" if when else None,
+                             "version": rec.row_version, "collection": m.group(1), "id": rec.id}})
+    finally:
+        db.close()
+        concurrency.READ_ONLY.reset(ro)
+    return await call_next(request)
 
 
 @app.post("/api/presence")

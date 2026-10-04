@@ -217,7 +217,8 @@
           <td class="line-no">${idx + 1}</td>
           <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
           <td class="grow"><input type="text" class="line-desc" value="${escapeHtml(lineDescription(l))}">${lineNoteBox(l.notes, l.print_notes, true)}</td>
-          <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="${l.quantity}"></td>
+          <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="${l.quantity}" onchange="qtyChanged(this)"><div class="qty-flag"></div></td>
+          <td class="num delivered-cell">${deliveredCell(l)}</td>
           <td class="num">${priceInput("line-price", l.unit_price)}</td>
           <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
           <td class="line-actions">${lineNoteBtn(l.notes)}${trashBtn("this.closest('tr').remove(); recalcInvoice();", "Remove this line (saved when you Save the invoice)")}</td>
@@ -227,7 +228,8 @@
           <td class="line-no">${idx + 1}</td>
           <td><strong>${escapeHtml(itemCodeOf(l))}</strong>${lineShipmentTag(invoice, l)}</td>
           <td class="grow">${escapeHtml(lineDescription(l))}${lineNoteBox(l.notes, l.print_notes, false)}</td>
-          <td class="num">${fmtQty(l.quantity)}</td>
+          <td class="num">${fmtQty(l.quantity)}<div class="qty-flag"></div></td>
+          <td class="num delivered-cell">${deliveredCell(l)}</td>
           <td class="num">${fmtPrice(l.unit_price)}</td>
           <td class="num subtotal">${fmtMoney(lineTotal(l))}</td>
         </tr>
@@ -246,6 +248,60 @@
         tr.querySelector(".line-no").textContent = i + 1;
       });
       document.getElementById("invoice-total").textContent = fmtMoney(total);
+      flagQtyDifferences();
+    }
+
+    // ---- billed vs delivered: warn while typing, confirm on leaving the box, banner on the saved invoice ----
+    let billingCheck = { delivered: {}, differences: [] };
+    function deliveredCell(l) {
+      const d = l.order_line_id != null ? billingCheck.delivered[l.order_line_id] : undefined;
+      return d === undefined ? `<span class="muted">—</span>` : fmtQty(d);
+    }
+    function billedByLine() {  // order line -> qty on screen (a line may appear more than once)
+      const out = {};
+      document.querySelectorAll("#line-rows > tr").forEach(tr => {
+        const ol = tr.dataset.orderLineId, q = tr.querySelector(".line-qty");
+        if (ol && q) out[ol] = (out[ol] || 0) + (parseFloat(q.value) || 0);
+      });
+      return out;
+    }
+    function flagQtyDifferences() {
+      const billed = billedByLine();
+      document.querySelectorAll("#line-rows > tr").forEach(tr => {
+        const ol = tr.dataset.orderLineId, flag = tr.querySelector(".qty-flag"), d = billingCheck.delivered[ol];
+        if (!flag) return;
+        const diff = ol && d !== undefined ? (billed[ol] || 0) - d : 0;
+        tr.classList.toggle("qty-off", Math.abs(diff) > 1e-6);
+        flag.innerHTML = Math.abs(diff) > 1e-6 ? `<span class="${diff > 0 ? "neg" : "warn-text"}">${diff > 0 ? "over" : "under"} by ${fmtQty(Math.abs(diff))}</span>` : "";
+      });
+    }
+    async function qtyChanged(input) {
+      const tr = input.closest("tr"), ol = tr.dataset.orderLineId, d = billingCheck.delivered[ol];
+      if (!ol || d === undefined) return;
+      const billed = billedByLine()[ol] || 0;
+      if (Math.abs(billed - d) < 1e-6) { delete tr.dataset.acceptedQty; return; }
+      if (tr.dataset.acceptedQty === input.value) return;
+      const over = billed > d;
+      const { value, el } = await askDialog({ title: `Billing ${over ? "more" : "less"} than was delivered`, tone: "warn",
+        body: `<p><strong>${escapeHtml(tr.querySelector("strong").textContent)}</strong>: delivered <strong>${fmtQty(d)}</strong>, you're billing <strong>${fmtQty(billed)}</strong>
+            — <span class="${over ? "neg" : ""}"><strong>${over ? "over" : "under"} by ${fmtQty(Math.abs(billed - d))}</strong></span>.</p>
+          <label>Why? (kept on the customer order so it can be squared up later)</label><input type="text" class="qty-note" placeholder="e.g. customer agreed to pay for the full release">`,
+        buttons: [{ label: `Keep ${fmtQty(billed)}`, value: "keep", cls: "confirm-btn" }, { label: `Change Back To ${fmtQty(d)}`, value: "back", cls: "secondary" }] });
+      if (value === "keep") {
+        tr.dataset.acceptedQty = input.value;
+        tr.dataset.qtyNote = el.querySelector(".qty-note").value.trim();
+      } else {
+        input.value = Math.max(0, d - (billed - (parseFloat(input.value) || 0)));
+        recalcInvoice();
+      }
+    }
+    function billingBannerHtml() {
+      const diffs = billingCheck.differences;
+      if (!diffs.length) return "";
+      return `<div class="notice billing-off"><strong>Billed ≠ delivered</strong> — kept against the order until it's squared up:
+        <ul>${diffs.map(d => `<li>#${d.line_no ?? ""} <strong>${escapeHtml(d.item_code)}</strong>: delivered ${fmtQty(d.delivered)}, billed ${fmtQty(d.billed)}
+          — <span class="${d.difference > 0 ? "neg" : ""}">${d.difference > 0 ? "over" : "under"} by ${fmtQty(Math.abs(d.difference))}</span>
+          ${d.reason ? `<span class="muted">· “${escapeHtml(d.reason)}” (${escapeHtml(d.accepted_by || "")})</span>` : d.accepted_by ? `<span class="muted">· accepted by ${escapeHtml(d.accepted_by)}</span>` : `<span class="muted">· no reason recorded</span>`}</li>`).join("")}</ul></div>`;
     }
 
     // Order / shipment context for an invoice: PO #, job #, shipment code and delivered (ship) date.
@@ -258,7 +314,8 @@
     }
 
     async function showDetail(id) {
-      const invoice = await apiFetch(`/api/invoices/${id}`);
+      const [invoice, check] = await Promise.all([apiFetch(`/api/invoices/${id}`), apiFetch(`/api/invoices/${id}/billing-check`).catch(() => ({ delivered: {}, differences: [] }))]);
+      billingCheck = check;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       const editable = invoice.status !== "void";  // sent/paid invoices can be corrected too
@@ -313,11 +370,12 @@
         </section>
 
         <section class="dsec"><h4 class="dsec-title">Lines</h4>
+          <div id="billing-banner">${billingBannerHtml()}</div>
           <div class="table-scroll">
           <table class="fit-table ${editable ? "lines-table" : ""}">
-            <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
+            <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num" title="What this invoice's shipments delivered on that order line">Delivered</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
             <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
-            <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
+            <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
           </table>
           </div>
           ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add Line</button>` : ""}
@@ -348,6 +406,7 @@
           </table></section>
         ` : ""}
       `;
+      flagQtyDifferences();
       const { order } = await invoiceContext(invoice);
       const invShipments = (invoice.shipment_ids || []).map(id => shipments.find(s => s.id === id)).filter(Boolean);
       document.getElementById("invoice-refs").innerHTML = [
@@ -577,7 +636,8 @@
         <td class="line-no"></td>
         <td></td>
         <td class="grow"><input type="text" class="line-desc" placeholder="e.g. Handling fee">${lineNoteBox("", true)}</td>
-        <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="1"></td>
+        <td class="num"><input type="number" step="1" min="0" class="line-qty qty-input" value="1"><div class="qty-flag"></div></td>
+        <td class="num delivered-cell"><span class="muted">—</span></td>
         <td class="num">${priceInput("line-price", 0)}</td>
         <td class="num subtotal">$0.00</td>
         <td class="line-actions">${lineNoteBtn("")}${trashBtn("this.closest('tr').remove(); recalcInvoice();", "Remove this line (saved when you Save the invoice)")}</td>
@@ -607,7 +667,9 @@
         const diffs = await apiFetch(`/api/invoices/${id}/qty-check`, { method: "POST", body: JSON.stringify({ lines }) });
         let accept = null;
         if (diffs.length) {
-          accept = await askQtyDifferences(diffs);
+          const rows = [...document.querySelectorAll("#line-rows > tr")];
+          const okAlready = diffs.every(d => rows.some(tr => tr.dataset.orderLineId === String(d.order_line_id) && tr.dataset.acceptedQty === tr.querySelector(".line-qty").value));
+          accept = okAlready ? { note: [...new Set(rows.map(tr => tr.dataset.qtyNote).filter(Boolean))].join("; ") } : await askQtyDifferences(diffs);
           if (!accept) return;
         }
         await apiFetch(`/api/invoices/${id}`, {

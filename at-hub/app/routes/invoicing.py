@@ -113,6 +113,15 @@ def qty_check(invoice_id: int, data: QtyCheckIn, db: Session = Depends(get_db)):
     return billing.invoice_differences(db, InvoiceService.get(db, invoice_id), [l.model_dump() for l in data.lines])
 
 
+@router.get("/{invoice_id}/billing-check")
+def billing_check(invoice_id: int, db: Session = Depends(get_db)):
+    """What the invoice's shipments delivered per order line (the screen warns as you type) and the saved
+    invoice's over / under-billed lines with the reason they were accepted."""
+    from app.services import billing
+    inv = InvoiceService.get(db, invoice_id)
+    return {"delivered": {str(k): v for k, v in billing.delivered_for(inv).items()}, "differences": billing.open_differences(db, inv)}
+
+
 @router.put("/{invoice_id}/status", response_model=InvoiceResponse)
 def set_invoice_status(invoice_id: int, data: InvoiceStatusUpdate, db: Session = Depends(get_db)):
     return InvoiceService.set_status(db, invoice_id, data.status)

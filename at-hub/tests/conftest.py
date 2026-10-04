@@ -41,15 +41,18 @@ from tests.builders import Builders  # noqa: E402
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "import_: re-runs the MRPeasy import against the latest snapshot (slow)")
+    config.addinivalue_line("markers", "race: people clicking at the same moment, over real HTTP (slow)")
 
 
 def pytest_collection_modifyitems(config, items):
-    if "import_" in (config.getoption("-m") or ""):
-        return
-    skip = pytest.mark.skip(reason="slow import test -- run with: pytest -m import_")
-    for item in items:
-        if "import_" in item.keywords:
-            item.add_marker(skip)
+    chosen = config.getoption("-m") or ""
+    for mark in ("import_", "race"):
+        if mark in chosen:
+            continue
+        skip = pytest.mark.skip(reason=f"slow test -- run with: pytest -m {mark}")
+        for item in items:
+            if mark in item.keywords:
+                item.add_marker(skip)
 
 
 def pytest_sessionfinish(session, exitstatus):

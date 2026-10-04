@@ -56,7 +56,8 @@ function linesSectionHtml(shipment) {
       <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th>
         <th class="num" title="Quantity on the order line">Ordered</th>
         <th class="num" title="Shipped on earlier shipments of this order">Shipped before</th>
-        <th class="num" title="Booked into this shipment">This shipment</th><th class="num">Picked</th>
+        <th class="num" title="Booked into this shipment, one row per lot">Booked (by lot)</th>
+        <th class="num" title="The whole order line on this shipment -- every lot added up">Line total</th><th class="num">Picked</th>
         <th class="num" title="Still to ship on the order line once this shipment has gone">Left after this</th>
         ${picking ? "<th>Pick now</th>" : ""}${open ? "<th>Unbook</th>" : ""}</tr></thead>
       <tbody oninput="refreshLeftAfter()">
@@ -70,7 +71,8 @@ function linesSectionHtml(shipment) {
             ${first ? `<td class="line-no"${span}>#${l.line_no ?? ""}</td><td class="grow"${span}>${itemLabel(l.item_id)}</td>` : ""}
             <td>${lotCode(l.lot_id)}</td>
             ${first ? `<td class="num"${span}>${ol ? fmtQty(ol.quantity) : ""}</td><td class="num muted"${span}>${before != null ? fmtQty(before) : ""}</td>` : ""}
-            <td class="num"><strong>${fmtQty(l.quantity)}</strong></td>
+            <td class="num">${g.n > 1 ? fmtQty(l.quantity) : `<strong>${fmtQty(l.quantity)}</strong>`}</td>
+            ${first ? `<td class="num line-total"${span}><strong>${fmtQty(g.qty)}</strong>${g.n > 1 ? `<div class="muted small">${g.n} lots</div>` : ""}</td>` : ""}
             <td class="num">${fmtQty(l.picked_quantity)}${l.picked_quantity >= l.quantity ? " ✓" : ""}</td>
             ${first ? `<td class="num left-after"${span} data-after="${after ?? ""}">${after == null ? "" : after > 0 ? `<strong>${fmtQty(after)}</strong>` : `<span class="pos">0 ✓</span>`}</td>` : ""}
             ${picking ? `<td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>` : ""}

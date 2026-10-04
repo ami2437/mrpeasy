@@ -29,6 +29,21 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
     return CustomerOrderService.get(db, order_id)
 
 
+@router.get("/{order_id}/billing", dependencies=[Depends(require_perm("invoices"))])
+def order_billing(order_id: int, db: Session = Depends(get_db)):
+    """Per order line: ordered, shipped, billed across every invoice -- and the accepted differences with reasons."""
+    from app.models import BillingVariance, CustomerOrder, Invoice
+    from app.services import billing
+    order = db.get(CustomerOrder, order_id)
+    if not order:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Order not found")
+    codes = dict(db.query(Invoice.id, Invoice.code).filter(Invoice.order_id == order_id).all())
+    return {"lines": billing.order_ledger(db, order),
+            "accepted": [{"order_line_id": v.order_line_id, "invoice": codes.get(v.invoice_id), "delivered": v.delivered_qty, "billed": v.billed_qty,
+                          "reason": v.reason, "by": v.accepted_by} for v in db.query(BillingVariance).filter(BillingVariance.order_id == order_id).all()]}
+
+
 @router.get("/{order_id}/profit", response_model=OrderProfitResponse, dependencies=[Depends(require_perm("money.view"))])
 def order_profit(order_id: int, db: Session = Depends(get_db)):
     """Revenue vs. lot cost (incl. landed costs) for shipped, booked, and not-yet-booked quantity."""

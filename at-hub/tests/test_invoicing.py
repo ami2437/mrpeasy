@@ -180,7 +180,7 @@ def test_billing_a_different_qty_needs_accepting_and_is_tracked(api, client, adm
         if l["item_id"] == a["id"]:
             l["quantity"] = 12
         if l["item_id"] == nut["id"]:
-            l["quantity"] = 3   # $0 line: no warning
+            l["quantity"] = 0   # a $0 kit line left off: no warning (billing it at all would be checked)
     diffs = client.post(f"/api/invoices/{inv['id']}/qty-check", json={"lines": lines}, headers=admin_headers).json()
     assert [(d["delivered"], d["billed"]) for d in diffs] == [(10, 12)]
     r = client.put(f"/api/invoices/{inv['id']}", json={"lines": lines}, headers=admin_headers)

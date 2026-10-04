@@ -17,6 +17,8 @@ const AuthGuard = {
     localStorage.removeItem("at_hub_user");
   },
   logout() {
+    // viewing as someone: Logout ends the view and returns to your own account
+    if (localStorage.getItem("at_hub_view_as_back")) { viewAsBack(); return; }
     this.clearSession();
     window.location.href = "login.html";
   },
@@ -1431,7 +1433,31 @@ function applyPermGates(root = document) {
   els.forEach(el => { if (!AuthGuard.canAny(...el.dataset.perm.split(" "))) el.style.display = "none"; });
 }
 
+// "View as" banner: a super admin looking through someone else's eyes (read-only) -- one click back.
+function viewAsBack() {
+  try {
+    const back = JSON.parse(localStorage.getItem("at_hub_view_as_back"));
+    localStorage.removeItem("at_hub_view_as_back");
+    if (back && back.token) { AuthGuard.setSession(back.token, back.user); location.href = "users.html"; return; }
+  } catch {}
+  AuthGuard.clearSession();
+  location.href = "login.html";
+}
+function drawViewAsBanner() {
+  let back = null;
+  try { back = JSON.parse(localStorage.getItem("at_hub_view_as_back")); } catch {}
+  const u = AuthGuard.getUser();
+  if (!back || !u || location.pathname.endsWith("login.html")) return;
+  const bar = document.createElement("div");
+  bar.className = "view-as-bar";
+  bar.innerHTML = `${icon("eye")}<span>Viewing as <strong>${escapeHtml(u.full_name || u.username)}</strong> · ${escapeHtml(u.role_name || u.role)} — read-only, nothing you do here is saved</span>
+    <button class="small-btn" onclick="viewAsBack()">Back To My Account</button>`;
+  document.body.prepend(bar);
+  document.body.classList.add("viewing-as");
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  drawViewAsBanner();
   if (hidesMoney()) document.body.classList.add("no-money");
   hideMoneyColumns();
   applyPermGates();

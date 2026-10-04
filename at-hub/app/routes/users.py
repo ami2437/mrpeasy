@@ -202,3 +202,19 @@ def delete_role(key: str, db: Session = Depends(get_db), _: User = Depends(super
     db.delete(r)
     db.commit()
     return Response(status_code=204)
+
+
+# ---- View as: see AT-HUB exactly as someone else does (read-only; app/main.py refuses changes) ----
+@router.post("/{user_id}/view-as")
+def view_as(user_id: int, db: Session = Depends(get_db), current: User = Depends(super_admin)):
+    from datetime import timedelta
+    from app.services.permissions import KEYS, perms_for, role_name
+    target = _get(db, user_id)
+    if not target.is_active:
+        raise HTTPException(status_code=400, detail="That account is deactivated")
+    if target.id == current.id:
+        raise HTTPException(status_code=400, detail="That's you")
+    token = AuthService.create_access_token({"sub": target.username, "view_as_by": current.username}, expires_delta=timedelta(hours=2))
+    out = UserResponse.model_validate(target).model_dump()
+    out.update(permissions=sorted(perms_for(db, target.role), key=KEYS.index), role_name=role_name(db, target.role), view_as_by=current.username)
+    return {"access_token": token, "user": out}

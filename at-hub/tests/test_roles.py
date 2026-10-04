@@ -55,3 +55,19 @@ def test_role_rules(client, admin_headers):
     assert client.delete("/api/roles/temp_role", headers=admin_headers).status_code == 400   # still has a user
     emp = _user(client, admin_headers, "employee")
     assert client.post("/api/roles/", json={"name": "Sneaky", "permissions": P.KEYS}, headers=emp).status_code == 403
+
+
+def test_view_as_is_read_only(client, admin_headers):
+    """A super admin can see AT-HUB as someone else -- their menus and data -- but nothing can be changed that way."""
+    _user(client, admin_headers, "driver")
+    uid = next(u["id"] for u in client.get("/api/users/", headers=admin_headers).json() if u["username"] == "u-driver")
+    r = client.post(f"/api/users/{uid}/view-as", headers=admin_headers).json()
+    assert r["user"]["permissions"] == ["shipments.view", "pod.upload"] and r["user"]["view_as_by"] == "admin"
+    h = {"Authorization": f"Bearer {r['access_token']}"}
+    assert client.get("/api/auth/me", headers=h).json()["username"] == "u-driver"
+    assert client.get("/api/shipments/", headers=h).status_code == 200
+    assert client.get("/api/invoices/", headers=h).status_code == 403            # the driver's own limits
+    blocked = client.post("/api/attachments/", headers=h)
+    assert blocked.status_code == 403 and "read-only" in blocked.json()["detail"]
+    emp = _user(client, admin_headers, "employee")
+    assert client.post(f"/api/users/{uid}/view-as", headers=emp).status_code == 403
