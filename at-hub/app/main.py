@@ -267,6 +267,8 @@ app.include_router(landed_costs.router)
 app.include_router(test_data.router)
 app.include_router(users.router)
 app.include_router(users.roles_router)
+from app.routes import bulk as bulk_routes  # noqa: E402
+app.include_router(bulk_routes.router)
 app.include_router(attachments.router)
 app.include_router(invoice_funding.router)
 app.include_router(ai_orders.router)

@@ -584,26 +584,122 @@ function fmtFileSize(n) {
 }
 
 // Attachment files need the auth header, so they're fetched as blobs (cached per id).
-const attachmentBlobUrls = {};
+const attachmentBlobUrls = {}, attachmentTypes = {}, attachmentNames = {};
 async function attachmentUrl(id) {
   if (!attachmentBlobUrls[id]) {
     const r = await fetch(`/api/attachments/${id}/file`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
     if (!r.ok) throw new Error(`Could not open the file (${r.status})`);
-    attachmentBlobUrls[id] = URL.createObjectURL(await r.blob());
+    const blob = await r.blob();
+    attachmentTypes[id] = blob.type || "";
+    const cd = r.headers.get("content-disposition") || "";
+    attachmentNames[id] = decodeURIComponent((cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i) || [])[1] || `file-${id}`);
+    attachmentBlobUrls[id] = URL.createObjectURL(blob);
   }
   return attachmentBlobUrls[id];
 }
 
+// Files open in a floating viewer (not a new tab): it sits over the page without blocking it, so you can check
+// the document against what's on screen. Drag it by its bar, resize from the corner (both remembered); images
+// zoom (wheel / + -), pan (drag) and rotate; PDFs show inside; ‹ › steps through the other files on the screen.
 async function openAttachment(id) {
-  const win = window.open("", "_blank");
-  try {
-    const url = await attachmentUrl(id);
-    if (win) win.location.href = url; else window.location.href = url;
-  } catch (err) {
-    if (win) win.close();
-    alert(err.message);
-  }
+  const ids = [...new Set([...document.querySelectorAll('[onclick*="openAttachment("]')]
+    .map(el => parseInt((el.getAttribute("onclick").match(/openAttachment\((\d+)/) || [])[1])).filter(Boolean))];
+  fileViewer.show(id, ids.includes(id) ? ids : [id]);
 }
+const fileViewer = {
+  el: null, ids: [], at: 0, zoom: 1, rot: 0, dx: 0, dy: 0,
+  geom() { try { return JSON.parse(localStorage.getItem("file_viewer_geom")) || null; } catch { return null; } },
+  saveGeom() {
+    const r = this.el.getBoundingClientRect();
+    try { localStorage.setItem("file_viewer_geom", JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height })); } catch {}
+  },
+  build() {
+    const el = document.createElement("div");
+    el.className = "file-viewer";
+    el.setAttribute("role", "dialog");
+    el.innerHTML = `<div class="fv-bar">
+        <button class="fv-btn" data-act="prev" title="Previous file">‹</button><button class="fv-btn" data-act="next" title="Next file">›</button>
+        <span class="fv-name"></span>
+        <span class="fv-img-tools"><button class="fv-btn" data-act="out" title="Zoom out">−</button><button class="fv-btn" data-act="fit" title="Fit">Fit</button>
+          <button class="fv-btn" data-act="in" title="Zoom in">+</button><button class="fv-btn" data-act="rot" title="Rotate">⟳</button></span>
+        <button class="fv-btn" data-act="tab" title="Open in a new tab">↗</button><button class="fv-btn" data-act="dl" title="Download">${icon("download")}</button>
+        <button class="fv-btn fv-close" data-act="close" title="Close (Esc)">${icon("x")}</button></div>
+      <div class="fv-body"></div>`;
+    document.body.appendChild(el);
+    const g = this.geom(), vw = window.innerWidth, vh = window.innerHeight;
+    const w = Math.min(g ? g.w : Math.round(vw * 0.42), vw - 20), h = Math.min(g ? g.h : Math.round(vh * 0.8), vh - 20);
+    Object.assign(el.style, { width: `${w}px`, height: `${h}px`, left: `${Math.max(10, Math.min(g ? g.x : vw - w - 20, vw - w - 10))}px`,
+      top: `${Math.max(10, Math.min(g ? g.y : 70, vh - 60))}px` });
+    el.querySelector(".fv-bar").addEventListener("click", e => { const b = e.target.closest("[data-act]"); if (b) this.act(b.dataset.act); });
+    // drag by the bar
+    el.querySelector(".fv-bar").addEventListener("pointerdown", e => {
+      if (e.target.closest("button")) return;
+      const r = el.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+      const move = ev => { el.style.left = `${Math.max(0, Math.min(window.innerWidth - 80, r.left + ev.clientX - sx))}px`; el.style.top = `${Math.max(0, Math.min(window.innerHeight - 40, r.top + ev.clientY - sy))}px`; };
+      const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); this.saveGeom(); };
+      addEventListener("pointermove", move); addEventListener("pointerup", up);
+    });
+    new ResizeObserver(() => { if (this.el) this.saveGeom(); }).observe(el);
+    // images: wheel zoom, drag to pan
+    const body = el.querySelector(".fv-body");
+    body.addEventListener("wheel", e => { if (!body.querySelector("img")) return; e.preventDefault(); this.zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
+    body.addEventListener("pointerdown", e => {
+      const img = body.querySelector("img");
+      if (!img) return;
+      e.preventDefault();
+      const sx = e.clientX - this.dx, sy = e.clientY - this.dy;
+      const move = ev => { this.dx = ev.clientX - sx; this.dy = ev.clientY - sy; this.paint(); };
+      const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+      addEventListener("pointermove", move); addEventListener("pointerup", up);
+    });
+    document.addEventListener("keydown", this.key = e => {
+      if (!this.el) return;
+      if (e.key === "Escape") this.act("close");
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+      if (e.key === "ArrowRight" && e.altKey) this.act("next");
+      if (e.key === "ArrowLeft" && e.altKey) this.act("prev");
+    });
+    this.el = el;
+  },
+  async show(id, ids) {
+    if (!this.el) this.build();
+    this.ids = ids;
+    this.at = Math.max(0, ids.indexOf(id));
+    this.zoom = 1; this.rot = 0; this.dx = 0; this.dy = 0;
+    const body = this.el.querySelector(".fv-body");
+    body.innerHTML = `<div class="fv-msg">Loading…</div>`;
+    this.el.querySelector('[data-act="prev"]').disabled = this.el.querySelector('[data-act="next"]').disabled = ids.length < 2;
+    this.el.querySelector(".fv-name").textContent = ids.length > 1 ? `${this.at + 1} of ${ids.length}` : "";
+    try {
+      const url = await attachmentUrl(id), type = attachmentTypes[id];
+      if (this.ids[this.at] !== id) return;  // moved on meanwhile
+      this.el.querySelector(".fv-name").textContent = `${attachmentNames[id]}${ids.length > 1 ? ` · ${this.at + 1} of ${ids.length}` : ""}`;
+      this.el.querySelector(".fv-name").title = attachmentNames[id];
+      const isImg = type.startsWith("image/"), isPdf = type === "application/pdf" || /\.pdf$/i.test(attachmentNames[id]);
+      this.el.querySelector(".fv-img-tools").style.display = isImg ? "" : "none";
+      body.innerHTML = isImg ? `<img src="${url}" alt="" draggable="false">`
+        : isPdf ? `<iframe src="${url}#toolbar=1&view=FitH" title="${escapeHtml(attachmentNames[id])}"></iframe>`
+        : `<div class="fv-msg">This file type can't be shown here.<br><a class="link" onclick="fileViewer.act('tab')">Open it in a new tab</a></div>`;
+      this.paint();
+    } catch (e) { body.innerHTML = `<div class="fv-msg error">${escapeHtml(e.message)}</div>`; }
+  },
+  paint() {
+    const img = this.el && this.el.querySelector(".fv-body img");
+    if (img) img.style.transform = `translate(${this.dx}px, ${this.dy}px) rotate(${this.rot}deg) scale(${this.zoom})`;
+  },
+  zoomBy(f) { this.zoom = Math.max(0.2, Math.min(8, this.zoom * f)); this.paint(); },
+  act(a) {
+    const id = this.ids[this.at];
+    if (a === "close") { this.el.remove(); this.el = null; document.removeEventListener("keydown", this.key); return; }
+    if (a === "next" || a === "prev") { if (this.ids.length > 1) this.show(this.ids[(this.at + (a === "next" ? 1 : -1) + this.ids.length) % this.ids.length], this.ids); return; }
+    if (a === "in") this.zoomBy(1.25);
+    if (a === "out") this.zoomBy(1 / 1.25);
+    if (a === "fit") { this.zoom = 1; this.dx = 0; this.dy = 0; this.paint(); }
+    if (a === "rot") { this.rot = (this.rot + 90) % 360; this.paint(); }
+    if (a === "tab") window.open(attachmentBlobUrls[id], "_blank");
+    if (a === "dl") { const l = document.createElement("a"); l.href = attachmentBlobUrls[id]; l.download = attachmentNames[id] || "file"; l.click(); }
+  },
+};
 
 // Renders an upload box + the file list into `container` (an element or its id).
 // categories: which document types this record takes, first one is the default.
@@ -865,7 +961,7 @@ const NAV_GROUPS = [
     ["customers.html", "Customers", "customers.view"],
     ["customer-orders.html", "Customer Orders", "orders.view"],
     ["shipments.html", "Shipments", "shipments.view"],
-    ["pack-shipments.html", "Batch Shipments", "shipments.work"],
+    ["pack-shipments.html", "Bulk Operations", "shipments.work invoices"],
     ["pod.html", "Proof Of Delivery", "pod.upload"],
     ["labels.html", "On-Demand Labels", "shipments.work"],
     ["invoices.html", "Invoices", "invoices"],

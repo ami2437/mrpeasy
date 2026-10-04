@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>AT-HUB — Batch Shipments</title>
+  <title>AT-HUB — Bulk Operations</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
   <script src="shipment-detail.js"></script>
@@ -11,6 +11,15 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
+    <div class="card page-toolbar bulk-head">
+      <h1 class="page-title">Bulk Operations</h1>
+      <div class="seg-tabs area-tabs" id="area-tabs">
+        <button class="seg-tab active" data-area="shipments" onclick="setArea('shipments')">Shipments</button>
+        <button class="seg-tab" data-area="invoices" onclick="setArea('invoices')" data-perm="invoices">Invoices</button>
+      </div>
+      <span class="muted small bulk-head-hint">The same action on many records at once — tick them, then pick what to do.</span>
+    </div>
+    <div id="area-shipments">
     <div class="card batch-toolbar">
       <div class="stage-tabs" id="stage-tabs" role="tablist"></div>
       <div class="stage-hint muted small" id="stage-hint"></div>
@@ -76,10 +85,30 @@
 
     <div id="shipments-container"><div class="card">Loading...</div></div>
     <div id="detail-holder" style="display:none;"><div class="card" id="detail-card" style="display:none;"></div></div>
+    </div>
+
+    <div id="area-invoices" style="display:none;">
+      <div class="card batch-toolbar">
+        <div class="filters">
+          <input type="text" id="inv-search" placeholder="Search invoice, customer, PO or shipment #..." oninput="renderInvoices()">
+          <select id="inv-filter" onchange="renderInvoices()" style="max-width:220px;">
+            <option value="unsent">Not sent yet (drafts)</option><option value="open">Unpaid (sent)</option><option value="all">All live invoices</option>
+          </select>
+        </div>
+        <div class="batch-actions">
+          <label class="check-label"><input type="checkbox" id="inv-select-all" onchange="invSelectAll(this.checked)"> All shown</label>
+          <span class="sel-count" id="inv-sel-count">0 selected</span>
+          <span class="stage-actions"><button class="next-step" data-icon="mail" onclick="openDocsDialog('invoices')">Send / Print</button></span>
+        </div>
+      </div>
+      <div class="card"><table class="fit-table no-col-bands" id="inv-table">
+        <thead><tr><th></th><th>Invoice</th><th class="grow">Customer</th><th>PO #</th><th>Shipments</th><th>Date</th><th class="num">Total</th><th>Status</th><th>Emailed</th></tr></thead>
+        <tbody id="inv-body"></tbody></table></div>
+    </div>
   </main>
 
   <script>
-    AuthGuard.requirePerm("shipments.work");
+    AuthGuard.requirePerm("shipments.work", "invoices");
     document.getElementById("sidebar").innerHTML = renderSidebar("pack-shipments.html");
 
     // Globals the shared shipment-detail.js reads.
@@ -194,7 +223,8 @@
     function drawStageActions() {
       const today = new Date().toISOString().substring(0, 10);
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
-        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>`;
+        <button class="secondary" onclick="printSelectedPackingLists()" title="One PDF with every selected packing list">Packing Lists</button>`
+        + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;
       const html = {
         pick: `<button class="next-step" onclick="bulkPickAll()">${icon("check")} Pick All</button>
           <button class="secondary" onclick="bulkSavePacking()" title="Packing can be accepted before picking is done">Accept Packing</button>${print}`,
@@ -202,10 +232,11 @@
         ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}`,
         shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
           <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">
-          <button class="secondary" onclick="printSelectedPackingLists()">Packing Lists</button>`
+          <button class="secondary" onclick="printSelectedPackingLists()">Packing Lists</button>
+          <button class="secondary" onclick="openDocsDialog('shipments')">${icon("mail")} Send / Print</button>`
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>`,
-        delivered: canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
-          : `<span class="muted small">A manager creates the invoices.</span>`,
+        delivered: (canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
+          : `<span class="muted small">A manager creates the invoices.</span>`) + `<button class="secondary" onclick="openDocsDialog('shipments')">${icon("mail")} Send / Print</button>`,
         all: `${print}`,
       }[stage];
       document.getElementById("stage-actions").innerHTML = html;
@@ -788,6 +819,168 @@
       out.innerHTML = `<ul class="result-list">${msgs.map(m => `<li>${m}</li>`).join("")}</ul>`;
     }
 
+    // ---- areas: Shipments | Invoices (more to come) ----
+    let invoicesAll = null;
+    const invSelected = new Set();
+    function setArea(a) {
+      document.querySelectorAll("#area-tabs .seg-tab").forEach(t => t.classList.toggle("active", t.dataset.area === a));
+      document.getElementById("area-shipments").style.display = a === "shipments" ? "" : "none";
+      document.getElementById("area-invoices").style.display = a === "invoices" ? "" : "none";
+      try { localStorage.setItem("bulk_area", a); } catch {}
+      if (a === "invoices") loadInvoices();
+    }
+    async function loadInvoices() {
+      if (!invoicesAll) document.getElementById("inv-body").innerHTML = `<tr><td colspan="9" class="muted">Loading…</td></tr>`;
+      invoicesAll = await apiFetch("/api/invoices/");
+      renderInvoices();
+    }
+    function visibleInvoices() {
+      const f = document.getElementById("inv-filter").value, q = document.getElementById("inv-search").value.trim().toLowerCase();
+      return (invoicesAll || []).filter(i => i.status !== "void" && (f === "all" || (f === "unsent" ? i.status === "draft" : i.status === "sent")))
+        .filter(i => { const o = order(i.order_id) || {}; return !q || [i.code, customerName(i.customer_id), o.po_number, o.code, ...(i.shipment_codes || [])].join(" ").toLowerCase().includes(q); });
+    }
+    function renderInvoices() {
+      const list = visibleInvoices();
+      document.getElementById("inv-body").innerHTML = list.length ? list.map(i => { const o = order(i.order_id) || {}; return `
+        <tr class="${invSelected.has(i.id) ? "row-selected" : ""}">
+          <td><input type="checkbox" ${invSelected.has(i.id) ? "checked" : ""} onchange="invToggle(${i.id}, this.checked)"></td>
+          <td><a class="link" href="invoices.html?id=${i.id}">${escapeHtml(i.code)}</a></td>
+          <td class="grow">${escapeHtml(customerName(i.customer_id) || "")}</td><td>${escapeHtml(o.po_number || "")}</td>
+          <td>${escapeHtml((i.shipment_codes || []).join(", "))}</td><td>${fmtDate(i.invoice_date)}</td>
+          <td class="num">${fmtMoney(i.total)}</td><td><span class="tag ${i.status === "draft" ? "draft" : i.status === "paid" ? "shipped" : "confirmed"}">${i.status}</span></td>
+          <td>${i.emails && i.emails.length ? `${icon("check")} ${fmtDate(i.emails[i.emails.length - 1].sent_at)}` : `<span class="muted">—</span>`}</td></tr>`; }).join("")
+        : `<tr><td colspan="9" class="muted">No invoices match.</td></tr>`;
+      document.getElementById("inv-sel-count").textContent = `${invSelected.size} selected`;
+      const all = document.getElementById("inv-select-all"), n = list.filter(i => invSelected.has(i.id)).length;
+      all.checked = list.length > 0 && n === list.length;
+      all.indeterminate = n > 0 && n < list.length;
+    }
+    function invToggle(id, on) { on ? invSelected.add(id) : invSelected.delete(id); renderInvoices(); }
+    function invSelectAll(on) { visibleInvoices().forEach(i => on ? invSelected.add(i.id) : invSelected.delete(i.id)); renderInvoices(); }
+
+    // ---- Send / Print documents: packing lists, labels, invoices, PODs for many records at once ----
+    let docsReq = null;
+    function openDocsDialog(area) {
+      const ids = area === "invoices" ? [...invSelected] : selectedShipments().map(s => s.id);
+      if (!ids.length) { if (area === "invoices") toast("Tick the invoices first"); else showError("Tick the shipments first."); return; }
+      const canInv = AuthGuard.can("invoices"), shipDocs = AuthGuard.can("shipments.work");
+      docsReq = { area, shipment_ids: area === "shipments" ? ids : [], invoice_ids: area === "invoices" ? ids : [] };
+      const opt = (k, label, on, sub, allowed = true) => allowed ? `<label class="docs-opt"><input type="checkbox" class="docs-kind" value="${k}" ${on ? "checked" : ""}>
+          <span><b>${label}</b><span class="muted small">${sub}</span></span></label>` : "";
+      const back = document.createElement("div");
+      back.className = "glass-back";
+      back.id = "docs-dialog";
+      back.addEventListener("click", e => { if (e.target === back) closeDocsDialog(); });
+      back.innerHTML = `<div class="glass-panel docs-panel" role="dialog" aria-modal="true" aria-labelledby="dd-title">
+        <div class="sm-head"><div><h3 id="dd-title">Send / Print documents</h3>
+            <div class="muted small">${ids.length} ${area === "invoices" ? "invoice" : "shipment"}${ids.length === 1 ? "" : "s"} selected</div></div>
+          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeDocsDialog()">${icon("x")}</button></div>
+        <div id="dd-step">
+          <div class="docs-opts">
+            ${area === "invoices" ? opt("invoice", "Invoice", true, "the invoice PDF", canInv) + opt("packing_list", "Packing lists", false, "of the invoice's shipments", shipDocs)
+              : opt("packing_list", "Packing lists", true, "one per shipment", shipDocs) + opt("labels", "Box labels", false, "PDF, your box-label template", shipDocs)
+                + opt("invoice", "Invoices", canInv, "the shipment's invoice, if it has one", canInv) + opt("pod", "Proof of delivery", false, "photos / PDFs uploaded for it", shipDocs)}
+          </div>
+          ${area === "shipments" ? `<div class="docs-group"><span class="muted small">Emails:</span>
+            <label class="inline-check"><input type="radio" name="dd-group" value="order" checked> One per order</label>
+            <label class="inline-check"><input type="radio" name="dd-group" value="shipment"> One per shipment</label></div>` : ""}
+          <div class="error" id="dd-error"></div>
+          <div class="sm-foot"><span class="muted small" style="flex:1;">Print makes one PDF of everything; Email lets you check each message before anything is sent.</span>
+            <button type="button" class="secondary" onclick="docsPrint()">${icon("printer")} Print / Download</button>
+            <button type="button" class="next-step" onclick="docsPreview()">${icon("mail")} Preview Emails</button></div>
+        </div></div>`;
+      document.body.appendChild(back);
+      document.body.classList.add("glass-open");
+      decorateIcons(back);
+    }
+    function closeDocsDialog() {
+      const el = document.getElementById("docs-dialog");
+      document.body.classList.remove("glass-open");
+      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
+    }
+    function docsKinds() { return [...document.querySelectorAll("#docs-dialog .docs-kind:checked")].map(c => c.value); }
+    function docsBody() {
+      const g = document.querySelector('#docs-dialog input[name="dd-group"]:checked');
+      return { shipment_ids: docsReq.shipment_ids, invoice_ids: docsReq.invoice_ids, kinds: docsKinds(), group_by: g ? g.value : "order" };
+    }
+    function docsPrint() {
+      const b = docsBody();
+      if (!b.kinds.length) { document.getElementById("dd-error").textContent = "Tick at least one kind of document."; return; }
+      openPdf(`/api/bulk/documents.pdf?shipment_ids=${b.shipment_ids.join(",")}&invoice_ids=${b.invoice_ids.join(",")}&kinds=${b.kinds.join(",")}`);
+    }
+    async function docsPreview() {
+      const b = docsBody(), err = document.getElementById("dd-error");
+      if (!b.kinds.length) { err.textContent = "Tick at least one kind of document."; return; }
+      let res;
+      try { res = await apiFetch("/api/bulk/documents/plan", { method: "POST", body: JSON.stringify(b) }); } catch (e) { err.textContent = e.message; return; }
+      docsReq.body = b;
+      docsReq.groups = res.groups;
+      docsReq.emailReady = res.email_ready;
+      const kindIcon = { packing_list: "list", labels: "tag", invoice: "receipt", pod: "checkCircle" };
+      document.getElementById("dd-step").innerHTML = `
+        ${res.email_ready ? "" : `<div class="notice"><strong>Email isn't set up yet.</strong> Add your mail server to the AT-HUB <code>.env</code> (SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM) and restart — Print still works.</div>`}
+        <div class="docs-emails">${res.groups.map((g, i) => `
+          <div class="docs-email ${g.ready ? "" : "off"}" data-key="${escapeHtml(g.key)}">
+            <div class="docs-email-head"><label class="inline-check"><input type="checkbox" class="de-send" ${g.ready && g.to ? "checked" : ""} ${g.ready ? "" : "disabled"}> <b>${escapeHtml(g.customer)}</b></label>
+              <span class="muted small">${escapeHtml([g.order, g.po && `PO ${g.po}`].filter(Boolean).join(" · "))}</span><span class="de-result"></span></div>
+            <div class="docs-email-grid">
+              <label>To</label><input type="text" class="de-to" value="${escapeHtml(g.to)}" placeholder="customer@example.com">
+              <label>CC</label><input type="text" class="de-cc" value="" placeholder="Optional">
+              <label>Subject</label><input type="text" class="de-subject" value="${escapeHtml(g.subject)}">
+            </div>
+            <details><summary class="small">Message</summary><textarea class="de-body" rows="7">${escapeHtml(g.body)}</textarea></details>
+            <div class="docs-atts">${g.attachments.map(a => `<span class="docs-att">${icon(kindIcon[a.kind] || "file")}${escapeHtml(a.name)}</span>`).join("") || `<span class="muted small">Nothing to attach</span>`}</div>
+            ${g.warnings.length ? `<div class="docs-warn small">${g.warnings.map(escapeHtml).join(" · ")}</div>` : ""}
+          </div>`).join("")}</div>
+        <div class="error" id="dd-error"></div>
+        <div class="sm-foot">
+          <div class="sm-box" id="dd-box" aria-hidden="true">${icon("mail")}<span class="sm-count" id="dd-count">0</span></div>
+          <span class="muted small" style="flex:1;" id="dd-summary"></span>
+          <button type="button" class="secondary" onclick="docsPrint()">${icon("printer")} Print Instead</button>
+          <button type="button" class="ship-now" id="dd-send" onclick="docsSend()" ${res.email_ready ? "" : "disabled"}>Send</button>
+        </div>`;
+      document.querySelectorAll("#docs-dialog .de-send").forEach(c => c.addEventListener("change", docsCount));
+      document.querySelectorAll("#docs-dialog .de-to").forEach(inp => inp.addEventListener("input", () => {  // typing an address ticks that email
+        const box = inp.closest(".docs-email").querySelector(".de-send");
+        if (!box.disabled) { box.checked = !!inp.value.trim(); docsCount(); }
+      }));
+      docsCount();
+      decorateIcons(document.getElementById("docs-dialog"));
+    }
+    function docsCount() {
+      const n = document.querySelectorAll("#docs-dialog .de-send:checked").length;
+      document.getElementById("dd-summary").textContent = `${n} email${n === 1 ? "" : "s"} to send`;
+      const b = document.getElementById("dd-send");
+      b.textContent = `Send ${n} Email${n === 1 ? "" : "s"}`;
+      b.disabled = !docsReq.emailReady || !n;
+    }
+    async function docsSend() {
+      const go = document.getElementById("dd-send"), edits = {};
+      document.querySelectorAll("#docs-dialog .docs-email").forEach(card => {
+        edits[card.dataset.key] = { skip: !card.querySelector(".de-send").checked, to: card.querySelector(".de-to").value.trim(),
+          cc: card.querySelector(".de-cc").value.trim(), subject: card.querySelector(".de-subject").value.trim(), body: card.querySelector(".de-body").value };
+      });
+      go.disabled = true;
+      go.textContent = "Sending…";
+      let res;
+      try { res = await apiFetch("/api/bulk/documents/send", { method: "POST", body: JSON.stringify({ ...docsReq.body, edits }) }); }
+      catch (e) { document.getElementById("dd-error").textContent = e.message; go.disabled = false; docsCount(); return; }
+      const ok = [];
+      res.results.forEach(r => {
+        const card = document.querySelector(`#docs-dialog .docs-email[data-key="${CSS.escape(r.key)}"]`);
+        if (!card || r.skipped) return;
+        card.querySelector(".de-result").innerHTML = r.ok ? `<span class="pos">${icon("check")} ${escapeHtml(r.detail)}</span>` : `<span class="neg">${escapeHtml(r.detail)}</span>`;
+        card.classList.add(r.ok ? "sent" : "failed");
+        if (r.ok) ok.push(card.querySelector(".docs-email-head b"));
+      });
+      if (ok.length) await flyIntoBox(ok, document.getElementById("dd-box"), document.getElementById("dd-count"));
+      const failed = res.results.filter(r => !r.ok && !r.skipped).length;
+      go.textContent = failed ? `${failed} Failed — Fix And Send Again` : "Sent";
+      go.disabled = !failed;
+      if (!failed) { toast(`Sent ${ok.length} email${ok.length === 1 ? "" : "s"}`); setTimeout(() => { closeDocsDialog(); if (docsReq.area === "invoices") loadInvoices(); }, 1400); }
+      decorateIcons(document.getElementById("docs-dialog"));
+    }
+
     // ---- loading ----
     async function reloadList() {
       shipments = await apiFetch("/api/shipments/");
@@ -822,6 +1015,9 @@
         || ["pick", "pack", "ship"].find(count) || "ship";
       if (id && byId(id)) openCards.add(id);
       renderAll();
+      let area = params.get("area");
+      try { area = area || localStorage.getItem("bulk_area"); } catch {}
+      if ((area === "invoices" || !AuthGuard.can("shipments.work")) && AuthGuard.can("invoices")) setArea("invoices");
     }
 
     document.getElementById("search").addEventListener("input", renderAll);
