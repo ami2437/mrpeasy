@@ -1250,13 +1250,15 @@ class ShipmentService:
 
     @staticmethod
     def unpick(db: Session, shipment_id: int, by: str) -> Shipment:
-        """Undo picking on a shipment that hasn't left (picking moves no stock, so nothing else changes):
-        every line back to 0 picked. Bookings and any packing stay."""
+        """Undo picking on a shipment that hasn't left (picking moves no stock): every line back to 0 picked.
+        Bookings and the boxes stay, but an accepted packing has to be re-checked and accepted again once it's
+        picked again -- the shipment went back a step, so its packing is reverified before it can ship."""
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status not in ShipmentService.OPEN_STATUSES:
             raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only a shipment that hasn't shipped can be unpicked")
         for line in shipment.lines:
             line.picked_quantity = 0
+        shipment.packed_at = shipment.packed_by = None  # boxes kept as a proposal; Accept Packaging again
         shipment.updated_by = by
         db.commit()
         db.refresh(shipment)
@@ -1447,6 +1449,7 @@ class ShipmentService:
                 created_by=created_by,
             ))
         shipment.status = "new"
+        shipment.packed_at = shipment.packed_by = None  # back before packing: boxes kept, packing re-accepted before it ships again
         shipment.ship_date = None
         shipment.delivered_at = None
         shipment.delivered_by = None

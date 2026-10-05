@@ -189,7 +189,7 @@ async function confirmUnpack(codes) {
 async function confirmUnpick(codes) {
   const many = codes.length > 1;
   const { value } = await askDialog({ title: many ? `Unpick ${codes.length} shipments?` : `Unpick ${codes[0]}?`, tone: "warn",
-    body: `<p>Picked quantities go back to 0. Bookings and packing stay.</p>`,
+    body: `<p>Picked quantities go back to 0. Bookings and boxes stay; the packing is re-checked and accepted again after picking.</p>`,
     buttons: [{ label: "Unpick", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
   return value === "go";
 }
@@ -347,12 +347,17 @@ async function procPick(all) {
     if (sh.status === "new") await apiFetch(`/api/shipments/${sh.id}/confirm-booking`, { method: "POST" });  // picking confirms the bookings
     const after = await apiFetch(`/api/shipments/${sh.id}/pick`, { method: "POST", body: JSON.stringify(all ? { pick_all: true } : { lines }) });
     await afterShipmentChange(sh.id, allPicked(after) ? (after.packed_at ? "ship" : "pack") : "pick");  // all picked: on to packing
+    if (allPicked(after) && !after.packed_at && after.boxes.length) await askDialog({ title: "Re-check the packing", tone: "warn",
+      body: `<p>${escapeHtml(after.code)} was packed before it went back a step. Check the boxes and pallets, then <b>Accept Packaging</b>.</p>`,
+      buttons: [{ label: "Review Packing", value: "ok", cls: "confirm-btn" }] });
   } catch (e) { err.textContent = e.message; }
 }
 
 // ---- step 2: Pack (pack sizes, boxes, pallets) ----
 function procPackHtml(sh) {
-  return `<p class="muted small" style="margin-top:0;">Each order line is split into boxes by its pack size — pre-filled from what was packed before
+  return `${sh.boxes.length && !sh.packed_at ? `<div class="notice small"><b>Re-check needed</b> — these boxes were saved earlier
+      (packed before the shipment went back a step, or proposed in bulk). Check them, then <b>Accept Packaging</b>.</div>` : ""}
+    <p class="muted small" style="margin-top:0;">Each order line is split into boxes by its pack size — pre-filled from what was packed before
       (see the note under each size). Lines are packed separately even when they're the same item.</p>
     <div class="pack-tools-row">
       <div><label>Pallet # for every line (optional)</label>
