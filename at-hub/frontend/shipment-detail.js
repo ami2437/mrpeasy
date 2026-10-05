@@ -236,10 +236,13 @@ function openPackReview(id) {
 }
 function closePackReview() {
   const back = document.getElementById("pack-review");
-  if (packReview) packReview.moved.forEach(([sec, ph]) => { ph.parentNode.insertBefore(sec, ph); ph.remove(); });
+  // put the borrowed sections back -- unless the page behind was redrawn meanwhile (its placeholders are gone; it has fresh sections)
+  if (packReview) packReview.moved.forEach(([sec, ph]) => {
+    if (ph.parentNode) { ph.parentNode.insertBefore(sec, ph); ph.remove(); } else sec.remove();
+  });
   packReview = null;
   document.body.classList.remove("glass-open");
-  if (back) { back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
+  if (back) { back.id = ""; back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
 }
 async function acceptPackaging(id) {
   const err = document.getElementById("pr-error"), btn = document.getElementById("pr-accept");
@@ -727,6 +730,9 @@ function lotCodeForLine(orderLineId) {
 }
 
 async function showDetail(id) {
+  // an action inside Pack & Ship (Unpack, Unpick...) redraws this shipment: close the window cleanly, reopen it after
+  const reopenReview = !!packReview && packReview.id === id;
+  if (packReview) closePackReview();
   const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => []),
     packSuggest[id] ? null : loadPackSuggestions([id])]);
   const invoicesForShipment = allInvoices.filter(inv => (inv.shipment_ids || [inv.shipment_id]).includes(id) && inv.status !== "void");
@@ -847,6 +853,7 @@ async function showDetail(id) {
     <button class="secondary" onclick="closeShipmentDetail()" style="margin-top:16px;">Close</button>
   `;
   if (document.getElementById("box-rows")) { refreshBoxSummary(); renderPalletTable(); }
+  if (reopenReview && shipment.status === "ready" && allPicked(shipment)) openPackReview(shipment.id);
   renderAttachments("shipment-attachments", "shipment", shipment.id, ["pod", "bol", "other"],
     { notePlaceholder: "Note — E.g. Received By / Signed By", onChange: async () => {
       // A POD upload may have just marked it delivered.
