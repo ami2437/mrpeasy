@@ -1693,3 +1693,14 @@ button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .pack-paste { flex: 1 1 320px; min-width: 260px; }
 .pack-paste textarea { width: 100%; max-width: 520px; }
 .pack-src.src-changed { color: #b45309; font-weight: 600; }
+/* Process Selected (bulk) */
+.bproc-panel { width: min(1180px, 100%); }
+.bp-msg { margin: 0 0 8px; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); }
+.bp-group { margin-bottom: 14px; }
+.bp-group-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; }
+.bp-rows { margin-bottom: 12px; }
+.bp-pallet { display: inline-flex; align-items: center; gap: 6px; margin: 2px 14px 2px 0; }
+.bp-pallet .bp-w { width: 80px; }
+.bp-pallet .bp-d { width: 130px; }
+.bp-fill { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+#bp-pack .sp-tools { margin-top: 4px; }

@@ -41,10 +41,7 @@
         <a class="link small" onclick="expandAll(true)">Expand all</a>
         <a class="link small" onclick="expandAll(false)">Collapse all</a>
         <span class="pack-tools">
-          <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openSetPackSizes()" title="One grid of every item on the ticked shipments: type, paste, copy from a shipment or apply a preset">Set Pack Sizes</button>
           <label class="check-label" title="How the pack size boxes are pre-filled before you change them">Pre-fill <select id="pack-rule" onchange="setPackRule(this.value)" style="width:auto;max-width:190px;"></select></label>
-          <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openSetPackSizes(true)" title="Paste item # and pack size (space, tab or comma) for the ticked shipments">Paste Pack Sizes</button>
-          <a class="link small" onclick="togglePastePanel('pallet')">Paste Pallets</a>
           <button class="secondary small-btn" style="flex:0 0 auto;" onclick="openPackSizeManager(afterPackChange)">Pack Sizes</button>
         </span>
       </div>
@@ -62,21 +59,6 @@
       </div>
       <div id="bulk-error" class="error"></div>
       <div id="bulk-result" class="small"></div>
-    </div>
-
-    <div class="card" id="paste-pallet-panel" style="display:none;">
-      <h3 style="margin-top:0;">Paste Pallets</h3>
-      <div class="paste-grid">
-        <div>
-          <textarea id="paste-pallet-text" rows="7" placeholder="Item#&#9;Pallet#&#9;Weight&#9;Dimensions&#10;16713&#9;PLT-1&#9;250&#9;48x40x50&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300&#9;48x40x45"></textarea>
-          <div class="btn-row" style="margin-top:8px;"><button onclick="applyPaste('pallet')">Apply Pallets</button></div>
-        </div>
-        <div class="muted small">
-          <p style="margin-top:0;"><strong>Item # · Pallet #</strong> · Weight · Dimensions — tab, comma or space separated. Weight and dimensions only need to be on one row per pallet.</p>
-          <p>Saved to the <strong>ticked</strong> shipments (or every one shown) that aren't packed yet. Start a row with a shipment code to aim it at one shipment.</p>
-        </div>
-      </div>
-      <div id="paste-pallet-result" class="small" style="margin-top:8px;"></div>
     </div>
 
     <div id="shipments-container"><div class="card">Loading...</div></div>
@@ -162,13 +144,13 @@
     // ---- stages: the same steps as one shipment (pick -> accept packing -> Ship Now -> delivered -> invoice) ----
     const STAGES = [
       { key: "pick", label: "To pick", test: s => ["new", "ready"].includes(s.status) && !allPicked(s),
-        hint: "Booked and waiting on the floor. <b>Pick All</b> marks every line picked (and confirms the bookings).",
+        hint: "Booked and waiting on the floor. Tick them and <b>Process Selected</b> — or a card's <b>Process</b> for one.",
         empty: "Nothing to pick — new shipments land here once they're created on an order." },
       { key: "pack", label: "To pack", test: s => s.status === "ready" && allPicked(s) && !s.packed_at,
-        hint: "Picked. Open a card's <b>Process</b> to pack it, or tick several and use <b>Set Pack Sizes</b> / <b>Accept Packing</b>.",
+        hint: "Picked. Tick them and <b>Process Selected</b> to set pack sizes and pallets for all of them at once — or a card's <b>Process</b> for one.",
         empty: "Nothing waiting on packing." },
       { key: "ship", label: "Ready to ship", test: s => s.status === "ready" && allPicked(s) && !!s.packed_at,
-        hint: "Picked and packed. <b>Ship Now</b> takes the stock off on-hand — add carrier and tracking as they go out.",
+        hint: "Picked and packed. Tick them and <b>Process Selected</b> to add carriers and ship them together.",
         empty: "Nothing ready to ship yet — accept packing on picked shipments first." },
       { key: "shipped", label: "Shipped", test: s => s.status === "shipped",
         hint: "On the truck. A driver's POD marks it delivered automatically; managers can <b>Mark Delivered</b> by hand.",
@@ -269,14 +251,11 @@
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
         <button class="secondary" onclick="printSelectedPackingLists()" title="Every selected packing list -- one PDF, or one file each">Packing Lists</button>`
         + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;
-      const unconfirm = `<button class="danger" onclick="bulkUnconfirm()" title="Ticked confirmed shipments back to New (nothing picked; stock stays booked)">Unconfirm Bookings</button>`;
-      const unpick = `<button class="danger" onclick="bulkUnpick()" title="Picked quantities back to 0 on the ticked shipments (bookings and packing stay)">Unpick</button>`;
-      const unpack = `<button class="danger" onclick="bulkUnpack()" title="Clear boxes, pallets and accepted packing on the ticked shipments (picking stays)">Unpack</button>`;
+      const process = `<button class="next-step" onclick="openBulkProcess()" title="Pick, pack and ship the ticked shipments together -- same steps as one shipment">${icon("package")} Process Selected</button>`;
       const html = {
-        pick: `<button class="next-step" onclick="bulkPickAll()">${icon("check")} Pick All</button>
-          <button class="secondary" onclick="bulkSavePacking()" title="Packing can be accepted before picking is done">Accept Packing</button>${print}${unconfirm}${unpick}${unpack}`,
-        pack: `<button class="next-step" onclick="bulkSavePacking()" title="Saves the boxes and pallets as shown and accepts the packing">${icon("package")} Accept Packing</button>${print}${unpick}${unpack}`,
-        ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}${unpick}${unpack}`,
+        pick: process + print,
+        pack: process + print,
+        ship: process + print,
         shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
           <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">${print}`
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>${print}`,
@@ -382,7 +361,7 @@
       const q = document.getElementById("search").value.trim();
       const nPacked = stage === "pick" ? shown.filter(hasPacking).length : 0;
       container.innerHTML = shown.length ? shown.map((s, i) => (nPacked && hasPacking(s) && !hasPacking(shown[i - 1] || { boxes: [] })
-          ? `<div class="stage-divider">${icon("package")} Packed, still to pick (${nPacked}) <span class="muted small">— pack-size tools leave these alone</span></div>` : "") + renderCard(s)).join("")
+          ? `<div class="stage-divider">${icon("package")} Packed, still to pick (${nPacked}) <span class="muted small">— packed before picking</span></div>` : "") + renderCard(s)).join("")
         : `<div class="card muted stage-empty">${searching() ? noMatchHere() : STAGES.find(x => x.key === stage).empty}</div>`;
       if (detailOpenId && cardEl(detailOpenId)) attachDetail(detailOpenId);
       updateSelectionUi();
@@ -446,24 +425,6 @@
       await apiFetch(`/api/shipments/${s.id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes }) });
     }
 
-    async function bulkUnconfirm() {
-      const chosen = selectedShipments().filter(s => s.status === "ready" && !hasPicks(s));
-      if (!chosen.length) { showError("Tick confirmed shipments with nothing picked (Unpick first)."); return; }
-      if (!(await confirmUnconfirm(chosen.map(s => s.code)))) return;
-      moveOn(await bulkRun("Bookings unconfirmed", s => chosen.some(c => c.id === s.id), s => apiFetch(`/api/shipments/${s.id}/unconfirm-booking`, { method: "POST" })));
-    }
-    async function bulkUnpick() {
-      const chosen = selectedShipments().filter(hasPicks);
-      if (!chosen.length) { showError("Tick picked shipments that haven't shipped."); return; }
-      if (!(await confirmUnpick(chosen.map(s => s.code)))) return;
-      moveOn(await bulkRun("Unpicked", s => chosen.some(c => c.id === s.id), s => apiFetch(`/api/shipments/${s.id}/unpick`, { method: "POST" })));
-    }
-    async function bulkUnpack() {
-      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && (s.packed_at || s.boxes.length));
-      if (!chosen.length) { showError("Tick packed shipments that haven't shipped."); return; }
-      if (!(await confirmUnpack(chosen.map(s => s.code)))) return;
-      moveOn(await bulkRun("Unpacked", s => chosen.some(c => c.id === s.id), s => apiFetch(`/api/shipments/${s.id}/unpack`, { method: "POST" })));
-    }
     async function deliverOne(id) {
       try {
         const sh = await apiFetch(`/api/shipments/${id}/delivered`, { method: "POST", body: JSON.stringify({ delivered_at: null }) });
@@ -522,28 +483,6 @@
       showResult(res.msg + (where ? ` → now in ${where.label}` : ""));
     }
 
-    async function bulkSavePacking() {
-      // already-accepted packing isn't re-saved in bulk (Save Packing on the shipment changes it)
-      // the saved (proposed) boxes -- or, with none, boxes by the pre-filled pack sizes -- become the accepted packing
-      moveOn(await bulkRun("Packing accepted", s => ["new", "ready"].includes(s.status) && !hasPacking(s),
-        s => apiFetch(`/api/shipments/${s.id}/accept-packing`, { method: "POST" })));
-    }
-    async function bulkPickAll() {
-      const n = selectedShipments().filter(s => ["new", "ready"].includes(s.status)).length;
-      if (!n) { showError("Tick the shipments to pick first."); return; }
-      const { value } = await askDialog({ title: `Pick everything on ${n} shipment${n === 1 ? "" : "s"}?`, body: "<p>Every line is marked fully picked (bookings are confirmed too). They move to <b>To pack</b>.</p>",
-        buttons: [{ label: "Pick All", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
-      if (value !== "go") return;
-      moveOn(await bulkRun("Picked", s => ["new", "ready"].includes(s.status), async s => {
-        if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
-        await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
-      }));
-    }
-    function bulkShip() {
-      const ready = selectedShipments().filter(s => (stageOf(s) || {}).key === "ship");
-      if (!ready.length) { showError("Tick the shipments to ship — they need to be picked with packing accepted."); return; }
-      openShipDialog(ready.map(s => s.id));
-    }
     async function bulkDeliver() {
       const date = document.getElementById("bulk-delivered-date").value;
       const res = await bulkRun("Marked delivered (no POD)", s => s.status === "shipped", s => apiFetch(`/api/shipments/${s.id}/delivered`, {
@@ -556,81 +495,6 @@
       const chosen = selectedShipments().filter(s => s.status === "delivered");
       if (!chosen.length) { showError("Tick the delivered shipments to bill."); return; }
       offerBilling(chosen);
-    }
-
-    // ---- Ship Now: confirm, carrier and tracking per shipment, then off they go (like Pack & Ship on one) ----
-    function openShipDialog(ids) {
-      const list = ids.map(byId).filter(Boolean);
-      const carriers = [...new Set(shipments.map(s => s.carrier).filter(Boolean))].slice(0, 30);
-      const back = document.createElement("div");
-      back.className = "glass-back";
-      back.id = "ship-dialog";
-      back.addEventListener("click", e => { if (e.target === back) closeShipDialog(); });
-      back.innerHTML = `<div class="glass-panel ship-dialog" role="dialog" aria-modal="true" aria-labelledby="sd-title">
-        <div class="sm-head"><div><h3 id="sd-title">Ship ${list.length} shipment${list.length === 1 ? "" : "s"}</h3>
-            <div class="pr-steps"><span class="done">${icon("check")}Picked</span><span class="done">${icon("check")}Packed</span><span class="on">3 Ship</span></div></div>
-          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeShipDialog()">${icon("x")}</button></div>
-        <p class="muted small" style="margin:0 0 8px;">Stock leaves on-hand as each one ships. Carrier and tracking are optional — they go on the packing list and the POD email.</p>
-        <datalist id="sd-carriers">${carriers.map(c => `<option value="${escapeHtml(c)}">`).join("")}</datalist>
-        <div class="sm-body"><table class="sm-table no-table-tools no-col-bands">
-          <thead><tr><th>Shipment</th><th class="grow">Customer</th><th class="num">Boxes</th><th>Carrier</th><th>Tracking #</th></tr></thead>
-          <tbody>${list.map(s => { const ord = order(s.order_id) || {}; return `<tr data-id="${s.id}">
-            <td><span class="sd-code">${escapeHtml(s.code)}</span></td>
-            <td class="grow">${escapeHtml(customerName(ord.customer_id) || "")}<div class="muted small">${escapeHtml(ord.code || "")}${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</div></td>
-            <td class="num">${s.boxes.length}</td>
-            <td><input type="text" class="sd-carrier" list="sd-carriers" value="${escapeHtml(s.carrier || "")}" placeholder="Carrier"></td>
-            <td><input type="text" class="sd-tracking" value="${escapeHtml(s.tracking_number || "")}" placeholder="Optional"></td></tr>`; }).join("")}</tbody>
-        </table></div>
-        <div class="sm-foot">
-          <div class="sm-box" id="sd-box" aria-hidden="true">${icon("truck")}<span class="sm-count" id="sd-count">0</span></div>
-          <div class="sm-summary">${list.length} shipment${list.length === 1 ? "" : "s"} · ${list.reduce((t, s) => t + s.boxes.length, 0)} boxes</div>
-          <div class="error" id="sd-error"></div>
-          <button type="button" class="secondary" onclick="closeShipDialog()">Cancel</button>
-          <button type="button" class="ship-now lit" id="sd-go" onclick="shipFromDialog()">Ship Now</button>
-        </div></div>`;
-      document.body.appendChild(back);
-      document.body.classList.add("glass-open");
-      back.querySelector("#sd-go").focus();
-    }
-    function closeShipDialog() {
-      const el = document.getElementById("ship-dialog");
-      document.body.classList.remove("glass-open");
-      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
-    }
-    async function shipFromDialog() {
-      const back = document.getElementById("ship-dialog"), go = back.querySelector("#sd-go"), err = back.querySelector("#sd-error");
-      // last check: pallets with no weight / size (they'd print blank on the packing list)
-      const gaps = [...back.querySelectorAll("tbody tr")].flatMap(tr => { const s = byId(parseInt(tr.dataset.id));
-        return savedPalletGaps(s).map(g => `${s.code} — ${g}`); });
-      if (!(await confirmPalletGaps(gaps, "Ship"))) return;
-      go.disabled = true;
-      go.textContent = "Shipping…";
-      const ok = [], failed = [];
-      for (const tr of back.querySelectorAll("tbody tr")) {
-        const id = parseInt(tr.dataset.id), s = byId(id);
-        try {
-          const carrier = tr.querySelector(".sd-carrier").value.trim(), tracking = tr.querySelector(".sd-tracking").value.trim();
-          if (carrier !== (s.carrier || "") || tracking !== (s.tracking_number || ""))
-            await apiFetch(`/api/shipments/${id}`, { method: "PUT", body: JSON.stringify({ carrier: carrier || null, tracking_number: tracking || null }) });
-          await apiFetch(`/api/shipments/${id}/ship`, { method: "POST" });
-          ok.push(tr);
-        } catch (e) { failed.push(`${escapeHtml(s.code)}: ${escapeHtml(e.message)}`); }
-      }
-      if (ok.length) {
-        await flyIntoBox(ok.map(tr => tr.querySelector(".sd-code")), back.querySelector("#sd-box"), back.querySelector("#sd-count"));
-        const done = document.createElement("div");
-        done.className = "sm-done";
-        done.innerHTML = `<div class="sm-done-check ship-truck">${icon("truck")}</div><h3>${ok.length} shipped</h3>
-          <p class="muted">${failed.length ? `${failed.length} couldn't ship — see below` : "Stock has left on-hand · now in Shipped"}</p>`;
-        back.querySelector(".glass-panel").appendChild(done);
-        requestAnimationFrame(() => done.classList.add("show"));
-        await new Promise(r => setTimeout(r, 1200));
-      }
-      if (failed.length && !ok.length) { err.innerHTML = failed.join("<br>"); go.disabled = false; go.textContent = "Ship Now"; return; }
-      closeShipDialog();
-      await reloadList();
-      if (failed.length) showError(failed.join("<br>"));
-      moveOn({ ok: ok.map(tr => parseInt(tr.dataset.id)), msg: `Shipped: ${ok.length}` });
     }
 
     async function printSelectedLabels() {
@@ -687,87 +551,9 @@
       try { await downloadFile(path, name); } catch (e) { showError(escapeHtml(e.message)); toast(e.message); }
     }
 
-    // ---- paste: Item # / Pack size / Pallet # / Weight / Dimensions ----
-    function togglePastePanel(kind) {
-      const p = document.getElementById(`paste-${kind}-panel`);
-      p.style.display = p.style.display === "none" ? "block" : "none";
-      if (p.style.display === "block") document.getElementById(`paste-${kind}-text`).focus();
-    }
-
-    // After the pack size manager changes something: refresh defaults and history chips.
     async function afterPackChange() {
       [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
       renderAll();
-    }
-
-    // Paste Pallets: Item # · Pallet # · Weight · Dimensions (tab, comma or space). Saved straight to the ticked (or shown)
-    // shipments that aren't packed yet; anything it would change is listed and confirmed first.
-    async function applyPaste(kind) {
-      const out = document.getElementById(`paste-${kind}-result`);
-      out.innerHTML = "";
-      const shown = visibleShipments();
-      const scope = shown.filter(s => selected.has(s.id));
-      const targets = scope.length ? scope : shown;
-      const byCode = Object.fromEntries(shipments.map(s => [s.code.toLowerCase(), s]));
-      const plan = {};  // shipment id -> { lines: {order line: pallet}, pallets: {pallet: {weight, dimensions}} }
-      const skippedPacked = new Set(), notOnShipments = new Set();
-      document.getElementById(`paste-${kind}-text`).value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
-        const spaced = !row.includes("\t") && !row.includes(",");
-        let cols = splitPasteRow(row);
-        let only = null;
-        if (byCode[cols[0].toLowerCase()]) { only = byCode[cols[0].toLowerCase()]; cols = cols.slice(1); }
-        if (spaced && cols.length > 4) cols = [...cols.slice(0, 3), cols.slice(3).join(" ")];  // "48 x 40 x 50"
-        const [code, pallet, weight, dims] = cols;
-        if (!code || !pallet || /^item/i.test(code) || /^ship/i.test(code)) return;  // header row
-        let found = false;
-        (only ? [only] : targets).forEach(s => {
-          const entries = shippedByLine(s).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
-          if (!entries.length) return;
-          found = true;
-          if (s.packed_at || !["new", "ready"].includes(s.status)) { skippedPacked.add(s.code); return; }
-          const p = plan[s.id] = plan[s.id] || { lines: {}, pallets: {} };
-          entries.forEach(e => { p.lines[e.order_line_id] = pallet; });
-          const v = p.pallets[pallet] = p.pallets[pallet] || {};
-          if (weight) v.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || null;
-          if (dims) v.dimensions = normalizeDimensions(dims);
-        });
-        if (!found) notOnShipments.add(code);
-      });
-      // what's already there that this would change
-      const changes = [];
-      Object.entries(plan).forEach(([id, p]) => {
-        const s = byId(+id);
-        shippedByLine(s).forEach(e => { const cur = linePallet(s, e.order_line_id), to = p.lines[e.order_line_id];
-          if (to && cur && cur !== to) changes.push(`${s.code} ${itemCode(e.item_id)}: pallet ${cur} → ${to}`); });
-        Object.entries(p.pallets).forEach(([pn, v]) => { const was = s.pallets.find(x => x.pallet_number === pn) || {};
-          if (v.weight != null && was.weight != null && was.weight !== v.weight) changes.push(`${s.code} pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
-          if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`${s.code} pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`); });
-      });
-      if (changes.length) {
-        const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
-          body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
-          buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
-        if (value !== "go") { out.textContent = "Nothing changed."; return; }
-      }
-      const msgs = [], failed = [];
-      let lines = 0;
-      for (const [id, p] of Object.entries(plan)) {
-        const s = byId(+id);
-        try {
-          await saveProposedPacking(s, () => null, e => p.lines[e.order_line_id]);
-          const merged = Object.fromEntries(s.pallets.map(x => [x.pallet_number, { weight: x.weight, dimensions: x.dimensions }]));
-          Object.entries(p.pallets).forEach(([pn, v]) => { merged[pn] = { ...(merged[pn] || {}), ...v }; });
-          await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
-            Object.entries(merged).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ?? null, dimensions: v.dimensions || null })) }) });
-          lines += Object.keys(p.lines).length;
-        } catch (e) { failed.push(`${escapeHtml(s.code)}: ${escapeHtml(e.message)}`); }
-      }
-      await reloadList();
-      msgs.push(`Saved pallets on <strong>${lines}</strong> line(s) of <strong>${Object.keys(plan).length - failed.length}</strong> shipment(s)${scope.length ? " (ticked)" : " (all shown)"} — packing not accepted yet.`);
-      if (skippedPacked.size) msgs.push(`Left alone — packing already accepted: ${escapeHtml([...skippedPacked].join(", "))}. Change those in <b>Process</b>.`);
-      if (notOnShipments.size) msgs.push(`<span class="neg">Not on any ${scope.length ? "ticked" : "shown"} shipment: ${escapeHtml([...notOnShipments].join(", "))}.</span>`);
-      if (failed.length) msgs.push(`<span class="neg">${failed.join("<br>")}</span>`);
-      out.innerHTML = `<ul class="result-list">${msgs.map(m => `<li>${m}</li>`).join("")}</ul>`;
     }
 
     // ---- the pre-fill rule (company-wide) ----
@@ -803,98 +589,6 @@
     // ---- Set Pack Sizes: one row per item across the ticked shipments ----
     let sp = null;
     const normCode = c => String(c || "").trim().toLowerCase().replace(/-nuts$/, "-nut");
-    function currentPack(s, e) { return packSizeFor(s, e); }  // saved, else pre-filled
-    function openSetPackSizes(focusPaste = false) {
-      showError("");
-      // only shipments still to be packed: an accepted packing is changed on that shipment, never in bulk
-      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && !hasPacking(s));
-      const packedToo = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && hasPacking(s)).length;
-      const shippedToo = selectedShipments().length - chosen.length - packedToo;
-      if (!chosen.length) { showError("Tick shipments that aren't packed yet — ones with packing accepted are changed on the shipment itself."); return; }
-      const rows = {};
-      chosen.forEach(s => shippedByLine(s).forEach(e => {
-        const r = rows[e.item_id] = rows[e.item_id] || { item_id: e.item_id, lines: [], ships: new Set(), qty: 0 };
-        r.lines.push({ s, e });
-        r.ships.add(s.id);
-        r.qty += e.qty;
-      }));
-      const list = Object.values(rows).sort((a, b) => String(itemCode(a.item_id)).localeCompare(String(itemCode(b.item_id)), undefined, { numeric: true }));
-      list.forEach(r => {
-        const cur = [...new Set(r.lines.map(({ s, e }) => currentPack(s, e)))];
-        r.value = cur.length === 1 ? (cur[0] || "") : "";
-        r.mixed = cur.length > 1 ? cur.filter(Boolean) : null;
-        const src = [...new Set(r.lines.map(({ s, e }) => s.boxes.some(b => b.order_line_id === e.order_line_id) ? "Saved packing"
-          : ((packSuggest[s.id] || {})[e.order_line_id] || {}).label).filter(Boolean))];
-        r.source = src.length === 1 ? src[0] : src.length ? "Differs by shipment" : "";
-      });
-      const custIds = [...new Set(chosen.map(s => (order(s.order_id) || {}).customer_id).filter(Boolean))];
-      sp = { chosen, list, custId: custIds.length === 1 ? custIds[0] : null };
-      const chosenIds = new Set(chosen.map(s => s.id));
-      const sources = shipments.filter(s => s.boxes.length && !chosenIds.has(s.id) && s.status !== "cancelled")
-        .sort((a, b) => ((order(b.order_id) || {}).customer_id === sp.custId) - ((order(a.order_id) || {}).customer_id === sp.custId) || when(b) - when(a))
-        .slice(0, 40);
-      const back = document.createElement("div");
-      back.className = "glass-back";
-      back.id = "sp-dialog";
-      back.addEventListener("click", e => { if (e.target === back) closeSetPack(); });
-      back.innerHTML = `<div class="glass-panel sp-panel" role="dialog" aria-modal="true" aria-labelledby="sp-title">
-        <div class="sm-head"><div><h3 id="sp-title">Set pack sizes</h3>
-            <div class="muted small">${list.length} item${list.length === 1 ? "" : "s"} on ${chosen.length} shipment${chosen.length === 1 ? "" : "s"}
-              (${escapeHtml(chosen.map(s => s.code).slice(0, 6).join(", "))}${chosen.length > 6 ? "…" : ""})${packedToo ? ` · <b>${packedToo} already packed, left out</b>` : ""}${shippedToo ? ` · ${shippedToo} already shipped, left out` : ""}</div></div>
-          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeSetPack()">${icon("x")}</button></div>
-        <div class="sp-tools">
-          <label class="check-label">Fill from <select id="sp-fill" onchange="spFill(this.value)">
-            <option value="">Choose…</option>
-            <option value="suggested">Pre-filled sizes (${escapeHtml((document.getElementById("pack-rule").selectedOptions[0] || {}).textContent || "rule")} rule)</option>
-            <option value="default">Item defaults</option>
-            ${presets.length ? `<optgroup label="Presets">${presets.map(p => `<option value="preset:${p.id}">${escapeHtml(p.name)}${p.customer_id ? ` — ${escapeHtml(customerName(p.customer_id))}` : ""}</option>`).join("")}</optgroup>` : ""}
-            ${sources.length ? `<optgroup label="Copy from a packed shipment">${sources.map(s => { const o = order(s.order_id) || {};
-              return `<option value="ship:${s.id}">${escapeHtml(s.code)} · ${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""} · ${escapeHtml(customerName(o.customer_id) || "")} · ${fmtDate(s.packed_at || s.ship_date || s.created_at)}</option>`; }).join("")}</optgroup>` : ""}
-          </select></label>
-          <a class="link small" id="sp-del-preset" style="display:none;" onclick="spDeletePreset()">Delete this preset</a>
-          <span class="spacer"></span>
-          <a class="link small" onclick="document.getElementById('sp-paste-wrap').hidden = !document.getElementById('sp-paste-wrap').hidden">Hide / show paste box</a>
-          <a class="link small" onclick="spClear()">Clear all</a>
-        </div>
-        <div id="sp-paste-wrap" class="sp-paste">
-          <label class="small"><b>Paste item # and pack size</b> — one item per line, separated by a space, tab or comma (straight from Excel works). A header row is fine.</label>
-          <textarea id="sp-paste" rows="4" placeholder="Item #   Pack size&#10;16713   50&#10;15420   100"></textarea>
-          <div class="btn-row"><button type="button" class="secondary" onclick="spPaste()">Fill The Grid</button></div>
-        </div>
-        <div class="sm-body"><table class="sm-table no-table-tools no-col-bands" id="sp-table">
-          <thead><tr><th>Item</th><th class="grow">Description</th><th class="num">Ships</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Now</th></tr></thead>
-          <tbody>${list.map((r, i) => { const it = itemObj(r.item_id) || {}; return `<tr data-i="${i}" data-item="${r.item_id}">
-            <td class="nowrap"><b>${escapeHtml(it.code || "")}</b></td>
-            <td class="grow small">${escapeHtml(it.title || "")}</td>
-            <td class="num" title="${r.lines.length} line${r.lines.length === 1 ? "" : "s"}">${r.ships.size}</td>
-            <td class="num">${fmtQty(r.qty)}</td>
-            <td class="nowrap"><input type="number" min="1" step="1" class="qty-input sp-val" value="${r.value}" placeholder="${r.mixed ? escapeHtml(r.mixed.join(" / ")) : ""}" oninput="spRow(this)">
-              <a class="link small" title="Recent packings of this item" onclick="spUses(this)">${icon("clock")}</a></td>
-            <td class="sp-boxes small"></td>
-            <td class="small muted sp-src" title="${escapeHtml(r.mixed ? `Mixed: ${r.mixed.join(" / ")}` : r.source)}">${r.mixed ? `<span class="neg">Mixed: ${escapeHtml(r.mixed.join(" / "))}</span>` : escapeHtml(r.source)}</td></tr>`; }).join("")}</tbody>
-        </table></div>
-        <div id="sp-msg" class="small"></div>
-        <div class="error" id="sp-error"></div>
-        <div class="sm-foot sp-foot">
-          <label class="inline-check" title="Each item's default pack size becomes this size (the old one stays in its history)"><input type="checkbox" id="sp-save-default"> Also make these the items' default</label>
-          <span class="spacer"></span>
-          <button type="button" class="secondary" onclick="spSavePreset()">Save As Preset…</button>
-          <button type="button" class="secondary" onclick="closeSetPack()">Cancel</button>
-          <button type="button" class="danger" onclick="spApply(true)" title="Accepts packing on every shipment at once — no review — and moves them to Ready To Ship">Accept All, No Review</button>
-          <button type="button" class="next-step" onclick="spApply()" title="Fills the sizes in; you review each shipment, then Accept Packing">Apply To ${chosen.length} Shipment${chosen.length === 1 ? "" : "s"}</button>
-        </div></div>`;
-      document.body.appendChild(back);
-      document.body.classList.add("glass-open");
-      back.querySelectorAll(".sp-val").forEach(spRow);
-      decorateIcons(back);
-      if (focusPaste) document.getElementById("sp-paste").focus();
-    }
-    function closeSetPack() {
-      const el = document.getElementById("sp-dialog");
-      document.body.classList.remove("glass-open");
-      if (el) { el.classList.add("closing"); setTimeout(() => el.remove(), 180); }
-      sp = null;
-    }
     // live box count for a row: boxes over all its lines at this size
     function spRow(input) {
       const tr = input.closest("tr"), r = sp.list[+tr.dataset.i], v = parseInt(input.value) || 0;
@@ -1001,44 +695,430 @@
         document.getElementById("sp-del-preset").style.display = "none";
       } catch (e) { document.getElementById("sp-error").textContent = e.message; }
     }
-    async function spApply(accept = false) {
-      const vals = spValues(), err = document.getElementById("sp-error");
-      if (!Object.keys(vals).length) { err.textContent = "Fill in at least one pack size."; return; }
-      const saveDefault = document.getElementById("sp-save-default").checked;
-      const chosen = sp.chosen;
-      if (accept) {
-        const n = chosen.length, { value } = await askDialog({ title: "Accept without review?", tone: "warn",
-          body: `<p>${n} shipment${n === 1 ? "" : "s"} skip review and move to <b>Ready To Ship</b>.</p>`,
-          buttons: [{ label: `Accept ${n}`, value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    // ---- Process Selected: the bulk Process Shipment. Same steps (Pick -> Pack -> Ship, undo on each), applied to every
+    // ticked shipment at once. Only opens on shipments from one stage tab; follows them while they move on together.
+    let bp = null;  // { ids, step: pick | pack | ship, split: {stage: [shipments]} | null, msg }
+    const BP_STEPS = [["pick", "Pick"], ["pack", "Pack"], ["ship", "Ship"]];
+    const bpList = () => bp.ids.map(byId).filter(Boolean);
+    function stageGroups(list) {
+      const g = {};
+      list.forEach(s => { const k = (stageOf(s) || {}).key || s.status; (g[k] = g[k] || []).push(s); });
+      return g;
+    }
+    function stageLabel(k) { return (STAGES.find(x => x.key === k) || {}).label || k; }
+
+    function openBulkProcess() {
+      showError("");
+      const chosen = selectedShipments().filter(inPlay);
+      if (!chosen.length) { showError("Tick the shipments to process first."); return; }
+      const groups = stageGroups(chosen), keys = Object.keys(groups);
+      if (keys.length > 1 || !["pick", "pack", "ship"].includes(keys[0])) {
+        showError(`Process Selected works on one stage at a time — the ticked shipments are in ${keys.map(k => `<b>${escapeHtml(stageLabel(k))}</b> (${groups[k].length})`).join(", ")}.
+          Tick shipments from one tab.`);
+        return;
+      }
+      bp = { ids: chosen.map(s => s.id), step: keys[0], split: null, msg: "" };
+      let back = document.getElementById("bproc");
+      if (!back) {
+        back = document.createElement("div");
+        back.className = "glass-back";
+        back.id = "bproc";
+        back.addEventListener("click", e => { if (e.target === back) closeBulk(); });
+        document.body.appendChild(back);
+        document.body.classList.add("glass-open");
+      }
+      renderBulk();
+    }
+    async function closeBulk(force = false) {
+      if (!bp) return;
+      if (!force && bp.dirty) {
+        const { value } = await askDialog({ title: "Discard unsaved changes?", tone: "warn", body: "<p>The pack sizes / pallets you changed haven't been saved.</p>",
+          buttons: [{ label: "Discard", value: "go", cls: "danger" }, { label: "Keep Editing", value: null, cls: "secondary" }] });
         if (value !== "go") return;
       }
-      closeSetPack();
-      let lines = 0;
-      // saved straight to each shipment: lines with a new size are re-boxed, the rest keep their boxes
-      const res = await bulkRun(accept ? "Packed and accepted" : "Pack sizes saved", s => chosen.some(c => c.id === s.id), async s => {
-        const change = shippedByLine(s).filter(e => vals[e.item_id] && (vals[e.item_id] !== packSizeFor(s, e) || !s.boxes.some(b => b.order_line_id === e.order_line_id)));
-        if (change.length || !s.boxes.length) {
-          await saveProposedPacking(s, e => vals[e.item_id] || null);
-          lines += change.length;
-        }
-        if (accept) await apiFetch(`/api/shipments/${s.id}/accept-packing`, { method: "POST" });
-      });
-      const msgs = [`Pack sizes saved on <b>${lines}</b> line${lines === 1 ? "" : "s"}.`];
-      if (saveDefault) {
-        try {
-          const r = await apiFetch("/api/stock-items/pack-sizes/bulk", { method: "POST", body: JSON.stringify({
-            entries: Object.entries(vals).map(([id, n]) => ({ code: itemCode(+id), pack_size: n })), source: "set pack sizes",
-            reference: chosen.map(s => s.code).slice(0, 20).join(", ") }) });
-          [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
-          if (r.applied.length) msgs.push(`New item default for ${r.applied.length} item(s).`);
-        } catch (e) { msgs.push(`<span class="neg">Couldn't save item defaults: ${escapeHtml(e.message)}</span>`); }
-      }
-      moveOn(res);
-      if (res) msgs.push(escapeHtml(res.msg));
-      if (!accept) msgs.push("Check the cards, then <b>Accept Packing</b> (or open one with <b>Process</b>).");
-      showResult(msgs.join(" "), true);
+      const back = document.getElementById("bproc");
+      bp = null;
+      sp = null;
+      document.body.classList.remove("glass-open");
+      if (back) { back.id = ""; back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
+      renderAll();
+    }
+    // one shipment needs something different: close this and open its own Process pop-up
+    async function bulkOpenOne(id) {
+      await closeBulk();
+      if (!bp) openProcess(id);
     }
 
+    // After every bulk step: follow the shipments. Same next stage -> carry on there; split -> say where each went.
+    async function bulkAfter(msg) {
+      await reloadList();
+      if (!bp) return;
+      const list = bpList().filter(inPlay);
+      bp.ids = list.map(s => s.id);
+      bp.dirty = false;
+      bp.msg = msg || "";
+      if (!list.length) { const m = bp.msg; await closeBulk(true); showResult(m, true); return; }
+      const groups = stageGroups(list), keys = Object.keys(groups);
+      if (keys.length === 1 && ["pick", "pack", "ship"].includes(keys[0])) { bp.step = keys[0]; bp.split = null; }
+      else if (keys.length === 1) {  // all moved past shipping
+        const m = bp.msg, ids = bp.ids;
+        await closeBulk(true);
+        selected.clear();
+        ids.forEach(id => selected.add(id));
+        setStage(keys[0], true);
+        showResult(m, true);
+        return;
+      } else bp.split = groups;
+      renderBulk();
+    }
+    function bulkContinue(stageKey) {
+      bp.ids = bp.split[stageKey].map(s => s.id);
+      bp.step = stageKey;
+      bp.split = null;
+      bp.msg = "";
+      renderBulk();
+    }
+
+    // run one action per shipment; failures don't stop the rest
+    async function bulkEach(list, action) {
+      const ok = [], failed = [];
+      for (const s of list) {
+        try { await action(s); ok.push(s.code); } catch (e) { failed.push(`${s.code}: ${e.message}`); }
+      }
+      return `${ok.length ? `${ok.length} done` : "None done"}${failed.length ? ` · <span class="neg">${failed.map(escapeHtml).join("; ")}</span>` : ""}`;
+    }
+
+    function bpRowsHtml(list) {
+      return `<table class="fit-table no-table-tools no-col-bands bp-rows"><thead><tr><th>Shipment</th><th class="grow">Customer · PO</th><th class="num">Lines</th>
+          <th class="num">Units</th><th class="num">Picked</th><th>Packing</th><th></th></tr></thead><tbody>
+        ${list.map(s => { const o = order(s.order_id) || {}, units = s.lines.reduce((t, l) => t + l.quantity, 0), picked = s.lines.reduce((t, l) => t + (l.picked_quantity || 0), 0);
+          return `<tr><td class="nowrap"><b>${escapeHtml(s.code)}</b> <span class="muted small">${s.status === "new" ? "booked" : "confirmed"}</span></td>
+            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</td>
+            <td class="num">${shippedByLine(s).length}</td><td class="num">${fmtQty(units)}</td>
+            <td class="num">${fmtQty(picked)}${picked >= units - 1e-9 ? " ✓" : ""}</td>
+            <td>${s.packed_at ? `<span class="tag shipped">Accepted · ${s.boxes.length}</span>` : s.boxes.length ? `<span class="tag draft">Proposed · ${s.boxes.length}</span>` : `<span class="muted small">—</span>`}</td>
+            <td><a class="link small" onclick="bulkOpenOne(${s.id})" title="Open just this one in Process Shipment">Open</a></td></tr>`; }).join("")}</tbody></table>`;
+    }
+
+    function renderBulk() {
+      const back = document.getElementById("bproc"), list = bpList();
+      const body = bp.split ? bulkSplitHtml() : { pick: bpPickHtml, pack: bpPackHtml, ship: bpShipHtml }[bp.step](list);
+      const foot = bp.split ? `<span class="spacer"></span><button type="button" class="secondary" onclick="closeBulk(true)">Close</button>`
+        : { pick: bpPickFoot, pack: bpPackFoot, ship: bpShipFoot }[bp.step](list);
+      back.innerHTML = `<div class="glass-panel proc-panel bproc-panel" role="dialog" aria-modal="true" aria-labelledby="bp-title">
+        <div class="sm-head"><div><h3 id="bp-title">Process ${list.length} shipment${list.length === 1 ? "" : "s"}</h3>
+            <div class="muted small">${bp.split ? "They've moved to different stages" : `All in <b>${escapeHtml(stageLabel(bp.step))}</b>`} · ${escapeHtml(list.map(s => s.code).slice(0, 8).join(", "))}${list.length > 8 ? "…" : ""}</div></div>
+          <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeBulk()">${icon("x")}</button></div>
+        ${bp.split ? "" : `<div class="proc-tabs" role="tablist">${BP_STEPS.map(([k, label], i) => { const at = BP_STEPS.findIndex(x => x[0] === bp.step);
+          return `<span role="tab" aria-selected="${k === bp.step}" class="proc-tab ${k === bp.step ? "on" : ""} ${i < at ? "done" : ""}">${i < at ? icon("check") : `<span class="proc-n">${i + 1}</span>`}${label}</span>`; }).join("")}</div>`}
+        ${bp.msg ? `<div class="bp-msg small">${bp.msg}</div>` : ""}
+        <div class="proc-body" id="bp-body">${body}</div>
+        <div class="error" id="bp-error"></div>
+        <div class="sm-foot proc-foot">${foot}</div></div>`;
+      decorateIcons(back);
+      if (!bp.split && bp.step === "pack") {
+        back.querySelectorAll(".sp-val").forEach(spRow);
+        const b = document.getElementById("bp-body"), mark = () => { bp.dirty = true; };
+        b.addEventListener("input", mark);
+        b.addEventListener("change", mark);
+      }
+    }
+    function bulkSplitHtml() {
+      return Object.entries(bp.split).map(([k, list]) => `<div class="bp-group">
+          <div class="bp-group-head"><b>${escapeHtml(stageLabel(k))}</b> (${list.length})
+            ${["pick", "pack", "ship"].includes(k) ? `<button type="button" class="secondary small-btn" onclick="bulkContinue('${k}')">Continue With These</button>` : ""}</div>
+          ${bpRowsHtml(list)}</div>`).join("");
+    }
+
+    // ---- Pick ----
+    function bpPickHtml(list) {
+      return `<p class="muted small" style="margin-top:0;">Pick All marks every line picked (and confirms the bookings). For a part pick, <b>Open</b> that shipment.</p>${bpRowsHtml(list)}`;
+    }
+    function bpPickFoot(list) {
+      const picked = list.filter(hasPicks), unconf = list.filter(s => s.status === "ready" && !hasPicks(s)), unbook = list.filter(s => s.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9));
+      return `${picked.length ? `<button type="button" class="danger" onclick="bpUndo('unpick')">Unpick (${picked.length})</button>` : ""}
+        ${unconf.length ? `<button type="button" class="danger" onclick="bpUndo('unconfirm')">Unconfirm Bookings (${unconf.length})</button>` : ""}
+        ${unbook.length ? `<button type="button" class="danger" onclick="bpUndo('unbook')">Unbook All (${unbook.length})</button>` : ""}
+        <span class="spacer"></span>
+        <button type="button" class="next-step" onclick="bpPickAll()">${icon("check")} Pick All (${list.length})</button>`;
+    }
+    async function bpPickAll() {
+      const list = bpList();
+      const msg = await bulkEach(list, async s => {
+        if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
+        await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
+      });
+      await bulkAfter(`Picked: ${msg}`);
+      const waiting = bp ? bpList().filter(s => !s.packed_at && s.boxes.length) : [];
+      if (bp && bp.step === "pack" && waiting.length) await askDialog({ title: "Re-check the packing", tone: "warn",
+        body: `<p>${escapeHtml(waiting.map(s => s.code).join(", "))} ${waiting.length === 1 ? "was" : "were"} packed before going back a step. Check the sizes and pallets, then <b>Accept Packaging</b>.</p>`,
+        buttons: [{ label: "Review Packing", value: "ok", cls: "confirm-btn" }] });
+    }
+    // Undo on many: unpick | unconfirm | unbook | unpack
+    async function bpUndo(kind) {
+      const list = bpList();
+      const pick = { unpick: list.filter(hasPicks), unconfirm: list.filter(s => s.status === "ready" && !hasPicks(s)),
+        unbook: list.filter(s => s.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9)), unpack: list.filter(s => s.packed_at || s.boxes.length) }[kind];
+      const codes = pick.map(s => s.code);
+      let ok;
+      if (kind === "unpick") ok = await confirmUnpick(codes);
+      else if (kind === "unconfirm") ok = await confirmUnconfirm(codes);
+      else if (kind === "unpack") ok = await confirmUnpack(codes);
+      else {
+        const cancels = pick.filter(s => !hasPicks(s)).map(s => s.code);
+        ok = (await askDialog({ title: `Unbook all on ${pick.length} shipment${pick.length === 1 ? "" : "s"}?`, tone: "warn",
+          body: `<p>Every unpicked unit goes back to stock.${cancels.length ? ` Nothing is picked on <b>${escapeHtml(cancels.join(", "))}</b>, so ${cancels.length === 1 ? "it is" : "they are"} <b>cancelled</b>.` : ""}</p>`,
+          buttons: [{ label: "Unbook All", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] })).value === "go";
+      }
+      if (!ok) return;
+      const action = { unpick: "unpick", unconfirm: "unconfirm-booking", unbook: "unbook-all", unpack: "unpack" }[kind];
+      const label = { unpick: "Unpicked", unconfirm: "Bookings unconfirmed", unbook: "Unbooked", unpack: "Unpacked" }[kind];
+      const msg = await bulkEach(pick, s => apiFetch(`/api/shipments/${s.id}/${action}`, { method: "POST" }));
+      await bulkAfter(`${label}: ${msg}`);
+    }
+
+    // ---- Pack: one grid of every item (sizes) + pallets per shipment; Accept Packaging accepts them all ----
+    function spGridHtml(chosen) {
+      const rows = {};
+      chosen.forEach(s => shippedByLine(s).forEach(e => {
+        const r = rows[e.item_id] = rows[e.item_id] || { item_id: e.item_id, lines: [], ships: new Set(), qty: 0 };
+        r.lines.push({ s, e });
+        r.ships.add(s.id);
+        r.qty += e.qty;
+      }));
+      const list = Object.values(rows).sort((a, b) => String(itemCode(a.item_id)).localeCompare(String(itemCode(b.item_id)), undefined, { numeric: true }));
+      list.forEach(r => {
+        const cur = [...new Set(r.lines.map(({ s, e }) => packSizeFor(s, e)))];
+        r.value = cur.length === 1 ? (cur[0] || "") : "";
+        r.mixed = cur.length > 1 ? cur.filter(Boolean) : null;
+        const src = [...new Set(r.lines.map(({ s, e }) => s.boxes.some(b => b.order_line_id === e.order_line_id) ? (s.packed_at ? "Accepted packing" : "Saved — not accepted")
+          : ((packSuggest[s.id] || {})[e.order_line_id] || {}).label).filter(Boolean))];
+        r.source = src.length === 1 ? src[0] : src.length ? "Differs by shipment" : "";
+      });
+      const custIds = [...new Set(chosen.map(s => (order(s.order_id) || {}).customer_id).filter(Boolean))];
+      sp = { chosen, list, custId: custIds.length === 1 ? custIds[0] : null };
+      const chosenIds = new Set(chosen.map(s => s.id));
+      const sources = shipments.filter(s => s.boxes.length && !chosenIds.has(s.id) && s.status !== "cancelled")
+        .sort((a, b) => ((order(b.order_id) || {}).customer_id === sp.custId) - ((order(a.order_id) || {}).customer_id === sp.custId) || when(b) - when(a))
+        .slice(0, 40);
+      return `<h5 class="dsub-title" style="margin-top:0;border:0;padding-top:0;">Pack sizes — ${list.length} item${list.length === 1 ? "" : "s"}</h5>
+        <div class="sp-tools">
+          <label class="check-label">Fill from <select id="sp-fill" onchange="spFill(this.value)">
+            <option value="">Choose…</option>
+            <option value="suggested">Pre-filled sizes (${escapeHtml((document.getElementById("pack-rule").selectedOptions[0] || {}).textContent || "rule")} rule)</option>
+            <option value="default">Item defaults</option>
+            ${presets.length ? `<optgroup label="Presets">${presets.map(p => `<option value="preset:${p.id}">${escapeHtml(p.name)}${p.customer_id ? ` — ${escapeHtml(customerName(p.customer_id))}` : ""}</option>`).join("")}</optgroup>` : ""}
+            ${sources.length ? `<optgroup label="Copy from a packed shipment">${sources.map(s => { const o = order(s.order_id) || {};
+              return `<option value="ship:${s.id}">${escapeHtml(s.code)} · ${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""} · ${escapeHtml(customerName(o.customer_id) || "")} · ${fmtDate(s.packed_at || s.ship_date || s.created_at)}</option>`; }).join("")}</optgroup>` : ""}
+          </select></label>
+          <a class="link small" id="sp-del-preset" style="display:none;" onclick="spDeletePreset()">Delete this preset</a>
+          <span class="spacer"></span>
+          <a class="link small" onclick="spSavePreset()">Save as preset…</a>
+          <a class="link small" onclick="spClear()">Clear all</a>
+        </div>
+        <details class="sp-paste" id="sp-paste-wrap">
+          <summary class="link" style="cursor:pointer;">Paste pack sizes</summary>
+          <label class="small">Item # and pack size, one per line — space, tab or comma (straight from Excel works). Header row optional.</label>
+          <textarea id="sp-paste" rows="4" placeholder="Item #   Pack size&#10;16713   50&#10;15420   100"></textarea>
+          <div class="btn-row"><button type="button" class="secondary" onclick="spPaste()">Fill The Grid</button></div>
+        </details>
+        <table class="fit-table no-table-tools no-col-bands" id="sp-table">
+          <thead><tr><th>Item</th><th class="grow">Description</th><th class="num">Ships</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Now</th></tr></thead>
+          <tbody>${list.map((r, i) => { const it = itemObj(r.item_id) || {}; return `<tr data-i="${i}" data-item="${r.item_id}">
+            <td class="nowrap"><b>${escapeHtml(it.code || "")}</b></td>
+            <td class="grow small">${escapeHtml(it.title || "")}</td>
+            <td class="num" title="${r.lines.length} line${r.lines.length === 1 ? "" : "s"}">${r.ships.size}</td>
+            <td class="num">${fmtQty(r.qty)}</td>
+            <td class="nowrap"><input type="number" min="1" step="1" class="qty-input sp-val" value="${r.value}" placeholder="${r.mixed ? escapeHtml(r.mixed.join(" / ")) : ""}" oninput="spRow(this)">
+              <a class="link small" title="Recent packings of this item" onclick="spUses(this)">${icon("clock")}</a></td>
+            <td class="sp-boxes small"></td>
+            <td class="small muted sp-src" title="${escapeHtml(r.mixed ? `Mixed: ${r.mixed.join(" / ")}` : r.source)}">${r.mixed ? `<span class="neg">Mixed: ${escapeHtml(r.mixed.join(" / "))}</span>` : escapeHtml(r.source)}</td></tr>`; }).join("")}</tbody>
+        </table>
+        <div id="sp-msg" class="small"></div><div class="error" id="sp-error"></div>
+        <label class="inline-check" title="Each item's default pack size becomes this size (the old one stays in its history)"><input type="checkbox" id="sp-save-default"> Also make these the items' default</label>`;
+    }
+    function bpPalletsHtml(list) {
+      return `<h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
+        <details class="sp-paste"><summary class="link" style="cursor:pointer;">Paste pallets</summary>
+          <label class="small">Item # · Pallet # · Weight · Dimensions — space, tab or comma. Start a row with a shipment # to aim it at one shipment.
+            Weight and dimensions only need to be on one row per pallet. Saved straight away (not accepted).</label>
+          <textarea id="bp-pallet-paste" rows="4" placeholder="Item   Pallet   Weight   Dimensions&#10;16713   P1   250   48x40x50&#10;SH215762   15420   P2"></textarea>
+          <div class="btn-row"><button type="button" class="secondary" onclick="bpPastePallets()">Apply Pallets</button><span id="bp-pallet-status" class="small"></span></div>
+        </details>
+        <table class="fit-table no-table-tools no-col-bands bp-pallets"><thead><tr><th>Shipment</th><th>All lines on pallet</th><th class="grow">Pallets — weight (lbs) · dimensions (L x W x H in)</th></tr></thead><tbody>
+          ${list.map(s => { const used = [...new Set(s.boxes.map(b => b.pallet_number).filter(Boolean))];
+            return `<tr><td class="nowrap"><b>${escapeHtml(s.code)}</b></td>
+              <td class="nowrap"><input type="text" class="bp-all-pallet" data-sid="${s.id}" placeholder="E.g. P1" style="width:80px;">
+                <button type="button" class="secondary small-btn" onclick="bpPalletAll(${s.id}, this)">Set</button></td>
+              <td class="grow">${used.length ? used.map(pn => { const p = s.pallets.find(x => x.pallet_number === pn) || {};
+                return `<div class="bp-pallet"><b>${escapeHtml(pn)}</b>
+                  <input type="number" step="0.1" min="0" class="bp-w qty-input" data-sid="${s.id}" data-pn="${escapeHtml(pn)}" value="${p.weight ?? ""}" placeholder="lbs">
+                  <input type="text" class="bp-d" data-sid="${s.id}" data-pn="${escapeHtml(pn)}" value="${escapeHtml(p.dimensions || "")}" placeholder="48 x 40 x 50" onblur="this.value = normalizeDimensions(this.value)"></div>`; }).join("")
+                : `<span class="muted small">No pallets — set one, or paste.</span>`}</td></tr>`; }).join("")}</tbody></table>`;
+    }
+    function bpPackHtml(list) {
+      const waiting = list.filter(s => !s.packed_at && s.boxes.length);
+      return `${waiting.length ? `<div class="notice small"><b>Re-check needed</b> — ${escapeHtml(waiting.map(s => s.code).join(", "))} ${waiting.length === 1 ? "has" : "have"} boxes saved earlier. Check them, then <b>Accept Packaging</b>.</div>` : ""}
+        ${bpRowsHtml(list)}<div id="bp-pack">${spGridHtml(list)}</div><div id="bp-pallets">${bpPalletsHtml(list)}</div>`;
+    }
+    function bpPackFoot(list) {
+      return `<button type="button" class="danger" onclick="bpUndo('unpick')">Unpick (${list.length})</button>
+        ${list.some(s => s.packed_at || s.boxes.length) ? `<button type="button" class="danger" onclick="bpUndo('unpack')">Unpack</button>` : ""}
+        <span class="spacer"></span>
+        <button type="button" class="secondary" onclick="bpPackSave(false)" title="Save the sizes and pallets without accepting">Save</button>
+        <button type="button" class="next-step" onclick="bpPackSave(true)">${icon("package")} Accept Packaging (${list.length})</button>`;
+    }
+    // weights / sizes typed in the pallet table, merged into each shipment's saved pallets
+    async function bpSavePalletInputs(list) {
+      for (const s of list) {
+        const ins = [...document.querySelectorAll(`#bp-pallets .bp-w[data-sid="${s.id}"]`)];
+        if (!ins.length) continue;
+        const merged = Object.fromEntries(s.pallets.map(x => [x.pallet_number, { weight: x.weight, dimensions: x.dimensions }]));
+        ins.forEach(w => { const pn = w.dataset.pn, d = document.querySelector(`#bp-pallets .bp-d[data-sid="${s.id}"][data-pn="${CSS.escape(pn)}"]`);
+          merged[pn] = { weight: w.value ? parseFloat(w.value) : null, dimensions: normalizeDimensions(d ? d.value : "") || null }; });
+        await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
+          Object.entries(merged).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ?? null, dimensions: v.dimensions || null })) }) });
+      }
+    }
+    async function bpPackSave(accept) {
+      const err = document.getElementById("bp-error"), vals = spValues(), list = bpList();
+      err.textContent = "";
+      try {
+        let lines = 0;
+        for (const s of list) {  // sizes: changed lines re-boxed (pallets kept), the rest keep their boxes
+          const change = shippedByLine(s).filter(e => vals[e.item_id] && (vals[e.item_id] !== packSizeFor(s, e) || !s.boxes.some(b => b.order_line_id === e.order_line_id)));
+          if (change.length || !s.boxes.length) { await saveProposedPacking(s, e => vals[e.item_id] || null); lines += change.length; }
+        }
+        await bpSavePalletInputs(list);
+        if (document.getElementById("sp-save-default").checked) {
+          await apiFetch("/api/stock-items/pack-sizes/bulk", { method: "POST", body: JSON.stringify({
+            entries: Object.entries(vals).map(([id, n]) => ({ code: itemCode(+id), pack_size: n })), source: "process selected",
+            reference: list.map(s => s.code).slice(0, 20).join(", ") }) });
+          [items, packHistory] = await Promise.all([apiFetch("/api/stock-items/"), apiFetch("/api/stock-items/pack-sizes/history").catch(() => [])]);
+        }
+        await reloadList();
+        bp.dirty = false;
+        if (!accept) { await bulkAfter(`Saved — ${lines} line${lines === 1 ? "" : "s"} re-boxed; packing not accepted yet.`); return; }
+        const fresh = bpList();
+        const gaps = fresh.flatMap(s => savedPalletGaps(s).map(g => `${s.code} — ${g}`));
+        if (!(await confirmPalletGaps(gaps, "Accept"))) { await bulkAfter("Saved, not accepted — fill in the pallets, or accept anyway."); return; }
+        const msg = await bulkEach(fresh, s => apiFetch(`/api/shipments/${s.id}/accept-packing`, { method: "POST" }));
+        await bulkAfter(`Packing accepted: ${msg}`);
+      } catch (e) { err.textContent = e.message; }
+    }
+    async function bpPalletAll(sid, btn) {
+      const pn = btn.closest("td").querySelector(".bp-all-pallet").value.trim();
+      if (!pn) return;
+      const s = byId(sid);
+      if (linePalletsDiffer(s, pn)) {
+        const { value } = await askDialog({ title: `Put every line of ${s.code} on ${pn}?`, tone: "warn", body: `<p>Its lines are on ${escapeHtml(usedPallets(s).join(", "))} now.</p>`,
+          buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+      }
+      try {
+        await saveProposedPacking(s, () => null, () => pn);
+        await reloadList();
+        document.getElementById("bp-pallets").innerHTML = bpPalletsHtml(bpList());
+      } catch (e) { document.getElementById("bp-error").textContent = e.message; }
+    }
+    const usedPallets = s => [...new Set(s.boxes.map(b => b.pallet_number).filter(Boolean))];
+    const linePalletsDiffer = (s, pn) => usedPallets(s).some(x => x !== pn);
+    async function bpPastePallets() {
+      const status = document.getElementById("bp-pallet-status"), list = bpList();
+      const byCode = Object.fromEntries(list.map(s => [s.code.toLowerCase(), s]));
+      const plan = {}, notFound = new Set();
+      document.getElementById("bp-pallet-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
+        const spaced = !row.includes("\t") && !row.includes(",");
+        let cols = splitPasteRow(row), only = null;
+        if (byCode[cols[0].toLowerCase()]) { only = byCode[cols[0].toLowerCase()]; cols = cols.slice(1); }
+        if (spaced && cols.length > 4) cols = [...cols.slice(0, 3), cols.slice(3).join(" ")];
+        const [code, pallet, weight, dims] = cols;
+        if (!code || !pallet || /^item/i.test(code)) return;
+        let found = false;
+        (only ? [only] : list).forEach(s => {
+          const entries = shippedByLine(s).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
+          if (!entries.length) return;
+          found = true;
+          const p = plan[s.id] = plan[s.id] || { lines: {}, pallets: {} };
+          entries.forEach(e => { p.lines[e.order_line_id] = pallet; });
+          const v = p.pallets[pallet] = p.pallets[pallet] || {};
+          if (weight) v.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || null;
+          if (dims) v.dimensions = normalizeDimensions(dims);
+        });
+        if (!found) notFound.add(code);
+      });
+      const changes = [];
+      Object.entries(plan).forEach(([id, p]) => {
+        const s = byId(+id);
+        shippedByLine(s).forEach(e => { const cur = linePallet(s, e.order_line_id), to = p.lines[e.order_line_id];
+          if (to && cur && cur !== to) changes.push(`${s.code} ${itemCode(e.item_id)}: pallet ${cur} → ${to}`); });
+        Object.entries(p.pallets).forEach(([pn, v]) => { const was = s.pallets.find(x => x.pallet_number === pn) || {};
+          if (v.weight != null && was.weight != null && was.weight !== v.weight) changes.push(`${s.code} pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
+          if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`${s.code} pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`); });
+      });
+      if (changes.length) {
+        const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
+          body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
+          buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") { status.textContent = "Nothing changed."; return; }
+      }
+      let lines = 0;
+      try {
+        for (const [id, p] of Object.entries(plan)) {
+          const s = byId(+id);
+          await saveProposedPacking(s, () => null, e => p.lines[e.order_line_id]);
+          const merged = Object.fromEntries(s.pallets.map(x => [x.pallet_number, { weight: x.weight, dimensions: x.dimensions }]));
+          Object.entries(p.pallets).forEach(([pn, v]) => { merged[pn] = { ...(merged[pn] || {}), ...v }; });
+          await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
+            Object.entries(merged).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ?? null, dimensions: v.dimensions || null })) }) });
+          lines += Object.keys(p.lines).length;
+        }
+        await reloadList();
+        const text = document.getElementById("bp-pallet-paste").value;
+        document.getElementById("bp-pallets").innerHTML = bpPalletsHtml(bpList());
+        document.getElementById("bp-pallet-paste").value = text;
+        document.getElementById("bp-pallet-status").innerHTML = `Saved on ${lines} line${lines === 1 ? "" : "s"} of ${Object.keys(plan).length} shipment${Object.keys(plan).length === 1 ? "" : "s"}.`
+          + (notFound.size ? ` <span class="neg">Not on these shipments: ${escapeHtml([...notFound].join(", "))}.</span>` : "");
+      } catch (e) { document.getElementById("bp-error").textContent = e.message; }
+    }
+
+    // ---- Ship: carrier / tracking per shipment, the pallet check, Ship Now on all ----
+    function bpShipHtml(list) {
+      const carriers = [...new Set(shipments.map(s => s.carrier).filter(Boolean))].slice(0, 30);
+      return `<datalist id="bp-carriers">${carriers.map(c => `<option value="${escapeHtml(c)}">`).join("")}</datalist>
+        <div class="bp-fill"><label class="check-label">Carrier for all <input type="text" id="bp-carrier-all" list="bp-carriers" placeholder="E.g. SEFL" style="width:160px;"></label>
+          <button type="button" class="secondary small-btn" onclick="document.querySelectorAll('#bp-body .sd-carrier').forEach(i => { i.value = document.getElementById('bp-carrier-all').value; })">Fill</button></div>
+        <table class="fit-table no-table-tools no-col-bands"><thead><tr><th>Shipment</th><th class="grow">Customer · PO</th><th class="num">Boxes</th><th>Pallets</th><th>Carrier</th><th>Tracking #</th></tr></thead><tbody>
+        ${list.map(s => { const o = order(s.order_id) || {}, gaps = savedPalletGaps(s), n = usedPallets(s).length;
+          return `<tr data-id="${s.id}"><td class="nowrap"><b>${escapeHtml(s.code)}</b></td>
+            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</td>
+            <td class="num">${s.boxes.length}</td>
+            <td>${n ? `${n}${gaps.length ? ` <span class="neg small" title="${escapeHtml(gaps.join("\n"))}">· ${gaps.length} missing data</span>` : ""}` : `<span class="muted">—</span>`}</td>
+            <td><input type="text" class="sd-carrier" list="bp-carriers" value="${escapeHtml(s.carrier || "")}" placeholder="Carrier" style="width:130px;"></td>
+            <td><input type="text" class="sd-tracking" value="${escapeHtml(s.tracking_number || "")}" placeholder="Optional" style="width:140px;"></td></tr>`; }).join("")}</tbody></table>
+        <p class="muted small">Stock leaves on-hand as each one ships. Carrier and tracking go on the packing list and the POD email.</p>`;
+    }
+    function bpShipFoot(list) {
+      return `<button type="button" class="danger" onclick="bpUndo('unpack')">Unpack (${list.length})</button>
+        <span class="spacer"></span>
+        <button type="button" class="ship-now lit" id="bp-ship" onclick="bpShip()">${icon("truck")} Ship Now (${list.length})</button>`;
+    }
+    async function bpShip() {
+      const list = bpList(), btn = document.getElementById("bp-ship");
+      const gaps = list.flatMap(s => savedPalletGaps(s).map(g => `${s.code} — ${g}`));
+      if (!(await confirmPalletGaps(gaps, "Ship"))) return;
+      btn.disabled = true;
+      btn.textContent = "Shipping…";
+      const rows = Object.fromEntries([...document.querySelectorAll("#bp-body tr[data-id]")].map(tr => [tr.dataset.id,
+        { carrier: tr.querySelector(".sd-carrier").value.trim(), tracking: tr.querySelector(".sd-tracking").value.trim() }]));
+      const msg = await bulkEach(list, async s => {
+        const r = rows[s.id] || {};
+        if ((r.carrier || "") !== (s.carrier || "") || (r.tracking || "") !== (s.tracking_number || ""))
+          await apiFetch(`/api/shipments/${s.id}`, { method: "PUT", body: JSON.stringify({ carrier: r.carrier || null, tracking_number: r.tracking || null }) });
+        await apiFetch(`/api/shipments/${s.id}/ship`, { method: "POST" });
+      });
+      await bulkAfter(`Shipped: ${msg}`);
+    }
 
     // ---- areas: Shipments | Invoices (more to come) ----
     let invoicesAll = null;

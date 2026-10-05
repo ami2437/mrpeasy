@@ -231,7 +231,8 @@ function procNextStep(sh) {
 function procCanOpen(sh, step) {
   if (SHIPPED.includes(sh.status)) return step === "shipped";
   if (step === "ship") return allPicked(sh) && !!sh.packed_at;
-  return step === "pick" || step === "pack";  // packing can be done before picking
+  if (step === "pack") return allPicked(sh);  // pick first, then pack: the stage tabs (To pick / To pack / Ready to ship) stay clean
+  return step === "pick";
 }
 function procDone(sh, step) { return step === "pick" ? allPicked(sh) : step === "pack" ? !!sh.packed_at : SHIPPED.includes(sh.status); }
 
@@ -297,7 +298,7 @@ function renderProc() {
       <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeProcess()">${icon("x")}</button></div>
     ${shipped ? "" : `<div class="proc-tabs" role="tablist">${PROC_STEPS.map(([k, label], i) => `<button type="button" role="tab" aria-selected="${proc.step === k}"
         class="proc-tab ${proc.step === k ? "on" : ""} ${procDone(sh, k) ? "done" : ""}" ${procCanOpen(sh, k) ? "" : "disabled"} onclick="procGo('${k}')"
-        title="${k === "ship" && !procCanOpen(sh, k) ? "Pick everything and accept the packing first" : ""}">${procDone(sh, k) ? icon("check") : `<span class="proc-n">${i + 1}</span>`}${label}</button>`).join("")}</div>`}
+        title="${!procCanOpen(sh, k) ? (k === "pack" ? "Pick everything first" : "Pick everything and accept the packing first") : ""}">${procDone(sh, k) ? icon("check") : `<span class="proc-n">${i + 1}</span>`}${label}</button>`).join("")}</div>`}
     <div class="proc-body" id="proc-body">${{ pick: procPickHtml, pack: procPackHtml, ship: procShipHtml, shipped: procShippedHtml }[proc.step](sh)}</div>
     <div class="error" id="proc-error"></div>
     <div class="sm-foot proc-foot">${{ pick: procPickFoot, pack: procPackFoot, ship: procShipFoot, shipped: procShippedFoot }[proc.step](sh)}</div></div>`;
