@@ -317,7 +317,7 @@ function renderProc() {
 function procPickHtml(sh) {
   const sorted = sh.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
   return `<p class="muted small" style="margin-top:0;">${sh.status === "new" ? "Booked, not confirmed — picking confirms the bookings." : "Bookings confirmed."}
-      Pick now starts at everything left; lower it to pick part of a line (0 = not this time) — you'll be asked what happens to the rest.
+      Pick now starts at everything left; lower it to pick part of a line (0 = none) — whatever isn't picked is unbooked (back to stock, still open on the order).
       Unbook sends unpicked stock back to the shelf.</p>
     <table class="fit-table no-table-tools">
       <thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th><th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th><th>Unbook</th></tr></thead>
@@ -347,26 +347,25 @@ async function procPick() {
   const bad = rows.find(r => !Number.isInteger(r.qty) || r.qty < 0 || r.qty > r.left + 1e-9);
   if (bad) { err.textContent = `Line #${bad.line.line_no ?? ""}: pick a whole number from 0 to ${fmtQty(bad.left)}.`; return; }
   const lines = rows.filter(r => r.qty > 0).map(r => ({ shipment_line_id: r.line.id, quantity: r.qty }));
-  if (!lines.length) { err.textContent = "Enter a picked quantity on at least one line."; return; }
-  // Picking less than booked on any line: say which, and decide what happens to the rest
   const short = rows.filter(r => r.qty < r.left - 1e-9);
-  let unbookRest = false;
+  const pickedBefore = sh.lines.some(l => (l.picked_quantity || 0) > 0);
+  if (!lines.length && !(short.length && pickedBefore)) { err.textContent = "Enter a picked quantity on at least one line."; return; }
+  // Picking less than booked: the short qty is unbooked (back to stock, still open on the order) -- say so first
   if (short.length) {
     const units = short.reduce((t, r) => t + r.left - r.qty, 0);
     const { value } = await askDialog({ title: `Picking less than booked on ${short.length} line${short.length === 1 ? "" : "s"}`, tone: "warn",
-      body: `<table class="fit-table no-table-tools"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">To pick</th><th class="num">Picking</th><th class="num">Short</th></tr></thead>
+      body: `<table class="fit-table no-table-tools"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">To pick</th><th class="num">Picking</th><th class="num">Unbooked</th></tr></thead>
         <tbody>${short.map(r => `<tr><td class="line-no">#${r.line.line_no ?? ""}</td><td class="grow">${itemLabel(r.line.item_id)}</td>
           <td class="num">${fmtQty(r.left)}</td><td class="num">${fmtQty(r.qty)}</td><td class="num"><b>${fmtQty(r.left - r.qty)}</b></td></tr>`).join("")}</tbody></table>
-        <p><b>Keep Booked</b> — the ${fmtQty(units)} short stays reserved on ${escapeHtml(sh.code)}; it stays in Pick until you pick or unbook it.<br>
-        <b>Unbook the Rest</b> — the short goes back to stock and ${escapeHtml(sh.code)} moves on with what's picked; the order keeps it open to ship later.</p>`,
-      buttons: [{ label: "Unbook the Rest", value: "unbook", cls: "confirm-btn" }, { label: "Keep Booked", value: "keep", cls: "secondary" },
-                { label: "Go Back", value: null, cls: "secondary" }] });
-    if (!value) return;
-    unbookRest = value === "unbook";
+        <p>The <b>${fmtQty(units)}</b> not picked is <b>unbooked</b>: it goes back to stock, ${escapeHtml(sh.code)} moves on with what's picked,
+        and the customer order keeps it open so it can be booked on a later shipment.</p>`,
+      buttons: [{ label: "Pick & Unbook the Rest", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
   }
   try {
     if (sh.status === "new") await apiFetch(`/api/shipments/${sh.id}/confirm-booking`, { method: "POST" });  // picking confirms the bookings
-    const after = await apiFetch(`/api/shipments/${sh.id}/pick`, { method: "POST", body: JSON.stringify({ lines, unbook_rest: unbookRest }) });
+    const after = await apiFetch(`/api/shipments/${sh.id}/pick`, { method: "POST", body: JSON.stringify({ lines, unbook_rest: short.length > 0 }) });
+    if (short.length) toast(`${short.reduce((t, r) => t + r.left - r.qty, 0).toLocaleString()} unbooked — back in stock, still open on the order`);
     await afterShipmentChange(sh.id, allPicked(after) ? (after.packed_at ? "ship" : "pack") : "pick");  // all picked: on to packing
     if (allPicked(after) && !after.packed_at && after.boxes.length) await askDialog({ title: "Re-check the packing", tone: "warn",
       body: `<p>${escapeHtml(after.code)} was packed before it went back a step. Check the boxes and pallets, then <b>Accept Packaging</b>.</p>`,
