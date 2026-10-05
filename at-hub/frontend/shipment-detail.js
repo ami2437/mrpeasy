@@ -304,6 +304,7 @@ function renderProc() {
     <div class="sm-foot proc-foot">${{ pick: procPickFoot, pack: procPackFoot, ship: procShipFoot, shipped: procShippedFoot }[proc.step](sh)}</div></div>`;
   decorateIcons(back);
   if (proc.step === "pack") {
+    palletStash = {};
     refreshBoxSummary();
     renderPalletTable();
     const body = document.getElementById("proc-body");
@@ -428,11 +429,11 @@ function procPackHtml(sh) {
       <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
     </details>
     <h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
-    <p class="muted small">Give lines a pallet # above, then each pallet's weight and dimensions. Or paste
-      <strong>Item # · Pallet # · Weight · Dimensions</strong> (space, tab or comma), one row per item.</p>
+    <p class="muted small">Which line goes on which pallet: the <b>Pallet #</b> at the end of each line above. Then each pallet's weight and
+      dimensions below — or paste <strong>Pallet # · Weight · Dimensions</strong>, one row per pallet (space, tab or comma).</p>
     <details style="margin-bottom:10px;">
       <summary class="link" style="cursor:pointer;">Paste pallet data</summary>
-      <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="Item   Pallet   Weight   Dimensions&#10;16713   PLT-1   250   48x40x50&#10;15420   PLT-1&#10;15422   PLT-2   300   48x40x45"></textarea>
+      <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="${PALLET_PASTE_HINT}"></textarea>
       <div><button class="secondary" onclick="applyPastedPallets()" style="margin-top:6px;">Apply Pasted</button>
         <span id="pallet-paste-status" class="muted small"></span></div>
     </details>
@@ -810,7 +811,7 @@ function renderPalletTable(pending = {}) {
   });
   const names = Object.keys(byPallet);
   if (!names.length) {
-    container.innerHTML = `<p class="muted">No pallets yet. Type a pallet # on a line above (or paste pallet data) to enter its weight and dimensions.</p>`;
+    container.innerHTML = `<p class="muted">No pallets yet. Type a pallet # on a line above to enter its weight and dimensions.</p>`;
     return;
   }
   container.innerHTML = `
@@ -818,7 +819,8 @@ function renderPalletTable(pending = {}) {
       <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead>
       <tbody>${names.map(pn => {
         const saved = shipment.pallets.find(p => p.pallet_number === pn) || {};
-        const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, typed[pn] || {}, pending[pn] || {});
+        const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, palletStash[pn] || {}, typed[pn] || {}, pending[pn] || {});
+        delete palletStash[pn];
         return `<tr data-pallet="${escapeHtml(pn)}">
           <td><strong>${escapeHtml(pn)}</strong></td>
           <td class="grow">${escapeHtml([...byPallet[pn].items].join(", "))}</td>
@@ -857,53 +859,63 @@ function applyPastedPackSizes() {
     + (unknown.length ? ` <span class="neg">Not on this shipment: ${escapeHtml(unknown.join(", "))}.</span>` : "") + " Accept Packaging to keep it.";
 }
 
-// Paste rows of: Item # · Pallet # [· Weight] [· Dimensions] -- separated by tabs (Excel), commas or spaces
-// ("41574 2 250 48x48x48" or "41574 2 250 48 x 48 x 48"). A header row is skipped; weight / dimensions only need to be
-// on one row per pallet. Anything it would replace (a line's pallet, a pallet's weight or size) is listed first.
-async function applyPastedPallets() {
-  const status = document.getElementById("pallet-paste-status");
-  const shipment = shipmentsById[currentShipmentId];
-  const rows = document.getElementById("pallet-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const plan = [], pending = {}, unknown = [];
-  rows.forEach(row => {
+// Pallet paste (single and bulk): one row per pallet -- Pallet # · Weight · Dimensions, by tab (Excel), comma or spaces
+// ("P1 250 48x40x50", "P1 250 48 x 40 x 50", "P1, 250"). Which line is on which pallet comes from each line's Pallet #.
+const PALLET_PASTE_HINT = "Pallet   Weight   Dimensions&#10;P1   250   48x40x50&#10;P2   300   48x40x45";
+function parsePalletPaste(text) {
+  const out = [];
+  String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
     const spaced = !row.includes("\t") && !row.includes(",");
     let cols = splitPasteRow(row);
-    if (spaced && cols.length > 4) cols = [...cols.slice(0, 3), cols.slice(3).join(" ")];  // "48 x 48 x 48"
-    if (cols.length < 2 || /^item/i.test(cols[0])) return;
-    const [code, pallet, weight, dims] = cols;
-    if (!pallet) return;
-    const entries = shippedByLine(shipment).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
-    if (!entries.length) { unknown.push(code); return; }
-    entries.forEach(e => plan.push({ e, pallet }));
-    const p = pending[pallet] = pending[pallet] || {};
-    if (weight) p.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || "";
-    if (dims) p.dimensions = normalizeDimensions(dims);
+    if (spaced && cols.length > 3) cols = [cols[0], cols[1], cols.slice(2).join(" ")];
+    let [pallet, weight = "", dims = ""] = cols;
+    if (!pallet || /^pallet/i.test(pallet)) return;  // header
+    if (/x/i.test(weight) && !dims) { dims = weight; weight = ""; }  // "P1 48x40x50" -- no weight
+    out.push({ pallet, weight: weight ? (parseFloat(weight.replace(/[^\d.]/g, "")) || "") : "", dimensions: dims ? normalizeDimensions(dims) : "" });
   });
-  // what's already entered (typed or saved) that this would change
-  const now = palletValues(), changes = [];
-  plan.forEach(({ e, pallet }) => {
-    const cur = (document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`) || {}).value || "";
-    if (cur && cur !== pallet) changes.push(`${itemCode(e.item_id)}: pallet ${cur} → ${pallet}`);
-  });
-  Object.entries(pending).forEach(([pn, v]) => {
+  return out;
+}
+// Match pasted rows to the pallets in use ({pallet #: {weight, dimensions}}): what to fill, what it would replace, and
+// pallet #s no line is on yet (kept, and filled in once a line gets that #).
+function planPalletPaste(rows, now) {
+  const used = Object.keys(now), pending = {}, changes = [], unused = {};
+  const match = pn => used.find(u => u === pn) || used.find(u => u.toLowerCase() === pn.toLowerCase());
+  rows.forEach(r => {
+    const v = {};
+    if (r.weight !== "") v.weight = r.weight;
+    if (r.dimensions) v.dimensions = r.dimensions;
+    const pn = match(r.pallet);
+    if (!pn) { unused[r.pallet] = v; return; }
     const was = now[pn] || {};
     if (v.weight !== undefined && was.weight && String(was.weight) !== String(v.weight)) changes.push(`Pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
     if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`Pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`);
+    pending[pn] = v;
   });
-  if (changes.length) {
-    const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
-      body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
-      buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
-    if (value !== "go") { status.textContent = "Nothing changed."; return; }
-  }
-  plan.forEach(({ e, pallet }) => {
-    const input = document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`);
-    if (input) input.value = pallet;
-    setLinePallet(e.order_line_id, pallet);
-  });
-  renderPalletTable(pending);
-  status.textContent = `Applied to ${plan.length} line${plan.length === 1 ? "" : "s"}.`
-    + (unknown.length ? ` Not on this shipment: ${unknown.join(", ")}.` : "") + " Click Save Packing to keep it.";
+  return { pending, changes, unused };
+}
+async function confirmPalletReplace(changes) {
+  if (!changes.length) return true;
+  const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
+    body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
+    buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  return value === "go";
+}
+function pastedPalletsMsg(filled, unused) {
+  const u = Object.keys(unused);
+  return `${filled ? `Filled ${filled} pallet${filled === 1 ? "" : "s"}.` : "No pallet filled."}`
+    + (u.length ? ` <span class="neg">${escapeHtml(u.join(", "))} ${u.length === 1 ? "isn't" : "aren't"} on any line yet — give a line that Pallet # and it fills in.</span>` : "");
+}
+let palletStash = {};  // pasted pallets no line is on yet: {pallet #: {weight, dimensions}}
+async function applyPastedPallets() {
+  const status = document.getElementById("pallet-paste-status");
+  const rows = parsePalletPaste(document.getElementById("pallet-paste").value);
+  if (!rows.length) { status.textContent = "Nothing to apply — one row per pallet: Pallet # · Weight · Dimensions."; return; }
+  const plan = planPalletPaste(rows, palletValues());
+  if (!(await confirmPalletReplace(plan.changes))) { status.textContent = "Nothing changed."; return; }
+  Object.assign(palletStash, plan.unused);
+  renderPalletTable(plan.pending);
+  if (proc) proc.dirty = true;
+  status.innerHTML = pastedPalletsMsg(Object.keys(plan.pending).length, plan.unused) + " Accept Packaging to keep it.";
 }
 // The pallet table as it stands: {pallet #: {weight, dimensions}} (typed, else saved).
 function palletValues() {

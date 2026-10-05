@@ -724,7 +724,7 @@
           Tick shipments from one tab.`);
         return;
       }
-      bp = { ids: chosen.map(s => s.id), step: keys[0], split: null, msg: "" };
+      bp = { ids: chosen.map(s => s.id), step: keys[0], split: null, msg: "", open: new Set(), stash: {} };
       let back = document.getElementById("bproc");
       if (!back) {
         back = document.createElement("div");
@@ -795,16 +795,34 @@
       return `${ok.length ? `${ok.length} done` : "None done"}${failed.length ? ` · <span class="neg">${failed.map(escapeHtml).join("; ")}</span>` : ""}`;
     }
 
+    // the shipments in the pop-up; click a row to show what's on it
     function bpRowsHtml(list) {
       return `<table class="fit-table no-table-tools no-col-bands bp-rows"><thead><tr><th>Shipment</th><th class="grow">Customer · PO</th><th class="num">Lines</th>
           <th class="num">Units</th><th class="num">Picked</th><th>Packing</th><th></th></tr></thead><tbody>
         ${list.map(s => { const o = order(s.order_id) || {}, units = s.lines.reduce((t, l) => t + l.quantity, 0), picked = s.lines.reduce((t, l) => t + (l.picked_quantity || 0), 0);
-          return `<tr><td class="nowrap"><b>${escapeHtml(s.code)}</b> <span class="muted small">${s.status === "new" ? "booked" : "confirmed"}</span></td>
+          const open = bp.open.has(s.id);
+          return `<tr class="bp-row ${open ? "open" : ""}" onclick="bpToggle(${s.id})" title="Show / hide what's on it">
+            <td class="nowrap"><span class="caret">▶</span> <b>${escapeHtml(s.code)}</b> <span class="muted small">${s.status === "new" ? "booked" : "confirmed"}</span></td>
             <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</td>
             <td class="num">${shippedByLine(s).length}</td><td class="num">${fmtQty(units)}</td>
             <td class="num">${fmtQty(picked)}${picked >= units - 1e-9 ? " ✓" : ""}</td>
             <td>${s.packed_at ? `<span class="tag shipped">Accepted · ${s.boxes.length}</span>` : s.boxes.length ? `<span class="tag draft">Proposed · ${s.boxes.length}</span>` : `<span class="muted small">—</span>`}</td>
-            <td><a class="link small" onclick="bulkOpenOne(${s.id})" title="Open just this one in Process Shipment">Open</a></td></tr>`; }).join("")}</tbody></table>`;
+            <td><a class="link small" onclick="event.stopPropagation(); bulkOpenOne(${s.id})" title="Open just this one in Process Shipment">Open</a></td></tr>
+            ${open ? `<tr class="bp-detail"><td colspan="7">${bpLinesHtml(s)}</td></tr>` : ""}`; }).join("")}</tbody></table>`;
+    }
+    function bpLinesHtml(s) {
+      const lines = s.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
+      return `<table class="fit-table no-table-tools no-col-bands bp-lines"><thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th>
+          <th class="num">Booked</th><th class="num">Picked</th><th class="num">Boxes</th><th>Pallet #</th></tr></thead><tbody>
+        ${lines.map(l => { const bx = s.boxes.filter(b => b.order_line_id === l.order_line_id);
+          return `<tr><td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${itemLabel(l.item_id)}</td><td>${lotCode(l.lot_id)}</td>
+            <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td>
+            <td class="num">${bx.length || "—"}</td><td>${escapeHtml(linePallet(s, l.order_line_id)) || `<span class="muted">—</span>`}</td></tr>`; }).join("")}</tbody></table>`;
+    }
+    function bpToggle(id) {
+      bp.open.has(id) ? bp.open.delete(id) : bp.open.add(id);
+      const rows = document.getElementById("bp-rows-wrap");
+      if (rows) rows.innerHTML = bpRowsHtml(bpList());
     }
 
     function renderBulk() {
@@ -825,6 +843,7 @@
       decorateIcons(back);
       if (!bp.split && bp.step === "pack") {
         back.querySelectorAll(".sp-val").forEach(spRow);
+        bpList().forEach(s => bpRenderPallets(s.id));
         const b = document.getElementById("bp-body"), mark = () => { bp.dirty = true; };
         b.addEventListener("input", mark);
         b.addEventListener("change", mark);
@@ -834,13 +853,13 @@
       return Object.entries(bp.split).map(([k, list]) => `<div class="bp-group">
           <div class="bp-group-head"><b>${escapeHtml(stageLabel(k))}</b> (${list.length})
             ${["pick", "pack", "ship"].includes(k) ? `<button type="button" class="secondary small-btn" onclick="bulkContinue('${k}')">Continue With These</button>` : ""}</div>
-          ${bpRowsHtml(list)}</div>`).join("");
+          <div id="bp-rows-wrap">${bpRowsHtml(list)}</div></div>`).join("");
     }
 
     // ---- Pick ----
     function bpPickHtml(list) {
       return `<p class="muted small" style="margin-top:0;">Same as one shipment: Pick now starts at everything left; lower it to pick part of a line (0 = none) —
-          whatever isn't picked is unbooked (back to stock, still open on the order). Picking confirms the bookings.</p>${bpRowsHtml(list)}
+          whatever isn't picked is unbooked (back to stock, still open on the order). Picking confirms the bookings.</p><div id="bp-rows-wrap">${bpRowsHtml(list)}</div>
         <table class="fit-table no-table-tools no-col-bands bp-pick" style="margin-top:12px;"><thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th>
           <th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th></tr></thead><tbody>
         ${list.map(s => { const o = order(s.order_id) || {}, todo = s.lines.filter(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
@@ -954,29 +973,93 @@
         <div id="sp-msg" class="small"></div><div class="error" id="sp-error"></div>
         <label class="inline-check" title="Each item's default pack size becomes this size (the old one stays in its history)"><input type="checkbox" id="sp-save-default"> Also make these the items' default</label>`;
     }
+    // Pallets, shipment by shipment: a Pallet # at the end of every line (like one shipment), then each pallet's weight and
+    // dimensions -- typed or pasted (Pallet # · Weight · Dimensions). Pallet #s belong to their shipment. Saved with Save / Accept.
     function bpPalletsHtml(list) {
       return `<h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
-        <details class="sp-paste"><summary class="link" style="cursor:pointer;">Paste pallets</summary>
-          <label class="small">Item # · Pallet # · Weight · Dimensions — space, tab or comma. Start a row with a shipment # to aim it at one shipment.
-            Weight and dimensions only need to be on one row per pallet. Saved straight away (not accepted).</label>
-          <textarea id="bp-pallet-paste" rows="4" placeholder="Item   Pallet   Weight   Dimensions&#10;16713   P1   250   48x40x50&#10;SH215762   15420   P2"></textarea>
-          <div class="btn-row"><button type="button" class="secondary" onclick="bpPastePallets()">Apply Pallets</button><span id="bp-pallet-status" class="small"></span></div>
-        </details>
-        <table class="fit-table no-table-tools no-col-bands bp-pallets"><thead><tr><th>Shipment</th><th>All lines on pallet</th><th class="grow">Pallets — weight (lbs) · dimensions (L x W x H in)</th></tr></thead><tbody>
-          ${list.map(s => { const used = [...new Set(s.boxes.map(b => b.pallet_number).filter(Boolean))];
-            return `<tr><td class="nowrap"><b>${escapeHtml(s.code)}</b></td>
-              <td class="nowrap"><input type="text" class="bp-all-pallet" data-sid="${s.id}" placeholder="E.g. P1" style="width:80px;">
-                <button type="button" class="secondary small-btn" onclick="bpPalletAll(${s.id}, this)">Set</button></td>
-              <td class="grow">${used.length ? used.map(pn => { const p = s.pallets.find(x => x.pallet_number === pn) || {};
-                return `<div class="bp-pallet"><b>${escapeHtml(pn)}</b>
-                  <input type="number" step="0.1" min="0" class="bp-w qty-input" data-sid="${s.id}" data-pn="${escapeHtml(pn)}" value="${p.weight ?? ""}" placeholder="lbs">
-                  <input type="text" class="bp-d" data-sid="${s.id}" data-pn="${escapeHtml(pn)}" value="${escapeHtml(p.dimensions || "")}" placeholder="48 x 40 x 50" onblur="this.value = normalizeDimensions(this.value)"></div>`; }).join("")
-                : `<span class="muted small">No pallets — set one, or paste.</span>`}</td></tr>`; }).join("")}</tbody></table>`;
+        <p class="muted small" style="margin-top:0;">Which line goes on which pallet: the <b>Pallet #</b> at the end of each line. Then each pallet's weight and
+          dimensions — type them, or paste <b>Pallet # · Weight · Dimensions</b> (one row per pallet; space, tab or comma). Pallet #s are per shipment.
+          Kept when you <b>Save</b> or <b>Accept Packaging</b>.</p>
+        ${list.map(s => { const o = order(s.order_id) || {};
+          return `<details class="bp-ship-pallets" data-sid="${s.id}" ${list.length <= 3 ? "open" : ""}>
+            <summary><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</span>
+              <span class="bp-pal-sum small muted"></span></summary>
+            <div class="bp-pal-tools">
+              <label class="check-label">All lines on pallet <input type="text" class="bp-all-pallet" placeholder="E.g. P1" style="width:90px;"
+                onkeydown="if (event.key === 'Enter') bpPalletAll(${s.id}, this)"></label>
+              <button type="button" class="secondary small-btn" onclick="bpPalletAll(${s.id}, this)">Set</button>
+              <details class="sp-paste bp-pal-paste"><summary class="link" style="cursor:pointer;">Paste pallet data</summary>
+                <textarea class="bp-pal-text" rows="3" placeholder="${PALLET_PASTE_HINT}"></textarea>
+                <div class="btn-row"><button type="button" class="secondary small-btn" onclick="bpPastePallets(${s.id})">Apply Pasted</button>
+                  <span class="bp-pal-status small"></span></div></details>
+            </div>
+            <table class="fit-table no-table-tools no-col-bands bp-pal-lines"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pallet #</th></tr></thead><tbody>
+              ${shippedByLine(s).map(e => { const cur = linePallet(s, e.order_line_id);
+                return `<tr><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${itemLabel(e.item_id)}</td><td class="num">${fmtQty(e.qty)}</td>
+                  <td><input type="text" class="bp-line-pallet" data-sid="${s.id}" data-line="${e.order_line_id}" data-orig="${escapeHtml(cur)}" value="${escapeHtml(cur)}"
+                    placeholder="Optional" style="width:100px;" oninput="bpRenderPallets(${s.id})"></td></tr>`; }).join("")}</tbody></table>
+            <div class="bp-pal-table"></div>
+          </details>`; }).join("")}`;
+    }
+    const bpPalBlock = sid => document.querySelector(`#bp-pallets .bp-ship-pallets[data-sid="${sid}"]`);
+    // pallet #s on a shipment's lines -> the items on each (a line on two pallets reads "P1, P2")
+    function bpLinePallets(sid) {
+      const out = {}, entries = shippedByLine(byId(sid));
+      bpPalBlock(sid).querySelectorAll(".bp-line-pallet").forEach(inp => inp.value.split(",").map(x => x.trim()).filter(Boolean).forEach(pn => {
+        (out[pn] = out[pn] || []).push(itemCode(entries.find(e => e.order_line_id === +inp.dataset.line).item_id));
+      }));
+      return out;
+    }
+    function bpPalletValues(sid) {
+      const out = {};
+      bpPalBlock(sid).querySelectorAll(".bp-pal-table tr[data-pallet]").forEach(tr => {
+        out[tr.dataset.pallet] = { weight: tr.querySelector(".bp-w").value.trim(), dimensions: tr.querySelector(".bp-d").value.trim() }; });
+      return out;
+    }
+    // one row per pallet in use: typed values kept, else pasted earlier, else saved
+    function bpRenderPallets(sid, pending = {}) {
+      const s = byId(sid), box = bpPalBlock(sid);
+      if (!s || !box) return;
+      const typed = bpPalletValues(sid), used = bpLinePallets(sid), names = Object.keys(used), stash = bp.stash[sid] = bp.stash[sid] || {};
+      box.querySelector(".bp-pal-sum").textContent = names.length ? `· ${names.length} pallet${names.length === 1 ? "" : "s"}` : "· no pallets";
+      box.querySelector(".bp-pal-table").innerHTML = names.length ? `<table class="fit-table no-table-tools no-col-bands"><thead><tr><th>Pallet #</th><th class="grow">Items</th>
+          <th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead><tbody>
+        ${names.map(pn => { const saved = s.pallets.find(p => p.pallet_number === pn) || {};
+          const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, stash[pn] || {}, typed[pn] || {}, pending[pn] || {});
+          delete stash[pn];
+          return `<tr data-pallet="${escapeHtml(pn)}"><td><b>${escapeHtml(pn)}</b></td><td class="grow small">${escapeHtml([...new Set(used[pn])].join(", "))}</td>
+            <td><input type="number" step="0.1" min="0" class="bp-w qty-input" value="${escapeHtml(v.weight)}" placeholder="lbs"></td>
+            <td><input type="text" class="bp-d" value="${escapeHtml(v.dimensions)}" placeholder="48 x 40 x 50" style="width:140px;" onblur="this.value = normalizeDimensions(this.value)"></td></tr>`; }).join("")}</tbody></table>`
+        : `<p class="muted small" style="margin:6px 0 0;">No pallets yet — give the lines a Pallet #.</p>`;
+    }
+    function bpPalletAll(sid, el) {
+      const pn = el.closest(".bp-pal-tools").querySelector(".bp-all-pallet").value.trim();
+      if (!pn) return;
+      bpPalBlock(sid).querySelectorAll(".bp-line-pallet").forEach(i => { i.value = pn; });
+      bp.dirty = true;
+      bpRenderPallets(sid);
+    }
+    async function bpPastePallets(sid) {
+      const block = bpPalBlock(sid), status = block.querySelector(".bp-pal-status");
+      const rows = parsePalletPaste(block.querySelector(".bp-pal-text").value);
+      if (!rows.length) { status.textContent = "Nothing to apply — one row per pallet: Pallet # · Weight · Dimensions."; return; }
+      const plan = planPalletPaste(rows, bpPalletValues(sid));
+      if (!(await confirmPalletReplace(plan.changes))) { status.textContent = "Nothing changed."; return; }
+      Object.assign(bp.stash[sid] = bp.stash[sid] || {}, plan.unused);
+      bp.dirty = true;
+      bpRenderPallets(sid, plan.pending);
+      status.innerHTML = pastedPalletsMsg(Object.keys(plan.pending).length, plan.unused);
+    }
+    // a line's pallet as typed: undefined = untouched (keep the saved boxes' pallets), null = none
+    function bpTypedPallet(sid, lineId) {
+      const inp = document.querySelector(`#bp-pallets .bp-line-pallet[data-sid="${sid}"][data-line="${lineId}"]`);
+      if (!inp || inp.value.trim() === inp.dataset.orig) return undefined;
+      return inp.value.trim() || null;
     }
     function bpPackHtml(list) {
       const waiting = list.filter(s => !s.packed_at && s.boxes.length);
       return `${waiting.length ? `<div class="notice small"><b>Re-check needed</b> — ${escapeHtml(waiting.map(s => s.code).join(", "))} ${waiting.length === 1 ? "has" : "have"} boxes saved earlier. Check them, then <b>Accept Packaging</b>.</div>` : ""}
-        ${bpRowsHtml(list)}<div id="bp-pack">${spGridHtml(list)}</div><div id="bp-pallets">${bpPalletsHtml(list)}</div>`;
+        <div id="bp-rows-wrap">${bpRowsHtml(list)}</div><div id="bp-pack">${spGridHtml(list)}</div><div id="bp-pallets">${bpPalletsHtml(list)}</div>`;
     }
     function bpPackFoot(list) {
       return `<button type="button" class="danger" onclick="bpUndo('unpick')">Unpick (${list.length})</button>
@@ -985,28 +1068,19 @@
         <button type="button" class="secondary" onclick="bpPackSave(false)" title="Save the sizes and pallets without accepting">Save</button>
         <button type="button" class="next-step" onclick="bpPackSave(true)">${icon("package")} Accept Packaging (${list.length})</button>`;
     }
-    // weights / sizes typed in the pallet table, merged into each shipment's saved pallets
-    async function bpSavePalletInputs(list) {
-      for (const s of list) {
-        const ins = [...document.querySelectorAll(`#bp-pallets .bp-w[data-sid="${s.id}"]`)];
-        if (!ins.length) continue;
-        const merged = Object.fromEntries(s.pallets.map(x => [x.pallet_number, { weight: x.weight, dimensions: x.dimensions }]));
-        ins.forEach(w => { const pn = w.dataset.pn, d = document.querySelector(`#bp-pallets .bp-d[data-sid="${s.id}"][data-pn="${CSS.escape(pn)}"]`);
-          merged[pn] = { weight: w.value ? parseFloat(w.value) : null, dimensions: normalizeDimensions(d ? d.value : "") || null }; });
-        await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
-          Object.entries(merged).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ?? null, dimensions: v.dimensions || null })) }) });
-      }
-    }
     async function bpPackSave(accept) {
       const err = document.getElementById("bp-error"), vals = spValues(), list = bpList();
       err.textContent = "";
       try {
         let lines = 0;
-        for (const s of list) {  // sizes: changed lines re-boxed (pallets kept), the rest keep their boxes
+        for (const s of list) {  // sizes: changed lines re-boxed; pallet #s as typed on each line; the rest keep their boxes
           const change = shippedByLine(s).filter(e => vals[e.item_id] && (vals[e.item_id] !== packSizeFor(s, e) || !s.boxes.some(b => b.order_line_id === e.order_line_id)));
-          if (change.length || !s.boxes.length) { await saveProposedPacking(s, e => vals[e.item_id] || null); lines += change.length; }
+          const moved = shippedByLine(s).some(e => bpTypedPallet(s.id, e.order_line_id) !== undefined);
+          if (change.length || moved || !s.boxes.length) { await saveProposedPacking(s, e => vals[e.item_id] || null, e => bpTypedPallet(s.id, e.order_line_id)); lines += change.length; }
+          if (bpPalBlock(s.id)) await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
+            Object.entries(bpPalletValues(s.id)).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ? parseFloat(v.weight) : null,
+              dimensions: normalizeDimensions(v.dimensions) || null })) }) });
         }
-        await bpSavePalletInputs(list);
         if (document.getElementById("sp-save-default").checked) {
           await apiFetch("/api/stock-items/pack-sizes/bulk", { method: "POST", body: JSON.stringify({
             entries: Object.entries(vals).map(([id, n]) => ({ code: itemCode(+id), pack_size: n })), source: "process selected",
@@ -1023,82 +1097,7 @@
         await bulkAfter(`Packing accepted: ${msg}`);
       } catch (e) { err.textContent = e.message; }
     }
-    async function bpPalletAll(sid, btn) {
-      const pn = btn.closest("td").querySelector(".bp-all-pallet").value.trim();
-      if (!pn) return;
-      const s = byId(sid);
-      if (linePalletsDiffer(s, pn)) {
-        const { value } = await askDialog({ title: `Put every line of ${s.code} on ${pn}?`, tone: "warn", body: `<p>Its lines are on ${escapeHtml(usedPallets(s).join(", "))} now.</p>`,
-          buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
-        if (value !== "go") return;
-      }
-      try {
-        await saveProposedPacking(s, () => null, () => pn);
-        await reloadList();
-        document.getElementById("bp-pallets").innerHTML = bpPalletsHtml(bpList());
-      } catch (e) { document.getElementById("bp-error").textContent = e.message; }
-    }
     const usedPallets = s => [...new Set(s.boxes.map(b => b.pallet_number).filter(Boolean))];
-    const linePalletsDiffer = (s, pn) => usedPallets(s).some(x => x !== pn);
-    async function bpPastePallets() {
-      const status = document.getElementById("bp-pallet-status"), list = bpList();
-      const byCode = Object.fromEntries(list.map(s => [s.code.toLowerCase(), s]));
-      const plan = {}, notFound = new Set();
-      document.getElementById("bp-pallet-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
-        const spaced = !row.includes("\t") && !row.includes(",");
-        let cols = splitPasteRow(row), only = null;
-        if (byCode[cols[0].toLowerCase()]) { only = byCode[cols[0].toLowerCase()]; cols = cols.slice(1); }
-        if (spaced && cols.length > 4) cols = [...cols.slice(0, 3), cols.slice(3).join(" ")];
-        const [code, pallet, weight, dims] = cols;
-        if (!code || !pallet || /^item/i.test(code)) return;
-        let found = false;
-        (only ? [only] : list).forEach(s => {
-          const entries = shippedByLine(s).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
-          if (!entries.length) return;
-          found = true;
-          const p = plan[s.id] = plan[s.id] || { lines: {}, pallets: {} };
-          entries.forEach(e => { p.lines[e.order_line_id] = pallet; });
-          const v = p.pallets[pallet] = p.pallets[pallet] || {};
-          if (weight) v.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || null;
-          if (dims) v.dimensions = normalizeDimensions(dims);
-        });
-        if (!found) notFound.add(code);
-      });
-      const changes = [];
-      Object.entries(plan).forEach(([id, p]) => {
-        const s = byId(+id);
-        shippedByLine(s).forEach(e => { const cur = linePallet(s, e.order_line_id), to = p.lines[e.order_line_id];
-          if (to && cur && cur !== to) changes.push(`${s.code} ${itemCode(e.item_id)}: pallet ${cur} → ${to}`); });
-        Object.entries(p.pallets).forEach(([pn, v]) => { const was = s.pallets.find(x => x.pallet_number === pn) || {};
-          if (v.weight != null && was.weight != null && was.weight !== v.weight) changes.push(`${s.code} pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
-          if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`${s.code} pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`); });
-      });
-      if (changes.length) {
-        const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
-          body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
-          buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
-        if (value !== "go") { status.textContent = "Nothing changed."; return; }
-      }
-      let lines = 0;
-      try {
-        for (const [id, p] of Object.entries(plan)) {
-          const s = byId(+id);
-          await saveProposedPacking(s, () => null, e => p.lines[e.order_line_id]);
-          const merged = Object.fromEntries(s.pallets.map(x => [x.pallet_number, { weight: x.weight, dimensions: x.dimensions }]));
-          Object.entries(p.pallets).forEach(([pn, v]) => { merged[pn] = { ...(merged[pn] || {}), ...v }; });
-          await apiFetch(`/api/shipments/${s.id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets:
-            Object.entries(merged).map(([pallet_number, v]) => ({ pallet_number, weight: v.weight ?? null, dimensions: v.dimensions || null })) }) });
-          lines += Object.keys(p.lines).length;
-        }
-        await reloadList();
-        const text = document.getElementById("bp-pallet-paste").value;
-        document.getElementById("bp-pallets").innerHTML = bpPalletsHtml(bpList());
-        document.getElementById("bp-pallet-paste").value = text;
-        document.getElementById("bp-pallet-status").innerHTML = `Saved on ${lines} line${lines === 1 ? "" : "s"} of ${Object.keys(plan).length} shipment${Object.keys(plan).length === 1 ? "" : "s"}.`
-          + (notFound.size ? ` <span class="neg">Not on these shipments: ${escapeHtml([...notFound].join(", "))}.</span>` : "");
-      } catch (e) { document.getElementById("bp-error").textContent = e.message; }
-    }
-
     // ---- Ship: carrier / tracking per shipment, the pallet check, Ship Now on all ----
     function bpShipHtml(list) {
       const carriers = [...new Set(shipments.map(s => s.carrier).filter(Boolean))].slice(0, 30);
