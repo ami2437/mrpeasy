@@ -58,8 +58,7 @@ function linesSectionHtml(shipment) {
   return `
     <h4 style="display:flex; align-items:center; gap:10px;">Items
       ${ready ? (locked ? `<span class="lock-tag" title="Booked quantities are confirmed. Change Bookings to unbook.">${icon("lock")}Bookings locked</span>
-        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>
-        ${shipment.lines.every(l => !(l.picked_quantity > 0)) ? `<button class="danger small-btn" onclick="unconfirmShipment(${shipment.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}`
+        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>`
         : `<button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = false; showDetail(${shipment.id})">Done Changing</button>`) : ""}</h4>
     <table class="fit-table ship-lines">
       <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th>
@@ -85,7 +84,7 @@ function linesSectionHtml(shipment) {
             <td class="num">${fmtQty(l.picked_quantity)}${l.picked_quantity >= l.quantity ? " ✓" : ""}</td>
             ${first ? `<td class="num left-after"${span} data-after="${after ?? ""}">${after == null ? "" : after > 0 ? `<strong>${fmtQty(after)}</strong>` : `<span class="pos">0 ✓</span>`}</td>` : ""}
             ${picking ? `<td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>` : ""}
-            ${open ? `<td class="nowrap">${left > 0 ? `
+            ${open ? `<td class="unbook-cell">${left > 0 ? `
               <input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" data-ol="${l.order_line_id}" title="Blank = all ${left}">
               <button class="small-btn secondary" onclick="unbookLine(${shipment.id}, ${l.id})">Unbook</button>` : `<span class="muted small">Picked</span>`}</td>` : ""}
           </tr>
@@ -101,6 +100,8 @@ function linesSectionHtml(shipment) {
           <button class="ship-now next-step" onclick="shipNow(${shipment.id})">Ship Now</button>
           <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
         : `<button class="ship-now next-step" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
+      ${shipment.status === "ready" && shipment.lines.every(l => !(l.picked_quantity > 0))
+        ? `<button class="danger" onclick="unconfirmShipment(${shipment.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}
       ${shipment.status === "ready" && shipment.lines.some(l => (l.picked_quantity || 0) > 0)
         ? `<button class="danger" onclick="unpickShipment(${shipment.id})" title="Picked quantities back to 0 (bookings and packing stay)">Unpick</button>` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
@@ -219,7 +220,7 @@ function openPackReview(id) {
   // the real sections move in (their inputs and buttons keep working) and move back on close
   const body = back.querySelector("#pr-body");
   packReview = { id, moved: [] };
-  ["sec-packing", "sec-pallets", "sec-carrier"].forEach(secId => {
+  ["sec-packing", "sec-carrier"].forEach(secId => {
     const sec = document.getElementById(secId);
     if (!sec) return;
     const ph = document.createComment(secId);
@@ -759,7 +760,7 @@ async function showDetail(id) {
       <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
     </details>
 
-    </section><section class="dsec" id="sec-pallets"><h4 class="dsec-title">Pallets <span class="muted small">(optional)</span></h4>
+    <h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
     <p class="muted">Give lines a pallet # above, then enter each pallet's weight and dimensions here. Or paste from a spreadsheet:
       <strong>Item # · Pallet # · Weight · Dimensions</strong>, one row per item. Weight and dimensions only need to be on one row per pallet.</p>
     <details style="margin-bottom:10px;">

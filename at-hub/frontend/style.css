@@ -1623,3 +1623,5 @@ button.danger:hover:not(:disabled) { background: var(--danger-bg-hover); }
 .trash-btn { --ib: color-mix(in srgb, var(--neg) 78%, #64748b); }
 .stage-divider { display: flex; align-items: center; gap: 8px; margin: 18px 4px 8px; padding-top: 10px; border-top: 1px dashed var(--border); font-weight: 600; font-size: 13.5px; color: var(--text-2); }
 .stage-divider .ico { width: 16px; height: 16px; }
+.dsec .dsub-title { margin: 18px 0 6px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 14px; font-weight: 600; }
+.unbook-cell .unbook-qty { width: 76px; display: block; } .unbook-cell button { margin-top: 4px; }
