@@ -123,6 +123,13 @@
       return shippedByLine(shipment).every(e => Math.abs((boxed[e.order_line_id] || 0) - e.qty) < 1e-6);
     }
     // packing accepted: the bulk pack-size tools leave it alone (change it in Process)
+    // packing tag on a card; once it has left, "accepted" no longer matters (imported shipments never had the flag)
+    function packTagHtml(s, packed) {
+      const boxes = `${s.boxes.length} box${s.boxes.length === 1 ? "" : "es"}`, gone = !["new", "ready"].includes(s.status);
+      if (s.packed_at || (gone && packed)) return `<span class="tag shipped">Packed · ${boxes}</span>`;
+      if (gone) return `<span class="tag draft">No boxes</span>`;
+      return `<span class="tag draft">${packed ? "Proposed · not accepted" : "Not Packed"}</span>`;
+    }
     function hasPicks(s) { return s.status === "ready" && s.lines.some(l => (l.picked_quantity || 0) > 0); }
     function hasPacking(s) { return !!s.packed_at; }
     function lotCodesFor(shipment, lineId) {
@@ -257,7 +264,7 @@
         pack: process + print,
         ship: process + print,
         shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
-          <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">${print}`
+          <label class="stage-date-label" for="bulk-delivered-date">Delivered on</label><input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">${print}`
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>${print}`,
         delivered: (canBill ? `<button class="next-step" onclick="bulkInvoice()">${icon("receipt")} Create Invoices</button>`
           : `<span class="muted small">A manager creates the invoices.</span>`) + print,
@@ -282,7 +289,7 @@
           <span class="nowrap">${shipmentStatusHtml(s)}</span>
           <span class="who" title="${escapeHtml(customerName(ord.customer_id))}">${orderLinkHtml(ord, ord.code)} · <strong>${escapeHtml(customerName(ord.customer_id) || "")}</strong>${ord.po_number ? ` · ${orderLinkHtml(ord, `PO ${ord.po_number}`)}` : ""}</span>
           <span class="meta hide-sm">${nLines} line${nLines === 1 ? "" : "s"} · ${fmtQty(units)} units${pallets ? ` · ${pallets} pallet${pallets === 1 ? "" : "s"}` : ""} · ${podCellHtml(s)}</span>
-          <span class="tag ${s.packed_at ? "shipped" : "draft"}">${s.packed_at ? `Packed · ${s.boxes.length} box${s.boxes.length === 1 ? "" : "es"}` : packed ? "Proposed · not accepted" : "Not Packed"}</span>
+          ${packTagHtml(s, packed)}
         </div>`;
     }
 
