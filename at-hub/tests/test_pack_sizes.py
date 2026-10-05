@@ -113,3 +113,18 @@ def test_unpack_clears_packing_until_shipped(api, make):
     assert sum(l["quantity"] for l in un["lines"]) == 30                      # bookings untouched
     shipped = make.ship(make.order(lines=[(item, 5, 1)]))
     api.post(f"/api/shipments/{shipped['id']}/unpack", expect=400)           # gone: can't unpack
+
+
+def test_unpick_until_shipped(api, make):
+    item = make.item()
+    make.stock(item, 50)
+    sh = _book(api, make, make.customer(), item, 20)
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    api.post(f"/api/shipments/{sh['id']}/pick", json={"pick_all": True})
+    _pack(api, sh, item, 10)
+    un = api.post(f"/api/shipments/{sh['id']}/unpick")
+    assert all(l["picked_quantity"] == 0 for l in un["lines"]) and un["status"] == "ready"
+    assert un["packed_at"] and len(un["boxes"]) == 2                          # packing stays
+    assert api.get(f"/api/stock-items/{item['id']}")["on_hand"] == 50       # picking never moved stock
+    shipped = make.ship(make.order(lines=[(item, 5, 1)]))
+    api.post(f"/api/shipments/{shipped['id']}/unpick", expect=400)

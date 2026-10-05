@@ -1217,6 +1217,20 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def unpick(db: Session, shipment_id: int, by: str) -> Shipment:
+        """Undo picking on a shipment that hasn't left (picking moves no stock, so nothing else changes):
+        every line back to 0 picked. Bookings and any packing stay."""
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status not in ShipmentService.OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only a shipment that hasn't shipped can be unpicked")
+        for line in shipment.lines:
+            line.picked_quantity = 0
+        shipment.updated_by = by
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
     def unpack(db: Session, shipment_id: int, by: str) -> Shipment:
         """Undo the packing of a shipment that hasn't left: boxes, pallet weights and 'packing accepted' are cleared,
         so it's packed again from scratch. Picking and stock bookings are untouched."""

@@ -100,6 +100,8 @@ function linesSectionHtml(shipment) {
           <button class="ship-now next-step" onclick="shipNow(${shipment.id})">Ship Now</button>
           <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
         : `<button class="ship-now next-step" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
+      ${shipment.status === "ready" && shipment.lines.some(l => (l.picked_quantity || 0) > 0)
+        ? `<button class="danger" onclick="unpickShipment(${shipment.id})" title="Picked quantities back to 0 (bookings and packing stay)">Unpick</button>` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
       ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
       ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.can("shipments.undo") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
@@ -139,6 +141,19 @@ async function confirmUnpack(codes) {
     body: `<p>Boxes and pallets are cleared${many ? "" : ` on <b>${escapeHtml(codes[0])}</b>`}. Picking stays.</p>`,
     buttons: [{ label: "Unpack", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
   return value === "go";
+}
+// Undo picking on a shipment that hasn't shipped: every line back to 0 picked; bookings and packing stay.
+async function confirmUnpick(codes) {
+  const many = codes.length > 1;
+  const { value } = await askDialog({ title: many ? `Unpick ${codes.length} shipments?` : `Unpick ${codes[0]}?`, tone: "warn",
+    body: `<p>Picked quantities go back to 0. Bookings and packing stay.</p>`,
+    buttons: [{ label: "Unpick", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  return value === "go";
+}
+async function unpickShipment(id) {
+  const sh = shipmentsById[id] || shipments.find(s => s.id === id);
+  if (!(await confirmUnpick([sh ? sh.code : `#${id}`]))) return;
+  await shipmentAction(id, "unpick");
 }
 async function unpackShipment(id) {
   const sh = shipmentsById[id] || shipments.find(s => s.id === id);
