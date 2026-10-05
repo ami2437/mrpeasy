@@ -2657,9 +2657,12 @@ document.addEventListener("click", e => {
   const a = e.target.closest && e.target.closest("a[href]");
   if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
   if (a.target === "_blank" || a.hasAttribute("data-nopeek") || a.closest("[data-nopeek]")) return;
+  // "#" links are buttons (Light Mode, menus...): resolved against shipments.html?id=208 they'd look like a record link
+  if ((a.getAttribute("href") || "").trim().startsWith("#")) return;
   let url;
   try { url = new URL(a.getAttribute("href"), location.href); } catch (err) { return; }
   if (url.origin !== location.origin) return;
+  if (url.pathname === location.pathname && url.search === location.search) return;  // the page you're on
   const kind = PEEK_PAGES[url.pathname.split("/").pop()], id = parseInt(url.searchParams.get("id"));
   if (!kind || !id || [...url.searchParams.keys()].some(k => k !== "id")) return;
   e.preventDefault();
