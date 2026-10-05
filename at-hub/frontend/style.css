@@ -1621,3 +1621,5 @@ html[data-theme="dark"] { --danger-bg: rgba(205, 80, 80, .55); --danger-bg-hover
 button.danger { background: var(--danger-bg); color: #fff; border: 1px solid var(--danger-edge); }
 button.danger:hover:not(:disabled) { background: var(--danger-bg-hover); }
 .trash-btn { --ib: color-mix(in srgb, var(--neg) 78%, #64748b); }
+.stage-divider { display: flex; align-items: center; gap: 8px; margin: 18px 4px 8px; padding-top: 10px; border-top: 1px dashed var(--border); font-weight: 600; font-size: 13.5px; color: var(--text-2); }
+.stage-divider .ico { width: 16px; height: 16px; }

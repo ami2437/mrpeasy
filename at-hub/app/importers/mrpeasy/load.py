@@ -574,7 +574,7 @@ def _packing_from_old_backend(db, shipments, items, rep):
     from app.services.item_naming import normalize_code
     item_by_code = {i.code: i for i in items.values()}
     find = lambda c: item_by_code.get((c or "").strip()) or item_by_code.get(normalize_code((c or "").strip()))  # 15420-NUTS == 15420-NUT
-    n_box = n_pal = n_pack = 0
+    n_box = n_pal = n_pack = n_acc = 0
     for code, item_code, order_line, box_no, qty, lot_codes, pallet in old.execute(
             "select shipment_code, item_code, order_line, box_number, quantity_in_box, lot_codes, pallet_number from shipment_boxes"):
         sh, it = sh_by_code.get(code), find(item_code)
@@ -592,6 +592,13 @@ def _packing_from_old_backend(db, shipments, items, rep):
     from app.services.nut_pairing import fill_nut_pallets
     codes = {i.id: i.code for i in items.values()}
     n_nut = sum(fill_nut_pallets(sh, codes) for sh in sh_by_code.values() if sh.boxes)
+    # a shipment still open in MRPeasy but already packed in the old portal: its packing counts as accepted
+    for sh in sh_by_code.values():
+        if sh.boxes and sh.status in ("new", "ready") and not sh.packed_at:
+            sh.packed_at, sh.packed_by = sh.created_at, BY
+            n_acc += 1
+    if n_acc:
+        rep.add("packing", f"{n_acc} open shipments already packed in the old portal: packing marked accepted")
     if n_nut:
         rep.add("packing", f"{n_nut} nut boxes put on their bolt's pallet (as the old packing lists showed them)")
     for code, pallet, weight, dims in old.execute("select shipment_code, pallet_number, weight, dimensions from pallet_weights"):

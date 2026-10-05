@@ -162,6 +162,8 @@
       const boxed = boxedByLine(shipment);
       return shippedByLine(shipment).every(e => Math.abs((boxed[e.order_line_id] || 0) - e.qty) < 1e-6);
     }
+    // packing accepted, or boxes already saved (e.g. brought over from the old portal): bulk pack-size tools leave it alone
+    function hasPacking(s) { return !!s.packed_at || !!(s.boxes && s.boxes.length); }
     function lotCodesFor(shipment, lineId) {
       const ids = [...new Set(shipment.lines.filter(l => l.order_line_id === lineId).map(l => l.lot_id).filter(Boolean))];
       return ids.map(lotCode).filter(Boolean).join(", ");
@@ -214,7 +216,9 @@
         && (!cust || String((order(s.order_id) || {}).customer_id) === cust)
         && (!packed || (packed === "packed") === isPacked(s))
         && (!pod || (pod === "has") === !!(s.pods && s.pods.length)));
-      return sortShipments(list);
+      const sorted = sortShipments(list);
+      // To pick: shipments whose packing is already accepted go last, under their own heading -- never mixed in
+      return stageKey === "pick" ? sorted.filter(s => !hasPacking(s)).concat(sorted.filter(hasPacking)) : sorted;
     }
     function searching() { return !!document.getElementById("search").value.trim() || ["f-customer", "f-packed", "f-pod"].some(id => document.getElementById(id).value); }
     // ---- sort & filter (remembered); default: most recent first ----
@@ -415,7 +419,9 @@
       const shown = visibleShipments();
       drawStages();
       const q = document.getElementById("search").value.trim();
-      container.innerHTML = shown.length ? shown.map(renderCard).join("")
+      const nPacked = stage === "pick" ? shown.filter(hasPacking).length : 0;
+      container.innerHTML = shown.length ? shown.map((s, i) => (nPacked && hasPacking(s) && !hasPacking(shown[i - 1] || { boxes: [] })
+          ? `<div class="stage-divider">${icon("package")} Packed, still to pick (${nPacked}) <span class="muted small">— pack-size tools leave these alone</span></div>` : "") + renderCard(s)).join("")
         : `<div class="card muted stage-empty">${searching() ? noMatchHere() : STAGES.find(x => x.key === stage).empty}</div>`;
       shown.filter(s => openCards.has(s.id)).forEach(s => renderPallets(s.id));
       if (detailOpenId && cardEl(detailOpenId)) attachDetail(detailOpenId);
@@ -685,7 +691,8 @@
     }
 
     async function bulkSavePacking() {
-      moveOn(await bulkRun("Packing accepted", s => ["new", "ready"].includes(s.status), s => savePackingFor(s.id)));
+      // already-accepted packing isn't re-saved in bulk (Save Packing on the shipment changes it)
+      moveOn(await bulkRun("Packing accepted", s => ["new", "ready"].includes(s.status) && !hasPacking(s), s => savePackingFor(s.id)));
     }
     async function bulkPickAll() {
       const n = selectedShipments().filter(s => ["new", "ready"].includes(s.status)).length;
@@ -862,6 +869,7 @@
       const shown = visibleShipments();
       const scope = shown.filter(s => selected.has(s.id));
       const targets = scope.length ? scope : shown;
+      const skippedPacked = new Set();
       const byCode = Object.fromEntries(shipments.map(s => [s.code.toLowerCase(), s]));
       const packByCode = {};
       const notOnShipments = new Set();
@@ -881,6 +889,7 @@
         if (pack) packByCode[code] = pack;
         let found = false;
         (only ? [only] : targets).forEach(s => {
+          if (hasPacking(s)) { skippedPacked.add(s.code); return; }  // packing accepted: change it on that shipment only
           const entries = shippedByLine(s).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
           if (!entries.length) return;
           found = true;
@@ -920,6 +929,7 @@
           if (res.not_found.length) msgs.push(`<span class="neg">Not in Stock Items: ${escapeHtml(res.not_found.join(", "))}.</span>`);
         } catch (e) { msgs.push(`<span class="neg">Couldn't save item defaults: ${escapeHtml(e.message)}</span>`); }
       }
+      if (skippedPacked.size) msgs.push(`Left alone — packing already accepted: ${escapeHtml([...skippedPacked].join(", "))}. Change those on the shipment itself.`);
       if (notOnShipments.size) msgs.push(`<span class="neg">Not on any ${scope.length ? "selected" : "shown"} shipment: ${escapeHtml([...notOnShipments].join(", "))}.</span>`);
       msgs.push("Review the boxes, then <strong>Save Packing</strong> (per shipment, or select them and use the bulk button).");
       out.innerHTML = `<ul class="result-list">${msgs.map(m => `<li>${m}</li>`).join("")}</ul>`;
@@ -1005,9 +1015,11 @@
     }
     function openSetPackSizes() {
       showError("");
-      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status));
-      const shippedToo = selectedShipments().length - chosen.length;
-      if (!chosen.length) { showError("Tick the shipments to set pack sizes for — ones that haven't shipped yet."); return; }
+      // only shipments still to be packed: an accepted packing is changed on that shipment, never in bulk
+      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && !hasPacking(s));
+      const packedToo = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && hasPacking(s)).length;
+      const shippedToo = selectedShipments().length - chosen.length - packedToo;
+      if (!chosen.length) { showError("Tick shipments that aren't packed yet — ones with packing accepted are changed on the shipment itself."); return; }
       const rows = {};
       chosen.forEach(s => shippedByLine(s).forEach(e => {
         const r = rows[e.item_id] = rows[e.item_id] || { item_id: e.item_id, lines: [], ships: new Set(), qty: 0 };
@@ -1037,7 +1049,7 @@
       back.innerHTML = `<div class="glass-panel sp-panel" role="dialog" aria-modal="true" aria-labelledby="sp-title">
         <div class="sm-head"><div><h3 id="sp-title">Set pack sizes</h3>
             <div class="muted small">${list.length} item${list.length === 1 ? "" : "s"} on ${chosen.length} shipment${chosen.length === 1 ? "" : "s"}
-              (${escapeHtml(chosen.map(s => s.code).slice(0, 6).join(", "))}${chosen.length > 6 ? "…" : ""})${shippedToo ? ` · ${shippedToo} already shipped, left out` : ""}</div></div>
+              (${escapeHtml(chosen.map(s => s.code).slice(0, 6).join(", "))}${chosen.length > 6 ? "…" : ""})${packedToo ? ` · <b>${packedToo} already packed, left out</b>` : ""}${shippedToo ? ` · ${shippedToo} already shipped, left out` : ""}</div></div>
           <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeSetPack()">${icon("x")}</button></div>
         <div class="sp-tools">
           <label class="check-label">Fill from <select id="sp-fill" onchange="spFill(this.value)">
