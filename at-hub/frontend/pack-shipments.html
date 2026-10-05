@@ -290,11 +290,12 @@
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
         <button class="secondary" onclick="printSelectedPackingLists()" title="Every selected packing list -- one PDF, or one file each">Packing Lists</button>`
         + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;
+      const unpack = `<button class="danger" onclick="bulkUnpack()" title="Clear boxes, pallets and accepted packing on the ticked shipments (picking stays)">Unpack</button>`;
       const html = {
         pick: `<button class="next-step" onclick="bulkPickAll()">${icon("check")} Pick All</button>
-          <button class="secondary" onclick="bulkSavePacking()" title="Packing can be accepted before picking is done">Accept Packing</button>${print}`,
-        pack: `<button class="next-step" onclick="bulkSavePacking()" title="Saves the boxes and pallets as shown and accepts the packing">${icon("package")} Accept Packing</button>${print}`,
-        ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}`,
+          <button class="secondary" onclick="bulkSavePacking()" title="Packing can be accepted before picking is done">Accept Packing</button>${print}${unpack}`,
+        pack: `<button class="next-step" onclick="bulkSavePacking()" title="Saves the boxes and pallets as shown and accepts the packing">${icon("package")} Accept Packing</button>${print}${unpack}`,
+        ship: `<button class="next-step ship-now" onclick="bulkShip()">${icon("truck")} Ship Now</button>${print}${unpack}`,
         shipped: canManage ? `<button class="next-step" onclick="bulkDeliver()" title="Mark delivered without a POD">${icon("checkCircle")} Mark Delivered</button>
           <input type="date" id="bulk-delivered-date" value="${today}" max="${today}" class="stage-date">${print}`
           : `<span class="muted small">A driver's proof of delivery marks these delivered.</span>${print}`,
@@ -395,6 +396,7 @@
         </details>
         <div class="ship-actions">
           <button class="${(stageOf(s) || {}).key === "pack" ? "next-step" : "secondary"}" onclick="saveOne(${s.id})">${s.packed_at ? "Save Packing" : "Accept Packing"}</button>
+          ${hasPacking(s) ? `<button class="danger" onclick="unpackOne(${s.id})" title="Clear its boxes, pallets and accepted packing (picking stays)">Unpack</button>` : ""}
           <button class="secondary" onclick="printLabels(${s.id})">Labels</button>
           <button class="secondary" onclick="packingListOne(${s.id})">Packing List</button>
           ${lifecycleButtons(s)}
@@ -612,6 +614,22 @@
         await reloadList();
         showResult(`${byId(id).code} packed${(stageOf(byId(id)) || {}).key === "ship" ? " — it's in Ready to ship" : ""}.`);
       } catch (e) { err.textContent = e.message; }
+    }
+    async function unpackOne(id) {
+      if (!(await confirmUnpack([byId(id).code]))) return;
+      try {
+        await apiFetch(`/api/shipments/${id}/unpack`, { method: "POST" });
+        delete drafts[id];
+        await reloadList();
+        showResult(`${byId(id).code} unpacked — pack it again from scratch.`);
+      } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
+    }
+    async function bulkUnpack() {
+      const chosen = selectedShipments().filter(s => ["new", "ready"].includes(s.status) && hasPacking(s));
+      if (!chosen.length) { showError("Tick packed shipments that haven't shipped."); return; }
+      if (!(await confirmUnpack(chosen.map(s => s.code)))) return;
+      chosen.forEach(s => delete drafts[s.id]);
+      moveOn(await bulkRun("Unpacked", s => chosen.some(c => c.id === s.id), s => apiFetch(`/api/shipments/${s.id}/unpack`, { method: "POST" })));
     }
     async function deliverOne(id) {
       try {

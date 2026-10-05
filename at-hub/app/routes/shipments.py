@@ -151,6 +151,12 @@ def accept_packing(shipment_id: int, db: Session = Depends(get_db), current_user
     return with_pods(db, ShipmentService.accept_packing(db, shipment_id, current_user.username))
 
 
+@router.post("/{shipment_id}/unpack", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
+def unpack(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Clear the boxes, pallets and accepted packing of a shipment that hasn't shipped (picking stays)."""
+    return with_pods(db, ShipmentService.unpack(db, shipment_id, current_user.username))
+
+
 @router.post("/{shipment_id}/ship", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def ship(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Everything picked and packing accepted: stock leaves on-hand and the shipment is shipped."""

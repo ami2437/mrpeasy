@@ -132,6 +132,20 @@ async function shipmentAction(id, action, body) {
   }
 }
 
+// Undo packing on a shipment that hasn't shipped: boxes, pallets and "packing accepted" go; picking stays.
+async function confirmUnpack(codes) {
+  const many = codes.length > 1;
+  const { value } = await askDialog({ title: many ? `Unpack ${codes.length} shipments?` : `Unpack ${codes[0]}?`, tone: "warn",
+    body: `<p>Boxes and pallets are cleared${many ? "" : ` on <b>${escapeHtml(codes[0])}</b>`}. Picking stays.</p>`,
+    buttons: [{ label: "Unpack", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  return value === "go";
+}
+async function unpackShipment(id) {
+  const sh = shipmentsById[id] || shipments.find(s => s.id === id);
+  if (!(await confirmUnpack([sh ? sh.code : `#${id}`]))) return;
+  await shipmentAction(id, "unpack");
+}
+
 function allPicked(shipment) { return shipment.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9); }
 
 async function pickEntered(id) {
@@ -729,6 +743,8 @@ async function showDetail(id) {
 
     <div style="margin-top:14px;">
       <button onclick="savePacking(${shipment.id})">Save Packing</button>
+      ${["new", "ready"].includes(shipment.status) && (shipment.boxes.length || shipment.packed_at)
+        ? `<button class="danger" onclick="unpackShipment(${shipment.id})" title="Clear the boxes, pallets and accepted packing (picking stays)">Unpack</button>` : ""}
       <button class="secondary" onclick="printLabels(${shipment.id})">Print Labels</button>
       <button class="secondary" onclick="location.href='labels.html?shipment_id=${shipment.id}'" title="Edit a label before printing, print-only">Custom Label</button>
       <button class="secondary" onclick="printPackingList(${shipment.id})">Packing List PDF</button>

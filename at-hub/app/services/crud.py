@@ -1217,6 +1217,21 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def unpack(db: Session, shipment_id: int, by: str) -> Shipment:
+        """Undo the packing of a shipment that hasn't left: boxes, pallet weights and 'packing accepted' are cleared,
+        so it's packed again from scratch. Picking and stock bookings are untouched."""
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status not in ShipmentService.OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only a shipment that hasn't shipped can be unpacked")
+        db.query(ShipmentBox).filter(ShipmentBox.shipment_id == shipment.id).delete()
+        db.query(PalletWeight).filter(PalletWeight.shipment_id == shipment.id).delete()
+        shipment.packed_at = shipment.packed_by = None
+        shipment.updated_by = by
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
     def ship(db: Session, shipment_id: int, created_by: str) -> Shipment:
         """Send it: everything picked and packing accepted -> stock leaves on-hand, status shipped."""
         shipment = ShipmentService.get(db, shipment_id)

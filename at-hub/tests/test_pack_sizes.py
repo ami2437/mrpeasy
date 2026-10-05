@@ -98,3 +98,18 @@ def test_one_pdf_or_one_file_each_and_per_customer_emails(api, client, admin_hea
     finally:
         db.close()
     assert len(files) == 1 and len(PdfReader(io.BytesIO(files[0][0])).pages) >= 4         # merged into one attachment
+
+
+def test_unpack_clears_packing_until_shipped(api, make):
+    item = make.item(default_pack_size=10)
+    make.stock(item, 100)
+    sh = _book(api, make, make.customer(), item, 30)
+    api.put(f"/api/shipments/{sh['id']}/pallet-weights", json={"pallets": [{"pallet_number": "P1", "weight": 50}]})
+    _pack(api, sh, item, 10)
+    packed = api.get(f"/api/shipments/{sh['id']}")
+    assert packed["packed_at"] and len(packed["boxes"]) == 3
+    un = api.post(f"/api/shipments/{sh['id']}/unpack")
+    assert not un["packed_at"] and un["boxes"] == [] and un["pallets"] == []
+    assert sum(l["quantity"] for l in un["lines"]) == 30                      # bookings untouched
+    shipped = make.ship(make.order(lines=[(item, 5, 1)]))
+    api.post(f"/api/shipments/{shipped['id']}/unpack", expect=400)           # gone: can't unpack
