@@ -214,6 +214,8 @@ function openPackReview(id) {
       <div class="sm-summary" id="pr-summary"></div>
       <div class="error" id="pr-error"></div>
       <button type="button" class="secondary" onclick="closePackReview()">Close</button>
+      <button type="button" class="danger" id="pr-unpack" onclick="unpackShipment(${id})" title="Clear the boxes, pallets and accepted packing (picking stays)"
+        ${sh.packed_at || sh.boxes.length ? "" : "hidden"}>Unpack</button>
       <button type="button" id="pr-accept" onclick="acceptPackaging(${id})">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>
       <button type="button" class="ship-now" id="pr-ship" onclick="shipNow(${id}, true)" ${sh.packed_at ? "" : "disabled"}>Ship Now</button>
     </div></div>`;
@@ -264,6 +266,9 @@ async function acceptPackaging(id) {
     document.querySelector("#pack-review .pr-step-pack").innerHTML = `${icon("check")} Packing`;
     document.querySelector("#pack-review .pr-step-ship").classList.add("on");
     document.getElementById("pr-summary").innerHTML = `<span class="pos">Packing accepted</span> · ${shipmentsById[id].boxes.length} boxes`;
+    document.getElementById("pr-unpack").hidden = false;  // accepted: it can be undone right here
+    const n = shipmentsById[id].boxes.length, tag = document.querySelector("#sec-packing .dsec-title .tag");
+    if (tag) { tag.className = "tag shipped"; tag.textContent = `packed · ${n} box${n === 1 ? "" : "es"}`; }
     const ship = document.getElementById("pr-ship");
     ship.disabled = false;
     ship.classList.add("lit");

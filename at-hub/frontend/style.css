@@ -1650,3 +1650,4 @@ button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .stage-divider .ico { width: 16px; height: 16px; }
 .dsec .dsub-title { margin: 18px 0 6px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 14px; font-weight: 600; }
 .unbook-cell .unbook-qty { width: 76px; display: block; } .unbook-cell button { margin-top: 4px; }
+[hidden] { display: none !important; }
