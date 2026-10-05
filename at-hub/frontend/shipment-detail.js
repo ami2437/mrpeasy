@@ -1,5 +1,6 @@
-// Shipment detail panel shared by the Shipments page and the Batch Shipments page:
-// lines, picking, carrier, packing/boxes/pallets, labels, packing list, POD, delivery, invoicing.
+// Shipment detail shared by the Shipments page and Bulk Operations. The main screen (showDetail) only SHOWS a shipment:
+// items, timeline, accepted packing, carrier, POD, delivery, invoicing. Picking, packing and shipping -- and undoing them --
+// happen in one pop-up, Process Shipment (openProcess); once shipped it opens as Modify Shipment.
 // The page provides the data globals (shipments, orders, items, customers, lots,
 // shipmentsById, currentShipmentId) and reloadList(); it can set SHIPMENT_DETAIL_CONTAINER
 // and onShipmentDetailClose. Only one detail is open at a time (element ids are fixed).
@@ -32,109 +33,147 @@ function customerName(id) { const c = customers.find(c => c.id === id); return c
 
 function lotCode(id) { const lot = lots.find(l => l.id === id); return lot ? lot.lot_code : ""; }
 
-const STATUS_HELP = {
-  new: "Items are booked from stock (reserved, still on hand). Confirm the bookings to start picking, unbook individual lines, or cancel to release everything.",
-  ready: "Bookings confirmed — pick the items, then review and accept the packing; Ship Now sends it.",
-  shipped: "Fully picked and shipped — stock has left on-hand. Waiting for proof of delivery.",
-  delivered: "Delivered to the customer — ready to invoice.",
-  invoiced: "Shipped and invoiced.",
-  cancelled: "Cancelled — bookings were released back to stock.",
-};
+// ---- One source of truth: the main screen SHOWS a shipment; only the Process pop-up (openProcess) changes it ----
+const SHIPPED = ["shipped", "delivered", "invoiced"];
+let detailShownId = null;  // the shipment the main screen is showing (redrawn after changes made in the pop-up)
 
-// Bookings confirmed (in the Create Shipment pop-up, or with Confirm Bookings) are locked: no unbook boxes
-// until "Change Bookings". Per order line: ordered, shipped before, this shipment, and what's left after it.
-const unbookOpen = {};  // shipment id -> unbook boxes shown on a ready (locked) shipment
+// Booked -> Picked -> Packed -> Shipped -> Delivered -> Invoiced, each step done / current / to do.
+function shipTimelineHtml(sh, invoice = null, compact = false) {
+  const picked = sh.lines.reduce((t, l) => t + (l.picked_quantity || 0), 0), total = sh.lines.reduce((t, l) => t + l.quantity, 0);
+  const shipped = SHIPPED.includes(sh.status), delivered = !!sh.delivered_at || ["delivered", "invoiced"].includes(sh.status);
+  const steps = [
+    ["Booked", true, fmtDate(sh.created_at)],
+    ["Picked", total > 0 && picked >= total - 1e-9, picked > 0 && picked < total ? `${fmtQty(picked)} of ${fmtQty(total)}` : ""],
+    ["Packed", !!sh.packed_at || shipped, sh.packed_at ? `${fmtDate(sh.packed_at)}${sh.packed_by ? ` · ${sh.packed_by}` : ""}` : ""],
+    ["Shipped", shipped, sh.ship_date ? fmtDate(sh.ship_date) : ""],
+    ["Delivered", delivered, sh.delivered_at ? fmtDate(sh.delivered_at) : ""],
+    ["Invoiced", sh.status === "invoiced", invoice ? invoice.code : ""],
+  ].slice(0, compact ? 4 : 6);
+  const current = steps.findIndex(s => !s[1]);
+  if (sh.status === "cancelled") return `<div class="ship-timeline"><span class="tl-step cancelled">${icon("x")} Cancelled</span></div>`;
+  return `<ol class="ship-timeline ${compact ? "compact" : ""}">${steps.map(([label, done, note], i) =>
+    `<li class="tl-step ${done ? "done" : i === current ? "current" : ""}"><span class="tl-dot">${done ? icon("check") : i + 1}</span>
+      <span class="tl-label">${label}${note && !compact ? `<span class="tl-note">${escapeHtml(note)}</span>` : ""}</span></li>`).join("")}</ol>`;
+}
+
+// Items on the main screen: read-only. Per order line: ordered, shipped before, this shipment (by lot), picked, left after.
 function linesSectionHtml(shipment) {
-  const ready = shipment.status === "ready";
-  const isShipped = ["shipped", "delivered", "invoiced"].includes(shipment.status);
-  const locked = ready && !unbookOpen[shipment.id];
-  const picking = ready && locked;  // changing bookings hides picking
-  const open = shipment.status === "new" || (ready && !locked);
+  const isShipped = SHIPPED.includes(shipment.status);
   const ord = order(shipment.order_id);
   const sorted = shipment.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
-  const group = {};  // order line id -> { first row id, rows, this shipment qty }
+  const group = {};
   sorted.forEach(l => { const g = group[l.order_line_id] ??= { first: l.id, n: 0, qty: 0 }; g.n++; g.qty += l.quantity; });
   const olOf = id => (ord && ord.lines.find(x => x.id === id)) || null;
   return `
-    <h4 style="display:flex; align-items:center; gap:10px;">Items
-      ${ready ? (locked ? `<span class="lock-tag" title="Booked quantities are confirmed. Change Bookings to unbook.">${icon("lock")}Bookings locked</span>
-        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>`
-        : `<button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = false; showDetail(${shipment.id})">Done Changing</button>`) : ""}</h4>
+    <h4 class="dsec-title">Items</h4>
     <table class="fit-table ship-lines">
       <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th>
         <th class="num" title="Quantity on the order line">Ordered</th>
         <th class="num" title="Shipped on earlier shipments of this order">Shipped before</th>
         <th class="num" title="Booked into this shipment, one row per lot">Booked (by lot)</th>
         <th class="num" title="The whole order line on this shipment -- every lot added up">Line total</th><th class="num">Picked</th>
-        <th class="num" title="Still to ship on the order line once this shipment has gone">Left after this</th>
-        ${picking ? "<th>Pick now</th>" : ""}${open ? "<th>Unbook</th>" : ""}</tr></thead>
-      <tbody oninput="refreshLeftAfter()">
+        <th class="num" title="Still to ship on the order line once this shipment has gone">Left after this</th></tr></thead>
+      <tbody>
         ${sorted.map(l => {
-          const left = Math.max(0, l.quantity - l.picked_quantity), g = group[l.order_line_id], ol = olOf(l.order_line_id), first = g.first === l.id;
+          const g = group[l.order_line_id], ol = olOf(l.order_line_id), first = g.first === l.id;
           const before = ol ? Math.max(0, ol.shipped_quantity - (isShipped ? g.qty : 0)) : null;
           const after = ol ? Math.max(0, ol.quantity - before - g.qty) : null;
           const span = g.n > 1 ? ` rowspan="${g.n}"` : "";
-          return `
-          <tr data-ol="${l.order_line_id}">
+          return `<tr>
             ${first ? `<td class="line-no"${span}>#${l.line_no ?? ""}</td><td class="grow"${span}>${itemLabel(l.item_id)}</td>` : ""}
             <td>${lotCode(l.lot_id)}</td>
             ${first ? `<td class="num"${span}>${ol ? fmtQty(ol.quantity) : ""}</td><td class="num muted"${span}>${before != null ? fmtQty(before) : ""}</td>` : ""}
             <td class="num">${g.n > 1 ? fmtQty(l.quantity) : `<strong>${fmtQty(l.quantity)}</strong>`}</td>
-            ${first ? `<td class="num line-total"${span}><strong>${fmtQty(g.qty)}</strong>${g.n > 1 ? `<div class="muted small">${g.n} lots</div>` : ""}</td>` : ""}
+            ${first ? `<td class="num"${span}><strong>${fmtQty(g.qty)}</strong>${g.n > 1 ? `<div class="muted small">${g.n} lots</div>` : ""}</td>` : ""}
             <td class="num">${fmtQty(l.picked_quantity)}${l.picked_quantity >= l.quantity ? " ✓" : ""}</td>
-            ${first ? `<td class="num left-after"${span} data-after="${after ?? ""}">${after == null ? "" : after > 0 ? `<strong>${fmtQty(after)}</strong>` : `<span class="pos">0 ✓</span>`}</td>` : ""}
-            ${picking ? `<td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>` : ""}
-            ${open ? `<td class="unbook-cell">${left > 0 ? `
-              <input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" data-ol="${l.order_line_id}" title="Blank = all ${left}">
-              <button class="small-btn secondary" onclick="unbookLine(${shipment.id}, ${l.id})">Unbook</button>` : `<span class="muted small">Picked</span>`}</td>` : ""}
-          </tr>
-        `;
+            ${first ? `<td class="num"${span}>${after == null ? "" : after > 0 ? `<strong>${fmtQty(after)}</strong>` : `<span class="pos">0 ✓</span>`}</td>` : ""}
+          </tr>`;
         }).join("")}
       </tbody>
-    </table>
-    <div style="margin-top:10px;">
-      ${shipment.status === "new" ? `<button class="next-step" onclick="shipmentAction(${shipment.id}, 'confirm-booking')">Confirm Bookings</button>` : ""}
-      ${picking && !allPicked(shipment) ? `<button class="next-step" onclick="pickEntered(${shipment.id})" title="Records the Pick now quantities (they start at everything left)">Pick</button>` : ""}
-      ${picking && allPicked(shipment) ? `<span class="pick-done">${icon("checkCircle")}All picked</span>
-        ${shipment.packed_at ? `<span class="muted small">Packing accepted by ${escapeHtml(shipment.packed_by || "")}</span>
-          <button class="ship-now next-step" onclick="shipNow(${shipment.id})">Ship Now</button>
-          <button class="secondary" onclick="openPackReview(${shipment.id})">Review Packing</button>`
-        : `<button class="ship-now next-step" onclick="openPackReview(${shipment.id})">Review Packing &amp; Ship</button>`}` : ""}
-      ${shipment.status === "ready" && shipment.lines.every(l => !(l.picked_quantity > 0))
-        ? `<button class="danger" onclick="unconfirmShipment(${shipment.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}
-      ${shipment.status === "ready" && shipment.lines.some(l => (l.picked_quantity || 0) > 0)
-        ? `<button class="danger" onclick="unpickShipment(${shipment.id})" title="Picked quantities back to 0 (bookings and packing stay)">Unpick</button>` : ""}
-      ${open && shipment.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
-        ? `<button class="danger" onclick="unbookAll(${shipment.id})" title="Every unpicked unit back to stock in one go">Unbook All</button>` : ""}
-      ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
-      ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
-      ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.can("shipments.undo") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
-      ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
+    </table>`;
+}
+
+// Packing on the main screen: what's saved / accepted, read-only. Changes happen in Process Shipment.
+function packingReadOnlyHtml(sh) {
+  const n = sh.boxes.length;
+  const tag = sh.packed_at ? `<span class="tag shipped">Packing accepted · ${n} box${n === 1 ? "" : "es"}</span>`
+    : n ? `<span class="tag draft">Proposed · ${n} box${n === 1 ? "" : "es"} · not accepted</span>`
+    : `<span class="tag draft">Not packed yet</span>`;
+  const rows = shippedByLine(sh).map(e => {
+    const saved = sh.boxes.filter(b => b.order_line_id === e.order_line_id);
+    const byQty = {};
+    saved.forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
+    return `<tr><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${itemLabel(e.item_id)}</td><td class="num">${fmtQty(e.qty)}</td>
+      <td class="num">${saved.length ? packSizeFor(sh, e) : `<span class="muted" title="Not packed yet -- what Process Shipment will pre-fill">${packSizeFor(sh, e)}</span>`}</td>
+      <td>${saved.length ? formatBoxCounts(byQty) : `<span class="muted">—</span>`}</td><td>${escapeHtml(linePallet(sh, e.order_line_id)) || `<span class="muted">—</span>`}</td></tr>`;
+  }).join("");
+  const used = [...new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean))];
+  const pallets = used.map(pn => {
+    const p = sh.pallets.find(x => x.pallet_number === pn) || {};
+    const boxes = sh.boxes.filter(b => b.pallet_number === pn);
+    const missing = `<span class="neg small">missing</span>`;
+    return `<tr><td><strong>${escapeHtml(pn)}</strong></td><td class="grow">${escapeHtml([...new Set(boxes.map(b => itemCode(b.item_id)))].join(", "))}</td>
+      <td class="num">${boxes.length}</td><td>${p.weight != null ? `${fmtQty(p.weight)} lbs` : missing}</td><td>${p.dimensions ? escapeHtml(p.dimensions) : missing}</td></tr>`;
+  }).join("");
+  return `<h4 class="dsec-title">Packing ${tag}</h4>
+    ${sh.packed_at ? `<p class="muted small" style="margin-top:0;">Accepted ${fmtDate(sh.packed_at)}${sh.packed_by ? ` by ${escapeHtml(sh.packed_by)}` : ""}. To change it, use <b>Process Shipment</b>.</p>`
+      : `<p class="muted small" style="margin-top:0;">Packing is done in <b>Process Shipment</b>.${n ? "" : " Grey sizes are what it will pre-fill."}</p>`}
+    <table class="fit-table no-table-tools">
+      <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    ${used.length ? `<h5 class="dsub-title">Pallets</h5><table class="fit-table no-table-tools">
+      <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight</th><th>Dimensions (L x W x H in)</th></tr></thead>
+      <tbody>${pallets}</tbody></table>` : ""}
+    ${n ? `<div style="margin-top:12px;">
+      <button class="secondary" onclick="printLabels(${sh.id})">Print Labels</button>
+      <button class="secondary" onclick="location.href='labels.html?shipment_id=${sh.id}'" title="Edit a label before printing, print-only">Custom Label</button>
+      <button class="secondary" onclick="printPackingList(${sh.id})">Packing List PDF</button>
+      <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
+      <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
+      <label class="inline-check"><input type="checkbox" id="pl-pallets" ${used.length ? "checked" : ""}> Pallet info</label>
+      <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-pallet-boxes"> Boxes per pallet</label>
+      <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
+      <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
+    </div>` : ""}`;
+}
+
+function carrierReadOnlyHtml(sh) {
+  const v = x => x ? escapeHtml(String(x)) : `<span class="muted">—</span>`;
+  return `<h4 class="dsec-title">Carrier</h4>
+    <div class="carrier-grid ro">
+      <div><label>Carrier</label><div>${v(sh.carrier)}</div></div>
+      <div><label>Tracking Number</label><div>${v(sh.tracking_number)}</div></div>
+      ${hidesMoney() ? "" : `<div class="money-field"><label>Shipping Cost</label><div>${sh.shipping_cost != null ? fmtMoney(sh.shipping_cost) : `<span class="muted">—</span>`}</div></div>`}
     </div>
-    <div id="lifecycle-error" class="error"></div>
-  `;
+    ${sh.notes ? `<div class="carrier-notes"><label>Notes</label><div>${escapeHtml(sh.notes)}</div></div>` : ""}
+    <p class="muted small">Carrier and tracking are entered in <b>${SHIPPED.includes(sh.status) ? "Modify Shipment" : "Process Shipment"}</b>.</p>`;
 }
 
-// While unbooking: "Left after this" grows by what the unbook boxes would release.
-function refreshLeftAfter() {
-  document.querySelectorAll(".ship-lines .left-after").forEach(td => {
-    if (td.dataset.after === "") return;
-    const back = [...document.querySelectorAll(`.unbook-qty[data-ol="${td.closest("tr").dataset.ol}"]`)].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
-    const open = document.querySelector(".unbook-qty") !== null;
-    const after = parseFloat(td.dataset.after) + (open ? back : 0);
-    td.innerHTML = after > 0 ? `<strong>${fmtQty(after)}</strong>${open && back ? `<div class="muted small">if unbooked</div>` : ""}` : `<span class="pos">0 ✓</span>`;
-  });
+// Any change to a shipment, from the pop-up or elsewhere: refresh the pop-up (if open), the list, and the main screen.
+async function afterShipmentChange(id, step = null) {
+  if (proc && proc.id === id) {
+    const sh = await apiFetch(`/api/shipments/${id}`);
+    shipmentsById[id] = sh;
+    if (sh.status === "cancelled") { closeProcess(true); toast(`${sh.code} is cancelled — nothing left on it`); }
+    else {
+      proc.dirty = false;
+      proc.step = step && procCanOpen(sh, step) ? step : procCanOpen(sh, proc.step) ? proc.step : procNextStep(sh);
+      renderProc();
+    }
+  }
+  await reloadList();
+  const card = detailContainer();
+  if (detailShownId === id && card && card.style.display !== "none") await showDetail(id);
 }
 
-async function shipmentAction(id, action, body) {
-  const errorEl = document.getElementById("lifecycle-error");
-  errorEl.textContent = "";
+async function shipmentAction(id, action, body, step = null) {
+  const errorEl = document.getElementById("proc-error") || document.getElementById("lifecycle-error");
+  if (errorEl) errorEl.textContent = "";
   try {
     await apiFetch(`/api/shipments/${id}/${action}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-    await reloadList();
-    await showDetail(id);
+    await afterShipmentChange(id, step);
   } catch (err) {
-    errorEl.textContent = err.message;
+    if (errorEl) errorEl.textContent = err.message; else toast(err.message);
   }
 }
 
@@ -180,135 +219,255 @@ async function unpackShipment(id) {
 
 function allPicked(shipment) { return shipment.lines.every(l => (l.picked_quantity || 0) >= l.quantity - 1e-9); }
 
-async function pickEntered(id) {
-  const lines = Array.from(document.querySelectorAll(".pick-qty"))
-    .map(el => ({ shipment_line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 }))
-    .filter(l => l.quantity > 0);
-  if (!lines.length) {
-    document.getElementById("lifecycle-error").textContent = "Enter a picked quantity on at least one line.";
-    return;
-  }
-  await shipmentAction(id, "pick", { lines });
-  const sh = shipmentsById[id];
-  if (sh && sh.status === "ready" && allPicked(sh)) openPackReview(id);  // everything picked: on to packing
+// ---- Process Shipment: the ONE place a shipment is picked, packed and shipped. Once shipped it opens as
+// Modify Shipment (carrier / tracking, Undo Ship). Each finished step can be undone here, and only here.
+let proc = null;  // { id, step: pick | pack | ship | shipped, dirty }
+const PROC_STEPS = [["pick", "Pick"], ["pack", "Pack"], ["ship", "Ship"]];
+function procNextStep(sh) {
+  if (SHIPPED.includes(sh.status)) return "shipped";
+  if (!allPicked(sh)) return "pick";
+  return sh.packed_at ? "ship" : "pack";
 }
+function procCanOpen(sh, step) {
+  if (SHIPPED.includes(sh.status)) return step === "shipped";
+  if (step === "ship") return allPicked(sh) && !!sh.packed_at;
+  return step === "pick" || step === "pack";  // packing can be done before picking
+}
+function procDone(sh, step) { return step === "pick" ? allPicked(sh) : step === "pack" ? !!sh.packed_at : SHIPPED.includes(sh.status); }
 
-// ---- Pack & ship: once everything is picked, the packing, pallets, labels and carrier sections open in a
-// glass pop-up. Accept Packaging saves them and lights up Ship Now; shipping returns to the previous screen.
-let packReview = null;  // { id, moved: [[section, placeholder]] }
-function openPackReview(id) {
-  const sh = shipmentsById[id];
-  if (!sh || document.getElementById("pack-review")) return;
-  const back = document.createElement("div");
-  back.className = "glass-back";
-  back.id = "pack-review";
-  back.innerHTML = `<div class="glass-panel pack-panel" role="dialog" aria-modal="true" aria-labelledby="pr-title">
-    <div class="sm-head">
-      <div><h3 id="pr-title">Pack &amp; ship ${escapeHtml(sh.code)}</h3>
-        <div class="pr-steps"><span class="done">${icon("check")}Picked</span><span class="pr-step-pack ${sh.packed_at ? "done" : "on"}">${sh.packed_at ? icon("check") : "2"} Packing</span><span class="pr-step-ship">3 Ship</span></div></div>
-      <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closePackReview(true)">${icon("x")}</button>
-    </div>
-    <p class="muted small" style="margin:0 0 8px;">Check how it's packed — boxes by pack size, pallets, labels and the packing list — and the carrier, then accept the packaging.</p>
-    <div class="pr-body" id="pr-body"></div>
-    <div class="sm-foot">
-      <div class="sm-summary" id="pr-summary"></div>
-      <div class="error" id="pr-error"></div>
-      <button type="button" class="secondary" onclick="closePackReview(true)">Close</button>
-      <button type="button" class="danger" id="pr-unpack" onclick="unpackShipment(${id})" title="Clear the boxes, pallets and accepted packing (picking stays)"
-        ${sh.packed_at || sh.boxes.length ? "" : "hidden"}>Unpack</button>
-      <button type="button" id="pr-accept" onclick="acceptPackaging(${id})">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>
-      <button type="button" class="ship-now" id="pr-ship" onclick="shipNow(${id}, true)" ${sh.packed_at ? "" : "disabled"}>Ship Now</button>
-    </div></div>`;
-  document.body.appendChild(back);
-  document.body.classList.add("glass-open");
-  // the real sections move in (their inputs and buttons keep working) and move back on close
-  const body = back.querySelector("#pr-body");
-  packReview = { id, moved: [] };
-  ["sec-packing", "sec-carrier"].forEach(secId => {
-    const sec = document.getElementById(secId);
-    if (!sec) return;
-    const ph = document.createComment(secId);
-    sec.parentNode.insertBefore(ph, sec);
-    body.appendChild(sec);
-    packReview.moved.push([sec, ph]);
-  });
-  const boxes = document.getElementById("box-count");
-  document.getElementById("pr-summary").innerHTML = sh.packed_at ? `<span class="pos">Packing accepted</span> · ready to ship` : `${boxes ? boxes.textContent : "0"} boxes proposed`;
-  if (sh.packed_at) document.getElementById("pr-ship").classList.add("lit");
+async function openProcess(id, step = null) {
+  const [sh] = await Promise.all([apiFetch(`/api/shipments/${id}`), packSuggest[id] ? null : loadPackSuggestions([id])]);
+  if (sh.status === "cancelled") { toast(`${sh.code} is cancelled`); return; }
+  shipmentsById[id] = sh;
+  currentShipmentId = id;
+  let back = document.getElementById("proc");
+  if (!back) {
+    back = document.createElement("div");
+    back.className = "glass-back";
+    back.id = "proc";
+    back.addEventListener("click", e => { if (e.target === back) closeProcess(); });
+    document.body.appendChild(back);
+    document.body.classList.add("glass-open");
+    document.addEventListener("keydown", procKey);
+  }
+  proc = { id, step: step && procCanOpen(sh, step) ? step : procNextStep(sh), dirty: false };
+  renderProc();
 }
-function closePackReview(refresh = false) {
-  const back = document.getElementById("pack-review");
-  const redraw = refresh && packReview && packReview.changed ? packReview.id : null;
-  // put the borrowed sections back -- unless the page behind was redrawn meanwhile (its placeholders are gone; it has fresh sections)
-  if (packReview) packReview.moved.forEach(([sec, ph]) => {
-    if (ph.parentNode) { ph.parentNode.insertBefore(sec, ph); ph.remove(); } else sec.remove();
-  });
-  packReview = null;
+function procKey(e) { if (e.key === "Escape" && proc && !document.querySelector(".modal-backdrop")) closeProcess(); }
+
+// Close: unsaved packing edits are only dropped after asking. The screen behind is redrawn from what's saved.
+async function closeProcess(force = false) {
+  if (!proc) return;
+  if (!force && proc.dirty) {
+    const { value } = await askDialog({ title: "Discard unsaved changes?", tone: "warn",
+      body: "<p>The packing you changed hasn't been accepted.</p>",
+      buttons: [{ label: "Discard", value: "go", cls: "danger" }, { label: "Keep Editing", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
+  }
+  const id = proc.id, back = document.getElementById("proc");
+  proc = null;
+  document.removeEventListener("keydown", procKey);
   document.body.classList.remove("glass-open");
   if (back) { back.id = ""; back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
-  if (redraw) reloadList().then(() => showDetail(redraw));
+  await reloadList();
+  const card = detailContainer();
+  if (detailShownId === id && card && card.style.display !== "none") await showDetail(id);
 }
-async function acceptPackaging(id) {
-  const err = document.getElementById("pr-error"), btn = document.getElementById("pr-accept");
+
+async function procGo(step) {
+  if (!proc || step === proc.step) return;
+  if (proc.dirty) {
+    const { value } = await askDialog({ title: "Leave without accepting?", tone: "warn", body: "<p>Your packing changes will be lost.</p>",
+      buttons: [{ label: "Discard Changes", value: "go", cls: "danger" }, { label: "Stay", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
+  }
+  proc.step = step;
+  proc.dirty = false;
+  renderProc();
+}
+
+function renderProc() {
+  const sh = shipmentsById[proc.id], back = document.getElementById("proc"), shipped = SHIPPED.includes(sh.status);
+  const ord = order(sh.order_id) || {};
+  back.innerHTML = `<div class="glass-panel proc-panel" role="dialog" aria-modal="true" aria-labelledby="proc-title">
+    <div class="sm-head"><div>
+        <h3 id="proc-title">${shipped ? "Modify" : "Process"} ${escapeHtml(sh.code)}</h3>
+        <div class="muted small">${escapeHtml(ord.code || "")} · ${escapeHtml(customerName(ord.customer_id) || "")}${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</div>
+        ${shipTimelineHtml(sh, null, true)}</div>
+      <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeProcess()">${icon("x")}</button></div>
+    ${shipped ? "" : `<div class="proc-tabs" role="tablist">${PROC_STEPS.map(([k, label], i) => `<button type="button" role="tab" aria-selected="${proc.step === k}"
+        class="proc-tab ${proc.step === k ? "on" : ""} ${procDone(sh, k) ? "done" : ""}" ${procCanOpen(sh, k) ? "" : "disabled"} onclick="procGo('${k}')"
+        title="${k === "ship" && !procCanOpen(sh, k) ? "Pick everything and accept the packing first" : ""}">${procDone(sh, k) ? icon("check") : `<span class="proc-n">${i + 1}</span>`}${label}</button>`).join("")}</div>`}
+    <div class="proc-body" id="proc-body">${{ pick: procPickHtml, pack: procPackHtml, ship: procShipHtml, shipped: procShippedHtml }[proc.step](sh)}</div>
+    <div class="error" id="proc-error"></div>
+    <div class="sm-foot proc-foot">${{ pick: procPickFoot, pack: procPackFoot, ship: procShipFoot, shipped: procShippedFoot }[proc.step](sh)}</div></div>`;
+  decorateIcons(back);
+  if (proc.step === "pack") {
+    refreshBoxSummary();
+    renderPalletTable();
+    const body = document.getElementById("proc-body");
+    const mark = () => { proc.dirty = true; };
+    body.addEventListener("input", mark);
+    body.addEventListener("change", mark);
+  }
+}
+
+// ---- step 1: Pick (and the bookings: unbook, unbook all, unconfirm) ----
+function procPickHtml(sh) {
+  const sorted = sh.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
+  return `<p class="muted small" style="margin-top:0;">${sh.status === "new" ? "Booked, not confirmed — picking confirms the bookings." : "Bookings confirmed."}
+      Pick now starts at everything left; change it for a part pick. Unbook sends unpicked stock back to the shelf.</p>
+    <table class="fit-table no-table-tools">
+      <thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th><th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th><th>Unbook</th></tr></thead>
+      <tbody>${sorted.map(l => { const left = Math.max(0, l.quantity - (l.picked_quantity || 0)); return `<tr>
+        <td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${itemLabel(l.item_id)}</td><td>${lotCode(l.lot_id)}</td>
+        <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}${left <= 0 ? " ✓" : ""}</td>
+        <td>${left > 0 ? `<input type="number" step="1" min="0" class="pick-qty qty-input" data-line="${l.id}" value="${left}">` : ""}</td>
+        <td class="unbook-cell">${left > 0 ? `<input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" title="Blank = all ${left}">
+          <button class="small-btn secondary" onclick="unbookLine(${sh.id}, ${l.id})">Unbook</button>` : `<span class="muted small">Picked</span>`}</td></tr>`; }).join("")}</tbody>
+    </table>`;
+}
+function procPickFoot(sh) {
+  const picked = sh.lines.some(l => (l.picked_quantity || 0) > 0), unpicked = sh.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9);
+  return `${picked ? `<button type="button" class="danger" onclick="unpickShipment(${sh.id})" title="Picked quantities back to 0 (bookings and packing stay)">Unpick</button>` : ""}
+    ${sh.status === "ready" && !picked ? `<button type="button" class="danger" onclick="unconfirmShipment(${sh.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}
+    ${unpicked ? `<button type="button" class="danger" onclick="unbookAll(${sh.id})" title="Every unpicked unit back to stock in one go">Unbook All</button>` : ""}
+    <span class="spacer"></span>
+    ${unpicked ? `<button type="button" class="secondary" onclick="procPick(true)">Pick All</button>
+      <button type="button" class="next-step" onclick="procPick(false)" title="Records the Pick now quantities">Pick</button>`
+      : `<button type="button" class="next-step" onclick="procGo('${sh.packed_at ? "ship" : "pack"}')">Next: ${sh.packed_at ? "Ship" : "Pack"} →</button>`}`;
+}
+async function procPick(all) {
+  const sh = shipmentsById[proc.id], err = document.getElementById("proc-error");
+  err.textContent = "";
+  const lines = all ? [] : [...document.querySelectorAll("#proc-body .pick-qty")]
+    .map(el => ({ shipment_line_id: parseInt(el.dataset.line), quantity: parseFloat(el.value) || 0 })).filter(l => l.quantity > 0);
+  if (!all && !lines.length) { err.textContent = "Enter a picked quantity on at least one line."; return; }
+  try {
+    if (sh.status === "new") await apiFetch(`/api/shipments/${sh.id}/confirm-booking`, { method: "POST" });  // picking confirms the bookings
+    const after = await apiFetch(`/api/shipments/${sh.id}/pick`, { method: "POST", body: JSON.stringify(all ? { pick_all: true } : { lines }) });
+    await afterShipmentChange(sh.id, allPicked(after) ? (after.packed_at ? "ship" : "pack") : "pick");  // all picked: on to packing
+  } catch (e) { err.textContent = e.message; }
+}
+
+// ---- step 2: Pack (pack sizes, boxes, pallets) ----
+function procPackHtml(sh) {
+  return `<p class="muted small" style="margin-top:0;">Each order line is split into boxes by its pack size — pre-filled from what was packed before
+      (see the note under each size). Lines are packed separately even when they're the same item.</p>
+    <div class="row" style="max-width:300px;"><div><label>Pallet # for every line (optional)</label>
+      <input type="text" id="default-pallet" placeholder="E.g. PLT-1" oninput="applyPalletToAll(this.value)"></div></div>
+    <table class="fit-table">
+      <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
+      <tbody>${packSizeRowsHtml(sh)}</tbody>
+    </table>
+    <details id="box-details" style="margin-top:12px;">
+      <summary class="link" style="cursor:pointer;">Edit individual boxes (<span id="box-count">0</span>) — uneven splits, lot code or pallet per box</summary>
+      <table class="lines-table" style="margin-top:8px;">
+        <thead><tr><th>Order line</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th>Pallet #</th><th></th></tr></thead>
+        <tbody id="box-rows" oninput="refreshBoxSummary(); renderPalletTable()" onchange="refreshBoxSummary(); renderPalletTable()">${boxRowsHtml(sh)}</tbody>
+      </table>
+      <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
+    </details>
+    <h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
+    <p class="muted small">Give lines a pallet # above, then each pallet's weight and dimensions. Or paste
+      <strong>Item # · Pallet # · Weight · Dimensions</strong> (space, tab or comma), one row per item.</p>
+    <details style="margin-bottom:10px;">
+      <summary class="link" style="cursor:pointer;">Paste pallet data</summary>
+      <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="Item   Pallet   Weight   Dimensions&#10;16713   PLT-1   250   48x40x50&#10;15420   PLT-1&#10;15422   PLT-2   300   48x40x45"></textarea>
+      <div><button class="secondary" onclick="applyPastedPallets()" style="margin-top:6px;">Apply Pasted</button>
+        <span id="pallet-paste-status" class="muted small"></span></div>
+    </details>
+    <div id="pallet-table"></div>`;
+}
+function procPackFoot(sh) {
+  return `${sh.packed_at || sh.boxes.length ? `<button type="button" class="danger" onclick="unpackShipment(${sh.id})" title="Clear the boxes, pallets and accepted packing (picking stays)">Unpack</button>` : ""}
+    ${sh.boxes.length ? `<button type="button" class="secondary" onclick="printLabels(${sh.id})" title="Labels for the saved boxes">Labels</button>
+      <button type="button" class="secondary" onclick="printPackingList(${sh.id})" title="Packing list of the saved packing">Packing List</button>` : ""}
+    <span class="spacer"></span>
+    <button type="button" class="next-step" onclick="procAccept()">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>`;
+}
+async function procAccept() {
+  const id = proc.id, err = document.getElementById("proc-error");
   err.textContent = "";
   if (!(await confirmPalletGaps(palletGaps(palletValues()), "Accept"))) return;
-  if (packReview) packReview.changed = true;  // the page behind is redrawn on close
-  btn.disabled = true;
   try {
     await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes: collectBoxes() }) });
     await apiFetch(`/api/shipments/${id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets: collectPallets() }) });
-    if (document.getElementById("s-carrier")) {
-      const cost = document.getElementById("s-cost").value;
-      await apiFetch(`/api/shipments/${id}`, { method: "PUT", body: JSON.stringify({
-        carrier: document.getElementById("s-carrier").value || null, tracking_number: document.getElementById("s-tracking").value || null,
-        shipping_cost: cost ? parseFloat(cost) : null, notes: document.getElementById("s-notes").value || null }) });
-    }
-    shipmentsById[id] = await apiFetch(`/api/shipments/${id}/accept-packing`, { method: "POST" });
-    btn.textContent = "✓ Packaging Accepted";
-    btn.classList.add("secondary");
-    document.querySelector("#pack-review .pr-step-pack").className = "pr-step-pack done";
-    document.querySelector("#pack-review .pr-step-pack").innerHTML = `${icon("check")} Packing`;
-    document.querySelector("#pack-review .pr-step-ship").classList.add("on");
-    document.getElementById("pr-summary").innerHTML = `<span class="pos">Packing accepted</span> · ${shipmentsById[id].boxes.length} boxes`;
-    document.getElementById("pr-unpack").hidden = false;  // accepted: it can be undone right here
-    const n = shipmentsById[id].boxes.length, tag = document.querySelector("#sec-packing .dsec-title .tag");
-    if (tag) { tag.className = "tag shipped"; tag.textContent = `packed · ${n} box${n === 1 ? "" : "es"}`; }
-    const ship = document.getElementById("pr-ship");
-    ship.disabled = false;
-    ship.classList.add("lit");
-    ship.focus();
+    const sh = await apiFetch(`/api/shipments/${id}/accept-packing`, { method: "POST" });
+    proc.dirty = false;
+    toast(`${sh.code}: packing accepted · ${sh.boxes.length} boxes`);
+    await afterShipmentChange(id, allPicked(sh) ? "ship" : "pick");  // picked: on to Ship; else back to picking
   } catch (e) { err.textContent = e.message; }
-  btn.disabled = false;
 }
-async function shipNow(id, fromReview = false) {
-  const err = document.getElementById(fromReview ? "pr-error" : "lifecycle-error");
-  if (err) err.textContent = "";
+
+// ---- step 3: Ship (carrier, tracking, the last checks) ----
+function carrierInputsHtml(sh) {
+  return `<div class="carrier-grid">
+      <div><label>Carrier</label><input type="text" id="s-carrier" value="${escapeHtml(sh.carrier || "")}" placeholder="E.g. UPS, FedEx Freight"></div>
+      <div><label>Tracking Number</label><input type="text" id="s-tracking" value="${escapeHtml(sh.tracking_number || "")}"></div>
+      ${hidesMoney() ? `<input type="hidden" id="s-cost" value="">` : `<div class="money-field" title="What we pay the carrier"><label>Shipping Cost</label><input type="number" step="0.01" min="0" id="s-cost" value="${sh.shipping_cost ?? ""}"></div>`}
+    </div>
+    <div class="carrier-notes"><label>Notes</label><textarea id="s-notes" rows="2">${escapeHtml(sh.notes || "")}</textarea></div>`;
+}
+function procShipHtml(sh) {
+  const gaps = savedPalletGaps(sh), pallets = new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean)).size;
+  return `<div class="proc-summary">${icon("checkCircle")} Picked · packed: <b>${sh.boxes.length} box${sh.boxes.length === 1 ? "" : "es"}</b>${pallets ? ` on <b>${pallets} pallet${pallets === 1 ? "" : "s"}</b>` : ""}</div>
+    ${gaps.length ? `<div class="notice small"><b>Missing pallet data</b> — ${gaps.map(escapeHtml).join(" · ")}. Fix it under <a class="link" onclick="procGo('pack')">Pack</a>, or ship anyway.</div>` : ""}
+    ${carrierInputsHtml(sh)}
+    <p class="muted small">Ship Now takes the stock off on-hand. Carrier and tracking go on the packing list and the POD email.</p>`;
+}
+function procShipFoot(sh) {
+  return `<span class="spacer"></span><button type="button" class="ship-now lit" id="proc-ship" onclick="procShip()">${icon("truck")} Ship Now</button>`;
+}
+async function saveCarrierFromPopup(id) {
+  const cost = document.getElementById("s-cost").value;
+  await apiFetch(`/api/shipments/${id}`, { method: "PUT", body: JSON.stringify({
+    carrier: document.getElementById("s-carrier").value.trim() || null, tracking_number: document.getElementById("s-tracking").value.trim() || null,
+    shipping_cost: cost ? parseFloat(cost) : null, notes: document.getElementById("s-notes").value || null }) });
+}
+async function procShip() {
+  const id = proc.id, err = document.getElementById("proc-error"), btn = document.getElementById("proc-ship");
+  err.textContent = "";
   try {
-    if (!(await confirmPalletGaps(savedPalletGaps(await apiFetch(`/api/shipments/${id}`)), "Ship"))) return;
+    if (!(await confirmPalletGaps(savedPalletGaps(shipmentsById[id]), "Ship"))) return;
+    btn.disabled = true;
+    await saveCarrierFromPopup(id);
     const sh = await apiFetch(`/api/shipments/${id}/ship`, { method: "POST" });
-    if (fromReview) {
-      const panel = document.querySelector("#pack-review .glass-panel");
-      const done = document.createElement("div");
-      done.className = "sm-done";
-      done.innerHTML = `<div class="sm-done-check ship-truck">${icon("truck")}</div><h3>${escapeHtml(sh.code)} shipped</h3><p class="muted">Stock has left on-hand · taking you back…</p>`;
-      panel.appendChild(done);
-      requestAnimationFrame(() => done.classList.add("show"));
-      await new Promise(r => setTimeout(r, 1200));
-      closePackReview();
-    } else toast(`${sh.code} shipped`);
-    // back to where they came from: the page that linked here, else the shipments list
-    const ref = document.referrer ? new URL(document.referrer) : null;
-    if (ref && ref.origin === location.origin && ref.pathname !== location.pathname && !ref.pathname.endsWith("login.html")) location.href = ref.href;
-    else if (typeof closeRecordPage === "function" && SHIPMENT_DETAIL_CONTAINER === "detail-card" && !document.getElementById("detail-card").classList.contains("embedded")) { await reloadList(); closeRecordPage(); }
-    else { await reloadList(); showDetail(id); }
-  } catch (e) { if (err) err.textContent = e.message; }
+    const panel = document.querySelector("#proc .glass-panel"), done = document.createElement("div");
+    done.className = "sm-done";
+    done.innerHTML = `<div class="sm-done-check ship-truck">${icon("truck")}</div><h3>${escapeHtml(sh.code)} shipped</h3><p class="muted">Stock has left on-hand</p>`;
+    panel.appendChild(done);
+    requestAnimationFrame(() => done.classList.add("show"));
+    await new Promise(r => setTimeout(r, 1200));
+    await closeProcess(true);
+  } catch (e) { err.textContent = e.message; if (btn) btn.disabled = false; }
+}
+
+// ---- once shipped: Modify (carrier / tracking, Undo Ship) ----
+function procShippedHtml(sh) {
+  return `<div class="proc-summary">${icon("truck")} Shipped ${fmtDate(sh.ship_date)} · ${sh.boxes.length} box${sh.boxes.length === 1 ? "" : "es"}
+      ${sh.delivered_at ? ` · delivered ${fmtDate(sh.delivered_at)}` : ""}${sh.status === "invoiced" ? " · invoiced" : ""}</div>
+    ${carrierInputsHtml(sh)}
+    <p class="muted small"><b>Undo Ship</b> puts the stock back (still booked) and takes it back to picking${sh.status === "invoiced" ? " — its invoice is voided with it" : ""}.
+      Delivery and invoicing are on the shipment screen.</p>`;
+}
+function procShippedFoot(sh) {
+  return `${AuthGuard.can("shipments.undo") ? `<button type="button" class="danger" onclick="unshipShipment(${sh.id})">Undo Ship</button>` : ""}
+    <span class="spacer"></span>
+    <button type="button" class="next-step" onclick="procSaveCarrier()">Save Carrier Info</button>`;
+}
+async function procSaveCarrier() {
+  const id = proc.id, err = document.getElementById("proc-error");
+  err.textContent = "";
+  try { await saveCarrierFromPopup(id); toast("Carrier info saved"); await afterShipmentChange(id); }
+  catch (e) { err.textContent = e.message; }
 }
 
 async function unbookLine(shipmentId, lineId) {
   const box = document.getElementById(`unbook-${lineId}`);
   const qty = box.value.trim() === "" ? parseFloat(box.placeholder) : parseFloat(box.value);
   if (!Number.isInteger(qty) || qty <= 0) {
-    document.getElementById("lifecycle-error").textContent = "Unbook quantity must be a whole number greater than 0.";
+    (document.getElementById("proc-error") || document.getElementById("lifecycle-error")).textContent = "Unbook quantity must be a whole number greater than 0.";
     return;
   }
   await shipmentAction(shipmentId, "unbook", { shipment_line_id: lineId, quantity: qty });
@@ -385,7 +544,7 @@ async function clearDelivered(id) {
 async function unshipShipment(id) {
   let plan;
   try { plan = await apiFetch(`/api/shipments/${id}/undo-plan`); }
-  catch (e) { document.getElementById("lifecycle-error").textContent = e.message; return; }
+  catch (e) { (document.getElementById("proc-error") || document.getElementById("lifecycle-error")).textContent = e.message; return; }
   const what = `Stock goes back to its lots and stays booked; ${plan.code} returns to New so you can unbook, change, cancel or delete it.`
     + (plan.pods ? ` Its proof of delivery (${plan.pods} file${plan.pods === 1 ? "" : "s"}) stays on record.` : "");
   if (!plan.invoice || !plan.steps.length) {
@@ -465,8 +624,7 @@ async function undoGo(id) {
       combined_ok: val("undo-combined") ? val("undo-combined").checked : false }) });
     document.getElementById("undo-wizard").remove();
     toast("Shipment undone — its invoice is void");
-    await reloadList();
-    showDetail(id);
+    await afterShipmentChange(id, "pick");
   } catch (e) { val("undo-error").textContent = e.message; }
 }
 
@@ -480,28 +638,6 @@ async function deleteShipment(id) {
     document.getElementById("lifecycle-error").textContent = err.message;
   }
 }
-
-async function saveShipmentInfo(id) {
-  const errorEl = document.getElementById("info-error");
-  errorEl.textContent = "";
-  const cost = document.getElementById("s-cost").value;
-  try {
-    await apiFetch(`/api/shipments/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        carrier: document.getElementById("s-carrier").value || null,
-        tracking_number: document.getElementById("s-tracking").value || null,
-        shipping_cost: cost ? parseFloat(cost) : null,
-        notes: document.getElementById("s-notes").value || null,
-      }),
-    });
-    await reloadList();
-    showDetail(id);
-  } catch (err) {
-    errorEl.textContent = err.message;
-  }
-}
-
 
 // Packing is per order line: the same item on two order lines is boxed separately.
 // { order_line_id: { line_no, item_id, qty } }, ordered by line number.
@@ -739,12 +875,29 @@ function packSizeRowsHtml(shipment) {
       <td class="line-no">#${e.line_no ?? ""}</td>
       <td class="grow">${itemLabel(e.item_id)}</td>
       <td class="num">${fmtQty(e.qty)}</td>
-      <td><input type="number" step="1" min="1" class="pack-size-input qty-input" data-line="${e.order_line_id}" data-qty="${e.qty}" value="${packSizeFor(shipment, e)}" oninput="splitByPackSize(${e.order_line_id})"></td>
+      <td><input type="number" step="1" min="1" class="pack-size-input qty-input" data-line="${e.order_line_id}" data-qty="${e.qty}" value="${packSizeFor(shipment, e)}" oninput="splitByPackSize(${e.order_line_id})">
+        ${packSourceHtml(shipment, e)}</td>
       <td class="box-summary" data-line="${e.order_line_id}"></td>
       <td><input type="text" class="line-pallet" data-line="${e.order_line_id}" style="width:100px;" placeholder="Optional"
             value="${escapeHtml(linePallet(shipment, e.order_line_id))}" oninput="setLinePallet(${e.order_line_id}, this.value)"></td>
     </tr>
   `).join("");
+}
+
+// Under a pack size: where it came from (saved / customer's last / last packed / item default) + the item's recent packings.
+function packSourceHtml(sh, e) {
+  const saved = sh.boxes.some(b => b.order_line_id === e.order_line_id), sug = (packSuggest[sh.id] || {})[e.order_line_id];
+  const label = saved ? "Saved packing" : sug ? sug.label : "", src = saved ? "saved" : sug ? sug.source : "none";
+  return `<div class="pack-hints"><span class="pack-src src-${src}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+    <a class="link small" onclick="usePackFromHistory(this, ${e.item_id}, ${(order(sh.order_id) || {}).customer_id || "null"}, ${e.order_line_id})" title="What this item was packed at lately">${icon("clock")} Recent</a></div>`;
+}
+async function usePackFromHistory(el, itemId, customerId, lineId) {
+  const v = await showPackUses(itemId, customerId);
+  if (!v) return;
+  const input = document.querySelector(`.pack-size-input[data-line="${lineId}"]`);
+  input.value = v;
+  splitByPackSize(lineId);
+  if (proc) proc.dirty = true;
 }
 
 // A line's pallet # = the pallet(s) its saved boxes are on.
@@ -787,9 +940,6 @@ function lotCodeForLine(orderLineId) {
 }
 
 async function showDetail(id) {
-  // an action inside Pack & Ship (Unpack, Unpick...) redraws this shipment: close the window cleanly, reopen it after
-  const reopenReview = !!packReview && packReview.id === id;
-  if (packReview) closePackReview();
   const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => []),
     packSuggest[id] ? null : loadPackSuggestions([id])]);
   const invoicesForShipment = allInvoices.filter(inv => (inv.shipment_ids || [inv.shipment_id]).includes(id) && inv.status !== "void");
@@ -798,82 +948,35 @@ async function showDetail(id) {
     && ["shipped", "delivered"].includes(s.status));
   shipmentsById[shipment.id] = shipment;
   currentShipmentId = shipment.id;
+  detailShownId = shipment.id;
   const card = detailContainer();
   card.style.display = "block";
   const ord = order(shipment.order_id);
+  const open = ["new", "ready"].includes(shipment.status), shipped = SHIPPED.includes(shipment.status);
 
   card.innerHTML = `
     <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
     <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>${ord && ord.po_number
       ? ` · PO <a class="link" href="customer-orders.html?id=${shipment.order_id}">${escapeHtml(ord.po_number)}</a>` : ""}
       — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
-    <p>${STATUS_HELP[shipment.status] || ""}</p>
+
+    <div class="ship-actions-bar">
+      ${shipment.status !== "cancelled" ? `<button class="next-step" onclick="openProcess(${shipment.id})" ${open ? "" : "disabled"}
+          title="${open ? "Pick, pack and ship -- every change to the shipment happens here" : "Already shipped -- use Modify Shipment"}">${icon("package")} Process Shipment</button>` : ""}
+      ${shipped ? `<button class="secondary" onclick="openProcess(${shipment.id})" title="Carrier / tracking, or Undo Ship">${icon("pencil")} Modify Shipment</button>` : ""}
+      ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="secondary" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Delivery)">Mark Delivered (no POD)</button>` : ""}
+      <span class="spacer"></span>
+      ${open ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
+      ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
+    </div>
+    ${shipTimelineHtml(shipment, invoicesForShipment[0] || null)}
+    <div id="lifecycle-error" class="error"></div>
 
     <section class="dsec">${linesSectionHtml(shipment)}
 
     ${shipment.status !== "cancelled" ? `
-    </section><section class="dsec" id="sec-packing"><h4 class="dsec-title">Packing
-      ${shipment.boxes.length
-        ? `<span class="tag shipped">packed · ${shipment.boxes.length} box${shipment.boxes.length === 1 ? "" : "es"}</span>`
-        : `<span class="tag draft">not packed — review and Save Packing</span>`}</h4>
-    <p class="muted">Each order line is split into boxes by its pack size (pre-filled from the item's default) — lines are packed separately even when they're the same item. Change a pack size and the boxes update. You can pack before or after picking.</p>
-    <div class="row" style="max-width:300px;">
-      <div><label>Pallet # for every line (optional)</label>
-        <input type="text" id="default-pallet" placeholder="E.g. PLT-1" oninput="applyPalletToAll(this.value)"></div>
-    </div>
-    <table class="fit-table">
-      <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
-      <tbody>${packSizeRowsHtml(shipment)}</tbody>
-    </table>
-
-    <details id="box-details" style="margin-top:12px;">
-      <summary class="link" style="cursor:pointer;">Edit individual boxes (<span id="box-count">0</span>) — uneven splits, lot code or pallet per box</summary>
-      <table class="lines-table" style="margin-top:8px;">
-        <thead><tr><th>Order line</th><th>Box #</th><th>Qty in box</th><th>Lot code</th><th>Pallet #</th><th></th></tr></thead>
-        <tbody id="box-rows" oninput="refreshBoxSummary(); renderPalletTable()" onchange="refreshBoxSummary(); renderPalletTable()">${boxRowsHtml(shipment)}</tbody>
-      </table>
-      <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
-    </details>
-
-    <h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
-    <p class="muted">Give lines a pallet # above, then enter each pallet's weight and dimensions here. Or paste from a spreadsheet:
-      <strong>Item # · Pallet # · Weight · Dimensions</strong>, one row per item. Weight and dimensions only need to be on one row per pallet.</p>
-    <details style="margin-bottom:10px;">
-      <summary class="link" style="cursor:pointer;">Paste pallet data</summary>
-      <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="Item&#9;Pallet&#9;Weight&#9;Dimensions&#10;16713&#9;PLT-1&#9;250&#9;48x40x50&#10;15420&#9;PLT-1&#10;15422&#9;PLT-2&#9;300&#9;48x40x45"></textarea>
-      <div><button class="secondary" onclick="applyPastedPallets()" style="margin-top:6px;">Apply Pasted</button>
-        <span id="pallet-paste-status" class="muted small"></span></div>
-    </details>
-    <div id="pallet-table"></div>
-
-    <div style="margin-top:14px;">
-      <button onclick="savePacking(${shipment.id})">Save Packing</button>
-      ${["new", "ready"].includes(shipment.status) && (shipment.boxes.length || shipment.packed_at)
-        ? `<button class="danger" onclick="unpackShipment(${shipment.id})" title="Clear the boxes, pallets and accepted packing (picking stays)">Unpack</button>` : ""}
-      <button class="secondary" onclick="printLabels(${shipment.id})">Print Labels</button>
-      <button class="secondary" onclick="location.href='labels.html?shipment_id=${shipment.id}'" title="Edit a label before printing, print-only">Custom Label</button>
-      <button class="secondary" onclick="printPackingList(${shipment.id})">Packing List PDF</button>
-      <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
-      <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
-      <label class="inline-check"><input type="checkbox" id="pl-pallets" ${shipment.boxes.some(b => b.pallet_number) ? "checked" : ""}> Pallet info</label>
-      <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-pallet-boxes"> Boxes per pallet</label>
-      <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
-      <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
-    </div>
-    <div id="packing-error" class="error"></div>
-    ` : ""}
-
-    ${shipment.status !== "cancelled" ? `
-    </section><section class="dsec" id="sec-carrier"><h4 class="dsec-title">Carrier</h4>
-    <div class="carrier-grid">
-      <div><label>Carrier</label><input type="text" id="s-carrier" value="${escapeHtml(shipment.carrier || "")}" placeholder="E.g. UPS, FedEx Freight"></div>
-      <div><label>Tracking Number</label><input type="text" id="s-tracking" value="${escapeHtml(shipment.tracking_number || "")}"></div>
-      ${hidesMoney() ? `<input type="hidden" id="s-cost" value="">` : `<div class="money-field" title="What we pay the carrier"><label>Shipping Cost</label><input type="number" step="0.01" min="0" id="s-cost" value="${shipment.shipping_cost ?? ""}"></div>`}
-    </div>
-    <div class="carrier-notes"><label>Notes</label><textarea id="s-notes" rows="2">${escapeHtml(shipment.notes || "")}</textarea></div>
-    <button class="secondary" onclick="saveShipmentInfo(${shipment.id})" style="margin-top:8px;">Save Carrier Info</button>
-    <div id="info-error" class="error"></div>
-    ` : ""}
+    </section><section class="dsec" id="sec-packing">${packingReadOnlyHtml(shipment)}
+    </section><section class="dsec" id="sec-carrier">${carrierReadOnlyHtml(shipment)}` : ""}
 
     </section><section class="dsec"><h4 class="dsec-title">Proof of delivery &amp; documents</h4>
     <p class="muted small" style="margin-top:0;">Delivery photos, signed packing lists, bills of lading.
@@ -909,8 +1012,7 @@ async function showDetail(id) {
     </section>
     <button class="secondary" onclick="closeShipmentDetail()" style="margin-top:16px;">Close</button>
   `;
-  if (document.getElementById("box-rows")) { refreshBoxSummary(); renderPalletTable(); }
-  if (reopenReview && shipment.status === "ready" && allPicked(shipment)) openPackReview(shipment.id);
+  decorateIcons(card);
   renderAttachments("shipment-attachments", "shipment", shipment.id, ["pod", "bol", "other"],
     { notePlaceholder: "Note — E.g. Received By / Signed By", onChange: async () => {
       // A POD upload may have just marked it delivered.
@@ -948,24 +1050,42 @@ function collectBoxes() {
   }));
 }
 
-async function savePacking(shipmentId) {
-  const errorEl = document.getElementById("packing-error");
-  errorEl.textContent = "";
-  if (!(await confirmPalletGaps(palletGaps(palletValues()), "Save"))) return;
-  try {
-    const pallets = collectPallets();
-    await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
-      method: "PUT",
-      body: JSON.stringify({ boxes: collectBoxes() }),
+// ---- pack-size memory: recent packings of an item (pick one to use it) ----
+const usageCache = {};
+async function packUses(itemId) {
+  if (!usageCache[itemId]) usageCache[itemId] = (await apiFetch(`/api/stock-items/pack-sizes/usage?item_ids=${itemId}&limit=12`))[itemId] || [];
+  return usageCache[itemId];
+}
+// Resolves to the chosen size, or null.
+async function showPackUses(itemId, customerId) {
+  let uses = [];
+  try { uses = await packUses(itemId); } catch {}
+  const item = itemObj(itemId) || {};
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "modal-backdrop over-glass";
+    const done = v => { document.removeEventListener("keydown", onKey, true); back.remove(); resolve(v); };
+    const onKey = e => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+    back.innerHTML = `<div class="modal pack-uses" role="dialog" aria-modal="true">
+      <h3 style="margin:0 0 4px;">${escapeHtml(item.code || "")} — recent packings</h3>
+      <p class="muted small" style="margin:0 0 8px;">${escapeHtml(item.title || "")}. Click a row to use that size.</p>
+      ${uses.length ? `<table class="fit-table no-table-tools no-col-bands"><thead><tr><th class="num">Size</th><th>Packed</th><th>Shipment</th><th>Order</th><th class="grow">Customer</th></tr></thead><tbody>
+        ${uses.map(u => `<tr class="pu-row ${customerId && u.customer_id === customerId ? "pu-mine" : ""}" data-v="${u.pack_size}">
+          <td class="num"><b>${u.pack_size}</b>${u.sure ? "" : ` <span class="muted small" title="Packed as a single box, so the real pack size may have been bigger">1 box</span>`}</td>
+          <td>${fmtDate(u.date)}</td><td>${escapeHtml(u.shipment)}</td><td>${escapeHtml(u.order)}${u.po ? ` · PO ${escapeHtml(u.po)}` : ""}</td>
+          <td class="grow">${escapeHtml(u.customer || "")}${customerId && u.customer_id === customerId ? ` <span class="tag confirmed">This customer</span>` : ""}</td></tr>`).join("")}
+      </tbody></table>` : `<p class="muted">Not packed in AT-HUB yet.</p>`}
+      <div class="btn-row" style="margin-top:12px;">
+        ${item.default_pack_size ? `<button type="button" class="secondary" data-v="${item.default_pack_size}">Use Item Default (${item.default_pack_size})</button>` : ""}
+        <button type="button" class="secondary" data-close="1">Close</button></div></div>`;
+    back.addEventListener("click", e => {
+      if (e.target === back || e.target.closest("[data-close]")) return done(null);
+      const hit = e.target.closest("[data-v]");
+      if (hit) done(parseInt(hit.dataset.v));
     });
-    await apiFetch(`/api/shipments/${shipmentId}/pallet-weights`, {
-      method: "PUT",
-      body: JSON.stringify({ pallets }),
-    });
-    showDetail(shipmentId);
-  } catch (err) {
-    errorEl.textContent = err.message;
-  }
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(back);
+  });
 }
 
 // Same layout and fields as the main portal's 4x6 labels (shared printBoxLabels in auth-guard.js).
