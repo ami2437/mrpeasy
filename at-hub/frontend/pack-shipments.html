@@ -817,6 +817,10 @@
     }
     async function shipFromDialog() {
       const back = document.getElementById("ship-dialog"), go = back.querySelector("#sd-go"), err = back.querySelector("#sd-error");
+      // last check: pallets with no weight / size (they'd print blank on the packing list)
+      const gaps = [...back.querySelectorAll("tbody tr")].flatMap(tr => { const s = byId(parseInt(tr.dataset.id));
+        return savedPalletGaps(s).map(g => `${s.code} — ${g}`); });
+      if (!(await confirmPalletGaps(gaps, "Ship"))) return;
       go.disabled = true;
       go.textContent = "Shipping…";
       const ok = [], failed = [];

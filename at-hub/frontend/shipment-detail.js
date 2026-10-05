@@ -206,14 +206,14 @@ function openPackReview(id) {
     <div class="sm-head">
       <div><h3 id="pr-title">Pack &amp; ship ${escapeHtml(sh.code)}</h3>
         <div class="pr-steps"><span class="done">${icon("check")}Picked</span><span class="pr-step-pack ${sh.packed_at ? "done" : "on"}">${sh.packed_at ? icon("check") : "2"} Packing</span><span class="pr-step-ship">3 Ship</span></div></div>
-      <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closePackReview()">${icon("x")}</button>
+      <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closePackReview(true)">${icon("x")}</button>
     </div>
     <p class="muted small" style="margin:0 0 8px;">Check how it's packed — boxes by pack size, pallets, labels and the packing list — and the carrier, then accept the packaging.</p>
     <div class="pr-body" id="pr-body"></div>
     <div class="sm-foot">
       <div class="sm-summary" id="pr-summary"></div>
       <div class="error" id="pr-error"></div>
-      <button type="button" class="secondary" onclick="closePackReview()">Close</button>
+      <button type="button" class="secondary" onclick="closePackReview(true)">Close</button>
       <button type="button" class="danger" id="pr-unpack" onclick="unpackShipment(${id})" title="Clear the boxes, pallets and accepted packing (picking stays)"
         ${sh.packed_at || sh.boxes.length ? "" : "hidden"}>Unpack</button>
       <button type="button" id="pr-accept" onclick="acceptPackaging(${id})">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>
@@ -236,8 +236,9 @@ function openPackReview(id) {
   document.getElementById("pr-summary").innerHTML = sh.packed_at ? `<span class="pos">Packing accepted</span> · ready to ship` : `${boxes ? boxes.textContent : "0"} boxes proposed`;
   if (sh.packed_at) document.getElementById("pr-ship").classList.add("lit");
 }
-function closePackReview() {
+function closePackReview(refresh = false) {
   const back = document.getElementById("pack-review");
+  const redraw = refresh && packReview && packReview.changed ? packReview.id : null;
   // put the borrowed sections back -- unless the page behind was redrawn meanwhile (its placeholders are gone; it has fresh sections)
   if (packReview) packReview.moved.forEach(([sec, ph]) => {
     if (ph.parentNode) { ph.parentNode.insertBefore(sec, ph); ph.remove(); } else sec.remove();
@@ -245,10 +246,13 @@ function closePackReview() {
   packReview = null;
   document.body.classList.remove("glass-open");
   if (back) { back.id = ""; back.classList.add("closing"); setTimeout(() => back.remove(), 180); }
+  if (redraw) reloadList().then(() => showDetail(redraw));
 }
 async function acceptPackaging(id) {
   const err = document.getElementById("pr-error"), btn = document.getElementById("pr-accept");
   err.textContent = "";
+  if (!(await confirmPalletGaps(palletGaps(palletValues()), "Accept"))) return;
+  if (packReview) packReview.changed = true;  // the page behind is redrawn on close
   btn.disabled = true;
   try {
     await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes: collectBoxes() }) });
@@ -280,6 +284,7 @@ async function shipNow(id, fromReview = false) {
   const err = document.getElementById(fromReview ? "pr-error" : "lifecycle-error");
   if (err) err.textContent = "";
   try {
+    if (!(await confirmPalletGaps(savedPalletGaps(await apiFetch(`/api/shipments/${id}`)), "Ship"))) return;
     const sh = await apiFetch(`/api/shipments/${id}/ship`, { method: "POST" });
     if (fromReview) {
       const panel = document.querySelector("#pack-review .glass-panel");
@@ -631,35 +636,82 @@ function renderPalletTable(pending = {}) {
     </table>`;
 }
 
-// Paste rows of: Item # <tab> Pallet # [<tab> Weight] [<tab> Dimensions] -- same format as the main portal.
-// Tab or comma separated; a header row is skipped; weight/dimensions only need to appear once per pallet.
-function applyPastedPallets() {
+// Paste rows of: Item # · Pallet # [· Weight] [· Dimensions] -- separated by tabs (Excel), commas or spaces
+// ("41574 2 250 48x48x48" or "41574 2 250 48 x 48 x 48"). A header row is skipped; weight / dimensions only need to be
+// on one row per pallet. Anything it would replace (a line's pallet, a pallet's weight or size) is listed first.
+async function applyPastedPallets() {
   const status = document.getElementById("pallet-paste-status");
   const shipment = shipmentsById[currentShipmentId];
   const rows = document.getElementById("pallet-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const pending = {};
-  let applied = 0;
-  const unknown = [];
+  const plan = [], pending = {}, unknown = [];
   rows.forEach(row => {
-    const cols = row.split(row.includes("\t") ? "\t" : ",").map(c => c.trim());
+    const spaced = !row.includes("\t") && !row.includes(",");
+    let cols = splitPasteRow(row);
+    if (spaced && cols.length > 4) cols = [...cols.slice(0, 3), cols.slice(3).join(" ")];  // "48 x 48 x 48"
     if (cols.length < 2 || /^item/i.test(cols[0])) return;
     const [code, pallet, weight, dims] = cols;
     if (!pallet) return;
     const entries = shippedByLine(shipment).filter(e => String(itemCode(e.item_id)).toLowerCase() === code.toLowerCase());
     if (!entries.length) { unknown.push(code); return; }
-    entries.forEach(e => {
-      const input = document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`);
-      if (input) input.value = pallet;
-      setLinePallet(e.order_line_id, pallet);
-      applied++;
-    });
+    entries.forEach(e => plan.push({ e, pallet }));
     const p = pending[pallet] = pending[pallet] || {};
     if (weight) p.weight = parseFloat(weight.replace(/[^\d.]/g, "")) || "";
     if (dims) p.dimensions = normalizeDimensions(dims);
   });
+  // what's already entered (typed or saved) that this would change
+  const now = palletValues(), changes = [];
+  plan.forEach(({ e, pallet }) => {
+    const cur = (document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`) || {}).value || "";
+    if (cur && cur !== pallet) changes.push(`${itemCode(e.item_id)}: pallet ${cur} → ${pallet}`);
+  });
+  Object.entries(pending).forEach(([pn, v]) => {
+    const was = now[pn] || {};
+    if (v.weight !== undefined && was.weight && String(was.weight) !== String(v.weight)) changes.push(`Pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
+    if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`Pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`);
+  });
+  if (changes.length) {
+    const { value } = await askDialog({ title: "Replace pallet data already entered?", tone: "warn",
+      body: `<ul class="small" style="margin:0;padding-left:18px;">${changes.map(c => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`,
+      buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (value !== "go") { status.textContent = "Nothing changed."; return; }
+  }
+  plan.forEach(({ e, pallet }) => {
+    const input = document.querySelector(`.line-pallet[data-line="${e.order_line_id}"]`);
+    if (input) input.value = pallet;
+    setLinePallet(e.order_line_id, pallet);
+  });
   renderPalletTable(pending);
-  status.textContent = `Applied to ${applied} line${applied === 1 ? "" : "s"}.`
+  status.textContent = `Applied to ${plan.length} line${plan.length === 1 ? "" : "s"}.`
     + (unknown.length ? ` Not on this shipment: ${unknown.join(", ")}.` : "") + " Click Save Packing to keep it.";
+}
+// The pallet table as it stands: {pallet #: {weight, dimensions}} (typed, else saved).
+function palletValues() {
+  const out = {};
+  document.querySelectorAll("#pallet-table tr[data-pallet]").forEach(tr => {
+    out[tr.dataset.pallet] = { weight: tr.querySelector(".pallet-weight").value.trim(), dimensions: tr.querySelector(".pallet-dimensions").value.trim() };
+  });
+  return out;
+}
+// "Pallet 2: no weight" -- pallets in use without a weight or dimensions (from the screen, or from a saved shipment).
+function palletGaps(values) {
+  return Object.entries(values).flatMap(([pn, v]) => {
+    const miss = [!v.weight && "weight", !v.dimensions && "dimensions"].filter(Boolean);
+    return miss.length ? [`Pallet ${pn}: no ${miss.join(" or ")}`] : [];
+  });
+}
+function savedPalletGaps(sh) {
+  const used = [...new Set((sh.boxes || []).map(b => b.pallet_number).filter(Boolean))];
+  return palletGaps(Object.fromEntries(used.map(pn => { const p = (sh.pallets || []).find(x => x.pallet_number === pn) || {};
+    return [pn, { weight: p.weight, dimensions: p.dimensions }]; })));
+}
+// Ask before going on with pallets missing a weight or size. Resolves true to go ahead.
+async function confirmPalletGaps(gaps, action) {
+  if (!gaps.length) return true;
+  const { value } = await askDialog({ title: "Pallet weight / size missing", tone: "warn",
+    body: `<ul class="small" style="margin:0 0 6px;padding-left:18px;">${gaps.map(g => `<li>${escapeHtml(g)}</li>`).join("")}</ul>
+      <p class="muted small" style="margin:0;">They print blank on the packing list.</p>`,
+    buttons: [{ label: `${action} Anyway`, value: "go", cls: "danger" }, { label: "Go Back", value: null, cls: "secondary" }] });
+  return value === "go";
 }
 
 function collectPallets() {
@@ -899,6 +951,7 @@ function collectBoxes() {
 async function savePacking(shipmentId) {
   const errorEl = document.getElementById("packing-error");
   errorEl.textContent = "";
+  if (!(await confirmPalletGaps(palletGaps(palletValues()), "Save"))) return;
   try {
     const pallets = collectPallets();
     await apiFetch(`/api/shipments/${shipmentId}/boxes`, {
