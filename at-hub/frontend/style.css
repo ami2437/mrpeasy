@@ -1688,3 +1688,8 @@ button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .proc-foot { flex-wrap: wrap; gap: 8px; }
 .proc-summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); margin-bottom: 10px; }
 .proc-summary .ico { width: 16px; height: 16px; color: #15803d; }
+.pack-tools-row { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: flex-start; margin-bottom: 10px; }
+.pack-tools-row > div { width: 280px; }
+.pack-paste { flex: 1 1 320px; min-width: 260px; }
+.pack-paste textarea { width: 100%; max-width: 520px; }
+.pack-src.src-changed { color: #b45309; font-weight: 600; }

@@ -354,8 +354,17 @@ async function procPick(all) {
 function procPackHtml(sh) {
   return `<p class="muted small" style="margin-top:0;">Each order line is split into boxes by its pack size — pre-filled from what was packed before
       (see the note under each size). Lines are packed separately even when they're the same item.</p>
-    <div class="row" style="max-width:300px;"><div><label>Pallet # for every line (optional)</label>
-      <input type="text" id="default-pallet" placeholder="E.g. PLT-1" oninput="applyPalletToAll(this.value)"></div></div>
+    <div class="pack-tools-row">
+      <div><label>Pallet # for every line (optional)</label>
+        <input type="text" id="default-pallet" placeholder="E.g. PLT-1" oninput="applyPalletToAll(this.value)"></div>
+      <details class="pack-paste" id="pack-paste-box">
+        <summary class="link" style="cursor:pointer;">Paste pack sizes</summary>
+        <textarea id="pack-paste" rows="4" style="font-family:monospace;margin-top:6px;" placeholder="Item #   Pack size&#10;16713   50&#10;15420   100"></textarea>
+        <div class="muted small">Item # and pack size, one per line — space, tab or comma (straight from Excel works). Header row optional.</div>
+        <div><button class="secondary" onclick="applyPastedPackSizes()" style="margin-top:6px;">Apply Pack Sizes</button>
+          <span id="pack-paste-status" class="muted small"></span></div>
+      </details>
+    </div>
     <table class="fit-table">
       <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
       <tbody>${packSizeRowsHtml(sh)}</tbody>
@@ -772,6 +781,32 @@ function renderPalletTable(pending = {}) {
     </table>`;
 }
 
+// Paste rows of: Item # · Pack size (space, tab or comma; header optional). Fills the pack size on every line of that item
+// and re-splits its boxes -- nothing is saved until Accept Packaging.
+function applyPastedPackSizes() {
+  const status = document.getElementById("pack-paste-status"), shipment = shipmentsById[currentShipmentId];
+  const norm = c => String(c || "").trim().toLowerCase().replace(/-nuts$/, "-nut");
+  let lines = 0;
+  const unknown = [], changed = [];
+  document.getElementById("pack-paste").value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
+    const cols = splitPasteRow(row), code = cols[0], size = parseInt(String(cols[cols.length - 1] || "").replace(/[^\d]/g, ""));
+    if (!code || !size || cols.length < 2) return;  // header / blank
+    const entries = shippedByLine(shipment).filter(e => norm(itemCode(e.item_id)) === norm(code));
+    if (!entries.length) { unknown.push(code); return; }
+    entries.forEach(e => {
+      const input = document.querySelector(`.pack-size-input[data-line="${e.order_line_id}"]`);
+      if (!input) return;
+      if (parseInt(input.value) !== size) changed.push(`${itemCode(e.item_id)}: ${input.value} → ${size}`);
+      input.value = size;
+      splitByPackSize(e.order_line_id);
+      lines++;
+    });
+  });
+  if (proc && lines) proc.dirty = true;
+  status.innerHTML = `Applied to ${lines} line${lines === 1 ? "" : "s"}${changed.length ? ` (changed: ${escapeHtml(changed.join(", "))})` : ""}.`
+    + (unknown.length ? ` <span class="neg">Not on this shipment: ${escapeHtml(unknown.join(", "))}.</span>` : "") + " Accept Packaging to keep it.";
+}
+
 // Paste rows of: Item # · Pallet # [· Weight] [· Dimensions] -- separated by tabs (Excel), commas or spaces
 // ("41574 2 250 48x48x48" or "41574 2 250 48 x 48 x 48"). A header row is skipped; weight / dimensions only need to be
 // on one row per pallet. Anything it would replace (a line's pallet, a pallet's weight or size) is listed first.
@@ -915,6 +950,8 @@ function setLinePallet(lineId, value) {
 
 function splitByPackSize(lineId) {
   const input = document.querySelector(`.pack-size-input[data-line="${lineId}"]`);
+  const src = input.closest("td").querySelector(".pack-src");
+  if (src) { src.className = "pack-src src-changed"; src.textContent = "Changed — Accept Packaging to keep"; src.title = src.textContent; }
   const qty = parseFloat(input.dataset.qty);
   const packSize = parseInt(input.value) || qty;
   const lineInput = document.querySelector(`.line-pallet[data-line="${lineId}"]`);
