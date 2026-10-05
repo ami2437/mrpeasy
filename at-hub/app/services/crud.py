@@ -1208,8 +1208,12 @@ class ShipmentService:
                                f"left to pick on that line"
                     )
                 line.picked_quantity = (line.picked_quantity or 0) + req.quantity
+        if data.unbook_rest and not any((l.picked_quantity or 0) > 0 for l in shipment.lines):
+            raise HTTPException(status_code=400, detail="Nothing is picked -- unbooking the rest would cancel the shipment (use Unbook All for that)")
         db.commit()
         db.refresh(shipment)
+        if data.unbook_rest and any(l.quantity - (l.picked_quantity or 0) > 1e-9 for l in shipment.lines):
+            shipment = ShipmentService.unbook_all(db, shipment_id)  # the short qty goes back to stock; the order line stays open for it
         return shipment
 
     @staticmethod

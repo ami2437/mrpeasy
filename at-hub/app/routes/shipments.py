@@ -141,7 +141,7 @@ def confirm_booking(shipment_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{shipment_id}/pick", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def pick(shipment_id: int, data: PickRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Record picked quantities; the shipment ships automatically once every line is fully picked."""
+    """Record picked quantities (added to what is picked). unbook_rest: then release whatever is still unpicked back to stock."""
     return ShipmentService.pick(db, shipment_id, data, created_by=current_user.username)
 
 

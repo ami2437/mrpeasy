@@ -174,3 +174,23 @@ def test_going_back_before_packing_needs_the_packing_reaccepted(api, make):
     api.post(f"/api/shipments/{back['id']}/ship", expect=400)                     # can't ship until re-accepted
     api.post(f"/api/shipments/{back['id']}/accept-packing")
     assert api.post(f"/api/shipments/{back['id']}/ship")["status"] == "shipped"
+
+
+def test_part_pick_then_unbook_the_rest(api, make):
+    a, b = make.item(), make.item()
+    make.stock(a, 50)
+    make.stock(b, 50)
+    o = make.order(lines=[(a, 40, 1), (b, 10, 1)])
+    sh = api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": l["id"], "quantity": l["quantity"]} for l in o["lines"]]})
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    la = next(l for l in sh["lines"] if l["item_id"] == a["id"])
+    api.post(f"/api/shipments/{sh['id']}/pick", json={"lines": [], "unbook_rest": True}, expect=400)   # nothing picked: refused
+    kept = api.post(f"/api/shipments/{sh['id']}/pick", json={"lines": [{"shipment_line_id": la["id"], "quantity": 10}]})
+    assert sorted((l["quantity"], l["picked_quantity"]) for l in kept["lines"]) == [(10, 0), (40, 10)]   # keep booked: only 10 picked
+    after = api.post(f"/api/shipments/{sh['id']}/pick", json={"lines": [{"shipment_line_id": la["id"], "quantity": 5}], "unbook_rest": True})
+    assert [(l["item_id"], l["quantity"], l["picked_quantity"]) for l in after["lines"]] == [(a["id"], 15, 15)]   # rest released
+    assert api.get(f"/api/stock-items/{a['id']}")["booked"] == 15 and api.get(f"/api/stock-items/{b['id']}")["booked"] == 0
+    api.post(f"/api/shipments/{after['id']}/accept-packing")
+    assert api.post(f"/api/shipments/{after['id']}/ship")["status"] == "shipped"
+    line_a = next(l for l in api.get(f"/api/customer-orders/{o['id']}")["lines"] if l["item_id"] == a["id"])
+    assert line_a["shipped_quantity"] == 15   # the other 25 stays open on the order

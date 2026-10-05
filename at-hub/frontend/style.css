@@ -1704,3 +1704,4 @@ button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .bp-pallet .bp-d { width: 130px; }
 .bp-fill { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 #bp-pack .sp-tools { margin-top: 4px; }
+.qty-input.pick-short { border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 12%, transparent); font-weight: 600; }

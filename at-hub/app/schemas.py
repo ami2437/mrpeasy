@@ -450,6 +450,7 @@ class PickLineRequest(InputModel):
 class PickRequest(BaseModel):
     lines: List[PickLineRequest] = []
     pick_all: bool = False  # pick everything still outstanding
+    unbook_rest: bool = False  # then release every unpicked unit back to stock (picked short on purpose)
 
 
 # ---- Shipments / Packing / Labels ----
