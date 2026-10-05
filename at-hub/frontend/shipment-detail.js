@@ -429,8 +429,8 @@ function procPackHtml(sh) {
       <button class="secondary" onclick="addBoxRow()" style="margin-top:8px;">+ Add box</button>
     </details>
     <h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
-    <p class="muted small">Which line goes on which pallet: the <b>Pallet #</b> at the end of each line above. Then each pallet's weight and
-      dimensions below — or paste <strong>Pallet # · Weight · Dimensions</strong>, one row per pallet (space, tab or comma).</p>
+    <p class="muted small">Which line goes on which pallet: the <b>Pallet #</b> at the end of each line above; each pallet's weight and dimensions below.
+      Or paste both at once — <strong>Item # · Pallet # · Weight · Dimensions</strong> (or just <strong>Pallet # · Weight · Dimensions</strong>), space, tab or comma.</p>
     <details style="margin-bottom:10px;">
       <summary class="link" style="cursor:pointer;">Paste pallet data</summary>
       <textarea id="pallet-paste" rows="4" style="font-family:monospace;margin-top:6px;max-width:520px;" placeholder="${PALLET_PASTE_HINT}"></textarea>
@@ -815,16 +815,14 @@ function renderPalletTable(pending = {}) {
     return;
   }
   container.innerHTML = `
-    <table class="fit-table no-table-tools">
-      <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead>
+    <table class="fit-table no-table-tools pallet-grid">
+      <thead><tr><th>Pallet #</th><th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead>
       <tbody>${names.map(pn => {
         const saved = shipment.pallets.find(p => p.pallet_number === pn) || {};
         const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, palletStash[pn] || {}, typed[pn] || {}, pending[pn] || {});
         delete palletStash[pn];
         return `<tr data-pallet="${escapeHtml(pn)}">
           <td><strong>${escapeHtml(pn)}</strong></td>
-          <td class="grow">${escapeHtml([...byPallet[pn].items].join(", "))}</td>
-          <td class="num">${byPallet[pn].boxes}</td>
           <td><input type="number" step="0.1" min="0" class="pallet-weight" style="width:100px;" value="${escapeHtml(v.weight)}"></td>
           <td><input type="text" class="pallet-dimensions" style="width:150px;" placeholder="48 x 40 x 50" value="${escapeHtml(v.dimensions)}"
                 onblur="this.value = normalizeDimensions(this.value)"></td>
@@ -859,39 +857,85 @@ function applyPastedPackSizes() {
     + (unknown.length ? ` <span class="neg">Not on this shipment: ${escapeHtml(unknown.join(", "))}.</span>` : "") + " Accept Packaging to keep it.";
 }
 
-// Pallet paste (single and bulk): one row per pallet -- Pallet # · Weight · Dimensions, by tab (Excel), comma or spaces
-// ("P1 250 48x40x50", "P1 250 48 x 40 x 50", "P1, 250"). Which line is on which pallet comes from each line's Pallet #.
-const PALLET_PASTE_HINT = "Pallet   Weight   Dimensions&#10;P1   250   48x40x50&#10;P2   300   48x40x45";
-function parsePalletPaste(text) {
-  const out = [];
+// Pallet paste (single and bulk), one box for both kinds of row -- tab (Excel), comma or spaces; header optional:
+//   Item # · Pallet # · Weight · Dimensions   puts that item's line(s) on the pallet, and gives the pallet its weight / size
+//   Pallet # · Weight · Dimensions            just the pallet's weight / size
+// A row is an item row when its first value is an item on the shipment. Rows that give one pallet different weights or
+// sizes are asked about (pickPalletConflicts); anything it would replace on screen is listed first.
+const PALLET_PASTE_HINT = "Item #   Pallet #   Weight   Dimensions&#10;15420   1   250   48x48x48&#10;15420-NUT   1&#10;16713   2   300   48x48x24";
+const DIMS_AT_END = /(\d+(?:\.\d+)?\s*(?:in\.?|")?\s*[xX×*]\s*\d+(?:\.\d+)?\s*(?:in\.?|")?\s*[xX×*]\s*\d+(?:\.\d+)?\s*(?:in\.?|")?)\s*$/;
+const palletItemKey = c => String(c || "").trim().toLowerCase().replace(/-nuts$/, "-nut");
+// -> { rows: [{ item, lineIds, pallet, weight, dimensions }], unknown: [item #s not on the shipment] }
+function parsePalletPaste(text, linesOfItem) {
+  const rows = [], unknown = [];
   String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(row => {
-    const spaced = !row.includes("\t") && !row.includes(",");
-    let cols = splitPasteRow(row);
-    if (spaced && cols.length > 3) cols = [cols[0], cols[1], cols.slice(2).join(" ")];
-    let [pallet, weight = "", dims = ""] = cols;
-    if (!pallet || /^pallet/i.test(pallet)) return;  // header
-    if (/x/i.test(weight) && !dims) { dims = weight; weight = ""; }  // "P1 48x40x50" -- no weight
-    out.push({ pallet, weight: weight ? (parseFloat(weight.replace(/[^\d.]/g, "")) || "") : "", dimensions: dims ? normalizeDimensions(dims) : "" });
+    let dims = "", toks;
+    if (row.includes("\t") || row.includes(",")) {
+      toks = splitPasteRow(row).filter(t => t !== "");
+      if (toks.length && DIMS_AT_END.test(toks[toks.length - 1])) dims = toks.pop();
+    } else {
+      const m = row.match(DIMS_AT_END);
+      if (m) { dims = m[1]; row = row.slice(0, m.index).trim(); }
+      toks = row ? row.split(/\s+/) : [];
+    }
+    if (!toks.length || /^(item|pallet)/i.test(toks[0])) return;  // header / blank
+    const lineIds = linesOfItem(toks[0]);
+    let item = null, pallet, weight;
+    if (lineIds.length) [item, pallet, weight] = toks;
+    else if (toks.length >= 3) { unknown.push(toks[0]); return; }  // item # . pallet . weight, but not an item on it
+    else [pallet, weight] = toks;
+    if (!pallet) { if (item) unknown.push(`${item} (no pallet #)`); return; }
+    rows.push({ item, lineIds, pallet, weight: weight ? (parseFloat(weight.replace(/[^\d.]/g, "")) || "") : "", dimensions: dims ? normalizeDimensions(dims) : "" });
+  });
+  return { rows, unknown };
+}
+// One weight / size per pallet. Rows that disagree: ask which to keep. -> {pallet #: {weight?, dimensions?}}, or null if cancelled.
+async function pickPalletConflicts(rows) {
+  const byPallet = {}, order = [];
+  rows.forEach(r => {
+    const key = r.pallet.toLowerCase();
+    if (!byPallet[key]) { byPallet[key] = { pallet: r.pallet, opts: [] }; order.push(key); }
+    if (r.weight === "" && !r.dimensions) return;
+    const g = byPallet[key], same = g.opts.find(o => o.weight === r.weight && o.dimensions === r.dimensions);
+    if (same) { if (r.item) same.items.push(r.item); } else g.opts.push({ weight: r.weight, dimensions: r.dimensions, items: r.item ? [r.item] : [] });
+  });
+  const out = {}, clash = [];
+  order.forEach(key => {
+    const g = byPallet[key], ws = [...new Set(g.opts.map(o => o.weight).filter(w => w !== ""))], ds = [...new Set(g.opts.map(o => o.dimensions).filter(Boolean))];
+    if (ws.length > 1 || ds.length > 1) { clash.push(g); return; }
+    const v = {};
+    if (ws.length) v.weight = ws[0];
+    if (ds.length) v.dimensions = ds[0];
+    out[g.pallet] = v;
+  });
+  if (!clash.length) return out;
+  const optLabel = o => `${o.weight !== "" ? `${o.weight} lbs` : "no weight"} · ${o.dimensions || "no size"}${o.items.length ? ` <span class="muted">(${escapeHtml(o.items.join(", "))})</span>` : ""}`;
+  const { value, el } = await askDialog({ title: "Same pallet, different weight or size", tone: "warn",
+    body: `<p class="small" style="margin-top:0;">These rows give one pallet more than one weight or size. Which is right?</p>
+      ${clash.map((g, gi) => `<div class="pal-clash"><b>Pallet ${escapeHtml(g.pallet)}</b>${g.opts.map((o, oi) => `
+        <label class="pal-clash-opt"><input type="radio" name="pal-clash-${gi}" value="${oi}" ${oi === g.opts.length - 1 ? "checked" : ""}> ${optLabel(o)}</label>`).join("")}</div>`).join("")}`,
+    buttons: [{ label: "Use These", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value !== "go") return null;
+  clash.forEach((g, gi) => {
+    const o = g.opts[+(el.querySelector(`input[name="pal-clash-${gi}"]:checked`) || {}).value || 0];
+    const v = {};
+    if (o.weight !== "") v.weight = o.weight;
+    if (o.dimensions) v.dimensions = o.dimensions;
+    out[g.pallet] = v;
   });
   return out;
 }
-// Match pasted rows to the pallets in use ({pallet #: {weight, dimensions}}): what to fill, what it would replace, and
-// pallet #s no line is on yet (kept, and filled in once a line gets that #).
-function planPalletPaste(rows, now) {
-  const used = Object.keys(now), pending = {}, changes = [], unused = {};
-  const match = pn => used.find(u => u === pn) || used.find(u => u.toLowerCase() === pn.toLowerCase());
-  rows.forEach(r => {
-    const v = {};
-    if (r.weight !== "") v.weight = r.weight;
-    if (r.dimensions) v.dimensions = r.dimensions;
-    const pn = match(r.pallet);
-    if (!pn) { unused[r.pallet] = v; return; }
-    const was = now[pn] || {};
+// What a paste would replace: a line's pallet #, a pallet's weight or size. linePallets: {lineId: current value}; now: {pallet #: {weight, dimensions}}
+function palletPasteChanges(rows, pallets, linePallets, now, lineName) {
+  const changes = [];
+  rows.forEach(r => r.lineIds.forEach(id => { const cur = linePallets[id] || "";
+    if (cur && cur !== r.pallet) changes.push(`${lineName(id)}: pallet ${cur} → ${r.pallet}`); }));
+  Object.entries(pallets).forEach(([pn, v]) => {
+    const was = now[pn] || Object.entries(now).find(([k]) => k.toLowerCase() === pn.toLowerCase())?.[1] || {};
     if (v.weight !== undefined && was.weight && String(was.weight) !== String(v.weight)) changes.push(`Pallet ${pn} weight: ${was.weight} → ${v.weight} lbs`);
     if (v.dimensions && was.dimensions && was.dimensions !== v.dimensions) changes.push(`Pallet ${pn} size: ${was.dimensions} → ${v.dimensions}`);
-    pending[pn] = v;
   });
-  return { pending, changes, unused };
+  return [...new Set(changes)];
 }
 async function confirmPalletReplace(changes) {
   if (!changes.length) return true;
@@ -900,22 +944,42 @@ async function confirmPalletReplace(changes) {
     buttons: [{ label: "Replace", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
   return value === "go";
 }
-function pastedPalletsMsg(filled, unused) {
-  const u = Object.keys(unused);
-  return `${filled ? `Filled ${filled} pallet${filled === 1 ? "" : "s"}.` : "No pallet filled."}`
-    + (u.length ? ` <span class="neg">${escapeHtml(u.join(", "))} ${u.length === 1 ? "isn't" : "aren't"} on any line yet — give a line that Pallet # and it fills in.</span>` : "");
+function pastedPalletsMsg(lines, filled, unused, unknown) {
+  return [lines ? `${lines} line${lines === 1 ? "" : "s"} put on a pallet.` : "",
+    filled ? `${filled} pallet${filled === 1 ? "" : "s"} filled.` : "",
+    unused.length ? `<span class="neg">${escapeHtml(unused.join(", "))} ${unused.length === 1 ? "isn't" : "aren't"} on any line yet — give a line that Pallet # and it fills in.</span>` : "",
+    unknown.length ? `<span class="neg">Not on this shipment: ${escapeHtml(unknown.join(", "))}.</span>` : ""].filter(Boolean).join(" ") || "Nothing applied.";
+}
+// Pasting into a shipment's Pack screen; the screen-specific parts are passed in.
+// io: { lineIds(code), linePallet(id), setLinePallet(id, pn), lineName(id), palletValues(), render(pending), stash }
+async function runPalletPaste(text, io) {
+  const { rows, unknown } = parsePalletPaste(text, io.lineIds);
+  if (!rows.length) return { msg: unknown.length ? pastedPalletsMsg(0, 0, [], unknown) : "Nothing to apply — Item # · Pallet # · Weight · Dimensions, or Pallet # · Weight · Dimensions." };
+  const pallets = await pickPalletConflicts(rows);
+  if (!pallets) return { msg: "Nothing changed." };
+  const cur = {};
+  rows.forEach(r => r.lineIds.forEach(id => { cur[id] = io.linePallet(id); }));
+  if (!(await confirmPalletReplace(palletPasteChanges(rows, pallets, cur, io.palletValues(), io.lineName)))) return { msg: "Nothing changed." };
+  let lines = 0;
+  rows.forEach(r => r.lineIds.forEach(id => { io.setLinePallet(id, r.pallet); lines++; }));
+  io.render(pallets);
+  const shown = Object.keys(io.palletValues()).map(k => k.toLowerCase()), unused = [];
+  Object.entries(pallets).forEach(([pn, v]) => { if (!shown.includes(pn.toLowerCase())) { io.stash[pn] = v; unused.push(pn); } });
+  return { msg: pastedPalletsMsg(lines, Object.keys(pallets).length - unused.length, unused, unknown), changed: true };
 }
 let palletStash = {};  // pasted pallets no line is on yet: {pallet #: {weight, dimensions}}
 async function applyPastedPallets() {
-  const status = document.getElementById("pallet-paste-status");
-  const rows = parsePalletPaste(document.getElementById("pallet-paste").value);
-  if (!rows.length) { status.textContent = "Nothing to apply — one row per pallet: Pallet # · Weight · Dimensions."; return; }
-  const plan = planPalletPaste(rows, palletValues());
-  if (!(await confirmPalletReplace(plan.changes))) { status.textContent = "Nothing changed."; return; }
-  Object.assign(palletStash, plan.unused);
-  renderPalletTable(plan.pending);
-  if (proc) proc.dirty = true;
-  status.innerHTML = pastedPalletsMsg(Object.keys(plan.pending).length, plan.unused) + " Accept Packaging to keep it.";
+  const status = document.getElementById("pallet-paste-status"), sh = shipmentsById[currentShipmentId], entries = shippedByLine(sh);
+  const input = id => document.querySelector(`.line-pallet[data-line="${id}"]`);
+  const r = await runPalletPaste(document.getElementById("pallet-paste").value, {
+    lineIds: code => entries.filter(e => palletItemKey(itemCode(e.item_id)) === palletItemKey(code)).map(e => e.order_line_id),
+    linePallet: id => (input(id) || {}).value || "",
+    setLinePallet: (id, pn) => { const i = input(id); if (i) i.value = pn; setLinePallet(id, pn); },
+    lineName: id => { const e = entries.find(x => x.order_line_id === id); return `#${e.line_no ?? ""} ${itemCode(e.item_id)}`; },
+    palletValues, render: pending => renderPalletTable(pending), stash: palletStash,
+  });
+  if (r.changed && proc) proc.dirty = true;
+  status.innerHTML = r.msg + (r.changed ? " Accept Packaging to keep it." : "");
 }
 // The pallet table as it stands: {pallet #: {weight, dimensions}} (typed, else saved).
 function palletValues() {

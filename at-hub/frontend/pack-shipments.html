@@ -978,7 +978,8 @@
     function bpPalletsHtml(list) {
       return `<h5 class="dsub-title">Pallets <span class="muted small">(optional)</span></h5>
         <p class="muted small" style="margin-top:0;">Which line goes on which pallet: the <b>Pallet #</b> at the end of each line. Then each pallet's weight and
-          dimensions — type them, or paste <b>Pallet # · Weight · Dimensions</b> (one row per pallet; space, tab or comma). Pallet #s are per shipment.
+          dimensions — type them, or paste <b>Item # · Pallet # · Weight · Dimensions</b> (or just <b>Pallet # · Weight · Dimensions</b>; space, tab or comma).
+          Pallet #s are per shipment.
           Kept when you <b>Save</b> or <b>Accept Packaging</b>.</p>
         ${list.map(s => { const o = order(s.order_id) || {};
           return `<details class="bp-ship-pallets" data-sid="${s.id}" ${list.length <= 3 ? "open" : ""}>
@@ -1022,12 +1023,12 @@
       if (!s || !box) return;
       const typed = bpPalletValues(sid), used = bpLinePallets(sid), names = Object.keys(used), stash = bp.stash[sid] = bp.stash[sid] || {};
       box.querySelector(".bp-pal-sum").textContent = names.length ? `· ${names.length} pallet${names.length === 1 ? "" : "s"}` : "· no pallets";
-      box.querySelector(".bp-pal-table").innerHTML = names.length ? `<table class="fit-table no-table-tools no-col-bands"><thead><tr><th>Pallet #</th><th class="grow">Items</th>
+      box.querySelector(".bp-pal-table").innerHTML = names.length ? `<table class="fit-table no-table-tools no-col-bands pallet-grid"><thead><tr><th>Pallet #</th>
           <th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead><tbody>
         ${names.map(pn => { const saved = s.pallets.find(p => p.pallet_number === pn) || {};
           const v = Object.assign({ weight: saved.weight ?? "", dimensions: saved.dimensions ?? "" }, stash[pn] || {}, typed[pn] || {}, pending[pn] || {});
           delete stash[pn];
-          return `<tr data-pallet="${escapeHtml(pn)}"><td><b>${escapeHtml(pn)}</b></td><td class="grow small">${escapeHtml([...new Set(used[pn])].join(", "))}</td>
+          return `<tr data-pallet="${escapeHtml(pn)}"><td><b>${escapeHtml(pn)}</b></td>
             <td><input type="number" step="0.1" min="0" class="bp-w qty-input" value="${escapeHtml(v.weight)}" placeholder="lbs"></td>
             <td><input type="text" class="bp-d" value="${escapeHtml(v.dimensions)}" placeholder="48 x 40 x 50" style="width:140px;" onblur="this.value = normalizeDimensions(this.value)"></td></tr>`; }).join("")}</tbody></table>`
         : `<p class="muted small" style="margin:6px 0 0;">No pallets yet — give the lines a Pallet #.</p>`;
@@ -1040,15 +1041,17 @@
       bpRenderPallets(sid);
     }
     async function bpPastePallets(sid) {
-      const block = bpPalBlock(sid), status = block.querySelector(".bp-pal-status");
-      const rows = parsePalletPaste(block.querySelector(".bp-pal-text").value);
-      if (!rows.length) { status.textContent = "Nothing to apply — one row per pallet: Pallet # · Weight · Dimensions."; return; }
-      const plan = planPalletPaste(rows, bpPalletValues(sid));
-      if (!(await confirmPalletReplace(plan.changes))) { status.textContent = "Nothing changed."; return; }
-      Object.assign(bp.stash[sid] = bp.stash[sid] || {}, plan.unused);
-      bp.dirty = true;
-      bpRenderPallets(sid, plan.pending);
-      status.innerHTML = pastedPalletsMsg(Object.keys(plan.pending).length, plan.unused);
+      const block = bpPalBlock(sid), status = block.querySelector(".bp-pal-status"), entries = shippedByLine(byId(sid));
+      const input = id => block.querySelector(`.bp-line-pallet[data-line="${id}"]`);
+      const r = await runPalletPaste(block.querySelector(".bp-pal-text").value, {
+        lineIds: code => entries.filter(e => palletItemKey(itemCode(e.item_id)) === palletItemKey(code)).map(e => e.order_line_id),
+        linePallet: id => (input(id) || {}).value || "",
+        setLinePallet: (id, pn) => { const i = input(id); if (i) i.value = pn; },
+        lineName: id => { const e = entries.find(x => x.order_line_id === id); return `#${e.line_no ?? ""} ${itemCode(e.item_id)}`; },
+        palletValues: () => bpPalletValues(sid), render: pending => bpRenderPallets(sid, pending), stash: bp.stash[sid] = bp.stash[sid] || {},
+      });
+      if (r.changed) bp.dirty = true;
+      status.innerHTML = r.msg;
     }
     // a line's pallet as typed: undefined = untouched (keep the saved boxes' pallets), null = none
     function bpTypedPallet(sid, lineId) {

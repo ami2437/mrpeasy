@@ -1736,3 +1736,6 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 .bp-pal-paste textarea { max-width: 420px; }
 .bp-pal-lines { margin-bottom: 8px; }
 .bp-pal-table .bp-w { width: 90px; }
+.pallet-grid { width: auto; }
+.pal-clash { margin: 8px 0; }
+.pal-clash-opt { display: flex; align-items: center; gap: 6px; margin: 4px 0 0 12px; font-weight: 400; text-transform: none; font-size: 13px; }
