@@ -104,6 +104,8 @@ function linesSectionHtml(shipment) {
         ? `<button class="danger" onclick="unconfirmShipment(${shipment.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}
       ${shipment.status === "ready" && shipment.lines.some(l => (l.picked_quantity || 0) > 0)
         ? `<button class="danger" onclick="unpickShipment(${shipment.id})" title="Picked quantities back to 0 (bookings and packing stay)">Unpick</button>` : ""}
+      ${open && shipment.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
+        ? `<button class="danger" onclick="unbookAll(${shipment.id})" title="Every unpicked unit back to stock in one go">Unbook All</button>` : ""}
       ${["new", "ready"].includes(shipment.status) ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
       ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="next-step" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Proof of delivery)">Mark Delivered (no POD)</button>` : ""}
       ${["shipped", "delivered", "invoiced"].includes(shipment.status) && AuthGuard.can("shipments.undo") ? `<button class="secondary" onclick="unshipShipment(${shipment.id})">Undo Ship</button>` : ""}
@@ -299,6 +301,16 @@ async function unbookLine(shipmentId, lineId) {
   await shipmentAction(shipmentId, "unbook", { shipment_line_id: lineId, quantity: qty });
 }
 
+
+async function unbookAll(id) {
+  const sh = shipmentsById[id];
+  const units = sh.lines.reduce((t, l) => t + Math.max(0, l.quantity - (l.picked_quantity || 0)), 0);
+  const nonePicked = sh.lines.every(l => !(l.picked_quantity > 0));
+  const { value } = await askDialog({ title: `Unbook all on ${sh.code}?`, tone: "warn",
+    body: `<p>${fmtQty(units)} units go back to stock.${nonePicked ? " Nothing is picked, so the shipment is <b>cancelled</b>." : " Picked units stay."}</p>`,
+    buttons: [{ label: "Unbook All", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value === "go") await shipmentAction(id, "unbook-all");
+}
 
 function cancelShipment(id) {
   if (!confirm("Cancel this shipment? Its bookings are released back to stock and its packing list is cleared.")) return;

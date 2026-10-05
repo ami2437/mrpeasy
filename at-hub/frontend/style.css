@@ -1615,11 +1615,36 @@ html[data-theme="dark"] .docs-warn { color: #fbbf24; }
 .modal-backdrop.over-glass { z-index: 170; }
 .sp-paste label { display: block; margin-bottom: 4px; text-transform: none; }
 
-/* Red (.danger) buttons -- delete, cancel, skip-review: a muted, slightly see-through red, not a siren */
-:root { --danger-bg: rgba(190, 58, 58, .80); --danger-bg-hover: rgba(176, 44, 44, .90); --danger-edge: rgba(150, 30, 30, .30); }
-html[data-theme="dark"] { --danger-bg: rgba(205, 80, 80, .55); --danger-bg-hover: rgba(215, 90, 90, .68); --danger-edge: rgba(255, 160, 160, .25); }
-button.danger { background: var(--danger-bg); color: #fff; border: 1px solid var(--danger-edge); }
-button.danger:hover:not(:disabled) { background: var(--danger-bg-hover); }
+/* Red (.danger) buttons -- delete, cancel, undo steps: liquid glass. A see-through red body with a frosted blur,
+   a light rim, a glossy top highlight and a soft red glow; hover lifts and brightens it. */
+:root {
+  --danger-top: rgba(236, 96, 96, .74); --danger-bottom: rgba(190, 34, 34, .82);
+  --danger-rim: rgba(255, 255, 255, .55); --danger-glow: rgba(220, 38, 38, .38); --danger-shine: rgba(255, 255, 255, .42);
+}
+html[data-theme="dark"] {
+  --danger-top: rgba(248, 113, 113, .42); --danger-bottom: rgba(185, 28, 28, .48);
+  --danger-rim: rgba(255, 200, 200, .28); --danger-glow: rgba(248, 113, 113, .30); --danger-shine: rgba(255, 255, 255, .22);
+}
+button.danger {
+  position: relative; overflow: hidden; isolation: isolate; color: #fff; font-weight: 600;
+  background: linear-gradient(180deg, var(--danger-top), var(--danger-bottom));
+  -webkit-backdrop-filter: blur(12px) saturate(170%); backdrop-filter: blur(12px) saturate(170%);
+  border: 1px solid var(--danger-rim); border-radius: 10px;
+  text-shadow: 0 1px 1px rgba(127, 29, 29, .35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 -2px 6px rgba(127, 29, 29, .22), 0 6px 16px -8px var(--danger-glow);
+  transition: transform .12s, box-shadow .18s, filter .18s;
+}
+button.danger::before {  /* the glossy top half */
+  content: ""; position: absolute; inset: 1px 1px 52% 1px; border-radius: 9px 9px 14px 14px / 9px 9px 8px 8px; z-index: -1;
+  background: linear-gradient(180deg, var(--danger-shine), rgba(255, 255, 255, 0)); pointer-events: none;
+}
+button.danger:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--danger-top), var(--danger-bottom)); filter: brightness(1.08) saturate(1.1);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .65), inset 0 -2px 6px rgba(127, 29, 29, .25), 0 0 0 3px rgba(239, 68, 68, .16), 0 10px 22px -10px var(--danger-glow);
+}
+button.danger:active:not(:disabled) { transform: translateY(0); filter: brightness(.97); box-shadow: inset 0 2px 6px rgba(127, 29, 29, .30); }
+button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .trash-btn { --ib: color-mix(in srgb, var(--neg) 78%, #64748b); }
 .stage-divider { display: flex; align-items: center; gap: 8px; margin: 18px 4px 8px; padding-top: 10px; border-top: 1px dashed var(--border); font-weight: 600; font-size: 13.5px; color: var(--text-2); }
 .stage-divider .ico { width: 16px; height: 16px; }

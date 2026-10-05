@@ -143,3 +143,20 @@ def test_unconfirm_booking(api, make):
     api.post(f"/api/shipments/{sh['id']}/unconfirm-booking", expect=400)                  # picked: unpick first
     api.post(f"/api/shipments/{sh['id']}/unpick")
     assert api.post(f"/api/shipments/{sh['id']}/unconfirm-booking")["status"] == "new"
+
+
+def test_unbook_all(api, make):
+    a, b = make.item(), make.item()
+    make.stock(a, 50)
+    make.stock(b, 50)
+    o = make.order(lines=[(a, 20, 1), (b, 10, 1)])
+    sh = api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": l["id"], "quantity": l["quantity"]} for l in o["lines"]]})
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    first = next(l for l in sh["lines"] if l["item_id"] == a["id"])
+    api.post(f"/api/shipments/{sh['id']}/pick", json={"lines": [{"shipment_line_id": first["id"], "quantity": 5}]})
+    after = api.post(f"/api/shipments/{sh['id']}/unbook-all")
+    assert after["status"] == "ready" and [(l["quantity"], l["picked_quantity"]) for l in after["lines"]] == [(5, 5)]   # picked stays
+    assert api.get(f"/api/stock-items/{b['id']}")["booked"] == 0
+    api.post(f"/api/shipments/{sh['id']}/unbook-all", expect=400)                           # nothing unpicked left
+    sh2 = _book(api, make, make.customer(), a, 10)
+    assert api.post(f"/api/shipments/{sh2['id']}/unbook-all")["status"] == "cancelled"      # nothing picked -> cancelled

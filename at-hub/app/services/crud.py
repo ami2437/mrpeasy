@@ -1148,6 +1148,23 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def unbook_all(db: Session, shipment_id: int) -> Shipment:
+        """Unbook every unpicked unit on every line (picked units stay). Nothing picked -> the shipment ends up
+        with no lines, and unbook() cancels it, as Cancel Shipment would."""
+        from types import SimpleNamespace
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status not in ShipmentService.OPEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only new or ready shipments can be unbooked")
+        todo = [(l.id, l.quantity - (l.picked_quantity or 0)) for l in shipment.lines if l.quantity - (l.picked_quantity or 0) > 1e-9]
+        if not todo:
+            raise HTTPException(status_code=400, detail="Nothing left to unbook -- everything on it is picked")
+        for line_id, qty in todo:
+            if shipment.status not in ShipmentService.OPEN_STATUSES:
+                break
+            shipment = ShipmentService.unbook(db, shipment_id, SimpleNamespace(shipment_line_id=line_id, order_line_id=None, quantity=qty))
+        return shipment
+
+    @staticmethod
     def unconfirm_booking(db: Session, shipment_id: int, by: str) -> Shipment:
         """Undo Confirm Bookings: ready -> new, so bookings can be changed again before picking.
         Stock stays booked. Only while nothing is picked (Unpick first)."""
