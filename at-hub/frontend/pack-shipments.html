@@ -1074,11 +1074,11 @@
         <div class="error" id="sp-error"></div>
         <div class="sm-foot sp-foot">
           <label class="inline-check" title="Each item's default pack size becomes this size (the old one stays in its history)"><input type="checkbox" id="sp-save-default"> Also make these the items' default</label>
-          <label class="inline-check" title="Save the boxes and accept the packing on these shipments straight away"><input type="checkbox" id="sp-accept"> Accept packing now</label>
           <span class="spacer"></span>
           <button type="button" class="secondary" onclick="spSavePreset()">Save As Preset…</button>
           <button type="button" class="secondary" onclick="closeSetPack()">Cancel</button>
-          <button type="button" class="next-step" onclick="spApply()">Apply To ${chosen.length} Shipment${chosen.length === 1 ? "" : "s"}</button>
+          <button type="button" class="danger" onclick="spApply(true)" title="Accepts packing on every shipment at once — no review — and moves them to Ready To Ship">Accept All, No Review</button>
+          <button type="button" class="next-step" onclick="spApply()" title="Fills the sizes in; you review each shipment, then Accept Packing">Apply To ${chosen.length} Shipment${chosen.length === 1 ? "" : "s"}</button>
         </div></div>`;
       document.body.appendChild(back);
       document.body.classList.add("glass-open");
@@ -1197,11 +1197,17 @@
         document.getElementById("sp-del-preset").style.display = "none";
       } catch (e) { document.getElementById("sp-error").textContent = e.message; }
     }
-    async function spApply() {
+    async function spApply(accept = false) {
       const vals = spValues(), err = document.getElementById("sp-error");
       if (!Object.keys(vals).length) { err.textContent = "Fill in at least one pack size."; return; }
-      const saveDefault = document.getElementById("sp-save-default").checked, accept = document.getElementById("sp-accept").checked;
+      const saveDefault = document.getElementById("sp-save-default").checked;
       const chosen = sp.chosen;
+      if (accept) {
+        const n = chosen.length, { value } = await askDialog({ title: "Accept without review?", tone: "warn",
+          body: `<p>${n} shipment${n === 1 ? "" : "s"} skip review and move to <b>Ready To Ship</b>.</p>`,
+          buttons: [{ label: `Accept ${n}`, value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+      }
       let lines = 0;
       const touched = new Set();
       chosen.forEach(s => {
