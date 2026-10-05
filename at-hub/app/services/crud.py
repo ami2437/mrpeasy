@@ -1148,6 +1148,21 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def unconfirm_booking(db: Session, shipment_id: int, by: str) -> Shipment:
+        """Undo Confirm Bookings: ready -> new, so bookings can be changed again before picking.
+        Stock stays booked. Only while nothing is picked (Unpick first)."""
+        shipment = ShipmentService.get(db, shipment_id)
+        if shipment.status != "ready":
+            raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only confirmed (ready) bookings can be unconfirmed")
+        if any((l.picked_quantity or 0) > 0 for l in shipment.lines):
+            raise HTTPException(status_code=400, detail=f"{shipment.code} has picked quantities -- Unpick it first")
+        shipment.status = "new"
+        shipment.updated_by = by
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
     def pick(db: Session, shipment_id: int, data, created_by: str) -> Shipment:
         """Record picked quantities. Nothing ships here: once everything is picked, packing is accepted
         and then Ship sends it (ship())."""

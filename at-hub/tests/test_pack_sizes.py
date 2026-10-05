@@ -128,3 +128,18 @@ def test_unpick_until_shipped(api, make):
     assert api.get(f"/api/stock-items/{item['id']}")["on_hand"] == 50       # picking never moved stock
     shipped = make.ship(make.order(lines=[(item, 5, 1)]))
     api.post(f"/api/shipments/{shipped['id']}/unpick", expect=400)
+
+
+def test_unconfirm_booking(api, make):
+    item = make.item()
+    make.stock(item, 50)
+    sh = _book(api, make, make.customer(), item, 20)
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    back = api.post(f"/api/shipments/{sh['id']}/unconfirm-booking")
+    assert back["status"] == "new" and sum(l["quantity"] for l in back["lines"]) == 20   # still booked
+    api.post(f"/api/shipments/{sh['id']}/unconfirm-booking", expect=400)                  # already new
+    api.post(f"/api/shipments/{sh['id']}/confirm-booking")
+    api.post(f"/api/shipments/{sh['id']}/pick", json={"pick_all": True})
+    api.post(f"/api/shipments/{sh['id']}/unconfirm-booking", expect=400)                  # picked: unpick first
+    api.post(f"/api/shipments/{sh['id']}/unpick")
+    assert api.post(f"/api/shipments/{sh['id']}/unconfirm-booking")["status"] == "new"

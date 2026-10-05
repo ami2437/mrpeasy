@@ -151,6 +151,12 @@ def accept_packing(shipment_id: int, db: Session = Depends(get_db), current_user
     return with_pods(db, ShipmentService.accept_packing(db, shipment_id, current_user.username))
 
 
+@router.post("/{shipment_id}/unconfirm-booking", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
+def unconfirm_booking(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Undo Confirm Bookings (ready -> new) while nothing is picked; stock stays booked."""
+    return with_pods(db, ShipmentService.unconfirm_booking(db, shipment_id, current_user.username))
+
+
 @router.post("/{shipment_id}/unpick", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
 def unpick(shipment_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Set every line back to 0 picked on a shipment that hasn't shipped (bookings and packing stay)."""

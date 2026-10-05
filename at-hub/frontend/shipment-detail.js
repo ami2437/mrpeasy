@@ -58,7 +58,8 @@ function linesSectionHtml(shipment) {
   return `
     <h4 style="display:flex; align-items:center; gap:10px;">Items
       ${ready ? (locked ? `<span class="lock-tag" title="Booked quantities are confirmed. Change Bookings to unbook.">${icon("lock")}Bookings locked</span>
-        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>`
+        <button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = true; showDetail(${shipment.id})">Change Bookings</button>
+        ${shipment.lines.every(l => !(l.picked_quantity > 0)) ? `<button class="danger small-btn" onclick="unconfirmShipment(${shipment.id})" title="Back to New -- stock stays booked">Unconfirm Bookings</button>` : ""}`
         : `<button class="secondary small-btn" onclick="unbookOpen[${shipment.id}] = false; showDetail(${shipment.id})">Done Changing</button>`) : ""}</h4>
     <table class="fit-table ship-lines">
       <thead><tr><th title="Order line">Line</th><th class="grow">Item</th><th>Lot</th>
@@ -149,6 +150,19 @@ async function confirmUnpick(codes) {
     body: `<p>Picked quantities go back to 0. Bookings and packing stay.</p>`,
     buttons: [{ label: "Unpick", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
   return value === "go";
+}
+// Undo Confirm Bookings: back to New (stock stays booked). Only while nothing is picked.
+async function confirmUnconfirm(codes) {
+  const many = codes.length > 1;
+  const { value } = await askDialog({ title: many ? `Unconfirm bookings on ${codes.length} shipments?` : `Unconfirm bookings on ${codes[0]}?`, tone: "warn",
+    body: `<p>Back to <b>New</b>. Stock stays booked.</p>`,
+    buttons: [{ label: "Unconfirm", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  return value === "go";
+}
+async function unconfirmShipment(id) {
+  const sh = shipmentsById[id] || shipments.find(s => s.id === id);
+  if (!(await confirmUnconfirm([sh ? sh.code : `#${id}`]))) return;
+  await shipmentAction(id, "unconfirm-booking");
 }
 async function unpickShipment(id) {
   const sh = shipmentsById[id] || shipments.find(s => s.id === id);
