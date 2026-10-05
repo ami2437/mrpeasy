@@ -805,7 +805,7 @@
       const body = bp.split ? bulkSplitHtml() : { pick: bpPickHtml, pack: bpPackHtml, ship: bpShipHtml }[bp.step](list);
       const foot = bp.split ? `<span class="spacer"></span><button type="button" class="secondary" onclick="closeBulk(true)">Close</button>`
         : { pick: bpPickFoot, pack: bpPackFoot, ship: bpShipFoot }[bp.step](list);
-      back.innerHTML = `<div class="glass-panel proc-panel bproc-panel" role="dialog" aria-modal="true" aria-labelledby="bp-title">
+      back.innerHTML = `<div class="glass-panel proc-panel bproc-panel ship-inproc" role="dialog" aria-modal="true" aria-labelledby="bp-title">
         <div class="sm-head"><div><h3 id="bp-title">Process ${list.length} shipment${list.length === 1 ? "" : "s"}</h3>
             <div class="muted small">${bp.split ? "They've moved to different stages" : `All in <b>${escapeHtml(stageLabel(bp.step))}</b>`} · ${escapeHtml(list.map(s => s.code).slice(0, 8).join(", "))}${list.length > 8 ? "…" : ""}</div></div>
           <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeBulk()">${icon("x")}</button></div>
@@ -832,7 +832,15 @@
 
     // ---- Pick ----
     function bpPickHtml(list) {
-      return `<p class="muted small" style="margin-top:0;">Pick All marks every line picked (and confirms the bookings). For a part pick, <b>Open</b> that shipment.</p>${bpRowsHtml(list)}`;
+      return `<p class="muted small" style="margin-top:0;">Same as one shipment: Pick now starts at everything left; lower it to pick part of a line (0 = none) —
+          whatever isn't picked is unbooked (back to stock, still open on the order). Picking confirms the bookings.</p>${bpRowsHtml(list)}
+        <table class="fit-table no-table-tools no-col-bands bp-pick" style="margin-top:12px;"><thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th>
+          <th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th></tr></thead><tbody>
+        ${list.map(s => { const o = order(s.order_id) || {}, todo = s.lines.filter(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
+            .sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
+          return `<tr class="bp-pick-head"><td colspan="6"><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</span></td></tr>
+            ${todo.map(l => `<tr><td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${itemLabel(l.item_id)}</td><td>${lotCode(l.lot_id)}</td>
+              <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td><td>${pickQtyInput(s, l)}</td></tr>`).join("")}`; }).join("")}</tbody></table>`;
     }
     function bpPickFoot(list) {
       const picked = list.filter(hasPicks), unconf = list.filter(s => s.status === "ready" && !hasPicks(s)), unbook = list.filter(s => s.lines.some(l => l.quantity - (l.picked_quantity || 0) > 1e-9));
@@ -840,15 +848,17 @@
         ${unconf.length ? `<button type="button" class="danger" onclick="bpUndo('unconfirm')">Unconfirm Bookings (${unconf.length})</button>` : ""}
         ${unbook.length ? `<button type="button" class="danger" onclick="bpUndo('unbook')">Unbook All (${unbook.length})</button>` : ""}
         <span class="spacer"></span>
-        <button type="button" class="next-step" onclick="bpPickAll()">${icon("check")} Pick All (${list.length})</button>`;
+        <button type="button" class="next-step" onclick="bpPick()" title="Records the Pick now quantities on every shipment">${icon("check")} Pick (${list.length})</button>`;
     }
-    async function bpPickAll() {
-      const list = bpList();
-      const msg = await bulkEach(list, async s => {
-        if (s.status === "new") await apiFetch(`/api/shipments/${s.id}/confirm-booking`, { method: "POST" });
-        await apiFetch(`/api/shipments/${s.id}/pick`, { method: "POST", body: JSON.stringify({ pick_all: true }) });
-      });
-      await bulkAfter(`Picked: ${msg}`);
+    async function bpPick() {
+      const err = document.getElementById("bp-error");
+      err.textContent = "";
+      const read = readPickInputs(document.getElementById("bp-body"), id => byId(id));
+      if (read.error) { err.textContent = read.error; return; }
+      if (!(await confirmShortPick(read.picks))) return;
+      const units = shortUnits(read.picks), bySh = new Map(read.picks.map(p => [p.sh.id, p]));
+      const msg = await bulkEach(read.picks.map(p => p.sh), s => savePick(bySh.get(s.id)));
+      await bulkAfter(`Picked: ${msg}${units ? ` · ${fmtQty(units)} unbooked — back in stock, still open on the order` : ""}`);
       const waiting = bp ? bpList().filter(s => !s.packed_at && s.boxes.length) : [];
       if (bp && bp.step === "pack" && waiting.length) await askDialog({ title: "Re-check the packing", tone: "warn",
         body: `<p>${escapeHtml(waiting.map(s => s.code).join(", "))} ${waiting.length === 1 ? "was" : "were"} packed before going back a step. Check the sizes and pallets, then <b>Accept Packaging</b>.</p>`,

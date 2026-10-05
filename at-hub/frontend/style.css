@@ -1705,3 +1705,20 @@ button.danger .ico { filter: drop-shadow(0 1px 1px rgba(127, 29, 29, .35)); }
 .bp-fill { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 #bp-pack .sp-tools { margin-top: 4px; }
 .qty-input.pick-short { border-color: #f59e0b; background: color-mix(in srgb, #f59e0b 12%, transparent); font-weight: 600; }
+/* ---- shipment underlay: pink while in process (booked, not shipped), green once shipped -- like the draft order's amber ---- */
+#detail-card.ship-inproc, .glass-panel.ship-inproc { --ship-tint: #ec4899; }
+#detail-card.ship-done, .glass-panel.ship-done { --ship-tint: #16a34a; }
+#detail-card.ship-inproc, #detail-card.ship-done { background: color-mix(in srgb, var(--ship-tint) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--ship-tint) 40%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ship-tint) 10%, transparent), 0 8px 28px -10px color-mix(in srgb, var(--ship-tint) 45%, transparent); }
+.glass-panel.ship-inproc, .glass-panel.ship-done { border-color: color-mix(in srgb, var(--ship-tint) 45%, transparent);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--ship-tint) 9%, rgba(255, 255, 255, .88)), color-mix(in srgb, var(--ship-tint) 5%, rgba(246, 248, 252, .74)));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ship-tint) 14%, transparent), 0 0 46px color-mix(in srgb, var(--ship-tint) 30%, transparent), 0 30px 80px rgba(15, 23, 42, .26); }
+html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass-panel.ship-done {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--ship-tint) 12%, rgba(36, 46, 62, .9)), color-mix(in srgb, var(--ship-tint) 7%, rgba(23, 30, 41, .8))); }
+/* the step you're on: its tab and its main button pulse */
+.ship-inproc .proc-tab.on { animation: step-tab-pulse 1.8s ease-in-out infinite; }
+.ship-inproc .proc-foot .next-step, #detail-card.ship-inproc .ship-actions-bar .next-step:not(:disabled) { animation: step-pulse 1.6s ease-in-out infinite; }
+@keyframes step-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); } 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent); } }
+@keyframes step-tab-pulse { 0%, 100% { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; } 50% { outline: 2px solid color-mix(in srgb, var(--accent) 0%, transparent); outline-offset: 5px; } }
+@media (prefers-reduced-motion: reduce) { .ship-inproc .proc-tab.on, .ship-inproc .proc-foot .next-step, #detail-card.ship-inproc .ship-actions-bar .next-step { animation: none; } }
+.bp-pick .bp-pick-head td { background: var(--surface-2); padding-top: 8px; }

@@ -290,7 +290,7 @@ async function procGo(step) {
 function renderProc() {
   const sh = shipmentsById[proc.id], back = document.getElementById("proc"), shipped = SHIPPED.includes(sh.status);
   const ord = order(sh.order_id) || {};
-  back.innerHTML = `<div class="glass-panel proc-panel" role="dialog" aria-modal="true" aria-labelledby="proc-title">
+  back.innerHTML = `<div class="glass-panel proc-panel ${shipped ? "ship-done" : "ship-inproc"}" role="dialog" aria-modal="true" aria-labelledby="proc-title">
     <div class="sm-head"><div>
         <h3 id="proc-title">${shipped ? "Modify" : "Process"} ${escapeHtml(sh.code)}</h3>
         <div class="muted small">${escapeHtml(ord.code || "")} · ${escapeHtml(customerName(ord.customer_id) || "")}${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</div>
@@ -324,8 +324,7 @@ function procPickHtml(sh) {
       <tbody>${sorted.map(l => { const left = Math.max(0, l.quantity - (l.picked_quantity || 0)); return `<tr>
         <td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${itemLabel(l.item_id)}</td><td>${lotCode(l.lot_id)}</td>
         <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}${left <= 0 ? " ✓" : ""}</td>
-        <td>${left > 0 ? `<input type="number" step="1" min="0" max="${left}" class="pick-qty qty-input" data-line="${l.id}" data-left="${left}" value="${left}"
-          oninput="this.classList.toggle('pick-short', (parseFloat(this.value) || 0) < ${left} - 1e-9)" title="Booked and not yet picked: ${fmtQty(left)}">` : ""}</td>
+        <td>${left > 0 ? pickQtyInput(sh, l) : ""}</td>
         <td class="unbook-cell">${left > 0 ? `<input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" title="Blank = all ${left}">
           <button class="small-btn secondary" onclick="unbookLine(${sh.id}, ${l.id})">Unbook</button>` : `<span class="muted small">Picked</span>`}</td></tr>`; }).join("")}</tbody>
     </table>`;
@@ -339,33 +338,59 @@ function procPickFoot(sh) {
     ${unpicked ? `<button type="button" class="next-step" onclick="procPick()" title="Records the Pick now quantities">Pick</button>`
       : `<button type="button" class="next-step" onclick="procGo('${sh.packed_at ? "ship" : "pack"}')">Next: ${sh.packed_at ? "Ship" : "Pack"} →</button>`}`;
 }
+// Pick now box (single and bulk Process): starts at everything left; lowered turns amber
+function pickQtyInput(sh, l) {
+  const left = Math.max(0, l.quantity - (l.picked_quantity || 0));
+  return `<input type="number" step="1" min="0" max="${left}" class="pick-qty qty-input" data-sh="${sh.id}" data-line="${l.id}" data-left="${left}" value="${left}"
+    oninput="this.classList.toggle('pick-short', (parseFloat(this.value) || 0) < ${left} - 1e-9)" title="Booked and not yet picked: ${fmtQty(left)}">`;
+}
+// Read the Pick now boxes under `scope`, grouped per shipment. Returns { error } or { picks: [{ sh, lines, short }] }.
+function readPickInputs(scope, shOf) {
+  const per = new Map();
+  for (const el of scope.querySelectorAll(".pick-qty")) {
+    const sh = shOf(parseInt(el.dataset.sh)), line = sh.lines.find(l => l.id === parseInt(el.dataset.line));
+    const left = parseFloat(el.dataset.left), qty = el.value.trim() === "" ? 0 : Number(el.value);
+    if (!Number.isInteger(qty) || qty < 0 || qty > left + 1e-9) return { error: `${sh.code} line #${line.line_no ?? ""}: pick a whole number from 0 to ${fmtQty(left)}.` };
+    if (!per.has(sh.id)) per.set(sh.id, { sh, lines: [], short: [] });
+    const p = per.get(sh.id);
+    if (qty > 0) p.lines.push({ shipment_line_id: line.id, quantity: qty });
+    if (qty < left - 1e-9) p.short.push({ line, left, qty });
+  }
+  for (const p of per.values())
+    if (!p.lines.length && !(p.short.length && p.sh.lines.some(l => (l.picked_quantity || 0) > 0)))
+      return { error: `${p.sh.code}: nothing to pick — enter a quantity, or Unbook All to release it.` };
+  return { picks: [...per.values()] };
+}
+// Picking less than booked: the short qty is unbooked (back to stock, still open on the order) -- list it and confirm first
+async function confirmShortPick(picks) {
+  const short = picks.flatMap(p => p.short.map(r => ({ ...r, sh: p.sh })));
+  if (!short.length) return true;
+  const many = picks.length > 1, units = short.reduce((t, r) => t + r.left - r.qty, 0);
+  const { value } = await askDialog({ title: `Picking less than booked on ${short.length} line${short.length === 1 ? "" : "s"}`, tone: "warn",
+    body: `<table class="fit-table no-table-tools"><thead><tr>${many ? "<th>Shipment</th>" : ""}<th>Line</th><th class="grow">Item</th><th class="num">To pick</th><th class="num">Picking</th><th class="num">Unbooked</th></tr></thead>
+      <tbody>${short.map(r => `<tr>${many ? `<td class="nowrap">${escapeHtml(r.sh.code)}</td>` : ""}<td class="line-no">#${r.line.line_no ?? ""}</td><td class="grow">${itemLabel(r.line.item_id)}</td>
+        <td class="num">${fmtQty(r.left)}</td><td class="num">${fmtQty(r.qty)}</td><td class="num"><b>${fmtQty(r.left - r.qty)}</b></td></tr>`).join("")}</tbody></table>
+      <p>The <b>${fmtQty(units)}</b> not picked is <b>unbooked</b>: it goes back to stock, ${many ? "each shipment" : escapeHtml(short[0].sh.code)} moves on with what's picked,
+      and the customer order keeps it open so it can be booked on a later shipment.</p>`,
+    buttons: [{ label: "Pick & Unbook the Rest", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
+  return value === "go";
+}
+// Confirm (if new) and record one shipment's picks; whatever wasn't picked is unbooked
+async function savePick(p) {
+  if (p.sh.status === "new") await apiFetch(`/api/shipments/${p.sh.id}/confirm-booking`, { method: "POST" });  // picking confirms the bookings
+  return apiFetch(`/api/shipments/${p.sh.id}/pick`, { method: "POST", body: JSON.stringify({ lines: p.lines, unbook_rest: p.short.length > 0 }) });
+}
+const shortUnits = picks => picks.reduce((t, p) => t + p.short.reduce((u, r) => u + r.left - r.qty, 0), 0);
+
 async function procPick() {
   const sh = shipmentsById[proc.id], err = document.getElementById("proc-error");
   err.textContent = "";
-  const rows = [...document.querySelectorAll("#proc-body .pick-qty")].map(el => ({
-    line: sh.lines.find(l => l.id === parseInt(el.dataset.line)), left: parseFloat(el.dataset.left), qty: el.value.trim() === "" ? 0 : Number(el.value) }));
-  const bad = rows.find(r => !Number.isInteger(r.qty) || r.qty < 0 || r.qty > r.left + 1e-9);
-  if (bad) { err.textContent = `Line #${bad.line.line_no ?? ""}: pick a whole number from 0 to ${fmtQty(bad.left)}.`; return; }
-  const lines = rows.filter(r => r.qty > 0).map(r => ({ shipment_line_id: r.line.id, quantity: r.qty }));
-  const short = rows.filter(r => r.qty < r.left - 1e-9);
-  const pickedBefore = sh.lines.some(l => (l.picked_quantity || 0) > 0);
-  if (!lines.length && !(short.length && pickedBefore)) { err.textContent = "Enter a picked quantity on at least one line."; return; }
-  // Picking less than booked: the short qty is unbooked (back to stock, still open on the order) -- say so first
-  if (short.length) {
-    const units = short.reduce((t, r) => t + r.left - r.qty, 0);
-    const { value } = await askDialog({ title: `Picking less than booked on ${short.length} line${short.length === 1 ? "" : "s"}`, tone: "warn",
-      body: `<table class="fit-table no-table-tools"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">To pick</th><th class="num">Picking</th><th class="num">Unbooked</th></tr></thead>
-        <tbody>${short.map(r => `<tr><td class="line-no">#${r.line.line_no ?? ""}</td><td class="grow">${itemLabel(r.line.item_id)}</td>
-          <td class="num">${fmtQty(r.left)}</td><td class="num">${fmtQty(r.qty)}</td><td class="num"><b>${fmtQty(r.left - r.qty)}</b></td></tr>`).join("")}</tbody></table>
-        <p>The <b>${fmtQty(units)}</b> not picked is <b>unbooked</b>: it goes back to stock, ${escapeHtml(sh.code)} moves on with what's picked,
-        and the customer order keeps it open so it can be booked on a later shipment.</p>`,
-      buttons: [{ label: "Pick & Unbook the Rest", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
-    if (value !== "go") return;
-  }
+  const read = readPickInputs(document.getElementById("proc-body"), () => sh);
+  if (read.error) { err.textContent = read.error; return; }
+  if (!(await confirmShortPick(read.picks))) return;
   try {
-    if (sh.status === "new") await apiFetch(`/api/shipments/${sh.id}/confirm-booking`, { method: "POST" });  // picking confirms the bookings
-    const after = await apiFetch(`/api/shipments/${sh.id}/pick`, { method: "POST", body: JSON.stringify({ lines, unbook_rest: short.length > 0 }) });
-    if (short.length) toast(`${short.reduce((t, r) => t + r.left - r.qty, 0).toLocaleString()} unbooked — back in stock, still open on the order`);
+    const after = await savePick(read.picks[0]), units = shortUnits(read.picks);
+    if (units) toast(`${units.toLocaleString()} unbooked — back in stock, still open on the order`);
     await afterShipmentChange(sh.id, allPicked(after) ? (after.packed_at ? "ship" : "pack") : "pick");  // all picked: on to packing
     if (allPicked(after) && !after.packed_at && after.boxes.length) await askDialog({ title: "Re-check the packing", tone: "warn",
       body: `<p>${escapeHtml(after.code)} was packed before it went back a step. Check the boxes and pallets, then <b>Accept Packaging</b>.</p>`,
@@ -1015,6 +1040,8 @@ async function showDetail(id) {
   card.style.display = "block";
   const ord = order(shipment.order_id);
   const open = ["new", "ready"].includes(shipment.status), shipped = SHIPPED.includes(shipment.status);
+  card.classList.toggle("ship-inproc", open);
+  card.classList.toggle("ship-done", shipped);
 
   card.innerHTML = `
     <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
