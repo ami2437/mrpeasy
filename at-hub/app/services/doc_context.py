@@ -314,7 +314,7 @@ def _quote(db, q, opt):
 
 
 def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pallets", "boxes", "weight"),
-                          footer=("company", "ship_date"), only_own: bool = False) -> list:
+                          footer=("company", "ship_date"), only_own: bool = False, show_of: bool = True) -> list:
     """A shipment's pallet labels: every pallet and the customer item #s on it, with PO # and job #. per_pallet: one
     label per pallet with its own row highlighted ("PALLET 3 OF 5"); else one summary label. The item list follows
     the packing list's rules (a nut rides on its bolt's pallet)."""
@@ -357,7 +357,7 @@ def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pa
     if not per_pallet or not rows:
         return [{**common, "label": base, "pallet_rows": rows}]
     return [{**common, "label": {**base, "pallet": r["pallet"], "pallet_of": f"{i} of {len(rows)}", "badge_caption": "Pallet",
-                                 "badge": f"{r['pallet']} of {len(rows)}"},
+                                 "badge": f"{r['pallet']} of {len(rows)}" if show_of else str(r["pallet"])},
              # only_own: just this pallet's row (thermal printers: no highlight box to smear)
              "pallet_rows": [dict(r)] if only_own else [{**x, "_hi": x["pallet"] == r["pallet"]} for x in rows]} for i, r in enumerate(rows, 1)]
 

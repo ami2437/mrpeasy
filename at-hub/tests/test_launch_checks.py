@@ -189,6 +189,9 @@ def test_shipment_pallet_labels(make, api, client, admin_headers):
     ctxs = doc_context.pallet_label_contexts(db, db.get(Shipment, sh["id"]))
     db.close()
     assert [c["label"]["badge"] for c in ctxs] == ["1 of 2", "2 of 2"] and ctxs[0]["label"]["po"] == "4156932"
+    db = SessionLocal()
+    assert [c["label"]["badge"] for c in doc_context.pallet_label_contexts(db, db.get(Shipment, sh["id"]), show_of=False)] == ["1", "2"]
+    db.close()
     assert ctxs[0]["pallet_rows"][0]["items"] == f"{bolt['code']}, {nut['code']}" and ctxs[0]["pallet_rows"][0]["_hi"]
     r = client.get(f"/api/shipments/{sh['id']}/pallet-labels.pdf", headers=admin_headers)
     assert r.status_code == 200 and len(pdfium.PdfDocument(r.content)) == 2               # one per pallet
