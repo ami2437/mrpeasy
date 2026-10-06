@@ -67,3 +67,27 @@ def test_simulation_export_formats(client, admin_headers):
     wb = load_workbook(io.BytesIO(client.post("/api/simulations/export", json={**body, "fmt": "xlsx"}, headers=admin_headers).content))
     assert wb.sheetnames == ["Summary", "Item by item", "Order tracker"] and wb["Item by item"]["C2"].value == 4220.85
     assert client.post("/api/simulations/export", json={**body, "fmt": "doc"}, headers=admin_headers).status_code == 400
+
+
+def test_simulation_changes_detects_new_records(make, api):
+    """Opening a simulation: the records it was built from (now), and open POs / confirmed orders / quotes on its items."""
+    bolt, other = make.item(code="SIMCH-1"), make.item(code="SIMCH-2")
+    mine = make.order(lines=[(bolt, 100, 2.0)])
+    src = make.po(lines=[(bolt, 100, 1.0)])
+    doc = {"demand": [{"id": "d1", "kind": "order", "ref_id": mine["id"], "lines": [{"id": "l1", "item_id": bolt["id"], "qty": 100, "price": 2.0}]}],
+           "sources": [{"id": "s1", "kind": "po", "ref_id": src["id"], "ref_link": f"purchase-orders.html?id={src['id']}",
+                        "lines": [{"id": "l2", "item_id": bolt["id"], "qty": 100, "price": 1.0}]}],
+           "tracker": {"i1|open": {"status": "draft", "po_id": 99999999, "po_code": "PO-GONE"}}}
+    s = api.post("/api/simulations/", json={"name": "Changes", "doc": doc})
+    new_po = make.po(lines=[(bolt, 500, 0.9), (other, 5, 1)])          # draft PO by someone else
+    new_order = make.order(lines=[(bolt, 40, 2.1)])                     # confirmed
+    draft_order = make.order(lines=[(bolt, 7, 2.1)], confirm=False)     # draft: not offered
+    r = api.post(f"/api/simulations/{s['id']}/changes")
+    assert r["linked"][f"order:{mine['id']}"]["status"] == "confirmed"
+    assert r["linked"][f"po:{src['id']}"]["lines"][0]["qty"] == 100
+    assert r["linked"]["po:99999999"]["missing"] is True
+    po_ids = {p["id"] for p in r["open"]["pos"]}
+    assert {new_po["id"], src["id"]} <= po_ids
+    assert [l["item_id"] for l in next(p for p in r["open"]["pos"] if p["id"] == new_po["id"])["lines"]] == [bolt["id"]]  # only this simulation's items
+    order_ids = {o["id"] for o in r["open"]["orders"]}
+    assert new_order["id"] in order_ids and draft_order["id"] not in order_ids

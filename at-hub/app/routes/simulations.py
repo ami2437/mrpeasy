@@ -205,6 +205,77 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
     return out
 
 
+# ---------- what changed since the simulation was last worked on ----------
+OPEN_PO = ("draft", "ordered", "partially_received")
+OPEN_QUOTE = ("draft", "sent", "accepted")
+
+
+@router.post("/{sim_id}/changes")
+def changes(sim_id: int, db: Session = Depends(get_db)):
+    """For the pop-up on opening a simulation:
+    linked -- the current state of every order / quote / PO the simulation was built from, and of the draft POs its
+              order tracker created (status, lines, received), so the page can say what changed and follow its POs;
+    open   -- open records that touch the simulation's items: POs (draft / ordered / partly received), CONFIRMED
+              customer orders, and quotes (asked about separately). The page leaves out what it already holds or has
+              seen, and asks about the rest."""
+    from app.models import Customer, CustomerOrder, CustomerOrderLine, PurchaseOrder, PurchaseOrderLine, Quote, QuoteLine, Vendor
+    s = _get(db, sim_id)
+    try:
+        d = json.loads(s.doc or "{}")
+    except ValueError:
+        d = {}
+    lines_of = lambda side: [l for b in d.get(side) or [] for l in b.get("lines") or []]  # noqa: E731
+    item_ids = {l.get("item_id") for l in lines_of("demand") + lines_of("sources") if isinstance(l.get("item_id"), int)}
+    refs = {"order": set(), "quote": set(), "po": set()}
+    for b in d.get("demand") or []:
+        if isinstance(b.get("ref_id"), int):
+            refs["quote" if b.get("kind") == "quote" else "order"].add(b["ref_id"])
+    for b in d.get("sources") or []:
+        if isinstance(b.get("ref_id"), int) and "purchase-orders" in (b.get("ref_link") or ""):
+            refs["po"].add(b["ref_id"])
+    for t in (d.get("tracker") or {}).values():
+        if isinstance(t, dict) and isinstance(t.get("po_id"), int):
+            refs["po"].add(t["po_id"])
+    codes = {i.id: i.code for i in db.query(StockItem.id, StockItem.code).filter(StockItem.id.in_(item_ids or {0})).all()}
+    cust = lambda cid: (db.get(Customer, cid).name if cid and db.get(Customer, cid) else "")  # noqa: E731
+    vend = lambda vid: (db.get(Vendor, vid).name if vid and db.get(Vendor, vid) else "")  # noqa: E731
+    when = lambda dt: dt.isoformat() + "Z" if dt else None  # noqa: E731
+
+    def po_out(po, only=None):
+        ls = [l for l in po.lines if only is None or l.item_id in only]
+        return {"id": po.id, "code": po.code, "status": po.status, "party_id": po.vendor_id, "party": vend(po.vendor_id),
+                "created_by": po.created_by, "created_at": when(po.created_at),
+                "lines": [{"item_id": l.item_id, "code": codes.get(l.item_id) or (db.get(StockItem, l.item_id).code if db.get(StockItem, l.item_id) else ""),
+                           "qty": l.quantity, "price": l.unit_cost, "received": l.received_quantity or 0} for l in ls]}
+
+    def co_out(o, only=None):
+        ls = [l for l in o.lines if only is None or l.item_id in only]
+        return {"id": o.id, "code": o.code, "status": o.status, "party_id": o.customer_id, "party": cust(o.customer_id), "po_number": o.po_number,
+                "created_by": o.created_by, "created_at": when(o.created_at),
+                "lines": [{"item_id": l.item_id, "code": codes.get(l.item_id, ""), "qty": l.quantity, "price": l.unit_price} for l in ls]}
+
+    def q_out(q, only=None):
+        ls = [l for l in q.lines if only is None or l.item_id in only]
+        return {"id": q.id, "code": q.code, "status": q.status, "party_id": q.customer_id, "party": cust(q.customer_id),
+                "created_by": q.created_by, "created_at": when(q.created_at),
+                "lines": [{"item_id": l.item_id, "code": codes.get(l.item_id, ""), "qty": l.quantity, "price": l.unit_price} for l in ls]}
+
+    linked = {}
+    for kind, model, out in (("order", CustomerOrder, co_out), ("quote", Quote, q_out), ("po", PurchaseOrder, po_out)):
+        found = {r.id: r for r in db.query(model).filter(model.id.in_(refs[kind] or {0})).all()}
+        for rid in refs[kind]:
+            linked[f"{kind}:{rid}"] = out(found[rid]) if rid in found else {"id": rid, "missing": True}
+    ids = item_ids or {0}
+    pos = (db.query(PurchaseOrder).join(PurchaseOrderLine, PurchaseOrderLine.po_id == PurchaseOrder.id)
+           .filter(PurchaseOrder.status.in_(OPEN_PO), PurchaseOrderLine.item_id.in_(ids)).distinct().all())
+    orders = (db.query(CustomerOrder).join(CustomerOrderLine, CustomerOrderLine.order_id == CustomerOrder.id)
+              .filter(CustomerOrder.status == "confirmed", CustomerOrderLine.item_id.in_(ids)).distinct().all())
+    quotes = (db.query(Quote).join(QuoteLine, QuoteLine.quote_id == Quote.id)
+              .filter(Quote.status.in_(OPEN_QUOTE), QuoteLine.item_id.in_(ids)).distinct().all())
+    return {"linked": linked, "open": {"pos": [po_out(p, item_ids) for p in pos], "orders": [co_out(o, item_ids) for o in orders],
+                                       "quotes": [q_out(q, item_ids) for q in quotes]}}
+
+
 # ---------- export: everything on the page as Excel / PDF / CSV ----------
 class ExportIn(BaseModel):
     name: str

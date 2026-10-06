@@ -39,7 +39,7 @@ function plan() {
 const isPoBlock = b => /purchase-orders\.html/.test(b.ref_link || "");
 function calc() {
   const d = doc, items = {}, P = plan();
-  const it = key => (items[key] ??= { key, item_id: null, code: "", desc: "", need: 0, revenue: 0, supply: 0, vendorValue: 0, effValue: 0,
+  const it = key => (items[key] ??= { key, item_id: null, code: "", desc: "", need: 0, revenue: 0, supply: 0, costQty: 0, received: 0, vendorValue: 0, effValue: 0,
                                       parts: [], demandBlocks: new Set(), sourceBlocks: new Set() });
   // sources: each line's effective unit cost = its price + its share of the source's and the shared extra costs
   const allSrcLines = d.sources.flatMap(b => b.lines.map(l => ({ b, l })));
@@ -65,8 +65,11 @@ function calc() {
     const q = num(l.qty); if (!q) continue;
     const x = it(keyOf(l));
     Object.assign(x, { item_id: x.item_id || l.item_id, code: x.code || l.code, desc: x.desc || l.desc });
-    x.supply += q; x.vendorValue += q * num(l.price); x.effValue += q * (num(l.price) + (effPer[l.id] || 0)); x.sourceBlocks.add(b.id);
-    x.parts.push({ b, l, q, price: num(l.price), onPo: isPoBlock(b) });
+    const key = keyOf(l), counted = P.stock !== "none" && !(P.stock !== "estimate" && d.stock_off[key]);
+    const rec = counted && isPoBlock(b) ? Math.min(q, num(l.received)) : 0, qs = q - rec;
+    x.supply += qs; x.received += rec; x.costQty += q;
+    x.vendorValue += q * num(l.price); x.effValue += q * (num(l.price) + (effPer[l.id] || 0)); x.sourceBlocks.add(b.id);
+    if (qs > 0) x.parts.push({ b, l, q: qs, price: num(l.price), onPo: isPoBlock(b) });
   }
   for (const b of d.demand) {
     const m = Math.max(1, num(b.multiplier) || 1);
@@ -89,7 +92,7 @@ function calc() {
   const estOf = key => { const e = d.estimates[key]; return e !== undefined && e !== "" ? num(e) : null; };
   const base = Object.values(items).map(x => {
     const ins = x.item_id ? INSIGHT[x.item_id] : null;
-    const vendor = x.supply ? x.vendorValue / x.supply : null, eff = x.supply ? x.effValue / x.supply : null;
+    const vendor = x.costQty ? x.vendorValue / x.costQty : null, eff = x.costQty ? x.effValue / x.costQty : null;
     return { ...x, vendor, eff, ins, lastBuy: ins ? ins.last_buy || null : null, onHand: ins ? Math.max(0, ins.available || 0) : 0,
              notInDb: !x.item_id, generic: x.item_id ? (GEN.generics[x.item_id] || null) : null, via: null, viaQty: 0, servedBy: [], rolled: 0 };
   });
@@ -174,7 +177,7 @@ function trackerLines(rows, P) {
                  vendor_id: fixed ? part.b.party_id : (T.vendor_id !== undefined ? T.vendor_id : vendorDefault),
                  vendorHint: !fixed && T.vendor_id === undefined && vendorDefault ? (part ? "from the quote" : "last bought from") : "",
                  status: fixed ? "onpo" : (T.status || "todo"), ref: fixed ? part.b.ref_code || part.b.label : (T.ref || ""),
-                 po_id: fixed ? part.b.ref_id : T.po_id, po_code: fixed ? part.b.ref_code : T.po_code });
+                 po_id: fixed ? part.b.ref_id : T.po_id, po_code: fixed ? part.b.ref_code : T.po_code, flag: fixed ? "" : T.flag || "" });
     };
     for (const part of [...r.parts].sort((a, b) => b.onPo - a.onPo)) {
       if (left <= 0) break;
@@ -294,7 +297,7 @@ function compareRows(rows) {
       <td><b>${escapeHtml(r.code || "")}</b> <span class="muted small">${escapeHtml(r.desc || (r.item_id && itemById(r.item_id) ? itemById(r.item_id).title : ""))}</span>
         ${r.notInDb ? `<span class="sim-tag">not in DB</span>` : ""}${genNote(r)}</td>
       <td class="num">${fmtQty(r.need)}${r.rolled ? `<div class="small sim-gen-txt" title="Specific nuts on the left that this generic nut stands in for">+ ${fmtQty(r.rolled)} for nuts</div>` : ""}</td>
-      <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.supply && r.supply < r.need + (r.rolled || 0) && !r.via ? `<div class="sim-warn small">short ${fmtQty(r.need + (r.rolled || 0) - r.supply)}</div>` : ""}</td>
+      <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.received ? `<div class="small muted" title="Already received: it's in stock, so it's counted there, not twice">+ ${fmtQty(r.received)} received</div>` : ""}${r.supply && r.supply < r.need + (r.rolled || 0) && !r.via ? `<div class="sim-warn small">short ${fmtQty(r.need + (r.rolled || 0) - r.supply)}</div>` : ""}</td>
       <td class="num">${r.item_id ? onHandCell(r) : "—"}</td>
       <td class="num">${r.via ? "" : `<input type="number" class="sim-num sim-mystock" min="0" step="1" placeholder="—" value="${r.myStock ?? ""}"
           title="What you think you really have" oninput="setMyStock('${escapeHtml(r.key)}', this.value)" onchange="changed(false)">`}</td>
@@ -333,6 +336,7 @@ function render() {
   const c = calc();
   const ocById = Object.fromEntries(c.orders.map(o => [o.b.id, o]));
   el.innerHTML = `
+    <div id="sim-alert"></div>
     <div id="sim-tiles">${tiles(c.summary)}</div>
     <div class="sim-book">
       <section class="sim-page sim-left"><div class="sim-page-head"><h3>Sell <span class="muted small">what customers want</span></h3>
@@ -359,6 +363,7 @@ function render() {
       <div id="sim-track"></div></div>`;
   drawCompare(c);
   drawTracker(c);
+  drawAlert();
   doc.summary = c.summary;
 }
 // numbers changed: redraw only the results (keeps the cursor where you're typing)
@@ -565,7 +570,8 @@ function trackerTable(c) {
       <td class="trk-c">${tick(t)}</td>
       <td><b>${escapeHtml(t.r.code || "")}</b> <span class="muted small">${escapeHtml((t.r.desc || "").slice(0, 44))}</span>
         ${t.r.notInDb ? `<span class="sim-tag" title="Add the item to AT-HUB before it can go on a PO">not in DB</span>` : ""}
-        ${t.part && !t.fixed ? `<div class="small muted">quoted on ${escapeHtml(t.part.b.label || "a source")}</div>` : ""}</td>
+        ${t.part && !t.fixed ? `<div class="small muted">quoted on ${escapeHtml(t.part.b.label || "a source")}</div>` : ""}
+        ${t.flag && t.status === "todo" ? `<div class="small neg">${escapeHtml(t.flag)}</div>` : ""}</td>
       <td class="num">${fmtQty(t.need)}<div class="small muted">${why(t.r)}</div></td>
       <td class="num">${t.fixed || t.status !== "todo" ? fmtQty(t.qty) : `<input type="number" class="sim-num" min="0" step="1" value="${t.qty}" onchange="setTrack('${k(t)}', 'qty', this.value)">
         ${t.qty !== t.suggested ? `<div class="small"><a class="link" onclick="setTrack('${k(t)}', 'qty', '')">suggested ${fmtQty(t.suggested)}</a></div>` : t.pack ? `<div class="small muted">pack ${fmtQty(t.pack)}</div>` : ""}`}</td>
@@ -575,7 +581,7 @@ function trackerTable(c) {
       <td>${t.fixed ? `<span class="trk-st onpo">On PO</span>` : `<select onchange="setTrack('${k(t)}', 'status', this.value)" style="width:auto;">
           <option value="todo" ${t.status === "todo" ? "selected" : ""}>To order</option><option value="ordered" ${t.status === "ordered" ? "selected" : ""}>Ordered</option>
           ${t.po_code ? `<option value="draft" ${t.status === "draft" ? "selected" : ""}>Draft PO</option>` : ""}</select>`}</td>
-      <td>${t.po_id ? `<a class="link" href="purchase-orders.html?id=${t.po_id}">${escapeHtml(t.po_code || "PO")}</a>` : t.fixed ? escapeHtml(t.ref) :
+      <td>${t.po_id ? `<a class="link" href="purchase-orders.html?id=${t.po_id}">${escapeHtml(t.po_code || "PO")}</a>${!t.fixed && TRK_PO[t.po_id] ? ` <span class="tag ${escapeHtml(TRK_PO[t.po_id].status)}">${escapeHtml(TRK_PO[t.po_id].status.replace("_", " "))}</span>` : ""}` : t.fixed ? escapeHtml(t.ref) :
           `<input value="${escapeHtml(t.ref)}" placeholder="PO # / note" style="width:96px;" onchange="setTrack('${k(t)}', 'ref', this.value)">`}</td></tr>`;
   const groups = trackGroups(c.track);
   const todo = c.track.filter(t => t.status === "todo");
@@ -646,7 +652,7 @@ async function createTrackerPos() {
     try {
       const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id: +v,
         lines: ls.map(t => ({ item_id: t.r.item_id, quantity: Math.ceil(t.qty), price: t.price || 0 })), notes: `From simulation "${sim.name}" (order tracker)` }) });
-      ls.forEach(t => { doc.tracker[t.key] = { ...(doc.tracker[t.key] || {}), vendor_id: +v, status: "draft", po_id: r.id, po_code: r.code, qty: t.qty, price: t.price }; TRK_SEL.delete(t.key); });
+      ls.forEach(t => { doc.tracker[t.key] = { ...(doc.tracker[t.key] || {}), vendor_id: +v, status: "draft", po_id: r.id, po_code: r.code, qty: t.qty, price: t.price, flag: undefined }; TRK_SEL.delete(t.key); });
       made.push(r.code);
     } catch (e) { toast(`${partyName(VENDORS, +v)}: ${e.message}`); }
   }
@@ -655,6 +661,175 @@ async function createTrackerPos() {
 }
 function setStockOff(key, off) { doc.stock_off ||= {}; if (off) doc.stock_off[key] = true; else delete doc.stock_off[key]; changed(true); }
 function setGenericOff(key, off) { if (off) doc.generic_off[key] = true; else delete doc.generic_off[key]; changed(true); }
+
+// ================= blocks from real records (also used when the review pop-up adds them) =================
+// snap: what the record looked like when it was added -- status + item/qty/price per line -- to spot later changes
+function snapOf(status, lines) {
+  return `${status || ""}|${(lines || []).map(l => `${l.item_id}:${+num(l.qty)}:${(+num(l.price)).toFixed(5)}`).sort().join(",")}`;
+}
+function blockFromOrder(o) {
+  return { id: uid(), kind: "order", label: o.po_number ? `PO ${o.po_number}` : o.code, party_id: o.customer_id, multiplier: 1,
+           ref_id: o.id, ref_code: o.code, ref_link: `customer-orders.html?id=${o.id}`,
+           lines: o.lines.map(l => fromDocLine(l.item_id, (itemById(l.item_id) || {}).code, (itemById(l.item_id) || {}).title, l.quantity, l.unit_price)),
+           snap: snapOf(o.status, o.lines.map(l => ({ item_id: l.item_id, qty: l.quantity, price: l.unit_price }))) };
+}
+function blockFromQuote(q) {
+  return { id: uid(), kind: "quote", label: q.code, party_id: q.customer_id, multiplier: 1, ref_id: q.id, ref_code: q.code,
+           lines: (q.lines || []).map(l => fromDocLine(l.item_id, (itemById(l.item_id) || {}).code || l.item_code || "", l.description || (itemById(l.item_id) || {}).title, l.quantity, l.unit_price)),
+           snap: snapOf(q.status, (q.lines || []).map(l => ({ item_id: l.item_id, qty: l.quantity, price: l.unit_price }))) };
+}
+function blockFromPo(p) {
+  return { id: uid(), kind: "po", label: p.code, party_id: p.vendor_id, ref_id: p.id, ref_code: p.code, ref_link: `purchase-orders.html?id=${p.id}`,
+           lines: p.lines.map(l => ({ ...fromDocLine(l.item_id, (itemById(l.item_id) || {}).code, l.vendor_description || (itemById(l.item_id) || {}).title, l.quantity, l.unit_cost),
+                                      received: l.received_quantity || 0 })),
+           costs: (p.charges || []).map(ch => ({ id: uid(), type: "shipping", label: ch.description || ch.charge_type, mode: "total", amount: ch.amount, alloc: "value" })),
+           snap: snapOf(p.status, p.lines.map(l => ({ item_id: l.item_id, qty: l.quantity, price: l.unit_cost }))) };
+}
+
+// ================= "what changed since you last worked on this" =================
+// On opening a simulation: new open POs / confirmed customer orders / quotes on its items (not already in it, not
+// already seen), records it was built from that changed, and draft POs from its tracker that were cancelled.
+// A pop-up asks what to add; a banner keeps it one click away. doc.seen = records already offered.
+let CHG = null, TRK_PO = {};
+const CHG_TYPE = { po: "PO", order: "Customer order", quote: "Quote" };
+function diffText(oldSnap, cur) {
+  const parse = s => { const [st, ls] = String(s || "").split("|"); const m = {};
+    (ls || "").split(",").filter(Boolean).forEach(x => { const [i, q, p] = x.split(":"); m[i] = { q: +q, p: +p }; }); return { st, m }; };
+  const a = parse(oldSnap), b = parse(snapOf(cur.status, cur.lines));
+  const code = id => (itemById(+id) || {}).code || `item ${id}`;
+  const out = [];
+  if (a.st !== b.st) out.push(`status ${a.st || "?"} → <b>${b.st}</b>`);
+  for (const id of new Set([...Object.keys(a.m), ...Object.keys(b.m)])) {
+    const x = a.m[id], y = b.m[id];
+    if (!y) out.push(`${escapeHtml(code(id))} removed`);
+    else if (!x) out.push(`${escapeHtml(code(id))} added (${fmtQty(y.q)})`);
+    else {
+      if (x.q !== y.q) out.push(`${escapeHtml(code(id))} qty ${fmtQty(x.q)} → <b>${fmtQty(y.q)}</b>`);
+      if (Math.abs(x.p - y.p) > 1e-6) out.push(`${escapeHtml(code(id))} price ${fmtPrice(x.p)} → <b>${fmtPrice(y.p)}</b>`);
+    }
+  }
+  return out;
+}
+async function checkChanges(popup = true) {
+  if (!sim) return;
+  let r;
+  try { r = await apiFetch(`/api/simulations/${sim.id}/changes`, { method: "POST" }); } catch (e) { return; }
+  plan();
+  let dirty = false;
+  const changedBlocks = [], flags = [];
+  // records the simulation was built from
+  for (const [side, blocks] of [["demand", doc.demand], ["sources", doc.sources]]) for (const b of blocks) {
+    if (!Number.isInteger(b.ref_id) || (side === "sources" && !isPoBlock(b))) continue;
+    const kind = side === "sources" ? "po" : b.kind === "quote" ? "quote" : "order";
+    const cur = r.linked[`${kind}:${b.ref_id}`];
+    if (!cur) continue;
+    if (cur.missing) { changedBlocks.push({ b, side, kind, cur, lines: [`${escapeHtml(b.ref_code || "")} no longer exists`], gone: true }); continue; }
+    if (kind === "po") {  // received so far, per line (goods received are on hand: counted once)
+      const left = {};
+      cur.lines.forEach(l => { left[l.item_id] = (left[l.item_id] || 0) + (l.received || 0); });
+      for (const l of b.lines) {
+        const rec = Math.min(num(l.qty), left[l.item_id] || 0);
+        if (l.item_id) left[l.item_id] = (left[l.item_id] || 0) - rec;
+        if ((l.received || 0) !== rec) { l.received = rec; dirty = true; }
+      }
+    }
+    const snap = snapOf(cur.status, cur.lines);
+    if (!b.snap) { b.snap = snap; dirty = true; continue; }  // added before changes were tracked: start from now
+    if (b.snap !== snap) changedBlocks.push({ b, side, kind, cur, lines: diffText(b.snap, cur), gone: cur.status === "cancelled" });
+  }
+  // draft POs made by the order tracker: follow them; cancelled / deleted -> back to To order
+  TRK_PO = {};
+  for (const T of Object.values(doc.tracker)) {
+    if (!T.po_id) continue;
+    const cur = r.linked[`po:${T.po_id}`];
+    if (cur && !cur.missing && cur.status !== "cancelled") { TRK_PO[T.po_id] = cur; continue; }
+    flags.push(`${escapeHtml(T.po_code || "A PO")} (made from this tracker) was ${cur && cur.status === "cancelled" ? "cancelled" : "deleted"} — its lines are back to <b>To order</b>.`);
+    T.flag = `${T.po_code || "PO"} was ${cur && cur.status === "cancelled" ? "cancelled" : "deleted"}`;
+    T.status = "todo"; delete T.po_id; delete T.po_code; dirty = true;
+  }
+  // new open records on these items
+  const inSim = new Set([...doc.demand.filter(b => Number.isInteger(b.ref_id)).map(b => (b.kind === "quote" ? "quote:" : "order:") + b.ref_id),
+                         ...doc.sources.filter(b => Number.isInteger(b.ref_id) && isPoBlock(b)).map(b => "po:" + b.ref_id),
+                         ...Object.values(doc.tracker).filter(T => T.po_id).map(T => "po:" + T.po_id)]);
+  const open = [...r.open.pos.map(x => ({ ...x, type: "po" })), ...r.open.orders.map(x => ({ ...x, type: "order" })), ...r.open.quotes.map(x => ({ ...x, type: "quote" }))]
+    .map(x => ({ ...x, key: `${x.type}:${x.id}` }));
+  if (!doc.seen) { doc.seen = Object.fromEntries(open.map(x => [x.key, 1])); dirty = true; }  // first check: what exists now is the starting point
+  const openKeys = new Set(open.map(x => x.key));
+  for (const k of Object.keys(doc.seen)) if (!openKeys.has(k)) { delete doc.seen[k]; dirty = true; }
+  const fresh = open.filter(x => !doc.seen[x.key] && !inSim.has(x.key));
+  CHG = { fresh, changedBlocks, flags };
+  if (dirty) { changed(true); }
+  drawAlert();
+  if (popup && (fresh.length || changedBlocks.length || flags.length)) openReview();
+}
+function chgCount() { return CHG ? CHG.fresh.length + CHG.changedBlocks.length + CHG.flags.length : 0; }
+function drawAlert() {
+  const el = document.getElementById("sim-alert");
+  if (!el) return;
+  const n = chgCount();
+  if (!n) { el.innerHTML = ""; return; }
+  const parts = [];
+  const pos = CHG.fresh.filter(x => x.type === "po").length, ords = CHG.fresh.filter(x => x.type === "order").length, qs = CHG.fresh.filter(x => x.type === "quote").length;
+  if (pos) parts.push(`${pos} new PO${pos === 1 ? "" : "s"}`);
+  if (ords) parts.push(`${ords} new confirmed order${ords === 1 ? "" : "s"}`);
+  if (qs) parts.push(`${qs} quote${qs === 1 ? "" : "s"}`);
+  if (CHG.changedBlocks.length) parts.push(`${CHG.changedBlocks.length} linked record${CHG.changedBlocks.length === 1 ? "" : "s"} changed`);
+  if (CHG.flags.length) parts.push(`${CHG.flags.length} PO${CHG.flags.length === 1 ? "" : "s"} cancelled`);
+  el.innerHTML = `<div class="sim-alert">${icon("bell")}<span><b>Since you last worked on this:</b> ${parts.join(" · ")}. Your counts may be affected.</span>
+    <button class="small-btn" onclick="openReview()">Review</button></div>`;
+}
+async function openReview() {
+  if (!chgCount()) return;
+  const when = x => [x.created_by ? `by ${escapeHtml(x.created_by)}` : "", x.created_at ? fmtDate(x.created_at, { month: "short", day: "numeric" }) : ""].filter(Boolean).join(" · ");
+  const linesTxt = x => x.lines.slice(0, 6).map(l => `${escapeHtml(l.code || "")} ${fmtQty(l.qty)}${l.price ? ` @ ${fmtPrice(l.price)}` : ""}`).join(" · ") + (x.lines.length > 6 ? ` · +${x.lines.length - 6} more` : "");
+  const rec = (x, checked, what) => `<label class="chg-row"><input type="checkbox" data-key="${escapeHtml(x.key)}" ${checked ? "checked" : ""}>
+      <span><b>${escapeHtml(x.code)}</b> ${escapeHtml(x.party || "")} <span class="tag ${escapeHtml(x.status)}">${escapeHtml(String(x.status).replace("_", " "))}</span>
+        <span class="muted small">${when(x)}</span><br><span class="small">${what}: ${linesTxt(x)}</span></span></label>`;
+  const sec = (title, note, rows) => rows.length ? `<h4 class="chg-h">${title}</h4>${note ? `<p class="muted small" style="margin:0 0 4px;">${note}</p>` : ""}${rows.join("")}` : "";
+  const f = CHG.fresh;
+  const body = `<div class="chg-body">
+    ${sec("New purchase orders", "They include items in this simulation. Ticked ones are added on the Buy side as sources.", f.filter(x => x.type === "po").map(x => rec(x, true, "items here")))}
+    ${sec("New confirmed customer orders", "They need the same items. Ticked ones are added on the Sell side.", f.filter(x => x.type === "order").map(x => rec(x, true, "items here")))}
+    ${sec("Quotes were also found — include them?", "Quotes aren't confirmed yet, so they're left out unless you tick them.", f.filter(x => x.type === "quote").map(x => rec(x, false, "items here")))}
+    ${sec("Changed since you added them", "Ticked: update this simulation to match. Unticked: keep your version.", CHG.changedBlocks.map((c, i) => `<label class="chg-row">
+        <input type="checkbox" data-chg="${i}" checked><span><b>${escapeHtml(c.b.label || c.b.ref_code || "")}</b> <span class="muted small">${CHG_TYPE[c.kind]}${c.gone ? " · will be removed" : ""}</span><br>
+        <span class="small">${c.lines.join(" · ") || "details changed"}</span></span></label>`))}
+    ${CHG.flags.length ? `<h4 class="chg-h">Order tracker</h4>${CHG.flags.map(t => `<p class="small" style="margin:2px 0;">${t}</p>`).join("")}` : ""}
+    </div>`;
+  const { value, el } = await askDialog({ title: "New activity on this simulation's items", body,
+    buttons: [{ label: "Apply", value: "ok", cls: "confirm-btn" }, { label: "Not now", value: null, cls: "secondary" }] });
+  if (!value) return;
+  const pickKeys = new Set([...el.querySelectorAll("input[data-key]:checked")].map(x => x.dataset.key));
+  const pickChg = new Set([...el.querySelectorAll("input[data-chg]:checked")].map(x => +x.dataset.chg));
+  const added = [];
+  for (const x of f) {
+    doc.seen[x.key] = 1;  // offered once: ticked or not, it won't be asked again
+    if (!pickKeys.has(x.key)) continue;
+    try {
+      if (x.type === "po") doc.sources.push(blockFromPo(await apiFetch(`/api/purchase-orders/${x.id}`)));
+      else if (x.type === "order") doc.demand.push(blockFromOrder(await apiFetch(`/api/customer-orders/${x.id}`)));
+      else doc.demand.push(blockFromQuote(await apiFetch(`/api/quotes/${x.id}`)));
+      added.push(x.code);
+    } catch (e) { toast(`${x.code}: ${e.message}`); }
+  }
+  CHG.changedBlocks.forEach((c, i) => {
+    const list = c.side === "demand" ? doc.demand : doc.sources;
+    if (!pickChg.has(i)) { if (!c.cur.missing) c.b.snap = snapOf(c.cur.status, c.cur.lines); return; }  // keep mine
+    if (c.gone) { list.splice(list.indexOf(c.b), 1); return; }
+    // update to match: same block (label, repeats, extra costs), the record's lines now
+    const keepQty = {};
+    c.b.lines.forEach(l => { keepQty[l.item_id] = l; });
+    c.b.lines = c.cur.lines.map(l => { const old = keepQty[l.item_id];
+      return { ...fromDocLine(l.item_id, (itemById(l.item_id) || {}).code || l.code, old ? old.desc : (itemById(l.item_id) || {}).title, l.qty, l.price), ...(c.kind === "po" ? { received: l.received || 0 } : {}) }; });
+    c.b.snap = snapOf(c.cur.status, c.cur.lines);
+  });
+  CHG = { fresh: [], changedBlocks: [], flags: [] };
+  drawAlert();
+  await ensureInsights([...doc.demand, ...doc.sources].flatMap(b => b.lines.map(l => l.item_id)).filter(Boolean));
+  changed(true);
+  await saveNow();
+  if (added.length) toast(`Added ${added.join(", ")}`);
+}
 
 // ================= adding demand / sources =================
 const fromDocLine = (item_id, code, desc, qty, price) => ({ id: uid(), item_id: item_id || null, code: code || "", desc: desc || "", qty: num(qty) || 0, price: price ?? "" });
@@ -693,16 +868,12 @@ async function addDemand(kind) {
       const id = await pickFrom("Add a customer order", orders.filter(o => o.status !== "cancelled").sort((a, b) => b.id - a.id)
         .map(o => `<option value="${o.id}">${escapeHtml(o.code)} — ${escapeHtml(partyName(CUSTOMERS, o.customer_id))}${o.po_number ? ` — PO ${escapeHtml(o.po_number)}` : ""}</option>`).join(""), "Pick an order…");
       if (!id) return;
-      const o = orders.find(x => x.id === parseInt(id));
-      Object.assign(b, { label: o.po_number ? `PO ${o.po_number}` : o.code, ref_id: o.id, ref_code: o.code, ref_link: `customer-orders.html?id=${o.id}`, party_id: o.customer_id,
-                         lines: o.lines.map(l => fromDocLine(l.item_id, (itemById(l.item_id) || {}).code, (itemById(l.item_id) || {}).title, l.quantity, l.unit_price)) });
+      b = blockFromOrder(orders.find(x => x.id === parseInt(id)));
     } else if (kind === "quote") {
       const quotes = await apiFetch("/api/quotes/");
       const id = await pickFrom("Add a quote", quotes.sort((a, b) => b.id - a.id).map(q => `<option value="${q.id}">${escapeHtml(q.code)} — ${escapeHtml(partyName(CUSTOMERS, q.customer_id))}</option>`).join(""), "Pick a quote…");
       if (!id) return;
-      const q = await apiFetch(`/api/quotes/${id}`);
-      Object.assign(b, { label: q.code, ref_id: q.id, ref_code: q.code, party_id: q.customer_id,
-                         lines: (q.lines || []).map(l => fromDocLine(l.item_id, (itemById(l.item_id) || {}).code || l.item_code || "", l.description || (itemById(l.item_id) || {}).title, l.quantity, l.unit_price)) });
+      b = blockFromQuote(await apiFetch(`/api/quotes/${id}`));
     } else if (kind === "paste") {
       const p = await pasteDialog("Paste customer lines", "demand"); if (!p || !p.text.trim()) return;
       const rows = await apiFetch("/api/simulations/parse", { method: "POST", body: JSON.stringify({ text: p.text, side: "demand", party_id: p.party_id }) });
@@ -732,10 +903,7 @@ async function addSource(kind) {
       const id = await pickFrom("Add a purchase order", pos.filter(p => p.status !== "cancelled").sort((a, b) => b.id - a.id)
         .map(p => `<option value="${p.id}">${escapeHtml(p.code)} — ${escapeHtml(partyName(VENDORS, p.vendor_id))} (${p.status.replace("_", " ")})</option>`).join(""), "Pick a PO…");
       if (!id) return;
-      const p = pos.find(x => x.id === parseInt(id));
-      Object.assign(b, { label: p.code, ref_id: p.id, ref_code: p.code, ref_link: `purchase-orders.html?id=${p.id}`, party_id: p.vendor_id,
-                         lines: p.lines.map(l => fromDocLine(l.item_id, (itemById(l.item_id) || {}).code, l.vendor_description || (itemById(l.item_id) || {}).title, l.quantity, l.unit_cost)),
-                         costs: (p.charges || []).map(ch => ({ id: uid(), type: "shipping", label: ch.description || ch.charge_type, mode: "total", amount: ch.amount, alloc: "value" })) });
+      b = blockFromPo(pos.find(x => x.id === parseInt(id)));
     } else if (kind === "paste") {
       const p = await pasteDialog("Paste a vendor quote", "source"); if (!p || !p.text.trim()) return;
       const rows = await apiFetch("/api/simulations/parse", { method: "POST", body: JSON.stringify({ text: p.text, side: "source", party_id: p.party_id }) });
@@ -768,7 +936,7 @@ async function makePo(bid) {
   if (!lines.length) { toast("No lines with our items to order"); return; }
   if (!confirm(`Create a draft PO to ${partyName(VENDORS, b.party_id)} with ${lines.length} line${lines.length === 1 ? "" : "s"}?${skipped ? `\n${skipped} line(s) not in our database are left out.` : ""}`)) return;
   try { const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id: b.party_id, lines, notes: `Drafted from simulation "${sim.name}"` }) });
-        toast(`Draft ${r.code} created`); b.ref_link = `purchase-orders.html?id=${r.id}`; b.ref_code = r.code; changed(true); }
+        toast(`Draft ${r.code} created`); b.ref_link = `purchase-orders.html?id=${r.id}`; b.ref_code = r.code; b.ref_id = r.id; delete b.snap; changed(true); }
   catch (e) { toast(e.message); }
 }
 async function makeOrder(bid) {
@@ -783,7 +951,7 @@ async function makeOrder(bid) {
   if (!value) return;
   const lines = b.lines.filter(l => num(l.qty) > 0).map(l => ({ item_id: l.item_id, quantity: num(l.qty), price: num(l.price) }));
   try { const r = await apiFetch("/api/simulations/create-order", { method: "POST", body: JSON.stringify({ customer_id: b.party_id, po_number: el.querySelector("#sim-po").value, job_number: el.querySelector("#sim-job").value, lines }) });
-        toast(`Draft ${r.code} created`); b.ref_link = `customer-orders.html?id=${r.id}`; b.ref_code = r.code; changed(true); }
+        toast(`Draft ${r.code} created`); b.ref_link = `customer-orders.html?id=${r.id}`; b.ref_code = r.code; b.ref_id = r.id; b.kind = "order"; delete b.snap; changed(true); }
   catch (e) { toast(e.message); }
 }
 
@@ -835,7 +1003,7 @@ async function openSim(id) {
   if (!id) return;
   if (saveTimer) await saveNow();
   sim = await apiFetch(`/api/simulations/${id}`);
-  CMP = null; CMP_CHIP = ""; TRK_SEL = new Set();  // a fresh table (and filters, ticks) per simulation
+  CMP = null; CMP_CHIP = ""; TRK_SEL = new Set(); CHG = null; TRK_PO = {};  // a fresh table (and filters, ticks) per simulation
   doc = Object.assign(blankDoc(), sim.doc || {});
   history.replaceState(null, "", `simulate.html?id=${id}`);
   doc.generic_off ||= {}; doc.stock_off ||= {};
@@ -843,6 +1011,7 @@ async function openSim(id) {
   genKey = ""; await refreshGeneric();
   setSaveState(`Saved ${fmtWhen(sim.updated_at)}`);
   drawBar(); render();
+  checkChanges(true);  // anything new on these items since last time? asks right away
 }
 async function newSim() {
   const name = prompt("Name the simulation", `Simulation ${new Date().toLocaleDateString()}`);
@@ -864,6 +1033,9 @@ async function deleteSim() {
   const id = parseInt(new URLSearchParams(location.search).get("id")) || (SIMS[0] || {}).id;
   if (id) await openSim(id); else render();
   window.addEventListener("beforeunload", () => { if (saveTimer) saveNow(); });
+  // back on this tab after a while: look again (banner only -- the pop-up is for opening the simulation)
+  let lastCheck = Date.now();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && sim && Date.now() - lastCheck > 60000) { lastCheck = Date.now(); checkChanges(false); } });
 })().catch(e => { document.getElementById("sim-main").innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; });
 
 // ================= spreadsheet (everything as one editable grid, with an AI helper) =================
