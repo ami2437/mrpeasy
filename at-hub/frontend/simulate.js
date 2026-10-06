@@ -187,13 +187,41 @@ function costsTable(path, costs, blockId) {
       <td><a class="sim-x" onclick="removeCost('${blockId}','${c.id}')">×</a></td></tr>`).join("")}</tbody></table>` : ""}
     <div class="sim-chips">${COST_TYPES.map(([k, l, m]) => `<a class="pack-chip" onclick="addCost('${blockId}','${k}')">+ ${l}</a>`).join("")}</div></div>`;
 }
-function compareTable(c) {
-  if (!c.rows.length) return `<p class="muted">Add customer demand on the left and sources on the right — the comparison appears here.</p>`;
+// The comparison table is built once and kept: each change redraws only its rows, so the header's sort and
+// ▾ filters (shared table tools) and the quick chips stay as you set them while you edit the numbers.
+let CMP = null, CMP_CHIP = "";
+const CMP_CHIPS = [["", "All"], ["need", "On this job"], ["nocost", "Needs a cost"], ["order", "To order"], ["loss", "Losing money"],
+                   ["generic", "Generic nuts"], ["nodb", "Not in DB"]];
+const chipTest = {
+  need: r => r.need > 0, nocost: r => r.need > 0 && r.cost == null, order: r => r.toOrder > 0 || (r.via && r.viaQty > 0),
+  loss: r => r.profit != null && r.profit < 0, generic: r => r.generic || r.via, nodb: r => r.notInDb };
+function drawCompare(c) {
+  const host = document.getElementById("sim-compare");
+  if (!host) return;
+  if (!c.rows.length) { host.innerHTML = `<p class="muted">Add customer demand on the left and sources on the right — the comparison appears here.</p>`; CMP = null; return; }
+  if (!CMP) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<div class="sim-chips-row" id="sim-cmp-chips"></div><div class="sim-cmp-scroll">${compareHead()}<tbody></tbody></table></div>`;
+    CMP = wrap;
+  }
+  if (CMP.parentNode !== host) host.replaceChildren(CMP);
+  const shown = CMP_CHIP ? c.rows.filter(chipTest[CMP_CHIP]) : c.rows;
+  CMP.querySelector("#sim-cmp-chips").innerHTML = CMP_CHIPS.map(([k, l]) => {
+    const n = k ? c.rows.filter(chipTest[k]).length : c.rows.length;
+    return `<a class="pack-chip ${CMP_CHIP === k ? "on" : ""}" onclick="CMP_CHIP = '${k}'; drawCompare(calc())">${l} <b>${n}</b></a>`;
+  }).join("");
+  const tb = CMP.querySelector("tbody");
+  if (tb.contains(document.activeElement)) return;  // typing an estimate: don't pull the box away
+  tb.innerHTML = shown.length ? compareRows(shown) : `<tr><td colspan="12" class="muted">Nothing here.</td></tr>`;
+}
+function compareHead() {
   return `<table class="compact-table sim-compare"><thead><tr><th>Item</th><th class="num sum">Need</th><th class="num sum">Sourced</th>
       <th class="num" title="Available stock (on hand minus booked)">On hand</th><th class="num sum">To order</th><th class="num">Customer price</th>
       <th class="num">Vendor price</th><th class="num">+ Extras</th><th class="num" title="Vendor price + extras (or your estimate)">Effective cost</th>
-      <th class="num">Profit / unit</th><th class="num sum">Profit</th><th></th></tr></thead><tbody>
-    ${c.rows.map(r => `<tr class="${r.notInDb ? "sim-unknown" : ""}">
+      <th class="num">Profit / unit</th><th class="num sum">Profit</th><th data-nosort></th></tr></thead>`;
+}
+function compareRows(rows) {
+  return `${rows.map(r => `<tr class="${r.notInDb ? "sim-unknown" : ""}">
       <td><b>${escapeHtml(r.code || "")}</b> <span class="muted small">${escapeHtml(r.desc || (r.item_id && itemById(r.item_id) ? itemById(r.item_id).title : ""))}</span>
         ${r.notInDb ? `<span class="sim-tag">not in DB</span>` : ""}${genNote(r)}</td>
       <td class="num">${fmtQty(r.need)}${r.rolled ? `<div class="small sim-gen-txt" title="Specific nuts on the left that this generic nut stands in for">+ ${fmtQty(r.rolled)} for nuts</div>` : ""}</td>
@@ -208,7 +236,7 @@ function compareTable(c) {
         ${r.profitUnit != null && r.custPrice ? `<div class="small muted">${(r.profitUnit / r.custPrice * 100).toFixed(1)}%</div>` : ""}</td>
       <td class="num ${r.profit != null ? (r.profit >= 0 ? "pos" : "neg") : ""}">${r.profit != null ? money(r.profit) : `<span class="sim-warn small">${r.need ? "needs a cost" : ""}</span>`}</td>
       <td>${r.item_id ? `<a class="link small" onclick="showInsight(${r.item_id})" title="Who bought and sold it, at what">History</a>` : ""}</td></tr>`).join("")}
-    </tbody></table>`;
+    `;
 }
 function ordersTable(c) {
   if (!c.orders.length) return "";
@@ -255,8 +283,9 @@ function render() {
         ${doc.use_stock && Object.keys(doc.stock_off || {}).length ? `<span class="muted small">${Object.keys(doc.stock_off).length} item${Object.keys(doc.stock_off).length === 1 ? "" : "s"} ignored ·
           <a class="link" onclick="doc.stock_off = {}; changed(true)">count all</a></span>` : ""}
         <span class="spacer"></span><button class="secondary small-btn" onclick="makePoFromShort()" title="A draft PO for everything still to order">Create PO For What's Short</button></div>
-      <div id="sim-compare">${compareTable(c)}</div></div>
+      <div id="sim-compare"></div></div>
     <div class="card"><h3 style="margin-top:0;">Profit Per Order</h3><div id="sim-orders">${ordersTable(c) || `<p class="muted small">Add demand to see each order's profit.</p>`}</div></div>`;
+  drawCompare(c);
   doc.summary = c.summary;
 }
 // numbers changed: redraw only the results (keeps the cursor where you're typing)
@@ -266,8 +295,7 @@ function renderResults() {
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set("sim-tiles", tiles(c.summary));
   set("sim-orders", ordersTable(c));
-  const cmp = document.getElementById("sim-compare");
-  if (cmp && !cmp.contains(document.activeElement)) cmp.innerHTML = compareTable(c);
+  drawCompare(c);
   for (const b of [...doc.demand, ...doc.sources]) {
     const isD = doc.demand.includes(b);
     const total = b.lines.reduce((s, l) => s + num(l.qty) * num(l.price), 0);
@@ -574,6 +602,7 @@ async function openSim(id) {
   if (!id) return;
   if (saveTimer) await saveNow();
   sim = await apiFetch(`/api/simulations/${id}`);
+  CMP = null; CMP_CHIP = "";  // a fresh table (and filters) per simulation
   doc = Object.assign(blankDoc(), sim.doc || {});
   history.replaceState(null, "", `simulate.html?id=${id}`);
   doc.generic_off ||= {}; doc.stock_off ||= {};

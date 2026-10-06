@@ -64,6 +64,14 @@
     .sim-stock.off { color: var(--muted); text-decoration: line-through; }
     .pos { color: #15803d; } .neg { color: #dc2626; }
     .sim-compare { width: 100%; }
+    /* frozen header: the table scrolls in its own box, the header row stays put */
+    .sim-cmp-scroll { max-height: calc(100vh - 170px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .sim-cmp-scroll .table-tools { position: sticky; left: 0; padding: 4px 6px 0; }
+    .sim-cmp-scroll table.sim-compare thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-3, var(--bg)); box-shadow: inset 0 -1px 0 var(--border); }
+    .sim-cmp-scroll table.sim-compare tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface-3, var(--bg)); box-shadow: inset 0 1px 0 var(--border); }
+    .sim-chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .sim-chips-row .pack-chip { cursor: pointer; }
+    .sim-chips-row .pack-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
     .sim-est { width: 92px; box-shadow: 0 0 0 2px color-mix(in srgb, #f59e0b 30%, transparent); }
     #sim-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     /* spreadsheet */

@@ -1431,12 +1431,11 @@ const TableTools = {
           if (dir === 0) return original.get(a) - original.get(b);
           const at = Array.from(ths[col].parentNode.cells).indexOf(ths[col]);  // columns may have been moved
           const x = this.sortKey(a.cells[at]), y = this.sortKey(b.cells[at]);
-          let c;
-          if (x.n != null && y.n != null) c = x.n - y.n;
-          else if (x.n != null || y.n != null) c = x.n != null ? -1 : 1;  // numbers before text/blank
-          else if (!x.s || !y.s) c = !x.s && !y.s ? 0 : !x.s ? 1 : -1;  // blanks last
-          else c = x.s.localeCompare(y.s, undefined, { numeric: true });
-          return c * dir || original.get(a) - original.get(b);
+          // numbers before text, blanks last -- in both directions (a descending sort shouldn't lead with empty cells)
+          if (x.n != null && y.n != null) return (x.n - y.n) * dir || original.get(a) - original.get(b);
+          if (x.n != null || y.n != null) return x.n != null ? -1 : 1;
+          if (!x.s || !y.s) return (!x.s && !y.s ? 0 : !x.s ? 1 : -1) || original.get(a) - original.get(b);
+          return x.s.localeCompare(y.s, undefined, { numeric: true }) * dir || original.get(a) - original.get(b);
         });
         if (sorted.some((r, i) => r !== sortable[i])) sorted.forEach(r => tb.appendChild(r));
       });
