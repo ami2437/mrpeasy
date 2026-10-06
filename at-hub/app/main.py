@@ -27,6 +27,7 @@ try:
     from app.services.permissions import seed as seed_roles
     seed_roles(db)
     ProductGroupService.ensure_defaults(db)
+    ProductGroupService.seed_non_stock(db)
     ShipmentService.reconcile_bookings(db)
     backfill_lot_costing(db)
     backfill_line_identity(db)

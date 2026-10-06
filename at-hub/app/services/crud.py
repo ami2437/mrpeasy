@@ -266,8 +266,31 @@ class ProductGroupService:
     @staticmethod
     def list(db: Session) -> list:
         counts = dict(db.query(StockItem.category, func.count(StockItem.id)).group_by(StockItem.category).all())
-        return [{"id": g.id, "name": g.name, "item_count": counts.get(g.name, 0)}
+        return [{"id": g.id, "name": g.name, "item_count": counts.get(g.name, 0), "non_stock": bool(g.non_stock)}
                 for g in sorted(db.query(ProductGroup).all(), key=lambda g: g.name.lower())]
+
+    NON_STOCK_DEFAULTS = ("do not sell", "service", "services", "monthly recurring fixed charges")
+
+    @staticmethod
+    def seed_non_stock(db: Session) -> None:
+        """Once per database: the groups that are services / not sold start as non-stock (Product Groups can change it)."""
+        from app.models import AppSetting
+        if db.get(AppSetting, "non_stock_groups_v1"):
+            return
+        for g in db.query(ProductGroup).all():
+            if g.name.strip().lower() in ProductGroupService.NON_STOCK_DEFAULTS:
+                g.non_stock = True
+        db.add(AppSetting(key="non_stock_groups_v1", value="true"))
+        db.commit()
+
+    @staticmethod
+    def set_non_stock(db: Session, group_id: int, on: bool) -> dict:
+        g = db.get(ProductGroup, group_id)
+        if not g:
+            raise HTTPException(status_code=404, detail="Group not found")
+        g.non_stock = bool(on)
+        db.commit()
+        return next(x for x in ProductGroupService.list(db) if x["id"] == group_id)
 
     @staticmethod
     def canonical(db: Session, name: Optional[str]) -> Optional[str]:

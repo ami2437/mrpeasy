@@ -144,6 +144,16 @@ def create_group(data: ProductGroupCreate, db: Session = Depends(get_db)):
     return ProductGroupService.create(db, data.name)
 
 
+class NonStockIn(BaseModel):
+    non_stock: bool
+
+
+@router.put("/groups/{group_id}/non-stock", response_model=ProductGroupResponse, dependencies=[Depends(require_perm("stock.edit"))])
+def set_group_non_stock(group_id: int, data: NonStockIn, db: Session = Depends(get_db)):
+    """Services / do-not-sell group: POs made only of its items are listed apart (Purchase Orders, bottom)."""
+    return ProductGroupService.set_non_stock(db, group_id, data.non_stock)
+
+
 @router.post("/groups/{group_id}/merge", dependencies=[Depends(require_perm("stock.edit"))])
 def merge_group(group_id: int, into_id: int = Query(...), db: Session = Depends(get_db)):
     """Move all of a group's items into another group and remove it."""

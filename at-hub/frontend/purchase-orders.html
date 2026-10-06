@@ -346,7 +346,14 @@
     }
     // Open POs first (newest entered first); finished ones -- everything received, or cancelled -- fold away at the
     // bottom. Paid isn't part of it (MRPeasy payment history isn't imported yet): the Balance column still shows it.
-    let showCompleted = false;
+    let showCompleted = false, showServices = false;
+    // Services / do-not-sell POs (freight, coating, rent...): every line's item is in a "Service / non-stock" product group
+    // (Stock Items > Product Groups). They're listed apart, at the bottom.
+    let nonStockGroups = new Set();
+    const isServicePo = o => o.lines.length > 0 && o.lines.every(l => {
+      const it = items.find(i => i.id === l.item_id);
+      return it && nonStockGroups.has(it.category);
+    });
     function poDone(o) {
       return o.status !== "draft" && o.lines.length > 0 && o.lines.every(l => l.received_quantity >= l.quantity - 1e-9);
     }
@@ -443,9 +450,13 @@
         return;
       }
       const newest = (a, b) => new Date(b.created_at || b.order_date) - new Date(a.created_at || a.order_date) || b.id - a.id;
-      const open = filtered.filter(o => !poDone(o)).sort(newest);
-      const finished = filtered.filter(poDone).sort(newest);
+      const services = filtered.filter(isServicePo).sort(newest);
+      const stock = filtered.filter(o => !isServicePo(o));
+      const open = stock.filter(o => !poDone(o)).sort(newest);
+      const finished = stock.filter(poDone).sort(newest);
       const expanded = showCompleted || (q && !open.length);
+      const svcExpanded = showServices || (q && !stock.length);
+      const svcOpen = services.filter(o => !poDone(o)).length;
       const row = o => {
         const total = o.order_total;
         const paid = o.amount_paid;
@@ -473,7 +484,11 @@
       tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="11" class="muted">No purchase orders in progress${q ? " match your search" : ""}.</td></tr>`)
         + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
             <td colspan="11"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed purchase orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — fully received${expanded ? "" : " · click to show"}</span></td></tr>`
-          + (expanded ? finished.map(row).join("") : "") : "");
+          + (expanded ? finished.map(row).join("") : "") : "")
+        + (services.length ? `<tr class="completed-toggle services-toggle" onclick="showServices = !showServices; renderOrders();">
+            <td colspan="11"><span class="caret">${svcExpanded ? "▾" : "▸"}</span> Services &amp; non-stock <span class="muted">(${services.length}${q ? " matching" : ""}${svcOpen ? ` · ${svcOpen} open` : ""})
+              — freight, coating, rent and other do-not-sell items${svcExpanded ? "" : " · click to show"}</span></td></tr>`
+          + (svcExpanded ? services.map(row).join("") : "") : "");
     }
 
 
@@ -1395,11 +1410,14 @@ Thank you.</textarea>
     }
 
     async function init() {
-      [vendors, items, orders] = await Promise.all([  // one round trip; loadOrders() is for refreshes
+      let groups;
+      [vendors, items, orders, groups] = await Promise.all([  // one round trip; loadOrders() is for refreshes
         apiFetch("/api/vendors/"),
         apiFetch("/api/stock-items/"),
         apiFetch("/api/purchase-orders/"),
+        apiFetch("/api/stock-items/groups/list").catch(() => []),
       ]);
+      nonStockGroups = new Set(groups.filter(g => g.non_stock).map(g => g.name));
       const vendorOptions = vendors.map(v => `<option value="${v.id}">${escapeHtml(v.name)}${v.code ? ` (${escapeHtml(v.code)})` : ""}</option>`).join("");
       document.getElementById("f-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
       document.getElementById("vp-vendor").innerHTML = vendorOptions;

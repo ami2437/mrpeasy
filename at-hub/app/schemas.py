@@ -93,6 +93,7 @@ class ProductGroupResponse(BaseModel):
     id: int
     name: str
     item_count: int = 0
+    non_stock: bool = False  # services / do-not-sell (freight, coating, rent...)
 
     class Config:
         from_attributes = True

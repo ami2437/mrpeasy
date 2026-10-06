@@ -38,6 +38,7 @@ class ProductGroup(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
+    non_stock = Column(Boolean, nullable=True, default=False)  # services / do-not-sell: POs made only of these are grouped apart
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

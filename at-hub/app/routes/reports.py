@@ -72,6 +72,11 @@ def all_sections(db: Session, user: User) -> list:
 
     if has(user, "purchasing"):
         pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("draft", "ordered", "partially_received"))).all()
+        # services / do-not-sell POs (freight, coating, rent...) are never "received": not chased for receiving
+        from app.models import ProductGroup
+        non_stock = {g.name for g in db.query(ProductGroup).filter(ProductGroup.non_stock.is_(True)).all()}
+        cats = dict(db.query(StockItem.id, StockItem.category).all())
+        pos = [po for po in pos if not (po.lines and all(cats.get(l.item_id) in non_stock for l in po.lines))]
 
         def po_row(po, extra=None):
             ordered = sum(l.quantity for l in po.lines)

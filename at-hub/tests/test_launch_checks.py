@@ -253,3 +253,17 @@ def test_receiving_history(make, api):
     assert sorted(l["quantity"] for l in r["receipts"][0]["lines"]) == [5, 6]
     recent = api.get("/api/purchase-orders/receipts/recent?days=1")
     assert any(x["po_id"] == po["id"] for x in recent)
+
+
+def test_service_pos_not_chased_for_receiving(make, api):
+    groups = {g["name"]: g for g in api.get("/api/stock-items/groups/list")}
+    if "Freight Svc" not in groups:
+        api.post("/api/stock-items/groups/list", json={"name": "Freight Svc"})
+        groups = {g["name"]: g for g in api.get("/api/stock-items/groups/list")}
+    api.put(f"/api/stock-items/groups/{groups['Freight Svc']['id']}/non-stock", json={"non_stock": True})
+    svc = make.item(group="Freight Svc")
+    po = make.po(lines=[(svc, 1, 100)], expected_date="2020-01-01")
+    api.post(f"/api/purchase-orders/{po['id']}/mark-ordered")
+    late = [r["id"] for s in api.get("/api/reports/action-items") if s["key"] == "po_overdue" for r in s["rows"]]
+    assert po["id"] not in late
+    assert next(g for g in api.get("/api/stock-items/groups/list") if g["name"] == "Freight Svc")["non_stock"] is True

@@ -48,7 +48,7 @@
       </div>
       <div id="group-error" class="error"></div>
       <table class="compact-table no-table-tools" style="margin-top:10px;">
-        <thead><tr><th>Group</th><th class="num">Items</th><th></th></tr></thead>
+        <thead><tr><th>Group</th><th class="num">Items</th><th title="Services / do-not-sell: purchase orders made only of these items are listed apart">Service / non-stock</th><th></th></tr></thead>
         <tbody id="groups-body"></tbody>
       </table>
       <button class="secondary" onclick="toggleGroups(false)" style="margin-top:10px;">Close</button>
@@ -139,9 +139,15 @@
       const canManage = AuthGuard.can("stock.edit");
       document.getElementById("groups-body").innerHTML = groups.map(g => `
         <tr><td>${groupTag({ category: g.name })}</td><td class="num">${g.item_count}</td>
+          <td><input type="checkbox" ${g.non_stock ? "checked" : ""} ${canManage ? "" : "disabled"} style="width:auto;" onchange="setNonStock(${g.id}, this.checked)"></td>
           <td class="nowrap">${canManage ? `<select onchange="if (this.value) mergeGroup(${g.id}, parseInt(this.value), this)" style="width:auto; padding:1px 4px; font-size:12px;">
               <option value="">Merge into…</option>${groups.filter(o => o.id !== g.id).map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("")}</select>` : ""}
             ${canManage && !g.item_count ? ` <a class="link" onclick="deleteGroup(${g.id})">Delete</a>` : ""}</td></tr>`).join("");
+    }
+
+    async function setNonStock(id, on) {
+      try { await apiFetch(`/api/stock-items/groups/${id}/non-stock`, { method: "PUT", body: JSON.stringify({ non_stock: on }) }); toast(on ? "Marked as service / non-stock" : "Back to a stock group"); }
+      catch (e) { toast(e.message); }
     }
 
     function toggleGroups(show = true) {
