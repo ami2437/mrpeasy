@@ -61,6 +61,21 @@ def list_orders(status: str | None = Query(None), db: Session = Depends(get_db))
     return pos
 
 
+@router.get("/receipts/recent")
+def recent_receipts(days: int = 30, db: Session = Depends(get_db)):
+    """Receiving log: everything received in the last `days`, newest first -- who, when, what, how much, lot #."""
+    from app.services import receiving
+    return receiving.recent(db, days)
+
+
+@router.get("/{po_id}/receipts")
+def po_receipts(po_id: int, db: Session = Depends(get_db)):
+    """This PO's receipts (who received what, when) and when it was marked ordered -- the PO's timeline."""
+    from app.services import receiving
+    po = PurchaseOrderService.get(db, po_id)
+    return {"receipts": receiving.receipts(db, [po.id]), **receiving.po_events(db, po)}
+
+
 @router.post("/", response_model=PurchaseOrderResponse)
 def create_order(data: PurchaseOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return PurchaseOrderService.create(db, data, created_by=current_user.username)

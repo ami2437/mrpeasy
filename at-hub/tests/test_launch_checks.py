@@ -239,3 +239,17 @@ def test_pallet_label_footer_parts(make, api):
     none = doc_context.pallet_label_contexts(db, s, footer=())[0]["label"]["footer_info"]
     db.close()
     assert "shipped" in both and "shipped" not in name_only and name_only and none == ""
+
+
+def test_receiving_history(make, api):
+    a, b = make.item(), make.item()
+    po = make.po(lines=[(a, 10, 2), (b, 5, 1)])
+    api.post(f"/api/purchase-orders/{po['id']}/mark-ordered")
+    l1, l2 = po["lines"]
+    api.post(f"/api/purchase-orders/{po['id']}/receive", json={"lines": [{"line_id": l1["id"], "quantity": 6}, {"line_id": l2["id"], "quantity": 5}]})
+    r = api.get(f"/api/purchase-orders/{po['id']}/receipts")
+    assert r["ordered_by"] == "admin" and r["ordered_at"].endswith("Z")
+    assert len(r["receipts"]) == 1 and r["receipts"][0]["by"] == "admin" and r["receipts"][0]["units"] == 11
+    assert sorted(l["quantity"] for l in r["receipts"][0]["lines"]) == [5, 6]
+    recent = api.get("/api/purchase-orders/receipts/recent?days=1")
+    assert any(x["po_id"] == po["id"] for x in recent)

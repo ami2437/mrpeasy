@@ -1848,3 +1848,9 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 
 .pl-opts { display: flex; flex-direction: column; gap: 6px; }
 .pl-opts .inline-check { display: flex; align-items: center; gap: 6px; }
+
+/* ---- receiving history (purchase-orders.html) ---- */
+.rcv-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.rcv-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.rcv-head .ico { color: var(--accent); }
+.rcv-sum { margin-left: auto; font-size: 12.5px; color: var(--text-2); font-weight: 600; }

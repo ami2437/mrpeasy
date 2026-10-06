@@ -63,6 +63,7 @@
 
     <div class="card">
       <div class="tabs" id="list-tabs"></div>
+      <div id="receiving-view" style="display:none;"></div>
       <div id="items-view" style="display:none;">
         <table class="list-fit" id="items-table">
           <thead><tr><th title="PO, vendor and the vendor's SO #">PO</th><th>Item</th><th>Vendor part # / Description</th>
@@ -340,7 +341,8 @@
       document.getElementById("list-tabs").innerHTML = `
         <div class="tab ${listView === "active" ? "active" : ""}" onclick="listView = 'active'; renderOrders()">${noun} <span class="muted">(${active})</span></div>
         <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="listView = 'cancelled'; renderOrders()">Cancelled <span class="muted">(${cancelled})</span></div>
-        <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every PO, searchable and filterable">Items</div>`;
+        <div class="tab ${listView === "items" ? "active" : ""}" onclick="listView = 'items'; renderOrders()" title="Every line of every PO, searchable and filterable">Items</div>
+        <div class="tab ${listView === "receiving" ? "active" : ""}" onclick="listView = 'receiving'; renderOrders()" title="Everything received: who, when, what, how much, lot #">Receiving</div>`;
     }
     // Open POs first (newest entered first); finished ones -- everything received, or cancelled -- fold away at the
     // bottom. Paid isn't part of it (MRPeasy payment history isn't imported yet): the Balance column still shows it.
@@ -350,6 +352,69 @@
     }
     const soLine = o => o.vendor_so_number ? `<div class="muted small">SO ${escapeHtml(o.vendor_so_number)}</div>` : "";
 
+    // ---- PO timeline: Created > Ordered > Received > Billed > Paid (same look as a customer order's) ----
+    function poTimeline(order, rec) {
+      if (order.status === "cancelled") return `<div class="timeline cancelled"><span class="tag cancelled">Cancelled</span></div>`;
+      const goods = order.lines.filter(l => !l.is_charge);
+      const qty = goods.reduce((s, l) => s + l.quantity, 0), got = goods.reduce((s, l) => s + Math.min(l.received_quantity, l.quantity), 0);
+      const receipts = rec ? rec.receipts : [];
+      const recDates = receipts.map(r => r.when).filter(Boolean).sort();
+      const billed = order.bills.reduce((s, b) => s + b.amount, 0), total = order.order_total || 0, paid = order.amount_paid || 0;
+      const payDates = order.payments.map(p => p.paid_date || p.created_at).filter(Boolean).sort();
+      const fullyReceived = qty > 0 && got >= qty - 1e-9, partly = got > 0 && !fullyReceived;
+      const steps = [
+        ["Created", true, order.created_at || order.order_date, order.created_by && order.created_by !== "mrpeasy-import" ? order.created_by : ""],
+        ["Ordered", order.status !== "draft", rec && rec.ordered_at ? rec.ordered_at : order.order_date, rec && rec.ordered_by ? rec.ordered_by : ""],
+        ["Received", fullyReceived, recDates[recDates.length - 1], partly ? `partly · ${fmtQty(got)} of ${fmtQty(qty)}` : !got && order.expected_date ? `due ${fmtDate(order.expected_date)}` : ""],
+        ["Billed", total > 0 && billed >= total - 0.01, order.bills.map(b => b.bill_date).filter(Boolean).sort().pop(), billed > 0.005 && billed < total - 0.01 ? "partly" : ""],
+        ["Paid", total > 0 && paid >= total - 0.01, payDates[payDates.length - 1], paid > 0.005 && paid < total - 0.01 ? "partly" : ""],
+      ];
+      return `<div class="timeline">${steps.map(([label, done, date, sub]) => `<div class="tl-step ${done ? "done" : sub && !done ? "partial" : ""}">
+          <span class="tl-dot">${done ? "✓" : ""}</span><span class="tl-label">${label}</span>
+          <span class="tl-date">${done && date ? fmtDate(date) : ""}${done && sub ? `<br>${escapeHtml(sub)}` : !done && sub ? escapeHtml(sub) : ""}</span></div>`).join('<span class="tl-bar"></span>')}</div>`;
+    }
+
+    // ---- Receipts: each Receive click -- when, who, every line with qty, lot # and landed cost ----
+    function receiptCards(list, showPo) {
+      if (!list.length) return `<p class="muted small" style="margin:0;">Nothing received yet.</p>`;
+      const money = !hidesMoney();
+      return list.map(r => `<div class="rcv-card">
+          <div class="rcv-head">${icon("package")}<strong>${fmtWhen(r.when)}</strong>
+            <span class="muted">received by</span> <strong>${escapeHtml(r.by)}</strong>
+            ${showPo ? `<span class="muted">·</span> <a class="link" onclick="showDetail(${r.po_id})">${escapeHtml(r.po_code)}</a> <span class="muted">${escapeHtml(r.vendor)}</span>` : ""}
+            <span class="rcv-sum">${r.lines.length} line${r.lines.length === 1 ? "" : "s"} · ${fmtQty(r.units)} units${money && r.value ? ` · ${fmtMoney(r.value)}` : ""}</span></div>
+          <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">Qty received</th><th>Lot #</th><th class="num">Still in that lot</th>${money ? `<th class="num">Unit cost (landed)</th>` : ""}</tr></thead><tbody>
+          ${r.lines.map(l => `<tr><td><a class="link" href="item.html?id=${l.item_id}">${escapeHtml(l.item_code)}</a> <span class="muted small">${escapeHtml(l.item_title)}</span>
+              ${l.vendor_item_code ? `<div class="muted small">Vendor part # ${escapeHtml(l.vendor_item_code)}</div>` : ""}</td>
+            <td class="num"><strong>${fmtQty(l.quantity)}</strong></td><td>${escapeHtml(l.lot_code)}</td><td class="num">${fmtQty(l.left)}</td>
+            ${money ? `<td class="num">${l.unit_cost != null ? fmtPrice(l.unit_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody></table></div>`).join("");
+    }
+    async function loadPoReceipts(order) {
+      const el = document.getElementById("po-receipts");
+      try {
+        const rec = await apiFetch(`/api/purchase-orders/${order.id}/receipts`);
+        el.innerHTML = receiptCards(rec.receipts, false);
+        document.getElementById("po-timeline").innerHTML = poTimeline(order, rec);
+      } catch (e) { el.innerHTML = `<div class="error small">${escapeHtml(e.message)}</div>`; }
+    }
+    let receivingDays = 30, receivingRows = null;
+    async function renderReceiving(q) {
+      const el = document.getElementById("receiving-view");
+      if (!receivingRows) {
+        el.innerHTML = `<p class="muted">Loading…</p>`;
+        receivingRows = await apiFetch(`/api/purchase-orders/receipts/recent?days=${receivingDays}`);
+      }
+      const ql = (q || "").toLowerCase();
+      const shown = receivingRows.filter(r => !ql || [r.po_code, r.vendor, r.by, ...r.lines.flatMap(l => [l.item_code, l.item_title, l.lot_code, l.vendor_item_code])]
+        .some(x => String(x || "").toLowerCase().includes(ql)));
+      el.innerHTML = `<div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+          <span class="muted small">Everything received in the last</span>
+          <select style="width:auto;" onchange="receivingDays = parseInt(this.value); receivingRows = null; renderOrders()">
+            ${[7, 30, 90, 365].map(d => `<option value="${d}" ${d === receivingDays ? "selected" : ""}>${d} days</option>`).join("")}</select>
+          <span class="muted small">${shown.length} receipt${shown.length === 1 ? "" : "s"} · ${fmtQty(shown.reduce((s, r) => s + r.units, 0))} units</span></div>
+        ${receiptCards(shown, true)}`;
+    }
+
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
       const q = document.getElementById("search").value.trim();
@@ -357,9 +422,11 @@
       const cancelledOnes = searched.filter(o => o.status === "cancelled");
       listTabs(searched.length - cancelledOnes.length, cancelledOnes.length, "Purchase Orders");
       showTable(document.getElementById("items-table"), listView === "items");
-      showTable(document.getElementById("orders-table"), listView !== "items");
+      showTable(document.getElementById("orders-table"), !["items", "receiving"].includes(listView));
       document.getElementById("items-view").style.display = listView === "items" ? "" : "none";
+      document.getElementById("receiving-view").style.display = listView === "receiving" ? "" : "none";
       if (listView === "items") { renderItemLines(q); return; }
+      if (listView === "receiving") { renderReceiving(q); return; }
       const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
         tbody.innerHTML = `<tr><td colspan="11" class="muted">${listView === "cancelled" ? "No cancelled purchase orders." : orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
@@ -440,6 +507,7 @@
           <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this PO (internal view)">Print</button></h3>
         <div id="ai-validate-panel"></div>
         <div id="po-sticky" class="sticky-strip"></div>
+        <div id="po-timeline">${poTimeline(order, null)}</div>
         ${poMoneyTiles(order)}
         <p class="muted" style="margin:0 0 4px;">${escapeHtml((vendors.find(v => v.id === order.vendor_id) || {}).name || "")}${order.order_date ? ` — ordered ${fmtDate(order.order_date)}` : ""}</p>
 
@@ -522,7 +590,7 @@
         </div>
         ${editable ? `
           <div class="row add-line-row" style="margin-top:8px; max-width:1100px;">
-            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))">${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
                 onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
             <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>
@@ -541,6 +609,9 @@
         ` : ""}
         <div id="lines-error" class="error"></div>
         </section>
+
+        <section class="dsec"><h4 class="dsec-title">Receipts <span class="muted small" style="font-weight:normal;">— who received what, when</span></h4>
+          <div id="po-receipts"><p class="muted small">Loading…</p></div></section>
 
         ${canReceive ? `<section class="dsec"><h4 class="dsec-title">Receive</h4>
           <p class="muted">Each line received becomes its own lot (a LOT-##### number, or the supplier's lot code if you enter one).
@@ -597,6 +668,7 @@
         });
       }
       stickyNotes("po-sticky", "purchase_order", order.id);
+      loadPoReceipts(order);
       renderAttachments("po-attachments", "purchase_order", order.id, ["purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"],
         { notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => { renderPoMtrs(order); renderFileStrip("po-file-strip", "purchase_order", order.id); } });
       renderFileStrip("po-file-strip", "purchase_order", order.id);

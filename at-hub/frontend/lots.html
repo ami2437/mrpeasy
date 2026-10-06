@@ -14,8 +14,8 @@
       <h1 class="page-title">Lots</h1>
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search lot #, item, PO or the job # it shipped to...">
-        <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="in-stock-only" checked style="width:auto;display:inline-block;"> In stock only</label>
-        <label style="margin:0; flex:0; white-space:nowrap;"><input type="checkbox" id="missing-only" style="width:auto;display:inline-block;"> Missing cost only</label>
+        <label class="check-label" style="flex:0 0 auto;"><input type="checkbox" id="in-stock-only" checked style="width:auto;"> In stock only</label>
+        <label class="check-label" style="flex:0 0 auto;"><input type="checkbox" id="missing-only" style="width:auto;"> Missing cost only</label>
       </div>
       <p class="muted" style="margin:8px 0 0;">Every receipt and every stock increase creates a lot. Bookings draw from lots oldest-first, so each shipped unit carries its lot's cost:
         the purchase (or adjustment) cost plus any landed costs applied to that receipt.</p>
