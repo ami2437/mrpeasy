@@ -65,10 +65,29 @@
     .pos { color: #15803d; } .neg { color: #dc2626; }
     .sim-compare { width: 100%; }
     /* frozen header: the table scrolls in its own box, the header row stays put */
-    .sim-cmp-scroll { max-height: calc(100vh - 170px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
-    .sim-cmp-scroll .table-tools { position: sticky; left: 0; padding: 4px 6px 0; }
-    .sim-cmp-scroll table.sim-compare thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-3, var(--bg)); box-shadow: inset 0 -1px 0 var(--border); }
-    .sim-cmp-scroll table.sim-compare tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface-3, var(--bg)); box-shadow: inset 0 1px 0 var(--border); }
+    /* frozen headers: the page scrolls, the header row sticks to the top of the window while its table is on screen */
+    table.sim-compare thead th, table.sim-track thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-3, var(--bg)); box-shadow: inset 0 -1px 0 var(--border); }
+    table.sim-compare tfoot td, table.sim-track tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface-3, var(--bg)); box-shadow: inset 0 1px 0 var(--border); }
+    /* cost with no vendor price: blue = last purchase price, red = typed with no history to go on */
+    .sim-est.est-hist { color: #1d4ed8; font-weight: 600; }
+    .sim-est.est-red { color: #dc2626; font-weight: 700; }
+    .sim-est.est-own { color: #b45309; font-weight: 600; }
+    .sim-src { display: block; font-size: 10.5px; line-height: 1.25; margin-top: 2px; white-space: normal; }
+    .sim-src.hist { color: #1d4ed8; } .sim-src.red { color: #dc2626; } .sim-src.own { color: #b45309; }
+    .sim-mystock { width: 66px; }
+    table.sim-compare .sim-est { width: 84px; }
+    table.sim-compare td { padding-left: 5px; padding-right: 5px; }
+    .sim-track-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+    .sim-plan { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 10px 0; padding: 8px 10px; border-radius: 10px; background: var(--bg); }
+    .sim-plan label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+    .sim-plan select, .sim-plan input[type=number] { width: auto; }
+    table.sim-track { width: 100%; }
+    table.sim-track select { min-width: 120px; max-width: 170px; }
+    table.sim-track input.sim-num { width: 80px; }
+    table.sim-track tr.trk-group td { background: var(--bg); font-weight: 700; }
+    .trk-st { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+    .trk-st.todo { background: #fef3c7; color: #92400e; } .trk-st.ordered { background: #dcfce7; color: #166534; }
+    .trk-st.draft { background: #dbeafe; color: #1e40af; } .trk-st.onpo { background: #e0e7ff; color: #3730a3; }
     .sim-chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
     .sim-chips-row .pack-chip { cursor: pointer; }
     .sim-chips-row .pack-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }

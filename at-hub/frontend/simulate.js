@@ -19,13 +19,24 @@ const money = v => v == null || isNaN(v) ? "—" : fmtMoney(v);
 const price = v => v == null || isNaN(v) ? "—" : fmtPrice(v);
 
 function blankDoc() {
-  return { demand: [], sources: [], shared_costs: [], estimates: {}, generic_off: {}, stock_off: {}, use_stock: false, sheet_cols: [], summary: {} };
+  return { demand: [], sources: [], shared_costs: [], estimates: {}, generic_off: {}, stock_off: {}, est_stock: {}, tracker: {}, use_stock: false, sheet_cols: [], summary: {} };
 }
 
 // ================= the numbers =================
+// How the "to order" quantities are worked out (shown on the Order Tracker, shared with the comparison):
+//   stock: none | system (AT-HUB on hand) | estimate (my on hand) | mixed (my on hand where entered, else system)
+//   incoming: count open POs not already in this simulation; buffer: % extra; pack: round up to the pack size
+const STOCK_MODES = [["none", "Ignore stock"], ["system", "System on hand"], ["estimate", "My on hand"], ["mixed", "My on hand, else system"]];
+function plan() {
+  doc.plan ||= { stock: doc.use_stock ? "system" : "none", incoming: false, buffer: 0, pack: false };
+  doc.est_stock ||= {}; doc.tracker ||= {}; doc.stock_off ||= {}; doc.generic_off ||= {};
+  return doc.plan;
+}
+const isPoBlock = b => /purchase-orders\.html/.test(b.ref_link || "");
 function calc() {
-  const d = doc, items = {};
-  const it = key => (items[key] ??= { key, item_id: null, code: "", desc: "", need: 0, revenue: 0, supply: 0, vendorValue: 0, effValue: 0, demandBlocks: new Set(), sourceBlocks: new Set() });
+  const d = doc, items = {}, P = plan();
+  const it = key => (items[key] ??= { key, item_id: null, code: "", desc: "", need: 0, revenue: 0, supply: 0, vendorValue: 0, effValue: 0,
+                                      parts: [], demandBlocks: new Set(), sourceBlocks: new Set() });
   // sources: each line's effective unit cost = its price + its share of the source's and the shared extra costs
   const allSrcLines = d.sources.flatMap(b => b.lines.map(l => ({ b, l })));
   const effPer = {};  // line id -> extras per unit
@@ -51,6 +62,7 @@ function calc() {
     const x = it(keyOf(l));
     Object.assign(x, { item_id: x.item_id || l.item_id, code: x.code || l.code, desc: x.desc || l.desc });
     x.supply += q; x.vendorValue += q * num(l.price); x.effValue += q * (num(l.price) + (effPer[l.id] || 0)); x.sourceBlocks.add(b.id);
+    x.parts.push({ b, l, q, price: num(l.price), onPo: isPoBlock(b) });
   }
   for (const b of d.demand) {
     const m = Math.max(1, num(b.multiplier) || 1);
@@ -61,15 +73,23 @@ function calc() {
       x.need += q; x.revenue += q * num(l.price); x.demandBlocks.add(b.id);
     }
   }
-  // on-hand counts can be wrong while stock is being cleaned up: count it only when switched on, and not for items ticked off
-  const stockOf = r => d.use_stock && !(d.stock_off || {})[r.key] ? r.onHand : 0;
+  // stock we count for an item: on-hand counts can be wrong while stock is being cleaned up, so it's a choice --
+  // none, the system's (minus items ticked off), my own estimate, or my estimate where I gave one
+  const myStock = r => { const v = d.est_stock[r.key]; return v !== undefined && v !== "" ? num(v) : null; };
+  const stockOf = r => {
+    const sys = d.stock_off[r.key] ? 0 : r.onHand, mine = myStock(r);
+    return P.stock === "system" ? sys : P.stock === "estimate" ? (mine ?? 0) : P.stock === "mixed" ? (mine ?? sys) : 0;
+  };
+  const simPos = new Set(d.sources.filter(isPoBlock).map(b => b.ref_id));
+  const incomingOf = r => P.incoming && r.item_id ? ((INSIGHT[r.item_id] || {}).incoming || []).filter(x => !simPos.has(x.po_id)).reduce((s, x) => s + x.qty, 0) : 0;
   const estOf = key => { const e = d.estimates[key]; return e !== undefined && e !== "" ? num(e) : null; };
   const base = Object.values(items).map(x => {
     const ins = x.item_id ? INSIGHT[x.item_id] : null;
     const vendor = x.supply ? x.vendorValue / x.supply : null, eff = x.supply ? x.effValue / x.supply : null;
-    return { ...x, vendor, eff, onHand: ins ? Math.max(0, ins.available || 0) : 0, notInDb: !x.item_id,
-             generic: x.item_id ? (GEN.generics[x.item_id] || null) : null, via: null, viaQty: 0, servedBy: [] };
+    return { ...x, vendor, eff, ins, lastBuy: ins ? ins.last_buy || null : null, onHand: ins ? Math.max(0, ins.available || 0) : 0,
+             notInDb: !x.item_id, generic: x.item_id ? (GEN.generics[x.item_id] || null) : null, via: null, viaQty: 0, servedBy: [], rolled: 0 };
   });
+  base.forEach(r => { r.myStock = myStock(r); r.stock = stockOf(r); r.incoming = incomingOf(r); });
   const byItem = Object.fromEntries(base.filter(r => r.item_id).map(r => [r.item_id, r]));
   // generic bulk nuts (58-NUT): a specific nut (15420-NUT) with no source of its own costs what the generic costs,
   // and what it still needs is bought as the generic -- it rolls up into the generic's "to order"
@@ -79,27 +99,35 @@ function calc() {
     if (!opts.length) continue;
     const o = opts.find(o => byItem[o.generic_id] && byItem[o.generic_id].supply) || opts[0];
     const g = byItem[o.generic_id] || null;
-    const short = Math.max(0, r.need - r.supply - stockOf(r));
+    const short = Math.max(0, r.need - r.supply - r.stock - r.incoming);
     r.via = { id: o.generic_id, code: GEN.generics[o.generic_id].code, match: o.match, g };
     r.viaQty = short;
-    if (g) { g.servedBy.push(r); g.rolled = (g.rolled || 0) + short; }
+    if (g) { g.servedBy.push(r); g.rolled += short; }
   }
+  // a cost with no vendor price: my estimate, else the last purchase price (marked as such), else nothing
+  const costFor = r => {
+    if (r.eff != null) return { cost: r.eff, src: "vendor" };
+    const e = estOf(r.key);
+    if (e != null) return { cost: e, src: "manual" };
+    if (r.lastBuy && r.lastBuy.price) return { cost: Math.round(r.lastBuy.price * 100000) / 100000, src: "history" };
+    return { cost: null, src: null };
+  };
   const rows = base.map(x => {
-    let cost = x.eff != null ? x.eff : estOf(x.key), viaCost = null;
+    let { cost, src } = costFor(x), viaCost = null;
     if (x.via) {
       const g = x.via.g;
-      viaCost = g ? (g.eff != null ? g.eff : estOf(g.key)) : null;
-      if (viaCost == null) viaCost = (INSIGHT[x.via.id] || {}).last_cost || null;
+      const gc = g ? costFor(g) : { cost: (INSIGHT[x.via.id] || {}).last_cost || null, src: "history" };
+      viaCost = gc.cost;
       // own supply first at its cost, the rest at the generic's
       const own = Math.min(x.supply, x.need);
-      if (viaCost != null) cost = x.need ? ((x.eff != null ? x.eff * own : 0) + viaCost * (x.need - own)) / x.need : viaCost;
+      if (viaCost != null) { cost = x.need ? ((x.eff != null ? x.eff * own : 0) + viaCost * (x.need - own)) / x.need : viaCost; src = "generic"; }
     }
     const custPrice = x.need ? x.revenue / x.need : null;
-    const want = x.need + (x.rolled || 0);
-    return { ...x, cost, viaCost, extras: x.eff != null && x.vendor != null ? x.eff - x.vendor : null, estimated: x.eff == null && !x.via && cost != null,
-             custPrice, profitUnit: custPrice != null && cost != null ? custPrice - cost : null,
-             profit: cost != null && x.need ? x.revenue - x.need * cost : null,
-             toOrder: x.via ? 0 : Math.max(0, want - x.supply - stockOf(x)) };
+    // what we still have to get: the need (+ what generic nuts stand in for), less stock and incoming, plus the buffer
+    const net = x.via ? 0 : Math.max(0, Math.ceil(Math.max(0, x.need + x.rolled - x.stock - x.incoming) * (1 + num(P.buffer) / 100) - 1e-9));
+    return { ...x, cost, costSrc: src, viaCost, extras: x.eff != null && x.vendor != null ? x.eff - x.vendor : null,
+             estimated: src === "manual" || src === "history", custPrice, profitUnit: custPrice != null && cost != null ? custPrice - cost : null,
+             profit: cost != null && x.need ? x.revenue - x.need * cost : null, net, toOrder: Math.max(0, net - x.supply) };
   }).sort((a, b) => (b.need > 0 || b.servedBy.length > 0) - (a.need > 0 || a.servedBy.length > 0) || String(a.code).localeCompare(String(b.code)));
   const costOf = Object.fromEntries(rows.map(r => [r.key, r.cost]));
   const orders = d.demand.map(b => {
@@ -113,14 +141,46 @@ function calc() {
     const m = Math.max(1, num(b.multiplier) || 1);
     return { b, m, rev, cost, profit: costedRev - cost, missing, margin: costedRev ? (costedRev - cost) / costedRev * 100 : null };
   });
+  const track = trackerLines(rows, P);
   const withCost = rows.filter(r => r.need && r.cost != null);
   const revenue = rows.reduce((s, r) => s + r.revenue, 0), cost = withCost.reduce((s, r) => s + r.need * r.cost, 0);
   const profit = withCost.reduce((s, r) => s + r.revenue - r.need * r.cost, 0);
   const costedRev = withCost.reduce((s, r) => s + r.revenue, 0);
   const summary = { revenue, cost, profit, margin: costedRev ? profit / costedRev * 100 : null, items: rows.filter(r => r.need).length,
                     missing: rows.filter(r => r.need && r.cost == null).length, notInDb: rows.filter(r => r.notInDb).length,
-                    toOrder: rows.filter(r => r.toOrder > 0).length };
-  return { rows, orders, summary, effPer };
+                    estimated: rows.filter(r => r.need && r.estimated).length,
+                    toOrder: track.filter(t => t.status === "todo").length };
+  return { rows, orders, summary, effPer, track };
+}
+// The order tracker's lines: per item, what we still have to get (net), covered first by POs already in the
+// simulation ("On PO"), then by vendor quotes in it, then the rest from a vendor you pick (default: whoever we
+// last bought it from). Your choices (vendor, qty, status, reference) are kept per line in doc.tracker.
+function trackerLines(rows, P) {
+  const out = [];
+  for (const r of rows) {
+    if (r.via || r.net <= 0) continue;
+    let left = r.net;
+    const add = (key, part, qty, price, vendorDefault, fixed) => {
+      const T = doc.tracker[key] || {};
+      const pack = P.pack && r.ins && r.ins.pack_size > 1 ? r.ins.pack_size : 0;
+      const suggested = fixed ? qty : pack ? Math.ceil(qty / pack - 1e-9) * pack : qty;
+      const q = T.qty !== undefined && T.qty !== "" && !fixed ? num(T.qty) : suggested;
+      const p = T.price !== undefined && T.price !== "" && !fixed ? num(T.price) : price == null ? null : Math.round(price * 100000) / 100000;
+      out.push({ key, r, part, need: qty, suggested, qty: q, price: p, value: q * (p || 0), pack, fixed: !!fixed,
+                 vendor_id: fixed ? part.b.party_id : (T.vendor_id !== undefined ? T.vendor_id : vendorDefault),
+                 vendorHint: !fixed && T.vendor_id === undefined && vendorDefault ? (part ? "from the quote" : "last bought from") : "",
+                 status: fixed ? "onpo" : (T.status || "todo"), ref: fixed ? part.b.ref_code || part.b.label : (T.ref || ""),
+                 po_id: fixed ? part.b.ref_id : T.po_id, po_code: fixed ? part.b.ref_code : T.po_code });
+    };
+    for (const part of [...r.parts].sort((a, b) => b.onPo - a.onPo)) {
+      if (left <= 0) break;
+      const take = Math.min(part.q, left);
+      add(`${r.key}|${part.b.id}`, part, take, part.price, part.b.party_id || null, part.onPo);
+      left -= take;
+    }
+    if (left > 0) add(`${r.key}|open`, null, left, r.vendor ?? r.cost ?? null, (r.lastBuy && r.lastBuy.vendor_id) || null, false);
+  }
+  return out;
 }
 
 // ================= drawing =================
@@ -216,8 +276,9 @@ function drawCompare(c) {
 }
 function compareHead() {
   return `<table class="compact-table sim-compare"><thead><tr><th>Item</th><th class="num sum">Need</th><th class="num sum">Sourced</th>
-      <th class="num" title="Available stock (on hand minus booked)">On hand</th><th class="num sum">To order</th><th class="num">Customer price</th>
-      <th class="num">Vendor price</th><th class="num">+ Extras</th><th class="num" title="Vendor price + extras (or your estimate)">Effective cost</th>
+      <th class="num" title="Available stock in AT-HUB (on hand minus booked)">On hand</th>
+      <th class="num" title="What you think is really on the shelf -- used when the stock basis is My on hand">My on hand</th><th class="num sum">To order</th><th class="num">Customer price</th>
+      <th class="num" title="The vendor's price, and below it the extra costs per unit (tariff, freight...)">Vendor price</th><th class="num" title="Vendor price + extras; with no vendor price: your estimate (red) or the last purchase price (blue)">Effective cost</th>
       <th class="num">Profit / unit</th><th class="num sum">Profit</th><th data-nosort></th></tr></thead>`;
 }
 function compareRows(rows) {
@@ -227,11 +288,11 @@ function compareRows(rows) {
       <td class="num">${fmtQty(r.need)}${r.rolled ? `<div class="small sim-gen-txt" title="Specific nuts on the left that this generic nut stands in for">+ ${fmtQty(r.rolled)} for nuts</div>` : ""}</td>
       <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.supply && r.supply < r.need + (r.rolled || 0) && !r.via ? `<div class="sim-warn small">short ${fmtQty(r.need + (r.rolled || 0) - r.supply)}</div>` : ""}</td>
       <td class="num">${r.item_id ? onHandCell(r) : "—"}</td>
+      <td class="num">${r.via ? "" : `<input type="number" class="sim-num sim-mystock" min="0" step="1" placeholder="—" value="${r.myStock ?? ""}"
+          title="What you think you really have" oninput="setMyStock('${escapeHtml(r.key)}', this.value)" onchange="changed(false)">`}</td>
       <td class="num">${r.toOrder ? `<b>${fmtQty(r.toOrder)}</b>` : r.via && r.viaQty ? `<span class="small sim-gen-txt">as ${escapeHtml(r.via.code)}</span>` : "—"}</td>
-      <td class="num">${price(r.custPrice)}</td><td class="num">${price(r.vendor)}</td>
-      <td class="num">${r.extras ? "+" + fmtPrice(r.extras) : "—"}</td>
-      <td class="num">${r.via && r.cost != null ? `<b>${fmtPrice(r.cost)}</b><div class="small sim-gen-txt">${escapeHtml(r.via.code)} cost</div>` : r.eff != null ? `<b>${fmtPrice(r.eff)}</b>` : `<input type="number" class="sim-num sim-est" step="any" placeholder="estimate" value="${doc.estimates[r.key] ?? ""}"
-          title="Nobody sources this yet: estimate what it will cost us" oninput="setEstimate('${escapeHtml(r.key)}', this.value)">`}</td>
+      <td class="num">${price(r.custPrice)}</td><td class="num">${price(r.vendor)}${r.extras ? `<div class="small muted" title="Extra costs per unit">+${fmtPrice(r.extras)}</div>` : ""}</td>
+      <td class="num">${r.via && r.cost != null ? `<b>${fmtPrice(r.cost)}</b><div class="small sim-gen-txt">${escapeHtml(r.via.code)} cost</div>` : r.eff != null ? `<b>${fmtPrice(r.eff)}</b>` : estimateCell(r)}</td>
       <td class="num ${r.profitUnit != null ? (r.profitUnit >= 0 ? "pos" : "neg") : ""}">${r.profitUnit != null ? fmtPrice(r.profitUnit) : "—"}
         ${r.profitUnit != null && r.custPrice ? `<div class="small muted">${(r.profitUnit / r.custPrice * 100).toFixed(1)}%</div>` : ""}</td>
       <td class="num ${r.profit != null ? (r.profit >= 0 ? "pos" : "neg") : ""}">${r.profit != null ? money(r.profit) : `<span class="sim-warn small">${r.need ? "needs a cost" : ""}</span>`}</td>
@@ -278,14 +339,18 @@ function render() {
         <div class="sim-block is-shared">${costsTable("shared", doc.shared_costs, "shared")}</div></section>
     </div>
     <div class="card"><div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;"><h3 style="margin:0;">Item By Item</h3>
-        <label class="check-label" title="Off: order everything as if the shelf were empty. On: stock on hand covers part of the need -- untick any item whose count you don't trust.">
-          <input type="checkbox" ${doc.use_stock ? "checked" : ""} onchange="doc.use_stock = this.checked; changed(true)"> Count stock on hand</label>
-        ${doc.use_stock && Object.keys(doc.stock_off || {}).length ? `<span class="muted small">${Object.keys(doc.stock_off).length} item${Object.keys(doc.stock_off).length === 1 ? "" : "s"} ignored ·
+        ${stockSelect()}
+        ${["system", "mixed"].includes(plan().stock) && Object.keys(doc.stock_off).length ? `<span class="muted small">${Object.keys(doc.stock_off).length} item${Object.keys(doc.stock_off).length === 1 ? "" : "s"} ignored ·
           <a class="link" onclick="doc.stock_off = {}; changed(true)">count all</a></span>` : ""}
-        <span class="spacer"></span><button class="secondary small-btn" onclick="makePoFromShort()" title="A draft PO for everything still to order">Create PO For What's Short</button></div>
+        <span class="spacer"></span><button class="secondary small-btn" onclick="document.getElementById('sim-track-card').scrollIntoView({ behavior: 'smooth' })">Order Tracker ↓</button></div>
       <div id="sim-compare"></div></div>
-    <div class="card"><h3 style="margin-top:0;">Profit Per Order</h3><div id="sim-orders">${ordersTable(c) || `<p class="muted small">Add demand to see each order's profit.</p>`}</div></div>`;
+    <div class="card"><h3 style="margin-top:0;">Profit Per Order</h3><div id="sim-orders">${ordersTable(c) || `<p class="muted small">Add demand to see each order's profit.</p>`}</div></div>
+    <div class="card" id="sim-track-card"><div class="sim-track-head"><h3 style="margin:0;">Order Tracker</h3>
+        <span class="muted small">what we still have to buy, who from, and whether it's ordered</span></div>
+      <div class="sim-plan" id="sim-plan"></div>
+      <div id="sim-track"></div></div>`;
   drawCompare(c);
+  drawTracker(c);
   doc.summary = c.summary;
 }
 // numbers changed: redraw only the results (keeps the cursor where you're typing)
@@ -296,6 +361,7 @@ function renderResults() {
   set("sim-tiles", tiles(c.summary));
   set("sim-orders", ordersTable(c));
   drawCompare(c);
+  drawTracker(c);
   for (const b of [...doc.demand, ...doc.sources]) {
     const isD = doc.demand.includes(b);
     const total = b.lines.reduce((s, l) => s + num(l.qty) * num(l.price), 0);
@@ -401,10 +467,131 @@ function genNote(r) {
 }
 // On hand column: with stock counted, each item has its own tick -- untick to ignore a count you don't trust
 function onHandCell(r) {
-  if (!doc.use_stock) return `<span class="muted" title="Stock isn't counted (switch on Count stock on hand)">${fmtQty(r.onHand)}</span>`;
+  if (!["system", "mixed"].includes(plan().stock)) return `<span class="muted" title="Not counted: the stock basis is ${escapeHtml(STOCK_MODES.find(m => m[0] === plan().stock)[1])}">${fmtQty(r.onHand)}</span>`;
   const on = !(doc.stock_off || {})[r.key];
   return `<label class="sim-stock ${on ? "" : "off"}" title="${on ? "Counted -- untick if this count is wrong" : "Ignored -- tick to count it"}">
     <input type="checkbox" ${on ? "checked" : ""} onchange="setStockOff('${escapeHtml(r.key)}', !this.checked)"> ${fmtQty(r.onHand)}</label>`;
+}
+// Cost with no vendor price. Blue = filled from the last purchase (where it came from underneath),
+// red = your number with no price history to go on, amber = your number over a known last purchase.
+// Clearing the box goes back to the last purchase price.
+function estimateCell(r) {
+  const mine = doc.estimates[r.key], lb = r.lastBuy, hasMine = mine !== undefined && mine !== "";
+  const cls = hasMine ? (lb ? "est-own" : "est-red") : lb ? "est-hist" : "";
+  const val = hasMine ? mine : lb ? Math.round(lb.price * 100000) / 100000 : "";
+  const from = lb ? [lb.doc ? `<a class="link" href="purchase-orders.html?id=${lb.doc_id}">${escapeHtml(lb.doc)}</a>` : "", escapeHtml(lb.party || ""),
+                     lb.date ? fmtDate(lb.date, { month: "short", day: "numeric", year: "2-digit" }) : ""].filter(Boolean).join(" · ") : "";
+  const label = hasMine ? (lb ? `<span class="sim-src own">your estimate · ${lb.doc ? "last buy" : "item cost"} ${fmtPrice(lb.price)}</span>` : `<span class="sim-src red">your estimate · no price history</span>`)
+    : lb ? `<span class="sim-src hist">${lb.doc ? `last buy · ${from}` : "item card cost"}</span>` : `<span class="sim-src red">no price history: estimate it</span>`;
+  return `<input type="number" class="sim-num sim-est ${cls}" step="any" placeholder="estimate" value="${val}"
+      title="No vendor price in this simulation. Type your own estimate; clear it to use the last purchase price."
+      oninput="setEstimate('${escapeHtml(r.key)}', this.value)" onchange="setTimeout(() => changed(false))">${label}`;
+}
+function setMyStock(key, value) { plan(); if (value === "") delete doc.est_stock[key]; else doc.est_stock[key] = Math.max(0, num(value)); changed(false); }
+function stockSelect() {
+  return `<label class="check-label" title="Which stock covers part of the need. Counts can be wrong while stock is being cleaned up: enter My on hand where you know better.">Stock:
+    <select style="width:auto;" onchange="plan().stock = this.value; changed(true)">${STOCK_MODES.map(([k, l]) =>
+      `<option value="${k}" ${plan().stock === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
+}
+
+// ================= order tracker =================
+const TRACK_STATUS = { todo: "To order", ordered: "Ordered", draft: "Draft PO", onpo: "On PO" };
+function planBar(c) {
+  const P = plan();
+  const withIncoming = c.rows.filter(r => r.item_id && ((INSIGHT[r.item_id] || {}).incoming || []).length).length;
+  return `${stockSelect()}
+    <label title="Quantities still coming in on open POs (not the ones already in this simulation)"><input type="checkbox" ${P.incoming ? "checked" : ""}
+      onchange="plan().incoming = this.checked; changed(true)"> Count open POs (incoming)${withIncoming ? ` <span class="muted small">${withIncoming} item${withIncoming === 1 ? "" : "s"} have some</span>` : ""}</label>
+    <label title="Order this much extra on top of the need">Buffer <input type="number" min="0" step="1" style="width:64px;" value="${P.buffer || 0}"
+      onchange="plan().buffer = Math.max(0, num(this.value)); changed(true)"> %</label>
+    <label title="Round each order quantity up to the item's pack size"><input type="checkbox" ${P.pack ? "checked" : ""} onchange="plan().pack = this.checked; changed(true)"> Round up to pack size</label>`;
+}
+function trackGroups(track) {
+  const vname = id => id ? partyName(VENDORS, id) || "?" : "";
+  const rank = { todo: 0, draft: 1, ordered: 2, onpo: 3 };
+  // not ordered yet first, grouped by the vendor you picked (no vendor yet at the very top), then drafts, ordered, on PO
+  const sorted = [...track].sort((a, b) => rank[a.status] - rank[b.status] || (a.status === "todo" && !!a.vendor_id - !!b.vendor_id)
+    || vname(a.vendor_id).localeCompare(vname(b.vendor_id)) || String(a.r.code).localeCompare(String(b.r.code)));
+  const groups = [];
+  for (const t of sorted) {
+    const label = t.status === "todo" ? (t.vendor_id ? vname(t.vendor_id) : "No vendor picked yet") : `${TRACK_STATUS[t.status]}${t.vendor_id ? " · " + vname(t.vendor_id) : ""}`;
+    const g = groups[groups.length - 1];
+    if (g && g.label === label && g.status === t.status) g.lines.push(t); else groups.push({ label, status: t.status, lines: [t] });
+  }
+  return groups;
+}
+function trackerTable(c) {
+  if (!c.track.length) return `<p class="muted">Nothing to buy: the need is covered${plan().stock !== "none" ? " by stock and" : " by"} the sources above.</p>`;
+  const vendorOpts = id => `<option value="">Vendor…</option>${VENDORS.map(v => `<option value="${v.id}" ${v.id === id ? "selected" : ""}>${escapeHtml(v.name)}</option>`).join("")}`;
+  const k = t => escapeHtml(t.key);
+  const why = r => [`need ${fmtQty(r.need)}`, r.rolled ? `+ ${fmtQty(r.rolled)} for nuts` : "", r.stock ? `− stock ${fmtQty(r.stock)}` : "",
+                    r.incoming ? `− incoming ${fmtQty(r.incoming)}` : "", num(plan().buffer) ? `+ ${plan().buffer}%` : ""].filter(Boolean).join(" ");
+  const row = t => `<tr class="${t.r.notInDb ? "sim-unknown" : ""}">
+      <td><b>${escapeHtml(t.r.code || "")}</b> <span class="muted small">${escapeHtml((t.r.desc || "").slice(0, 44))}</span>
+        ${t.r.notInDb ? `<span class="sim-tag" title="Add the item to AT-HUB before it can go on a PO">not in DB</span>` : ""}
+        ${t.part && !t.fixed ? `<div class="small muted">quoted on ${escapeHtml(t.part.b.label || "a source")}</div>` : ""}</td>
+      <td class="num">${fmtQty(t.need)}<div class="small muted">${why(t.r)}</div></td>
+      <td class="num">${t.fixed ? fmtQty(t.qty) : `<input type="number" class="sim-num" min="0" step="1" value="${t.qty}" onchange="setTrack('${k(t)}', 'qty', this.value)">
+        ${t.qty !== t.suggested ? `<div class="small"><a class="link" onclick="setTrack('${k(t)}', 'qty', '')">suggested ${fmtQty(t.suggested)}</a></div>` : t.pack ? `<div class="small muted">pack ${fmtQty(t.pack)}</div>` : ""}`}</td>
+      <td class="num">${t.fixed ? price(t.price) : `<input type="number" class="sim-num" min="0" step="any" value="${t.price ?? ""}" placeholder="price" onchange="setTrack('${k(t)}', 'price', this.value)">`}</td>
+      <td class="num">${money(t.value)}</td>
+      <td>${t.fixed || t.status === "draft" ? escapeHtml(partyName(VENDORS, t.vendor_id) || "—") : `<select onchange="setTrack('${k(t)}', 'vendor_id', parseInt(this.value) || null)">${vendorOpts(t.vendor_id)}</select>${t.vendorHint ? `<div class="small muted">${t.vendorHint}</div>` : ""}`}</td>
+      <td>${t.fixed ? `<span class="trk-st onpo">On PO</span>` : `<select onchange="setTrack('${k(t)}', 'status', this.value)" style="width:auto;">
+          <option value="todo" ${t.status === "todo" ? "selected" : ""}>To order</option><option value="ordered" ${t.status === "ordered" ? "selected" : ""}>Ordered</option>
+          ${t.po_code ? `<option value="draft" ${t.status === "draft" ? "selected" : ""}>Draft PO</option>` : ""}</select>`}</td>
+      <td>${t.po_id ? `<a class="link" href="purchase-orders.html?id=${t.po_id}">${escapeHtml(t.po_code || "PO")}</a>` : t.fixed ? escapeHtml(t.ref) :
+          `<input value="${escapeHtml(t.ref)}" placeholder="PO # / note" style="width:96px;" onchange="setTrack('${k(t)}', 'ref', this.value)">`}</td></tr>`;
+  const groups = trackGroups(c.track);
+  const todo = c.track.filter(t => t.status === "todo");
+  const ready = todo.filter(t => t.vendor_id && t.r.item_id && t.qty > 0);
+  const vendors = new Set(ready.map(t => t.vendor_id));
+  return `<table class="compact-table sim-track no-table-tools"><thead><tr><th>Item</th><th class="num">Still need</th><th class="num">Order qty</th><th class="num">Price</th>
+      <th class="num">Value</th><th>Vendor</th><th>Status</th><th>PO / reference</th></tr></thead><tbody>
+    ${groups.map(g => `<tr class="trk-group"><td colspan="4"><span class="trk-st ${g.status}">${TRACK_STATUS[g.status]}</span> ${escapeHtml(g.label.replace(TRACK_STATUS[g.status] + " · ", ""))}</td>
+        <td class="num">${money(g.lines.reduce((s, t) => s + t.value, 0))}</td><td colspan="3" class="muted small">${g.lines.length} line${g.lines.length === 1 ? "" : "s"}</td></tr>
+      ${g.lines.map(row).join("")}`).join("")}</tbody>
+    <tfoot><tr><td colspan="4">${todo.length} to order · ${c.track.filter(t => t.status !== "todo").length} ordered / on PO</td>
+      <td class="num">${money(todo.reduce((s, t) => s + t.value, 0))}</td><td colspan="3">
+      <button class="small-btn" ${ready.length ? "" : "disabled"} onclick="createTrackerPos()" title="One draft PO per vendor for the lines still to order">Create ${vendors.size || ""} Draft PO${vendors.size === 1 ? "" : "s"}</button>
+      ${todo.length > ready.length ? `<span class="muted small">${todo.length - ready.length} line${todo.length - ready.length === 1 ? "" : "s"} need a vendor${todo.some(t => t.r.notInDb) ? " or aren't in our database" : ""}</span>` : ""}</td></tr></tfoot></table>`;
+}
+function drawTracker(c) {
+  const host = document.getElementById("sim-track"), bar = document.getElementById("sim-plan");
+  if (!host) return;
+  if (bar && !bar.contains(document.activeElement)) bar.innerHTML = planBar(c);
+  if (host.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;  // typing: leave the box alone
+  host.innerHTML = trackerTable(c);
+}
+function setTrack(key, field, value) {
+  plan();
+  const T = (doc.tracker[key] ||= {});
+  if (value === "" || value === undefined) delete T[field]; else T[field] = field === "qty" || field === "price" ? num(value) : value;
+  if (field === "status" && value === "todo") { delete T.po_id; delete T.po_code; }
+  setTimeout(() => changed(false));
+}
+// one draft PO per vendor from the lines still to order; the lines then show "Draft PO" with its link
+async function createTrackerPos() {
+  const c = calc();
+  const ready = c.track.filter(t => t.status === "todo" && t.vendor_id && t.r.item_id && t.qty > 0);
+  const byVendor = {};
+  ready.forEach(t => (byVendor[t.vendor_id] ||= []).push(t));
+  const list = Object.entries(byVendor).map(([v, ls]) => `<li><b>${escapeHtml(partyName(VENDORS, +v))}</b>: ${ls.length} line${ls.length === 1 ? "" : "s"}, ${money(ls.reduce((s, t) => s + t.value, 0))}</li>`).join("");
+  const { value } = await askDialog({ title: `Create ${Object.keys(byVendor).length} draft PO${Object.keys(byVendor).length === 1 ? "" : "s"}?`,
+    body: `<ul style="margin:0 0 8px 18px;">${list}</ul><p class="muted small" style="margin:0;">Drafts only: nothing is sent to vendors until you open each PO and order it.</p>`,
+    buttons: [{ label: "Create Drafts", value: "ok", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (!value) return;
+  plan();
+  const made = [];
+  for (const [v, ls] of Object.entries(byVendor)) {
+    try {
+      const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id: +v,
+        lines: ls.map(t => ({ item_id: t.r.item_id, quantity: Math.ceil(t.qty), price: t.price || 0 })), notes: `From simulation "${sim.name}" (order tracker)` }) });
+      ls.forEach(t => { doc.tracker[t.key] = { ...(doc.tracker[t.key] || {}), vendor_id: +v, status: "draft", po_id: r.id, po_code: r.code, qty: t.qty, price: t.price }; });
+      made.push(r.code);
+    } catch (e) { toast(`${partyName(VENDORS, +v)}: ${e.message}`); }
+  }
+  if (made.length) toast(`Draft ${made.join(", ")} created`);
+  changed(true);
 }
 function setStockOff(key, off) { doc.stock_off ||= {}; if (off) doc.stock_off[key] = true; else delete doc.stock_off[key]; changed(true); }
 function setGenericOff(key, off) { if (off) doc.generic_off[key] = true; else delete doc.generic_off[key]; changed(true); }
@@ -522,21 +709,6 @@ async function makePo(bid) {
   if (!confirm(`Create a draft PO to ${partyName(VENDORS, b.party_id)} with ${lines.length} line${lines.length === 1 ? "" : "s"}?${skipped ? `\n${skipped} line(s) not in our database are left out.` : ""}`)) return;
   try { const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id: b.party_id, lines, notes: `Drafted from simulation "${sim.name}"` }) });
         toast(`Draft ${r.code} created`); b.ref_link = `purchase-orders.html?id=${r.id}`; b.ref_code = r.code; changed(true); }
-  catch (e) { toast(e.message); }
-}
-async function makePoFromShort() {
-  const c = calc(), short = c.rows.filter(r => r.toOrder > 0 && r.item_id);
-  if (!short.length) { toast("Nothing short to order"); return; }
-  const { value, el } = await askDialog({ title: "Draft a PO for what's short",
-    body: `<p class="small">${short.map(r => `${escapeHtml(r.code)}: <b>${fmtQty(r.toOrder)}</b>`).join(" · ")}</p>
-      <select id="sim-vendor"><option value="">Vendor…</option>${VENDORS.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join("")}</select>`,
-    buttons: [{ label: "Create Draft PO", value: "ok", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
-  if (!value) return;
-  const vendor_id = parseInt(el.querySelector("#sim-vendor").value);
-  if (!vendor_id) { toast("Pick the vendor"); return; }
-  const lines = short.map(r => ({ item_id: r.item_id, quantity: Math.ceil(r.toOrder), price: r.vendor || (INSIGHT[r.item_id] || {}).last_cost || 0 }));
-  try { const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id, lines, notes: `Shortfall from simulation "${sim.name}"` }) });
-        toast(`Draft ${r.code} created`); }
   catch (e) { toast(e.message); }
 }
 async function makeOrder(bid) {

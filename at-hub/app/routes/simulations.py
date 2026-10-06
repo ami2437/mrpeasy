@@ -167,10 +167,20 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
     suggested selling price and the last cost."""
     if not has(user, "money.view"):
         raise HTTPException(status_code=403, detail="Simulating profit needs the role that sees prices")
+    from app.models import PurchaseOrder, PurchaseOrderLine
     from app.services.crud import price_history
     from app.services.quotes import suggest_price
+    ids = set(data.item_ids[:300]) or {0}
+    # still coming in: open PO lines (ordered / partly received), per PO so the page can leave out POs it already counts
+    incoming = {}
+    for line, po in (db.query(PurchaseOrderLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
+                     .filter(PurchaseOrderLine.item_id.in_(ids), PurchaseOrder.status.in_(("ordered", "partially_received"))).all()):
+        left = (line.quantity or 0) - (line.received_quantity or 0)
+        if left > 1e-9:
+            incoming.setdefault(line.item_id, []).append({"po_id": po.id, "code": po.code, "vendor_id": po.vendor_id, "qty": left,
+                                                          "expected": po.expected_date})
     out = {}
-    for it in db.query(StockItem).filter(StockItem.id.in_(set(data.item_ids[:300]) or {0})).all():
+    for it in db.query(StockItem).filter(StockItem.id.in_(ids)).all():
         hist = price_history(db, it.id)
         sales = [h for h in hist if h["kind"] == "sale" and h["status"] != "cancelled"][:8]
         buys = [h for h in hist if h["kind"] == "purchase" and h["status"] != "cancelled" and h["unit_price"]][:8]
@@ -181,7 +191,17 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
                            "last_cost": buys[0]["unit_price"] if buys else (it.cost_price or None),
                            "last_sale": sales[0]["unit_price"] if sales else None,
                            "suggested_price": sugg["price"] if sugg else (sales[0]["unit_price"] if sales else it.selling_price),
-                           "sales": [row(h) for h in sales], "purchases": [row(h) for h in buys]}
+                           "sales": [row(h) for h in sales], "purchases": [row(h) for h in buys],
+                           "incoming": incoming.get(it.id, [])}
+        # the most recent purchase, with its vendor (the order tracker suggests it), or the item card's cost
+        if buys:
+            po = db.get(PurchaseOrder, buys[0]["doc_id"])
+            out[str(it.id)]["last_buy"] = {"price": buys[0]["unit_price"], "date": buys[0]["date"], "doc": buys[0]["doc_code"],
+                                           "doc_id": buys[0]["doc_id"], "party": buys[0]["party"], "vendor_id": po.vendor_id if po else None}
+        elif it.cost_price:
+            out[str(it.id)]["last_buy"] = {"price": it.cost_price, "date": None, "doc": None, "doc_id": None, "party": "item cost", "vendor_id": None}
+        else:
+            out[str(it.id)]["last_buy"] = None
     return out
 
 

@@ -41,3 +41,13 @@ def test_simulation_generic_nuts(make, api):
     r = api.post("/api/simulations/generic", json={"item_ids": [bulk["id"], bolt["id"], nut["id"], other["id"]]})
     assert list(r["generics"]) == [str(bulk["id"])] and "not marked" in r["generics"][str(bulk["id"])]["why"]
     assert r["serves"] == {str(nut["id"]): [{"generic_id": bulk["id"], "match": "exact"}]}  # 77701-NUT is the bolt's own nut, not generic
+
+
+def test_simulation_insights_last_buy_and_incoming(make, api):
+    """The order tracker's defaults: the last purchase (price, PO, vendor) and what's still coming on open POs."""
+    it = make.item(code="SIM-LB1", title="5/8 F436 washer")
+    v = make.vendor()
+    po = api.post("/api/simulations/create-po", json={"vendor_id": v["id"], "lines": [{"item_id": it["id"], "quantity": 300, "price": 0.031}]})
+    ins = api.post("/api/simulations/insights", json={"item_ids": [it["id"]]})[str(it["id"])]
+    assert ins["last_buy"]["price"] == 0.031 and ins["last_buy"]["doc"] == po["code"] and ins["last_buy"]["vendor_id"] == v["id"]
+    assert ins["incoming"] == []  # a draft PO isn't incoming yet
