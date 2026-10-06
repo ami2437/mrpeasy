@@ -310,7 +310,7 @@ function renderPage(s, scale, interactive) {
   const sheet = document.createElement("div");
   sheet.className = "sheet" + (interactive ? " editing" : "");
   Object.assign(sheet.style, { width: `${(page.w || 8.5) * PX * scale}px`, minHeight: `${(page.h || 11) * PX * scale}px`, padding: `${m}px`,
-    fontFamily: s.font === "ui" ? '"Segoe UI", system-ui, sans-serif' : 'Arial, "Segoe UI", sans-serif' });
+    fontFamily: s.font === "ui" ? '"Segoe UI", system-ui, sans-serif' : s.font === "gothic" ? '"Century Gothic", "Trebuchet MS", sans-serif' : 'Arial, "Segoe UI", sans-serif' });
   for (const [k, label] of (isLabelSpec(s) ? BANDS_LABEL : BANDS_DOC)) {
     if (k === "running" && !interactive) continue;
     const bd = document.createElement("div");
@@ -515,7 +515,7 @@ function drawEditProps(el) {
   } else {
     const p = spec.page || (spec.page = {});
     el.innerHTML = `<div class="props-head"><h3>Page</h3></div>
-      ${field("Font", sel_("font", spec.font || "sans", [["ui", "Segoe UI (as in the samples)"], ["sans", "Arial (built-in documents)"]]))}
+      ${field("Font", sel_("font", spec.font || "sans", [["ui", "Segoe UI (as in the samples)"], ["sans", "Arial (built-in documents)"], ["gothic", "Century Gothic (old portal)"]]))}
       <div class="pgrid">${field("Width (in)", num("page.w", p.w || 8.5, 0.1, 1))}${field("Height (in)", num("page.h", p.h || 11, 0.1, 1))}${field("Margin (in)", num("page.margin", p.margin ?? 0.5, 0.05, 0))}</div>
       ${isLabel() ? `<p class="muted small">Labels print one page per box. 6 × 4 in fits most thermal label printers.</p>` : ""}
       <p class="muted small">Click a band (Header, Line items, Summary, Footer) or a block to edit it.</p>`;

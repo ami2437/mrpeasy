@@ -70,7 +70,8 @@ FIELDS = {
     "invoice": _COMPANY + _DOC + _CUST + _ORDER + [
         ("invoice.date", "Invoice date"), ("invoice.due_date", "Due date"), ("invoice.terms", "Terms"),
         ("invoice.shipments", "Shipment #(s)"), ("invoice.shipped", "Ship date"), ("invoice.delivered", "Delivered date"),
-        ("invoice.notes", "Invoice notes (free text)"), ("totals.subtotal", "Subtotal"), ("totals.tax", "Tax"),
+        ("invoice.notes", "Invoice notes (free text)"), ("totals.subtotal", "Subtotal"), ("totals.items_subtotal", "Subtotal before shipping"),
+        ("totals.shipping", "Shipping"), ("totals.tax", "Tax"),
         ("totals.total", "Total / amount due"), ("totals.lines", "Number of lines")],
     "packing_list": _COMPANY + _DOC + _CUST + _ORDER + [
         ("shipment.code", "Shipment #"), ("shipment.ship_date", "Ship date"), ("shipment.carrier", "Carrier"),
@@ -95,10 +96,11 @@ FIELDS = {
 }
 COLUMNS = {
     "invoice": [("line_no", "#"), ("item_code", "Item #"), ("description", "Description"), ("item_code_desc", "Item # + description"),
-                ("shipment", "Shipment"), ("qty", "Qty"), ("price", "Unit price"), ("amount", "Amount")],
+                ("shipment", "Shipment"), ("delivery", "Delivery date"), ("qty", "Qty"), ("price", "Unit price"), ("amount", "Amount")],
     "packing_list": [("line_no", "Line"), ("item_code", "Item #"), ("description", "Description"), ("item_code_desc", "Item # + description"),
                      ("lot", "Lot #"), ("previous", "Previously shipped"), ("ordered", "Ordered"), ("shipped", "Shipped"),
                      ("backorder", "Backorder"), ("boxes", "Boxes"), ("pallet", "Pallet #"), ("check", "Check box")],
+    "pallets": [("pallet", "Pallet #"), ("items", "Items on it"), ("weight", "Weight (lbs)"), ("dimensions", "Dimensions"), ("po", "Customer PO #")],
     "purchase_order": [("line_no", "#"), ("item_code", "Part # (vendor's)"), ("our_code", "Our item #"), ("description", "Description"),
                        ("item_code_desc", "Part # + description"), ("qty", "Qty"), ("price", "Unit cost"), ("amount", "Amount")],
     "quote": [("line_no", "#"), ("item_code", "Item #"), ("description", "Description"), ("item_code_desc", "Item # + description"),
@@ -148,6 +150,12 @@ def build(db: Session, doc_type: str, record, options: Optional[dict] = None):
     return ctx, rows
 
 
+def _is_shipping(line, item=None):
+    """A freight line: AT-HUB's own (no item, "Shipping") or MRPeasy's "Shipping" item."""
+    code = (item.code if item else "").strip().lower()
+    return code == "shipping" or (line.item_id is None and (line.description or "").strip().lower().startswith("shipping"))
+
+
 def _invoice(db, inv: Invoice, opt):
     cust = db.get(Customer, inv.customer_id)
     order = db.get(CustomerOrder, inv.order_id) if inv.order_id else None
@@ -164,8 +172,10 @@ def _invoice(db, inv: Invoice, opt):
         sh = by_id.get(l.shipment_id)
         rows.append({"line_no": str(i), "item_code": it.code if it else "", "description": _desc(desc, l, show_notes),
                      "shipment": sh.code if sh else "", "qty": qty(l.quantity), "price": price(l.unit_price),
-                     "amount": money(line_amount(l.quantity, l.unit_price))})
+                     "delivery": date((sh.delivered_at if sh else None) or (order.delivery_date if order else None)),
+                     "amount": money(line_amount(l.quantity, l.unit_price)), "_shipping": _is_shipping(l, it)})
     total = sum(line_amount(l.quantity, l.unit_price) for l in printed)
+    shipping = sum(line_amount(l.quantity, l.unit_price) for l in printed if _is_shipping(l, items.get(l.item_id)))
     due = inv.due_date or (inv.invoice_date + timedelta(days=30) if inv.invoice_date else None)
     order_ship_to = order.ship_to_address if order else None
     ctx = {"doc": {"title": "INVOICE", "number": inv.code, "date": date(inv.invoice_date), "status": inv.status},
@@ -174,7 +184,8 @@ def _invoice(db, inv: Invoice, opt):
                        "shipments": ", ".join(s.code for s in ships), "shipped": date(ships[0].ship_date) if ships else "",
                        "delivered": date(ships[0].delivered_at) if ships else "",
                        "notes": inv.free_text if inv.free_text and inv.free_text != "Generated via AT-HUB" else ""},
-           "totals": {"subtotal": money(total), "tax": money(0), "total": money(total), "lines": str(len(rows))},
+           "totals": {"subtotal": money(total), "items_subtotal": money(total - shipping), "shipping": money(shipping),
+                      "tax": money(0), "total": money(total), "lines": str(len(rows))},
            "_watermark": "VOID" if inv.status == "void" else None}
     return ctx, rows
 
@@ -218,6 +229,15 @@ def _packing_list(db, sh: Shipment, opt):
                      "pallet": ", ".join(eff_pallets.get(lid, [])),
                      "check": ""})
     pallets = sorted({p for ps in eff_pallets.values() for p in ps})
+    saved = {p.pallet_number: p for p in sh.pallets}
+    on_pallet = {}
+    for lid, ps in eff_pallets.items():
+        for pn in ps:
+            on_pallet.setdefault(pn, []).append(codes.get(ols[lid].item_id, "") if lid in ols else "")
+    pallet_rows = [{"pallet": pn, "items": ", ".join(dict.fromkeys(c for c in on_pallet.get(pn, []) if c)),
+                    "weight": qty(saved[pn].weight) if pn in saved and saved[pn].weight is not None else "",
+                    "dimensions": (saved[pn].dimensions or "") if pn in saved else "", "po": (order.po_number or "") if order else ""}
+                   for pn in pallets]
     weight = sum(p.weight or 0 for p in sh.pallets)
     ship_to = (order.ship_to_address if order else None)
     from app.services.concurrency import REQUEST_BASE
@@ -227,7 +247,8 @@ def _packing_list(db, sh: Shipment, opt):
            "shipment": {"code": sh.code, "ship_date": date(sh.ship_date), "carrier": sh.carrier or "", "tracking": sh.tracking_number or "",
                         "notes": sh.notes or "", "lines": str(len(rows)), "units": qty(sum(by_line.values())), "boxes": str(len(sh.boxes) or ""),
                         "pallets": str(len(pallets)) if pallets else "", "weight": f"{weight:,.0f} lbs" if weight else "",
-                        "pod_url": f"{base}/pod.html?id={sh.id}" if base else f"/pod.html?id={sh.id}"}}
+                        "pod_url": f"{base}/pod.html?id={sh.id}" if base else f"/pod.html?id={sh.id}"},
+           "_pallet_rows": pallet_rows}
     return ctx, rows
 
 

@@ -6,7 +6,9 @@ spec = {
   "header": {"h": 2.4, "blocks": [...]},        # page 1 top (labels: the whole label)
   "running":{"h": 0.4, "blocks": [...]},        # top of pages 2+ (optional)
   "table":  {"columns": [{"key", "header", "w", "align"}], "style": {...}},   # documents only
-  "summary":{"h": 1.6, "blocks": [...]},        # right after the table, kept together
+  "pallets":{"heading": "Pallet Information", "new_page": true, "columns": [...], "style": {...}},
+                                                # packing lists: a pallet table after the lines (only when it has pallets)
+  "summary":{"h": 1.6, "blocks": [...]},        # right after the table(s), kept together
   "footer": {"h": 0.5, "blocks": [...]},        # every page bottom
 }
 block = {"type": text|image|barcode|qr|rect|line, "x","y","w","h" (inches from the band's top-left),
@@ -31,7 +33,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.platypus import BaseDocTemplate, Flowable, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import BaseDocTemplate, Flowable, Frame, PageBreak, PageTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus.flowables import HRFlowable
 
 from app.services.pdf import FONT as BASE_FONT, FONT_BOLD as BASE_BOLD, FONT_ITALIC as BASE_ITALIC
 
@@ -55,6 +58,24 @@ def _register_ui():
 
 
 _register_ui()
+
+
+def _register_gothic():
+    """Century Gothic -- the old portal's packing list and invoice font (spec["font"] = "gothic"); sans where it isn't installed."""
+    import os
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    d = "C:/Windows/Fonts/"
+    files = {"Gothic": "GOTHIC.TTF", "Gothic-Bold": "GOTHICB.TTF", "Gothic-Italic": "GOTHICI.TTF"}
+    if not all(os.path.exists(d + f) for f in files.values()):
+        return
+    for name, f in files.items():
+        pdfmetrics.registerFont(TTFont(name, d + f))
+    pdfmetrics.registerFontFamily("Gothic", normal="Gothic", bold="Gothic-Bold", italic="Gothic-Italic", boldItalic="Gothic-Bold")  # <b> in text
+    FAMILIES["gothic"] = ("Gothic", "Gothic-Bold", "Gothic-Italic", "Gothic-Bold")
+
+
+_register_gothic()
 FONT, FONT_BOLD, FONT_ITALIC, FONT_SEMI = FAMILIES["sans"]
 
 
@@ -431,9 +452,26 @@ def render(spec, ctx, rows, title="Document") -> bytes:
         PageTemplate("later", [later], onPage=lambda c, d: draw_band(c, running, {**ctx, "page": str(d.page)}, m, ph - m)),
     ])
     story = []
-    table = build_table(spec.get("table") or {}, rows, width) if spec.get("table") else None
+    tspec = spec.get("table") or {}
+    if tspec.get("omit_shipping"):  # shipping shown in the totals instead of as a line
+        rows = [r for r in rows if not r.get("_shipping")]
+    table = build_table(tspec, rows, width) if spec.get("table") else None
     if table is not None:
         story.append(table)
+    pal = spec.get("pallets")
+    if isinstance(pal, dict) and not pal.get("hidden") and ctx.get("_pallet_rows"):
+        if pal.get("new_page"):
+            story.append(PageBreak())
+        else:
+            story.append(Spacer(1, 10))
+        if pal.get("heading"):
+            hs = (pal.get("style") or {}).get("heading_size", 12)
+            story += [Paragraph(escape(pal["heading"]), ParagraphStyle("ph", fontName=FONT_BOLD, fontSize=hs, leading=hs * 1.3, alignment=TA_CENTER,
+                                                                       textColor=color((pal.get("style") or {}).get("heading_color"), colors.HexColor("#1f2d3a")))),
+                      HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1f2d3a"), spaceBefore=3, spaceAfter=10)]
+        ptable = build_table(pal, ctx["_pallet_rows"], width)
+        if ptable is not None:
+            story.append(ptable)
     if summary.get("blocks"):
         story += [Spacer(1, 6), BandFlowable(summary, ctx, width)]
     if not story:

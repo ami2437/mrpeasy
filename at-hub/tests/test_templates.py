@@ -107,3 +107,31 @@ def test_show_hide_leaves_parts_out():
     ctx = {"order": {"code": "C1", "job_number": "JOB-77"}, "totals": {"subtotal": "$9.00", "total": "$9.00"}, "doc": {"title": "INVOICE"}}
     text = _text(template_engine.render(spec, ctx, [{"line_no": "1", "item_code": "X", "qty": "5", "price": "$1", "amount": "$5"}]))
     assert "JOB-77" not in text and "Subtotal" not in text and "C1" in text
+
+
+def test_portal_pallet_table_and_shipping_total(api, make):
+    """Portal design: pallet rows (items, weight, size) for the packing list; invoice shipping split from the subtotal."""
+    from app.config.database import SessionLocal
+    from app.models import Invoice, Shipment
+    from app.services import doc_context, template_engine, template_starters
+    a, b = make.item(price=2), make.item(price=3)
+    make.stock(a, 10)
+    make.stock(b, 10)
+    sh = make.ship(make.order(lines=[(a, 5, 2), (b, 4, 3)]))
+    boxes = [{"order_line_id": bx["order_line_id"], "item_id": bx["item_id"], "box_number": i + 1, "quantity_in_box": bx["quantity_in_box"],
+              "pallet_number": "P1"} for i, bx in enumerate(sh["boxes"])]
+    api.put(f"/api/shipments/{sh['id']}/boxes", json={"boxes": boxes})
+    api.put(f"/api/shipments/{sh['id']}/pallet-weights", json={"pallets": [{"pallet_number": "P1", "weight": 250, "dimensions": "48 x 40 x 50"}]})
+    inv = make.invoice(sh, shipping=40)
+    db = SessionLocal()
+    try:
+        ctx, rows = doc_context.build(db, "packing_list", db.get(Shipment, sh["id"]))
+        assert ctx["_pallet_rows"] == [{"pallet": "P1", "items": f"{a['code']}, {b['code']}", "weight": "250", "dimensions": "48 x 40 x 50",
+                                        "po": ctx["order"]["po_number"]}]
+        assert template_engine.render(template_starters.portal_packing_list(), ctx, rows)[:4] == b"%PDF"
+        ctx, rows = doc_context.build(db, "invoice", db.get(Invoice, inv["id"]))
+        assert (ctx["totals"]["items_subtotal"], ctx["totals"]["shipping"], ctx["totals"]["total"]) == ("$22.00", "$40.00", "$62.00")
+        assert [r["_shipping"] for r in rows] == [False, False, True]
+        assert template_engine.render(template_starters.portal_invoice(), ctx, rows)[:4] == b"%PDF"
+    finally:
+        db.close()

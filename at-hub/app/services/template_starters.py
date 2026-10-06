@@ -748,6 +748,73 @@ def barcode_address_label():
     return {"name": "Ship-to + barcode", "page": {"w": 6, "h": 4, "margin": 0.15}, "header": {"h": LH, "blocks": blocks}}
 
 
+# ======================================================================================================
+# Portal: the old MRPeasy portal's packing list (frontend/public/packing-list.html) and invoice
+# (invoicing.html, generateInvoiceDraftPdf) -- same layout, labels, sizes (px x 0.75 = pt) and colours.
+# ======================================================================================================
+def portal_packing_list():
+    W = 7.9   # Letter, 0.3 in margins
+    lab = lambda x, y, w, t: T(x, y, w, 0.14, t, size=7.5, bold=True, color="#666666", upper=True)
+    val = lambda x, y, w, h, t, **k: T(x, y, w, h, t, size=9, color="#333333", lh=1.25, **({"semi": True} | k))
+    cw = (W - 0.36) / 2
+    lx, rx = 0.1, 0.1 + cw + 0.16
+    header = (g("Logo", B("image", W - 1.25, 0.04, 1.25, 0.46, align="center"))
+              + g("Title", [T(1.35, 0.0, W - 2.7, 0.22, "{{company.name}}", size=11.25, bold=True, color="#2c3e50", align="center"),
+                            T(1.35, 0.23, W - 2.7, 0.26, "Packing list {{shipment.code}}", size=13.5, bold=True, color="#333333", align="center")])
+              + [B("line", 0, 0.58, W, 0.02, border=1.5, color="#1f2d3a")]
+              + g("Shipment info", [B("rect", 0, 0.7, W, 1.92, border=0.75, border_color="#e0e0e0", radius=3)])
+              + g("Shipment info: Date", [lab(lx, 0.8, cw, "Date"), val(lx, 0.95, cw, 0.18, "{{doc.date}}")])
+              + g("Shipment info: Delivery date", [lab(lx, 1.19, cw, "Delivery Date"), val(lx, 1.34, cw, 0.18, "{{order.delivery_date|N/A}}")])
+              + g("Shipment info: Customer", [lab(lx, 1.58, cw, "Customer"), val(lx, 1.73, cw, 0.18, "{{customer.name|N/A}}")])
+              + g("Shipment info: Shipping address", [lab(lx, 1.97, cw, "Shipping Address"), val(lx, 2.12, cw, 0.48, "{{customer.ship_to|N/A}}", semi=False)])
+              + g("Shipment info: Reference", [lab(rx, 0.8, cw, "Reference"), val(rx, 0.95, cw, 0.18, "{{order.po_number|N/A}}")])
+              + g("Shipment info: Job #", [lab(rx, 1.19, cw, "Job #"), val(rx, 1.34, cw, 0.18, "{{order.job_number|N/A}}")])
+              + g("Shipment info: Supplier", [lab(rx, 1.58, cw, "Supplier"),
+                                              val(rx, 1.73, cw, 0.8, "{{company.name}}\nPhone: {{company.phone}}\nWebsite: {{company.website}}\nE-mail: {{company.email}}", semi=False)]))
+    grid = {"header_bg": "#e5e7eb", "header_color": "#000000", "header_size": 7.5, "header_upper": True, "grid": "#9aa4ad",
+            "zebra": "#f8f9fa", "size": 8.25, "color": "#000000", "pad": 5, "row_rule": "#9aa4ad"}
+    left = lambda k, h, w, **x: {"key": k, "header": h, "w": w, "align": "left", **x}
+    return {"name": "Portal", "font": "gothic", "page": {"w": 8.5, "h": 11, "margin": 0.3},
+            "header": {"h": 2.75, "blocks": header},
+            "table": {"columns": [left("item_code", "Part #", 0.87, bold=True), left("description", "Part description", 0),
+                                  left("ordered", "Qty ordered", 0.72), left("shipped", "Qty shipped", 0.72), left("backorder", "Backordered", 0.95),
+                                  left("boxes", "Box breakdown", 1.0), left("pallet", "Pallet #", 0.7)], "style": grid},
+            "pallets": {"heading": "Pallet Information", "new_page": True, "style": {**grid, "heading_size": 12},
+                        "columns": [left("pallet", "Pallet #", 0.7), left("items", "Customer Item #", 0), left("weight", "Weight (lbs)", 0.9),
+                                    left("dimensions", "Dimensions (in) L x W x H", 1.45), left("po", "Customer PO #", 1.5)]},
+            "summary": {"h": 0.62, "blocks": g("Received by", [B("line", 0, 0.1, W, 0.01, border=0.75, color="#7f8b96"),
+                                                                T(0, 0.18, W, 0.18, "Received by: __________________      Date: __________________", size=8.25, color="#666666", align="center")])
+                                              + g("Thank you", T(0, 0.38, W, 0.18, "Thank You For Your Business.", size=8.25, bold=True, color="#333333", align="center"))},
+            "footer": {"h": 0.22, "blocks": g("Page number", T(W - 1.5, 0.04, 1.5, 0.16, "Page {{page}}", size=6.75, color="#444444", align="right"))}}
+
+
+def portal_invoice():
+    W = 7.5   # Letter, 0.5 in margins
+    meta = ("<b>Order:</b> {{order.code|N/A}}\n<b>PO #:</b> {{order.po_number|N/A}}\n<b>Job #:</b> {{order.job_number|N/A}}\n"
+            "<b>Customer:</b> {{customer.name|N/A}}")
+    header = (g("Title", T(0.15, 0.15, 2.5, 0.2, "Invoice", size=9.75, bold=True, color="#0f172a"))
+              + g("Logo", B("image", W - 1.75 - 1.67 - 0.17, 0.15, 1.67, 0.6, align="center"))
+              + g("Invoice #", T(W - 1.75 - 0.15, 0.15, 1.75, 0.16, "<b>Invoice #:</b> {{doc.number}}", size=6, color="#334155", align="right"))
+              + [B("line", 0.15, 0.86, W - 0.3, 0.02, border=1.5, color="#e2e8f0")]
+              + g("Order details", T(0.15, 0.97, W - 0.3, 0.5, meta, size=6, color="#334155", lh=1.45)))
+    tot = lambda y, k, v, **x: [T(W - 0.15 - 2.92, y, 1.6, 0.16, k, size=x.get("size", 6.15), bold=x.get("bold", False), color="#0f172a"),
+                                T(W - 0.15 - 1.32, y, 1.32, 0.16, v, size=x.get("size", 6.15), bold=x.get("bold", False), color="#0f172a", align="right")]
+    summary = (g("Totals: Subtotal", tot(0.12, "Subtotal:", "{{totals.items_subtotal}}"))
+               + g("Totals: Shipping", tot(0.27, "Shipping:", "{{totals.shipping}}"))
+               + g("Totals: Total", [B("line", W - 0.15 - 2.92, 0.44, 2.92, 0.01, border=0.75, color="#94a3b8")]
+                   + tot(0.5, "Total:", "{{totals.total}}", size=6.75, bold=True)))
+    num = lambda k, h, w: {"key": k, "header": h, "w": w, "align": "right"}
+    return {"name": "Portal", "font": "gothic", "page": {"w": 8.5, "h": 11, "margin": 0.5},
+            "header": {"h": 1.55, "blocks": header},
+            "table": {"omit_shipping": True,
+                      "columns": [{"key": "item_code", "header": "Item Code", "w": 0.85}, {"key": "description", "header": "Description", "w": 0},
+                                  {"key": "shipment", "header": "Shipment #", "w": 0.9}, {"key": "delivery", "header": "Delivery Date", "w": 0.9},
+                                  num("qty", "Qty", 0.55), num("price", "Unit Price", 0.75), num("amount", "Line Total", 0.85)],
+                      "style": {"header_bg": "#f8fafc", "header_color": "#0f172a", "header_size": 5.85, "header_upper": True, "grid": "#cbd5e1",
+                                "zebra": "#f3f4f6", "size": 5.85, "color": "#0f172a", "pad": 3.5, "row_rule": "#cbd5e1", "bold_amount": False}},
+            "summary": {"h": 0.72, "blocks": summary}}
+
+
 def starters(doc_type):
     """[(key, spec)] -- fresh copies every call."""
     if doc_type == "box_label":
@@ -758,4 +825,6 @@ def starters(doc_type):
     else:
         out = ([("classic", classic(doc_type)), ("executive", executive(doc_type)), ("modern", modern(doc_type))]
                + [(k, f(doc_type)) for k, f in MORE_DOCS] + [("blank", blank(doc_type))])
+        if doc_type in ("packing_list", "invoice"):
+            out.insert(3, ("portal", portal_packing_list() if doc_type == "packing_list" else portal_invoice()))
     return [(k, copy.deepcopy(s)) for k, s in out]
