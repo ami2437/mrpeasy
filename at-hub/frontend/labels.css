@@ -35,3 +35,11 @@ body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 20px; back
 .addr-bottom { display: flex; justify-content: space-between; gap: 10px; border-top: 2px solid #000; padding-top: 6px; font-size: 13px; font-weight: 600; }
 .addr-bottom .label-field-label { display: inline; margin-right: 4px; }
 .addr-note { text-align: right; text-transform: uppercase; font-weight: 800; }
+
+/* Pallet # labels: one big number, readable across the dock (thermal-friendly: black on white, no fills) */
+.label-card.pallet-num-card { align-items: center; justify-content: center; text-align: center; font-family: Arial, Helvetica, sans-serif; overflow: hidden; padding: 0.15in 0.25in; }
+.pn-customer { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
+.pn-word { font-size: 40px; font-weight: 800; letter-spacing: 10px; line-height: 1; }
+.pn-number { font-weight: 900; line-height: 0.95; margin: 2px 0; }
+.pn-of { font-size: 38px; font-weight: 800; letter-spacing: 4px; line-height: 1; }
+.pn-ref { margin-top: auto; width: 100%; border-top: 3px solid #000; padding-top: 8px; font-size: 22px; font-weight: 800; }

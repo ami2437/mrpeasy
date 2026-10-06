@@ -22,6 +22,7 @@
           <button class="seg-tab active" data-mode="shipment" data-icon="truck">From Shipment</button>
           <button class="seg-tab" data-mode="blank" data-icon="tag">Structured Blank</button>
           <button class="seg-tab" data-mode="free" data-icon="type">Free Text</button>
+          <button class="seg-tab" data-mode="pallet" data-icon="layers">Pallet #</button>
           <button class="seg-tab" data-mode="address" data-icon="pin">Address</button>
         </div>
 
@@ -46,9 +47,12 @@
         <div class="lbl-panel" id="panel-free">
           <label>Label Text</label>
           <textarea id="fr-text" rows="8" placeholder="Type Anything — E.g. DO NOT STACK, Returns, Pallet 2 Of 3…"></textarea>
+          <p class="muted small" style="margin:4px 0 0;">Numbering: type <b>{n}</b> and each copy counts up (1, 2, 3…); <b>{total}</b> is the last number.
+            E.g. <i>PALLET {n} OF {total}</i> with 5 copies prints Pallet 1 Of 5 … Pallet 5 Of 5.</p>
           <div class="lbl-grid">
             <div><label>Font Size</label><select id="fr-size"><option value="20">Small</option><option value="28">Medium</option><option value="40" selected>Large</option><option value="56">Extra Large</option><option value="80">Huge</option></select></div>
             <div><label>Alignment</label><select id="fr-align"><option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option></select></div>
+            <div><label>{n} Starts At</label><input type="number" id="fr-start" min="0" value="1"></div>
           </div>
           <div class="lbl-checks">
             <label class="check-label"><input type="checkbox" id="fr-bold" checked> Bold</label>
@@ -59,6 +63,20 @@
             <span class="muted small">Quick Text:</span>
 
           </div>
+        </div>
+
+        <!-- Pallet # -->
+        <div class="lbl-panel" id="panel-pallet">
+          <p class="muted small" style="margin-top:0;">One label per pallet number, ready to print as a set. Set <b>Copies</b> below to 2 for a label on two sides of each pallet.</p>
+          <div class="lbl-grid">
+            <div><label>From Pallet #</label><input type="number" id="pn-from" min="0" value="1"></div>
+            <div><label>To Pallet #</label><input type="number" id="pn-to" min="0" value="5"></div>
+            <div class="full"><label>Fill PO # / Job # From Customer Order (Optional)</label><select id="pn-order" data-searchable><option value="">—</option></select></div>
+            <div><label>PO #</label><input type="text" id="pn-po"></div>
+            <div><label>Job #</label><input type="text" id="pn-job"></div>
+            <div class="full"><label>Customer (Optional)</label><input type="text" id="pn-customer"></div>
+          </div>
+          <div class="lbl-checks"><label class="check-label"><input type="checkbox" id="pn-of" checked> Show "Of N" (Pallet 3 Of 5)</label></div>
         </div>
 
         <!-- Address -->
@@ -99,7 +117,7 @@
       ["customer", "Customer", "full"], ["shipment", "Shipment"], ["order", "Order #"], ["po", "PO #"], ["job", "Job #"],
       ["item_code", "Item Code"], ["qty", "Quantity In Box"], ["item_title", "Item Description", "full area"], ["footer", "Footer", "full area"],
     ];
-    const QUICK = ["DO NOT STACK", "FRAGILE\nHANDLE WITH CARE", "THIS SIDE UP ↑", "RETURN TO VENDOR", "QC HOLD", "SAMPLE"];
+    const QUICK = ["PALLET {n} OF {total}", "DO NOT STACK", "FRAGILE\nHANDLE WITH CARE", "THIS SIDE UP ↑", "RETURN TO VENDOR", "QC HOLD", "SAMPLE"];
     let mode = "shipment", company = {}, items = [], orders = [], customers = [], shipments = [];
     let shipSource = null, shipDraft = {}, blankDraft = {}, dirty = false;
     const byId = (list, id) => list.find(x => x.id === id) || {};
@@ -122,10 +140,22 @@
     }
 
     // ---- Preview: the same card HTML the print tab uses, inside an iframe with labels.css ----
+    // Pallet #: every number from..to, each repeated `copies` times (two sides of a pallet).
+    function palletList(copies) {
+      const a = parseInt(v("pn-from")), b = parseInt(v("pn-to"));
+      if (isNaN(a) || isNaN(b)) return [];
+      const lo = Math.min(a, b), hi = Math.min(Math.max(a, b), lo + 199);
+      const base = { po: v("pn-po").trim(), job: v("pn-job").trim(), customer: v("pn-customer").trim(), total: c("pn-of") ? String(hi) : "" };
+      const out = [];
+      for (let n = lo; n <= hi; n++) for (let k = 0; k < copies; k++) out.push({ ...base, number: String(n) });
+      return out;
+    }
     function cardsFor(copies) {
+      if (mode === "pallet") return palletList(copies).map(p => palletNumberLabelHtml(p, company));
       if (mode === "free") {
         const f = { text: v("fr-text"), size: v("fr-size"), align: v("fr-align"), bold: c("fr-bold"), border: c("fr-border"), logo: c("fr-logo") };
-        return Array.from({ length: copies }, () => freeLabelHtml(f, company));
+        const start = parseInt(v("fr-start")) || 0, last = String(start + copies - 1);
+        return Array.from({ length: copies }, (_, i) => freeLabelHtml({ ...f, text: f.text.replaceAll("{n}", String(start + i)).replaceAll("{total}", last) }, company));
       }
       if (mode === "address") {
         const a = { from: v("ad-from"), to: v("ad-to"), attn: v("ad-attn"), ref: v("ad-ref"), note: v("ad-note") };
@@ -145,8 +175,8 @@
         <style>body{padding:0;margin:0;background:#fff;overflow:hidden}.label-card{margin:0}</style></head>
         <body>${cardsFor(1)[0]}</body></html>`;
       frame.onload = () => fitLabelText(frame.contentDocument);
-      const n = copies();
-      document.getElementById("preview-note").textContent = n > 1 ? `Showing 1 Of ${n} Copies — Print-Only` : "Print-Only — Never Saved";
+      const n = mode === "pallet" ? palletList(copies()).length : copies();
+      document.getElementById("preview-note").textContent = n > 1 ? `Showing 1 Of ${n} Labels — Print-Only` : "Print-Only — Never Saved";
     }
 
     function switchMode(next) {
@@ -218,6 +248,7 @@
       if (mode === "shipment") { shipDraft = shipSource ? { ...shipSource } : blank(); fillFields("sh", shipDraft); }
       if (mode === "blank") { blankDraft = blank(); fillFields("bl", blankDraft); }
       if (mode === "free") document.getElementById("fr-text").value = "";
+      if (mode === "pallet") { ["pn-po", "pn-job", "pn-customer"].forEach(id => document.getElementById(id).value = ""); document.getElementById("pn-from").value = 1; document.getElementById("pn-to").value = 5; }
       if (mode === "address") { ["ad-to", "ad-attn", "ad-ref", "ad-note"].forEach(id => document.getElementById(id).value = ""); document.getElementById("ad-from").value = companyFrom(); }
       document.getElementById("copies").value = 1;
       dirty = false;
@@ -230,11 +261,12 @@
       err.textContent = "";
       if (mode === "shipment" && !shipSource) { err.textContent = "Pick A Shipment First."; return; }
       if (mode === "free" && !v("fr-text").trim()) { err.textContent = "Type Some Text First."; return; }
+      if (mode === "pallet" && !palletList(1).length) { err.textContent = "Enter The Pallet Numbers (From / To)."; return; }
       if (mode === "address" && !v("ad-to").trim()) { err.textContent = "Enter A Ship To Address."; return; }
       const n = copies();
       const title = mode === "shipment" ? `${shipDraft.shipment || "Label"}-OnDemand` : `${mode}-label`;
-      // a designed default (Template Designer) prints these too; free-text labels stay as they are
-      if (mode !== "free") {
+      // a designed default (Template Designer) prints these too; free-text and pallet # labels stay as they are
+      if (mode !== "free" && mode !== "pallet") {
         const win = window.open("", "_blank");
         const list = mode === "address"
           ? Array.from({ length: n }, (_, i) => { const a = { from: v("ad-from"), to: v("ad-to"), attn: v("ad-attn"), ref: v("ad-ref"), note: v("ad-note") };
@@ -285,15 +317,27 @@
       adOrder.dispatchEvent(new Event("change"));  // refresh the search box text
       adOrder.addEventListener("change", () => fillAddressFromOrder(adOrder.value));
       document.getElementById("ad-from").value = companyFrom();
+      const pnOrder = document.getElementById("pn-order");
+      pnOrder.innerHTML = adOrder.innerHTML;
+      pnOrder.dispatchEvent(new Event("change"));  // refresh the search box text
+      pnOrder.addEventListener("change", () => {
+        const o = byId(orders, parseInt(pnOrder.value));
+        if (!o.id) return;
+        document.getElementById("pn-po").value = o.po_number || "";
+        document.getElementById("pn-job").value = o.job_number || "";
+        document.getElementById("pn-customer").value = byId(customers, o.customer_id).name || "";
+        dirty = true; renderPreview();
+      });
       const preset = new URLSearchParams(location.search).get("shipment_id");
       if (preset) { shSel.value = preset; shSel.dispatchEvent(new Event("change")); }
       renderPreview();
     }
 
     document.querySelectorAll(".seg-tab").forEach(t => t.addEventListener("click", () => switchMode(t.dataset.mode)));
-    ["fr-text", "fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "ad-from", "ad-to", "ad-attn", "ad-ref", "ad-note", "ad-number", "copies"]
+    ["fr-text", "fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "fr-start", "ad-from", "ad-to", "ad-attn", "ad-ref", "ad-note", "ad-number", "copies",
+     "pn-from", "pn-to", "pn-po", "pn-job", "pn-customer", "pn-of"]
       .forEach(id => document.getElementById(id).addEventListener("input", () => { if (id !== "copies") dirty = true; renderPreview(); }));
-    ["fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "ad-number"].forEach(id => document.getElementById(id).addEventListener("change", renderPreview));
+    ["fr-size", "fr-align", "fr-bold", "fr-border", "fr-logo", "ad-number", "pn-of"].forEach(id => document.getElementById(id).addEventListener("change", renderPreview));
     document.getElementById("reset-btn").onclick = resetEditor;
     document.getElementById("print-btn").onclick = printNow;
     init().catch(err => { document.getElementById("lbl-error").textContent = err.message; });

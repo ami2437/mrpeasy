@@ -961,6 +961,22 @@ function freeLabelHtml(f, company, base = "") {
     </div>`;
 }
 
+// Pallet # label (On-Demand Labels > Pallet #): "PALLET", the number huge, "OF 5", and PO # / job # along the bottom.
+// p: { number, total, po, job, customer }
+function palletNumberLabelHtml(p, company, base = "") {
+  const digits = String(p.number || "").length;
+  const size = digits <= 2 ? 210 : digits === 3 ? 160 : 110;
+  const ref = [p.po && `PO # ${escapeHtml(p.po)}`, p.job && `JOB # ${escapeHtml(p.job)}`].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
+  return `
+    <div class="label-card pallet-num-card">
+      ${p.customer ? `<div class="pn-customer">${escapeHtml(p.customer)}</div>` : ""}
+      <div class="pn-word">PALLET</div>
+      <div class="pn-number" style="font-size:${size}px">${escapeHtml(p.number || "")}</div>
+      ${p.total ? `<div class="pn-of">OF ${escapeHtml(p.total)}</div>` : ""}
+      ${ref ? `<div class="pn-ref">${ref}</div>` : ""}
+    </div>`;
+}
+
 // Address label. a: { from, to, attn, ref, note }
 function addressLabelHtml(a, company, base = "") {
   const lines = v => escapeHtml(v || "").replace(/\n/g, "<br>");
