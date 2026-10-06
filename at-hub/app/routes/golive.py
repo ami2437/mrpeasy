@@ -51,6 +51,10 @@ def dismiss(data: DismissIn, db: Session = Depends(get_db), user: User = Depends
     if not data.items:
         raise HTTPException(status_code=400, detail="Tick the rows to dismiss")
     by_key = {s["key"]: s["rows"] for s in all_sections(db, user)}
+    unknown = [it for it in data.items if it.get("key") not in by_key
+               or not any(golive._rid(r) == int(it.get("id") or 0) for r in by_key[it["key"]])]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"{len(unknown)} of the ticked rows aren't on Needs Attention any more -- reload the page")
     return {"dismissed": golive.dismiss(db, data.items, user.username, by_key)}
 
 
