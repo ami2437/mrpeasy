@@ -590,9 +590,9 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
             if key == "Unassigned":
                 continue
             prow.append([key, p(", ".join(entry["items"]), "td")] + ([str(entry["boxes"])] if include_pallet_boxes else [])
-                        + [f"{info.weight:,.1f}" if info and info.weight else "—", p(po_no, "td"), p((info.dimensions if info else None) or "—", "td")])
-        heads = ["Pallet #", "Items"] + (["Boxes"] if include_pallet_boxes else []) + ["Weight (lbs)", "Customer PO #", "Dimensions (L x W x H in)"]
-        widths = [0.75 * inch, (3.05 if not include_pallet_boxes else 2.45) * inch] + ([0.6 * inch] if include_pallet_boxes else []) + [1.0 * inch, 1.1 * inch, 1.4 * inch]
+                        + [f"{info.weight:,.1f}" if info and info.weight else "—", p((info.dimensions if info else None) or "—", "td"), p(po_no, "td")])
+        heads = ["Pallet #", "Items"] + (["Boxes"] if include_pallet_boxes else []) + ["Weight (lbs)", "Dimensions (L x W x H in)", "Customer PO #"]
+        widths = [0.75 * inch, (3.05 if not include_pallet_boxes else 2.45) * inch] + ([0.6 * inch] if include_pallet_boxes else []) + [1.0 * inch, 1.4 * inch, 1.1 * inch]
         story += [Spacer(1, 16), p("PALLETS", "label"), Spacer(1, 4),
                   _data_table(heads, prow, widths, right_cols=(2, 3) if include_pallet_boxes else (2,))]
 
