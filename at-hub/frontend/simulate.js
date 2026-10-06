@@ -26,7 +26,11 @@ function blankDoc() {
 // How the "to order" quantities are worked out (shown on the Order Tracker, shared with the comparison):
 //   stock: none | system (AT-HUB on hand) | estimate (my on hand) | mixed (my on hand where entered, else system)
 //   incoming: count open POs not already in this simulation; buffer: % extra; pack: round up to the pack size
-const STOCK_MODES = [["none", "Ignore stock"], ["system", "System on hand"], ["estimate", "My on hand"], ["mixed", "My on hand, else system"]];
+// stock basis: [key, name, what it does]
+const STOCK_MODES = [["none", "Don't count stock", "Order the full need, as if the shelf were empty."],
+                     ["system", "AT-HUB on hand", "Use the on-hand quantity AT-HUB shows. Untick any item whose count you don't trust."],
+                     ["estimate", "Only my counts", "Use only the numbers you type in My on hand. Items left blank count as zero."],
+                     ["mixed", "My counts, else AT-HUB", "Use your number where you typed one in My on hand, and AT-HUB's on hand for everything else."]];
 function plan() {
   doc.plan ||= { stock: doc.use_stock ? "system" : "none", incoming: false, buffer: 0, pack: false };
   doc.est_stock ||= {}; doc.tracker ||= {}; doc.stock_off ||= {}; doc.generic_off ||= {};
@@ -268,6 +272,7 @@ function drawCompare(c) {
     CMP = wrap;
   }
   if (CMP.parentNode !== host) host.replaceChildren(CMP);
+  CMP.classList.toggle("stock-ticks", ["system", "mixed"].includes(plan().stock));
   const shown = CMP_CHIP ? rows.filter(chipTest[CMP_CHIP]) : rows;
   CMP.querySelector("#sim-cmp-chips").innerHTML = CMP_CHIPS.map(([k, l]) => {
     const n = k ? rows.filter(chipTest[k]).length : rows.length;
@@ -279,7 +284,7 @@ function drawCompare(c) {
 }
 function compareHead() {
   return `<table class="compact-table sim-compare"><thead><tr><th>Item</th><th class="num sum">Need</th><th class="num sum">Sourced</th>
-      <th class="num" title="Available stock in AT-HUB (on hand minus booked)">On hand</th>
+      <th class="num" data-label="On hand" title="Available stock in AT-HUB (on hand minus booked)">On hand<span class="sim-allnone"><a onclick="setAllStock(true)" title="Count every item's AT-HUB stock">all</a> · <a onclick="setAllStock(false)" title="Count no item's AT-HUB stock">none</a></span></th>
       <th class="num" title="What you think is really on the shelf -- used when the stock basis is My on hand">My on hand</th><th class="num sum">To order</th><th class="num">Customer price</th>
       <th class="num" title="The vendor's price, and below it the extra costs per unit (tariff, freight...)">Vendor price</th><th class="num" title="Vendor price + extras; with no vendor price: your estimate (red) or the last purchase price (blue)">Effective cost</th>
       <th class="num">Profit / unit</th><th class="num sum">Profit</th><th data-nosort></th></tr></thead>`;
@@ -470,7 +475,7 @@ function genNote(r) {
 }
 // On hand column: with stock counted, each item has its own tick -- untick to ignore a count you don't trust
 function onHandCell(r) {
-  if (!["system", "mixed"].includes(plan().stock)) return `<span class="muted" title="Not counted: the stock basis is ${escapeHtml(STOCK_MODES.find(m => m[0] === plan().stock)[1])}">${fmtQty(r.onHand)}</span>`;
+  if (!["system", "mixed"].includes(plan().stock)) return `<span class="muted" title="Not counted: Stock to count is set to ${escapeHtml(STOCK_MODES.find(m => m[0] === plan().stock)[1])}">${fmtQty(r.onHand)}</span>`;
   const on = !(doc.stock_off || {})[r.key];
   return `<label class="sim-stock ${on ? "" : "off"}" title="${on ? "Counted -- untick if this count is wrong" : "Ignored -- tick to count it"}">
     <input type="checkbox" ${on ? "checked" : ""} onchange="setStockOff('${escapeHtml(r.key)}', !this.checked)"> ${fmtQty(r.onHand)}</label>`;
@@ -491,10 +496,20 @@ function estimateCell(r) {
       oninput="setEstimate('${escapeHtml(r.key)}', this.value)" onchange="setTimeout(() => changed(false))">${label}`;
 }
 function setMyStock(key, value) { plan(); if (value === "") delete doc.est_stock[key]; else doc.est_stock[key] = Math.max(0, num(value)); changed(false); }
-function stockSelect() {
-  return `<label class="check-label" title="Which stock covers part of the need. Counts can be wrong while stock is being cleaned up: enter My on hand where you know better.">Stock:
-    <select style="width:auto;" onchange="plan().stock = this.value; changed(true)">${STOCK_MODES.map(([k, l]) =>
-      `<option value="${k}" ${plan().stock === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
+function stockSelect(withHelp = false) {
+  const m = STOCK_MODES.find(x => x[0] === plan().stock);
+  return `<label class="check-label" title="Which stock covers part of the need. ${escapeHtml(m[2])}">Stock to count:
+    <select style="width:auto;" onchange="setStockMode(this.value)">${STOCK_MODES.map(([k, l, d]) =>
+      `<option value="${k}" title="${escapeHtml(d)}" ${plan().stock === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    ${withHelp ? `<span class="muted small sim-stock-help">${escapeHtml(m[2])}</span>` : ""}`;
+}
+// switching to a basis that uses AT-HUB's counts starts with every item counted (ticked)
+function setStockMode(mode) { plan().stock = mode; if (mode === "system" || mode === "mixed") doc.stock_off = {}; changed(true); }
+function setAllStock(on) {
+  plan();
+  doc.stock_off = {};
+  if (!on) calc().rows.filter(r => r.need > 0 && r.item_id && !r.via).forEach(r => { doc.stock_off[r.key] = true; });
+  changed(true);
 }
 
 // ================= order tracker =================
@@ -502,7 +517,7 @@ const TRACK_STATUS = { todo: "To order", ordered: "Ordered", draft: "Draft PO", 
 function planBar(c) {
   const P = plan();
   const withIncoming = c.rows.filter(r => r.item_id && ((INSIGHT[r.item_id] || {}).incoming || []).length).length;
-  return `${stockSelect()}
+  return `${stockSelect(true)}
     <label title="Quantities still coming in on open POs (not the ones already in this simulation)"><input type="checkbox" ${P.incoming ? "checked" : ""}
       onchange="plan().incoming = this.checked; changed(true)"> Count open POs (incoming)${withIncoming ? ` <span class="muted small">${withIncoming} item${withIncoming === 1 ? "" : "s"} have some</span>` : ""}</label>
     <label title="Order this much extra on top of the need">Buffer <input type="number" min="0" step="1" style="width:64px;" value="${P.buffer || 0}"
@@ -768,6 +783,7 @@ function drawBar() {
     <button onclick="newSim()">+ New</button>
     ${sim ? `<input id="sim-name" value="${escapeHtml(sim.name)}" style="width:220px;" onchange="renameSim(this.value)" title="Name">
       <button class="secondary" onclick="openSheet()" data-icon="layers" title="Everything as an editable spreadsheet, with an AI assistant">Spreadsheet</button>
+      <button class="secondary" onclick="exportSim()" data-icon="download" title="Everything on this page as Excel, PDF or CSV">Export</button>
       <button class="secondary" onclick="copySim()" title="A copy to try something different">Copy</button>
       <button class="secondary" onclick="deleteSim()">Delete</button>
       <span class="muted small" id="sim-save">${escapeHtml(saveState)}</span>` : ""}`;
@@ -939,4 +955,56 @@ function sheetApply() {
   sheetClose();
   ensureInsights([...doc.demand, ...doc.sources].flatMap(b => b.lines.map(l => l.item_id)).filter(Boolean)).then(() => changed(true));
   toast("Sheet applied");
+}
+
+// ================= export: the whole page as Excel / PDF / CSV =================
+async function exportSim() {
+  const { value: fmt } = await askDialog({ title: "Export this simulation",
+    body: `<p class="muted small" style="margin-top:0;">Everything on the page: the summary, Sell and Buy lines, extra costs, Item By Item,
+      Profit Per Order and the Order Tracker. Excel puts each on its own sheet.</p>`,
+    buttons: [{ label: "Excel (.xlsx)", value: "xlsx", cls: "confirm-btn" }, { label: "PDF", value: "pdf", cls: "secondary" },
+              { label: "CSV", value: "csv", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (!fmt) return;
+  const c = calc(), col = (name, f = "text") => ({ name, fmt: f });
+  const n = v => v === "" || v == null || isNaN(num(v)) ? null : num(v);
+  const costSrc = r => ({ vendor: "vendor price + extras", manual: "my estimate", generic: `generic nut (${r.via ? r.via.code : ""})`,
+    history: r.lastBuy ? (r.lastBuy.doc ? `last buy ${r.lastBuy.doc} ${r.lastBuy.party || ""}` : "item card cost") : "" }[r.costSrc] || "");
+  const stockName = STOCK_MODES.find(m => m[0] === plan().stock)[1];
+  const facts = [["Revenue", fmtMoney(c.summary.revenue)], ["Cost", fmtMoney(c.summary.cost)], ["Profit", fmtMoney(c.summary.profit)],
+                 ["Margin", c.summary.margin != null ? c.summary.margin.toFixed(1) + "%" : "—"], ["Items without a cost", c.summary.missing],
+                 ["Items with an estimated cost", c.summary.estimated], ["Stock counted", stockName], ["Open POs counted", plan().incoming ? "yes" : "no"],
+                 ["Buffer", `${plan().buffer || 0}%`], ["Round up to pack size", plan().pack ? "yes" : "no"], ["Exported", fmtWhen(new Date().toISOString())]];
+  const sheets = [
+    { title: "Sell", columns: [col("Order / job"), col("Customer"), col("Repeated", "qty"), col("Item #"), col("Description"), col("Qty", "qty"),
+        col("Price", "price"), col("Total per order", "money"), col("In our database")],
+      rows: doc.demand.flatMap(b => b.lines.map(l => [b.label || "", partyName(CUSTOMERS, b.party_id), num(b.multiplier) || 1, l.code || "", l.desc || "",
+        n(l.qty), n(l.price), num(l.qty) * num(l.price), l.item_id ? "yes" : "no"])) },
+    { title: "Buy", columns: [col("Source"), col("Vendor"), col("Item #"), col("Description"), col("Qty", "qty"), col("Cost", "price"),
+        col("Extras / unit", "price"), col("Effective / unit", "price"), col("Total", "money")],
+      rows: doc.sources.flatMap(b => b.lines.map(l => [b.label || "", partyName(VENDORS, b.party_id), l.code || "", l.desc || "", n(l.qty), n(l.price),
+        c.effPer[l.id] || 0, num(l.price) + (c.effPer[l.id] || 0), num(l.qty) * num(l.price)])) },
+    { title: "Extra costs", columns: [col("On"), col("Cost"), col("How"), col("Amount", "price"), col("Spread by")],
+      rows: [...doc.sources.flatMap(b => (b.costs || []).map(x => [b.label || "Source", x.label, (MODES.find(m => m[0] === x.mode) || [])[1] || x.mode, n(x.amount), x.mode === "total" ? (x.alloc === "qty" ? "qty" : "value") : ""])),
+             ...doc.shared_costs.map(x => ["All sources (shared)", x.label, (MODES.find(m => m[0] === x.mode) || [])[1] || x.mode, n(x.amount), x.mode === "total" ? (x.alloc === "qty" ? "qty" : "value") : ""])] },
+    { title: "Item by item", columns: [col("Item #"), col("Description"), col("Need", "qty"), col("Sourced", "qty"), col("AT-HUB on hand", "qty"),
+        col("My on hand", "qty"), col("Stock counted", "qty"), col("Incoming counted", "qty"), col("To order", "qty"), col("Customer price", "price"),
+        col("Vendor price", "price"), col("Extras / unit", "price"), col("Effective cost", "price"), col("Cost from"), col("Profit / unit", "price"),
+        col("Margin", "pct"), col("Profit", "money")],
+      rows: c.rows.filter(r => r.need > 0).map(r => [r.code || "", r.desc || "", r.need, r.supply, r.item_id ? r.onHand : null, r.myStock, r.stock, r.incoming,
+        r.toOrder, r.custPrice, r.vendor, r.extras, r.cost, costSrc(r), r.profitUnit, r.profitUnit != null && r.custPrice ? r.profitUnit / r.custPrice * 100 : null, r.profit]) },
+    { title: "Profit per order", columns: [col("Order"), col("Repeated", "qty"), col("Revenue / order", "money"), col("Cost / order", "money"),
+        col("Profit / order", "money"), col("Margin", "pct"), col("Total profit", "money"), col("Lines without cost", "qty")],
+      rows: c.orders.map(o => [o.b.label || o.b.ref_code || "Order", o.m, o.rev, o.cost, o.profit, o.margin, o.profit * o.m, o.missing]) },
+    { title: "Order tracker", columns: [col("Status"), col("Vendor"), col("Item #"), col("Description"), col("Still need", "qty"), col("Order qty", "qty"),
+        col("Price", "price"), col("Value", "money"), col("PO / reference")],
+      rows: trackGroups(c.track).flatMap(g => g.lines).map(t => [TRACK_STATUS[t.status], partyName(VENDORS, t.vendor_id) || "", t.r.code || "", t.r.desc || "",
+        t.need, t.qty, t.price, t.value, t.po_code || t.ref || ""]) },
+  ];
+  try {
+    const res = await fetch(`${API_BASE}/api/simulations/export`, { method: "POST",
+      headers: { Authorization: `Bearer ${AuthGuard.getToken()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: sim.name, fmt, facts, sheets }) });
+    if (!res.ok) { let d = `Export failed (${res.status})`; try { d = (await res.json()).detail || d; } catch {} throw new Error(d); }
+    saveBlob(await res.blob(), `${(sim.name || "Simulation").replace(/[^\w .,()&-]+/g, "").trim() || "Simulation"}.${fmt}`);
+  } catch (e) { toast(e.message); }
 }

@@ -1854,3 +1854,17 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 .rcv-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
 .rcv-head .ico { color: var(--accent); }
 .rcv-sum { margin-left: auto; font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+
+/* ---- header controls (every table): an exact arrow cursor instead of the big grab hand, a bigger filter button,
+   and the filter kept clear of the column-resize edge so each is easy to hit, even on narrow columns ---- */
+th[draggable="true"], th.sortable { cursor: default; }
+th.dragging { cursor: grabbing; }
+th .th-filter, th.num .th-filter { min-width: 20px; height: 20px; line-height: 18px; font-size: 11px; top: 2px; right: 11px; left: auto;
+  cursor: pointer; z-index: 2; }
+th.num .th-filter { right: auto; left: 2px; }
+th .th-filter:hover { opacity: 1; background: var(--accent); color: #fff; border-color: var(--accent); }
+th .col-resizer { width: 8px; right: 0; z-index: 3; background: transparent; }
+th .col-resizer::after { content: ""; position: absolute; top: 18%; bottom: 18%; right: 0; width: 3px; border-radius: 2px; background: transparent; }
+th:hover .col-resizer::after { background: var(--border-strong); }
+th .col-resizer:hover::after { background: var(--accent); }
+th .col-resizer:hover { background: transparent; }

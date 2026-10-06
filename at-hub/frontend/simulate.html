@@ -69,11 +69,19 @@
     table.sim-compare thead th, table.sim-track thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-3, var(--bg)); box-shadow: inset 0 -1px 0 var(--border); }
     table.sim-compare tfoot td, table.sim-track tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--surface-3, var(--bg)); box-shadow: inset 0 1px 0 var(--border); }
     /* cost with no vendor price: blue = last purchase price, red = typed with no history to go on */
-    .sim-est.est-hist { color: #1d4ed8; font-weight: 600; }
-    .sim-est.est-red { color: #dc2626; font-weight: 700; }
-    .sim-est.est-own { color: #b45309; font-weight: 600; }
-    .sim-src { display: block; font-size: 10.5px; line-height: 1.25; margin-top: 2px; white-space: normal; }
-    .sim-src.hist { color: #1d4ed8; } .sim-src.red { color: #dc2626; } .sim-src.own { color: #b45309; }
+    .sim-est.est-hist { color: #1e3a8a; background: #dbeafe; font-weight: 700; box-shadow: 0 0 0 2px #93c5fd; }
+    .sim-est.est-red { color: #991b1b; background: #fee2e2; font-weight: 700; box-shadow: 0 0 0 2px #fca5a5; }
+    .sim-est.est-own { color: #92400e; background: #fef3c7; font-weight: 700; box-shadow: 0 0 0 2px #fcd34d; }
+    .sim-src { display: block; font-size: 11px; font-weight: 600; line-height: 1.25; margin-top: 3px; white-space: normal; }
+    .sim-src.hist { color: #1e3a8a; } .sim-src.red { color: #b91c1c; } .sim-src.own { color: #92400e; }
+    html[data-theme="dark"] .sim-est.est-hist { color: #dbeafe; background: #1e3a8a; box-shadow: 0 0 0 2px #3b82f6; }
+    html[data-theme="dark"] .sim-est.est-red { color: #fee2e2; background: #7f1d1d; box-shadow: 0 0 0 2px #ef4444; }
+    html[data-theme="dark"] .sim-est.est-own { color: #fef3c7; background: #78350f; box-shadow: 0 0 0 2px #f59e0b; }
+    html[data-theme="dark"] .sim-src.hist { color: #93c5fd; } html[data-theme="dark"] .sim-src.red { color: #fca5a5; } html[data-theme="dark"] .sim-src.own { color: #fcd34d; }
+    .sim-allnone { display: none; font-size: 10.5px; font-weight: 600; margin-top: 2px; }
+    .sim-allnone a { cursor: pointer; color: var(--accent); }
+    .stock-ticks .sim-allnone { display: block; }
+    .sim-stock-help { max-width: 360px; }
     .sim-mystock { width: 66px; }
     table.sim-compare .sim-est { width: 84px; }
     table.sim-compare td { padding-left: 5px; padding-right: 5px; }

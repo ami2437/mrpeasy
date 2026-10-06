@@ -205,6 +205,35 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
     return out
 
 
+# ---------- export: everything on the page as Excel / PDF / CSV ----------
+class ExportIn(BaseModel):
+    name: str
+    fmt: str = "xlsx"
+    facts: List[List[Any]] = []
+    sheets: List[dict]
+
+
+@router.post("/export")
+def export(data: ExportIn, user: User = Depends(get_current_active_user)):
+    """The page sends its tables (summary, sell, buy, extra costs, item by item, profit per order, order tracker)
+    exactly as shown; this only turns them into a file."""
+    if not has(user, "money.view"):
+        raise HTTPException(status_code=403, detail="Exporting a simulation needs the role that sees prices")
+    from app.services import filenames, sheet_export
+    name = re.sub(r"[^\w .,()&-]+", "", data.name or "Simulation").strip() or "Simulation"
+    if sum(len(s.get("rows") or []) for s in data.sheets) > 20000:
+        raise HTTPException(status_code=400, detail="Too many rows to export")
+    if data.fmt == "pdf":
+        body, media, ext = sheet_export.to_pdf(name, data.sheets, data.facts), "application/pdf", "pdf"
+    elif data.fmt == "csv":
+        body, media, ext = sheet_export.to_csv(name, data.sheets, data.facts), "text/csv", "csv"
+    elif data.fmt == "xlsx":
+        body, media, ext = sheet_export.to_xlsx(name, data.sheets, data.facts), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+    else:
+        raise HTTPException(status_code=400, detail="Export as xlsx, pdf or csv")
+    return Response(body, media_type=media, headers={"Content-Disposition": filenames.disposition(f"{name}.{ext}", inline=False)})
+
+
 # ---------- generic nuts ----------
 _GENERIC_CODE = re.compile(r"^(\d{1,3})-NUT$", re.I)  # a size code (34, 58, 114), not a 5-digit bolt #
 

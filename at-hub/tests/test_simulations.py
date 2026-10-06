@@ -51,3 +51,19 @@ def test_simulation_insights_last_buy_and_incoming(make, api):
     ins = api.post("/api/simulations/insights", json={"item_ids": [it["id"]]})[str(it["id"])]
     assert ins["last_buy"]["price"] == 0.031 and ins["last_buy"]["doc"] == po["code"] and ins["last_buy"]["vendor_id"] == v["id"]
     assert ins["incoming"] == []  # a draft PO isn't incoming yet
+
+
+def test_simulation_export_formats(client, admin_headers):
+    sheets = [{"title": "Item by item", "columns": [{"name": "Item #"}, {"name": "Need", "fmt": "qty"}, {"name": "Profit", "fmt": "money"}],
+               "rows": [["15420", 3150, 4220.85], ["16713", 15000, -12.5], ["x", None, None]]},
+              {"title": "Order tracker", "columns": [{"name": "Vendor"}, {"name": "Price", "fmt": "price"}], "rows": [["G&T", 0.02497]]}]
+    body = {"name": "Hudson / job 4065715", "facts": [["Profit", "$4,208.35"]], "sheets": sheets}
+    for fmt, magic in (("xlsx", b"PK"), ("pdf", b"%PDF"), ("csv", "﻿".encode())):
+        r = client.post("/api/simulations/export", json={**body, "fmt": fmt}, headers=admin_headers)
+        assert r.status_code == 200 and r.content.startswith(magic), fmt
+        assert f".{fmt}" in r.headers["content-disposition"]
+    from openpyxl import load_workbook
+    import io
+    wb = load_workbook(io.BytesIO(client.post("/api/simulations/export", json={**body, "fmt": "xlsx"}, headers=admin_headers).content))
+    assert wb.sheetnames == ["Summary", "Item by item", "Order tracker"] and wb["Item by item"]["C2"].value == 4220.85
+    assert client.post("/api/simulations/export", json={**body, "fmt": "doc"}, headers=admin_headers).status_code == 400
