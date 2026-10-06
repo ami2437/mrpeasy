@@ -780,8 +780,8 @@ def portal_packing_list():
                                   left("ordered", "Qty ordered", 0.72), left("shipped", "Qty shipped", 0.72), left("backorder", "Backordered", 0.95),
                                   left("boxes", "Box breakdown", 1.0), left("pallet", "Pallet #", 0.7)], "style": grid},
             "pallets": {"heading": "Pallet Information", "new_page": True, "style": {**grid, "heading_size": 12},
-                        "columns": [left("pallet", "Pallet #", 0.7), left("items", "Customer Item #", 0), left("weight", "Weight (lbs)", 0.9),
-                                    left("dimensions", "Dimensions (in) L x W x H", 1.45), left("po", "Customer PO #", 1.5)]},
+                        "columns": [left("pallet", "Pallet #", 0.7), left("items", "Customer Item #", 0), left("weight", "Weight (lbs)", 0.85),
+                                    left("po", "Customer PO #", 1.15), left("dimensions", "Dimensions (in) L x W x H", 1.35)]},
             "summary": {"h": 0.62, "blocks": g("Received by", [B("line", 0, 0.1, W, 0.01, border=0.75, color="#7f8b96"),
                                                                 T(0, 0.18, W, 0.18, "Received by: __________________      Date: __________________", size=8.25, color="#666666", align="center")])
                                               + g("Thank you", T(0, 0.38, W, 0.18, "Thank You For Your Business.", size=8.25, bold=True, color="#333333", align="center"))},

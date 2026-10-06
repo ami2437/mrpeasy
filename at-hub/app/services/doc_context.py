@@ -150,6 +150,11 @@ def build(db: Session, doc_type: str, record, options: Optional[dict] = None):
     return ctx, rows
 
 
+def _natural(text):
+    import re
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower()) for t in re.split(r"(\d+)", str(text or "")) if t]
+
+
 def _is_shipping(line, item=None):
     """A freight line: AT-HUB's own (no item, "Shipping") or MRPeasy's "Shipping" item."""
     code = (item.code if item else "").strip().lower()
@@ -228,7 +233,7 @@ def _packing_list(db, sh: Shipment, opt):
                      "boxes": "\n".join(f"{n} × {qty(q)}" for q, n in sorted(counts.items(), reverse=True)) or "—",
                      "pallet": ", ".join(eff_pallets.get(lid, [])),
                      "check": ""})
-    pallets = sorted({p for ps in eff_pallets.values() for p in ps})
+    pallets = sorted({p for ps in eff_pallets.values() for p in ps}, key=_natural)  # 1, 2, 10 -- not 1, 10, 2
     saved = {p.pallet_number: p for p in sh.pallets}
     on_pallet = {}
     for lid, ps in eff_pallets.items():

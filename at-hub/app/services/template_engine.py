@@ -154,8 +154,9 @@ def visible_spec(spec):
                         b[key] = drop_field_lines(b[key], b["hide_fields"])
             keep.append(b)
         band["blocks"] = keep
-    if isinstance(out.get("table"), dict):
-        out["table"]["columns"] = [c for c in out["table"].get("columns") or [] if not c.get("hidden")]
+    for k in ("table", "pallets"):
+        if isinstance(out.get(k), dict):
+            out[k]["columns"] = [c for c in out[k].get("columns") or [] if not c.get("hidden")]
     return out
 
 

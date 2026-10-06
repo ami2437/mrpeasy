@@ -279,26 +279,26 @@ function blockEl(b, scale, interactive, bandKey) {
   return el;
 }
 
-function tableEl(t, scale, interactive) {
+function tableEl(t, scale, interactive, rowsIn = null, isPallets = false) {
   const cols = (t.columns || []).filter(c => c.key && !c.hidden), st = t.style || {};
   const width = ((spec.page.w || 8.5) - 2 * (spec.page.margin || 0.5)) * PX * scale;
   const fixed = cols.reduce((s, c) => s + (parseFloat(c.w) || 0) * PX * scale, 0), flex = cols.filter(c => !parseFloat(c.w));
   const share = flex.length ? Math.max(0.6 * PX * scale, (width - fixed) / flex.length) : 0;
   const numeric = k => ["qty", "price", "amount", "ordered", "shipped", "backorder"].includes(k);
   const fs = (st.size || 8.6) * PT * scale, hs = (st.header_size || 7.5) * PT * scale, pad = (st.pad || 5) * PT * scale;
-  const rows = (sample.rows || []).slice(0, isLabel() ? 0 : 6);
+  const rows = rowsIn || (sample.rows || []).slice(0, isLabel() ? 0 : 6);
   const cell = (c, r) => c.key === "check" ? "☐" : c.key === "item_code_desc" ? `<b>${escapeHtml(r.item_code || "")}</b><div style="color:#64748b;font-size:${fs * 0.9}px">${escapeHtml(r.description || "")}</div>`
     : escapeHtml(String(r[c.key] ?? "")).replace(/\n/g, "<br>");
   const el = document.createElement("div");
-  el.className = "tbl" + (interactive && sel && sel.table ? " sel" : "");
+  el.className = "tbl" + (interactive && sel && sel.table && !isPallets ? " sel" : "");
   el.innerHTML = `<table class="no-table-tools no-col-bands" style="width:${width}px;font-size:${fs}px">
     <colgroup>${cols.map(c => `<col style="width:${(parseFloat(c.w) || 0) * PX * scale || share}px">`).join("")}</colgroup>
     <thead><tr style="${st.header_bg ? `background:${st.header_bg};` : ""}${st.top_rule ? `box-shadow:inset 0 ${0.8 * PT * scale}px 0 ${st.top_rule};` : ""}">${cols.map(c =>
       `<th style="padding:${pad}px;font-size:${hs}px;font-weight:600;${st.header_upper ? "text-transform:uppercase;" : ""}color:${st.header_color || "#64748b"};text-align:${c.align || (numeric(c.key) ? "right" : "left")};${st.header_rule ? `border-bottom:${(st.header_rule_w || 1.2) * PT * scale}px solid ${st.header_rule}` : ""}">${escapeHtml(c.header || "")}</th>`).join("")}</tr></thead>
     <tbody>${rows.map((r, i) => `<tr style="${st.zebra && i % 2 ? `background:${st.zebra};` : ""}">${cols.map(c =>
       `<td style="padding:${pad}px;text-align:${c.align || (numeric(c.key) ? "right" : "left")};border-bottom:0.5px solid ${st.row_rule || "#e2e8f0"};${c.key === "amount" ? "font-weight:700;" : ""}">${cell(c, r)}</td>`).join("")}</tr>`).join("")
-      || `<tr><td colspan="${cols.length}" style="padding:${pad}px;color:#94a3b8">(the record's lines go here)</td></tr>`}</tbody></table>`;
-  if (interactive) el.addEventListener("pointerdown", e => { e.stopPropagation(); sel = { band: "table", table: true }; drawCanvas(); drawProps(); });
+      || `<tr><td colspan="${cols.length}" style="padding:${pad}px;color:#94a3b8">${isPallets ? "(the shipment's pallets go here -- this record has none)" : "(the record's lines go here)"}</td></tr>`}</tbody></table>`;
+  if (interactive && !isPallets) el.addEventListener("pointerdown", e => { e.stopPropagation(); sel = { band: "table", table: true }; drawCanvas(); drawProps(); });
   return el;
 }
 
@@ -313,11 +313,12 @@ function renderPage(s, scale, interactive) {
     fontFamily: s.font === "ui" ? '"Segoe UI", system-ui, sans-serif' : s.font === "gothic" ? '"Century Gothic", "Trebuchet MS", sans-serif' : 'Arial, "Segoe UI", sans-serif' });
   for (const [k, label] of (isLabelSpec(s) ? BANDS_LABEL : BANDS_DOC)) {
     if (k === "running" && !interactive) continue;
-    const bd = document.createElement("div");
+    let bd = document.createElement("div");
     bd.className = `band band-${k}` + (interactive && sel && sel.band === k && !sel.id && !sel.table ? " sel" : "");
     if (k === "table") {
       if (!s.table) continue;
       bd.appendChild(tableEl(s.table, scale, interactive));
+      if (s.pallets && (interactive || !s.pallets.hidden)) sheet.appendChild(bd), bd = palletBand(s, scale, interactive);
     } else {
       const bnd = s[k] || { h: 0, blocks: [] };
       bd.style.height = `${(bnd.h || 0) * PX * scale}px`;
@@ -342,6 +343,22 @@ function renderPage(s, scale, interactive) {
   }
   spec = prevSpec;
   return sheet;
+}
+// Packing lists: the pallet table (spec.pallets) after the lines -- on its own page when new_page is set
+function palletBand(s, scale, interactive) {
+  const p = s.pallets, st = p.style || {}, bd = document.createElement("div");
+  bd.className = "band band-pallets" + (p.hidden ? " faded" : "");
+  bd.style.marginTop = `${8 * scale}px`;
+  if (p.heading) bd.insertAdjacentHTML("beforeend", `<div style="text-align:center;font-weight:700;font-size:${(st.heading_size || 12) * PT * scale}px;color:${st.heading_color || "#1f2d3a"};
+    border-bottom:${1.5 * PT * scale}px solid #1f2d3a;padding-bottom:${3 * scale}px;margin-bottom:${8 * scale}px">${escapeHtml(p.heading)}</div>`);
+  bd.appendChild(tableEl(p, scale, false, sample.pallet_rows || [], true));
+  if (interactive) {
+    const tag = document.createElement("div");
+    tag.className = "band-tag";
+    tag.textContent = `Pallet information${p.new_page ? " · own page" : ""}${p.hidden ? " · hidden" : ""}`;
+    bd.appendChild(tag);
+  }
+  return bd;
 }
 function isLabelSpec(s) { return !s.table && (s.page || {}).w <= 6.5 && (s.page || {}).h <= 6.5; }
 
@@ -554,6 +571,8 @@ function showHideHtml() {
       return `<div class="sh-sec">${box(on, `toggleSection(${i}, '', this.checked)`, `<b>${escapeHtml(sec.name)}</b>`)}${subs ? `<div class="sh-sub">${subs}</div>` : ""}</div>`;
     }).join("")}</div>` : `<p class="muted small">This template has no sections yet — give blocks a Section name (select a block) to list them here.</p>`}
     ${spec.table ? `<h4>Line-item columns</h4><div class="sh-list sh-cols">${(spec.table.columns || []).map((c, i) => box(!c.hidden, `toggleColumn(${i}, this.checked)`, escapeHtml(c.header || ((typeOf().columns || []).find(x => x.key === c.key) || {}).label || c.key))).join("")}</div>` : ""}
+    ${spec.pallets ? `<h4>Pallet information</h4><div class="sh-list">${box(!spec.pallets.hidden, "togglePallets(this.checked)", "<b>Print the pallet table</b> <span class='muted'>(when the shipment has pallets)</span>")}</div>
+      <div class="sh-list sh-cols">${(spec.pallets.columns || []).map((c, i) => box(!c.hidden && !spec.pallets.hidden, `togglePalletColumn(${i}, this.checked)`, escapeHtml(c.header || c.key), !!spec.pallets.hidden)).join("")}</div>` : ""}
     ${others.length ? `<h4>Other blocks</h4><div class="sh-list">${others.map(({ band: bk, block: b }) => box(!b.hidden, `toggleBlock('${bk}', '${b.id}', this.checked)`,
         `${kind[b.type] || b.type}: ${escapeHtml(String(b.text || b.value || "").replace(/<[^>]+>/g, "").slice(0, 28))}`)).join("")}</div>` : ""}`;
 }
@@ -576,6 +595,8 @@ function toggleField(i, j, on) {
   }
   changed(); drawCanvas(); drawProps();
 }
+function togglePallets(on) { snapshot(); spec.pallets.hidden = !on; changed(); drawCanvas(); drawProps(); }
+function togglePalletColumn(i, on) { snapshot(); spec.pallets.columns[i].hidden = !on; changed(); drawCanvas(); drawProps(); }
 function toggleColumn(i, on) { snapshot(); spec.table.columns[i].hidden = !on; changed(); drawCanvas(); drawProps(); }
 function toggleBlock(bk, id, on) { snapshot(); const b = band(bk).blocks.find(x => x.id === id); if (b) b.hidden = !on; changed(); drawCanvas(); drawProps(); }
 

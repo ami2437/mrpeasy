@@ -181,10 +181,11 @@ def sample(doc_type: str, record_id: Optional[int] = None, db: Session = Depends
     if doc_type not in doc_context.DOC_TYPES:
         raise HTTPException(status_code=404, detail="Unknown document type")
     ctx, rows = _context(db, doc_type, record_id)
+    pallet_rows = ctx.get("_pallet_rows") or []
     ctx = {k: v for k, v in ctx.items() if not k.startswith("_")}
     ctx.setdefault("page", "1")
     ctx.setdefault("pages", "1")
-    return {"context": ctx, "rows": rows[:30]}
+    return {"context": ctx, "rows": [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows[:30]], "pallet_rows": pallet_rows[:12]}
 
 
 class PreviewIn(BaseModel):
