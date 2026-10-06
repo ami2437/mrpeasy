@@ -185,6 +185,50 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
     return out
 
 
+# ---------- generic nuts ----------
+_GENERIC_CODE = re.compile(r"^(\d{1,3})-NUT$", re.I)  # a size code (34, 58, 114), not a 5-digit bolt #
+
+
+def looks_generic(it: StockItem, codes: set, parents: set) -> Optional[str]:
+    """Why this item is bulk stock that specific nuts draw from -- or None. Flagged generic, drawn from already,
+    or coded <size>-NUT (58-NUT, 1-3 digits) where the front isn't one of our bolts (15420-NUT is 15420's own nut)."""
+    if it.is_generic:
+        return "marked generic"
+    if it.id in parents:
+        return "other items draw from it"
+    m = _GENERIC_CODE.match(it.code or "")
+    if m and m.group(1).upper() not in codes:
+        return "treated as generic (not marked on the item)"
+    return None
+
+
+@router.post("/generic")
+def generic(data: ItemsIn, db: Session = Depends(get_db)):
+    """Which items in the simulation are generic bulk nuts, and which specific nuts each one can stand in for
+    (same size, thread and grade as booking uses: "exact", or "check" when a finish / heavy is unstated)."""
+    from app.services import stock_transfer
+    ids = set(data.item_ids[:500])
+    items = db.query(StockItem).filter(StockItem.id.in_(ids or {0})).all()
+    codes = {c.upper() for (c,) in db.query(StockItem.code).all()}
+    parents = {p for (p,) in db.query(StockItem.parent_item_id).filter(StockItem.parent_item_id.isnot(None)).distinct().all()}
+    gens = {it.id: (it, why) for it in items for why in [looks_generic(it, codes, parents)] if why}
+    gspec = {gid: stock_transfer.spec(g.title) for gid, (g, _) in gens.items()}
+    serves = {}
+    for it in items:
+        if it.id in gens:
+            continue
+        mine = stock_transfer.spec(it.title)
+        opts = []
+        if it.parent_item_id in gens:
+            opts.append({"generic_id": it.parent_item_id, "match": "linked"})
+        if mine["dia"]:
+            opts += [{"generic_id": gid, "match": how} for gid, gs in gspec.items() if gid != it.parent_item_id
+                     for how in [stock_transfer.match(mine, gs)] if how]
+        if opts:
+            serves[str(it.id)] = opts
+    return {"generics": {str(gid): {"code": g.code, "title": g.title, "why": why} for gid, (g, why) in gens.items()}, "serves": serves}
+
+
 # ---------- the spreadsheet's AI assistant ----------
 class SheetIn(BaseModel):
     instruction: str

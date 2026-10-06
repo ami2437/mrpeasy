@@ -30,3 +30,14 @@ def test_sticky_notes_page_search(make, api):
     found = api.get("/api/notes/all?q=job-nb")
     assert len(found) == 1 and found[0]["record"]["po_number"] == "PO-NOTE-77" and found[0]["record"]["status"]
     assert api.get("/api/notes/all?q=nothing-like-this") == []
+
+
+def test_simulation_generic_nuts(make, api):
+    """Bulk 77-NUT (not marked generic) stands in for the specific nuts that match its size, thread and grade."""
+    bulk = make.item(code="77-NUT", title="7/16-14 A194 GR 2H HVY HEX NUT DOM. HDG")
+    bolt = make.item(code="77701", title="BOLT_HH_7/16-14x2_A325_TYPE1_HDG_W/A194-2H HEX NUT")
+    nut = make.item(code="77701-NUT", title="7/16-14 A194 2H HVY HEX NUT HDG")
+    other = make.item(code="77702-NUT", title="7/16-20 A194 2H HVY HEX NUT HDG")  # different thread; no bolt 77702, still not generic
+    r = api.post("/api/simulations/generic", json={"item_ids": [bulk["id"], bolt["id"], nut["id"], other["id"]]})
+    assert list(r["generics"]) == [str(bulk["id"])] and "not marked" in r["generics"][str(bulk["id"])]["why"]
+    assert r["serves"] == {str(nut["id"]): [{"generic_id": bulk["id"], "match": "exact"}]}  # 77701-NUT is the bolt's own nut, not generic

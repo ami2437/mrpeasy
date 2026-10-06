@@ -6,6 +6,7 @@ AuthGuard.requirePerm("simulate");
 document.getElementById("sidebar").innerHTML = renderSidebar("simulate.html");
 
 let SIMS = [], sim = null, doc = null, ITEMS = [], VENDORS = [], CUSTOMERS = [], INSIGHT = {}, saveTimer = null, saveState = "";
+let GEN = { generics: {}, serves: {} }, genKey = "";  // generic bulk nuts in this simulation (POST /api/simulations/generic)
 const COST_TYPES = [["tariff", "Tariff / duty", "percent"], ["inland", "Inland freight", "total"], ["trucking", "Trucking", "total"],
                     ["shipping", "Ocean / air shipping", "total"], ["customs", "Customs & brokerage", "total"], ["fees", "Fees", "total"],
                     ["insurance", "Insurance", "percent"], ["other", "Other", "total"]];
@@ -18,7 +19,7 @@ const money = v => v == null || isNaN(v) ? "—" : fmtMoney(v);
 const price = v => v == null || isNaN(v) ? "—" : fmtPrice(v);
 
 function blankDoc() {
-  return { demand: [], sources: [], shared_costs: [], estimates: {}, use_stock: false, sheet_cols: [], summary: {} };
+  return { demand: [], sources: [], shared_costs: [], estimates: {}, generic_off: {}, use_stock: false, sheet_cols: [], summary: {} };
 }
 
 // ================= the numbers =================
@@ -60,18 +61,44 @@ function calc() {
       x.need += q; x.revenue += q * num(l.price); x.demandBlocks.add(b.id);
     }
   }
-  const rows = Object.values(items).map(x => {
+  const estOf = key => { const e = d.estimates[key]; return e !== undefined && e !== "" ? num(e) : null; };
+  const base = Object.values(items).map(x => {
     const ins = x.item_id ? INSIGHT[x.item_id] : null;
-    const est = d.estimates[x.key];
     const vendor = x.supply ? x.vendorValue / x.supply : null, eff = x.supply ? x.effValue / x.supply : null;
-    const cost = eff != null ? eff : (est !== undefined && est !== "" ? num(est) : null);
+    return { ...x, vendor, eff, onHand: ins ? Math.max(0, ins.available || 0) : 0, notInDb: !x.item_id,
+             generic: x.item_id ? (GEN.generics[x.item_id] || null) : null, via: null, viaQty: 0, servedBy: [] };
+  });
+  const byItem = Object.fromEntries(base.filter(r => r.item_id).map(r => [r.item_id, r]));
+  // generic bulk nuts (58-NUT): a specific nut (15420-NUT) with no source of its own costs what the generic costs,
+  // and what it still needs is bought as the generic -- it rolls up into the generic's "to order"
+  for (const r of base) {
+    if (!r.need || !r.item_id || r.generic || d.generic_off[r.key]) continue;
+    const opts = (GEN.serves[r.item_id] || []).filter(o => byItem[o.generic_id] || GEN.generics[o.generic_id]);
+    if (!opts.length) continue;
+    const o = opts.find(o => byItem[o.generic_id] && byItem[o.generic_id].supply) || opts[0];
+    const g = byItem[o.generic_id] || null;
+    const short = Math.max(0, r.need - r.supply - (d.use_stock ? r.onHand : 0));
+    r.via = { id: o.generic_id, code: GEN.generics[o.generic_id].code, match: o.match, g };
+    r.viaQty = short;
+    if (g) { g.servedBy.push(r); g.rolled = (g.rolled || 0) + short; }
+  }
+  const rows = base.map(x => {
+    let cost = x.eff != null ? x.eff : estOf(x.key), viaCost = null;
+    if (x.via) {
+      const g = x.via.g;
+      viaCost = g ? (g.eff != null ? g.eff : estOf(g.key)) : null;
+      if (viaCost == null) viaCost = (INSIGHT[x.via.id] || {}).last_cost || null;
+      // own supply first at its cost, the rest at the generic's
+      const own = Math.min(x.supply, x.need);
+      if (viaCost != null) cost = x.need ? ((x.eff != null ? x.eff * own : 0) + viaCost * (x.need - own)) / x.need : viaCost;
+    }
     const custPrice = x.need ? x.revenue / x.need : null;
-    const onHand = ins ? Math.max(0, ins.available || 0) : 0;
-    return { ...x, vendor, eff, extras: eff != null && vendor != null ? eff - vendor : null, cost, estimated: eff == null && cost != null,
+    const want = x.need + (x.rolled || 0);
+    return { ...x, cost, viaCost, extras: x.eff != null && x.vendor != null ? x.eff - x.vendor : null, estimated: x.eff == null && !x.via && cost != null,
              custPrice, profitUnit: custPrice != null && cost != null ? custPrice - cost : null,
-             profit: cost != null && x.need ? x.revenue - x.need * cost : null, onHand,
-             toOrder: Math.max(0, x.need - x.supply - (d.use_stock ? onHand : 0)), notInDb: !x.item_id };
-  }).sort((a, b) => (b.need > 0) - (a.need > 0) || String(a.code).localeCompare(String(b.code)));
+             profit: cost != null && x.need ? x.revenue - x.need * cost : null,
+             toOrder: x.via ? 0 : Math.max(0, want - x.supply - (d.use_stock ? x.onHand : 0)) };
+  }).sort((a, b) => (b.need > 0 || b.servedBy.length > 0) - (a.need > 0 || a.servedBy.length > 0) || String(a.code).localeCompare(String(b.code)));
   const costOf = Object.fromEntries(rows.map(r => [r.key, r.cost]));
   const orders = d.demand.map(b => {
     // profit counts only lines with a cost: a line nobody has priced yet would otherwise look like pure profit
@@ -166,14 +193,14 @@ function compareTable(c) {
       <th class="num">Profit / unit</th><th class="num sum">Profit</th><th></th></tr></thead><tbody>
     ${c.rows.map(r => `<tr class="${r.notInDb ? "sim-unknown" : ""}">
       <td><b>${escapeHtml(r.code || "")}</b> <span class="muted small">${escapeHtml(r.desc || (r.item_id && itemById(r.item_id) ? itemById(r.item_id).title : ""))}</span>
-        ${r.notInDb ? `<span class="sim-tag">not in DB</span>` : ""}</td>
-      <td class="num">${fmtQty(r.need)}</td>
-      <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.supply && r.supply < r.need ? `<div class="sim-warn small">short ${fmtQty(r.need - r.supply)}</div>` : ""}</td>
+        ${r.notInDb ? `<span class="sim-tag">not in DB</span>` : ""}${genNote(r)}</td>
+      <td class="num">${fmtQty(r.need)}${r.rolled ? `<div class="small sim-gen-txt" title="Specific nuts on the left that this generic nut stands in for">+ ${fmtQty(r.rolled)} for nuts</div>` : ""}</td>
+      <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.supply && r.supply < r.need + (r.rolled || 0) && !r.via ? `<div class="sim-warn small">short ${fmtQty(r.need + (r.rolled || 0) - r.supply)}</div>` : ""}</td>
       <td class="num">${r.item_id ? fmtQty(r.onHand) : "—"}</td>
-      <td class="num">${r.toOrder ? `<b>${fmtQty(r.toOrder)}</b>` : "—"}</td>
+      <td class="num">${r.toOrder ? `<b>${fmtQty(r.toOrder)}</b>` : r.via && r.viaQty ? `<span class="small sim-gen-txt">as ${escapeHtml(r.via.code)}</span>` : "—"}</td>
       <td class="num">${price(r.custPrice)}</td><td class="num">${price(r.vendor)}</td>
       <td class="num">${r.extras ? "+" + fmtPrice(r.extras) : "—"}</td>
-      <td class="num">${r.eff != null ? `<b>${fmtPrice(r.eff)}</b>` : `<input type="number" class="sim-num sim-est" step="any" placeholder="estimate" value="${doc.estimates[r.key] ?? ""}"
+      <td class="num">${r.via && r.cost != null ? `<b>${fmtPrice(r.cost)}</b><div class="small sim-gen-txt">${escapeHtml(r.via.code)} cost</div>` : r.eff != null ? `<b>${fmtPrice(r.eff)}</b>` : `<input type="number" class="sim-num sim-est" step="any" placeholder="estimate" value="${doc.estimates[r.key] ?? ""}"
           title="Nobody sources this yet: estimate what it will cost us" oninput="setEstimate('${escapeHtml(r.key)}', this.value)">`}</td>
       <td class="num ${r.profitUnit != null ? (r.profitUnit >= 0 ? "pos" : "neg") : ""}">${r.profitUnit != null ? fmtPrice(r.profitUnit) : "—"}
         ${r.profitUnit != null && r.custPrice ? `<div class="small muted">${(r.profitUnit / r.custPrice * 100).toFixed(1)}%</div>` : ""}</td>
@@ -255,7 +282,10 @@ function renderResults() {
 function blocksOf(side) { return side === "demand" ? doc.demand : doc.sources; }
 function findBlock(side, id) { return blocksOf(side).find(b => b.id === id); }
 function findLine(side, bid, lid) { return (findBlock(side, bid) || { lines: [] }).lines.find(l => l.id === lid); }
-function changed(full = false) { if (full) render(); else renderResults(); scheduleSave(); }
+function changed(full = false) {
+  if (full) { render(); refreshGeneric().then(fetched => { if (fetched) render(); }); } else renderResults();
+  scheduleSave();
+}
 function setField(side, bid, lid, field, value, text = false) {
   const l = findLine(side, bid, lid); if (!l) return;
   l[field] = text ? value : (value === "" ? "" : num(value));
@@ -315,6 +345,28 @@ async function ensureInsights(ids, customerId = null) {
   try { Object.assign(INSIGHT, await apiFetch("/api/simulations/insights", { method: "POST", body: JSON.stringify({ item_ids: want, customer_id: customerId }) })); }
   catch (e) { toast(e.message); }
 }
+async function refreshGeneric(extra = []) {
+  const ids = [...new Set([...doc.demand, ...doc.sources].flatMap(b => b.lines.map(l => l.item_id)).concat(extra).filter(Boolean))].sort((a, b) => a - b);
+  const key = ids.join(",");
+  if (key === genKey) return false;
+  genKey = key;
+  try { GEN = ids.length ? await apiFetch("/api/simulations/generic", { method: "POST", body: JSON.stringify({ item_ids: ids }) }) : { generics: {}, serves: {} }; }
+  catch (e) { GEN = { generics: {}, serves: {} }; }
+  return true;
+}
+// generic nuts: the badge on 58-NUT ("covers 15420-NUT ...") and the link on a specific nut ("from 58-NUT")
+function genNote(r) {
+  if (r.generic) {
+    const kids = r.servedBy.map(k => k.code);
+    return `<div class="small"><span class="sim-gen" title="${escapeHtml(r.generic.why)}">generic</span>
+      ${kids.length ? `<span class="sim-gen-txt">stands in for ${escapeHtml(kids.slice(0, 6).join(", "))}${kids.length > 6 ? ` +${kids.length - 6}` : ""}</span>` : `<span class="muted">no matching nuts on the left</span>`}</div>`;
+  }
+  if (r.via) return `<div class="small"><span class="sim-gen-txt">from ${escapeHtml(r.via.code)}${r.via.match === "check" ? ` <span class="sim-warn" title="Size, thread and grade match; the finish or heavy isn't stated on one of them">(check finish)</span>` : ""}</span>
+      · <a class="link" onclick="setGenericOff('${escapeHtml(r.key)}', true)" title="Cost and order this nut on its own">don't use</a></div>`;
+  if (doc.generic_off[r.key] && GEN.serves[r.item_id]) return `<div class="small muted">not using generic stock · <a class="link" onclick="setGenericOff('${escapeHtml(r.key)}', false)">use ${escapeHtml((GEN.generics[GEN.serves[r.item_id][0].generic_id] || {}).code || "generic")}</a></div>`;
+  return "";
+}
+function setGenericOff(key, off) { if (off) doc.generic_off[key] = true; else delete doc.generic_off[key]; changed(true); }
 
 // ================= adding demand / sources =================
 const fromDocLine = (item_id, code, desc, qty, price) => ({ id: uid(), item_id: item_id || null, code: code || "", desc: desc || "", qty: num(qty) || 0, price: price ?? "" });
@@ -511,7 +563,9 @@ async function openSim(id) {
   sim = await apiFetch(`/api/simulations/${id}`);
   doc = Object.assign(blankDoc(), sim.doc || {});
   history.replaceState(null, "", `simulate.html?id=${id}`);
+  doc.generic_off ||= {};
   await ensureInsights([...doc.demand, ...doc.sources].flatMap(b => b.lines.map(l => l.item_id)).filter(Boolean));
+  genKey = ""; await refreshGeneric();
   setSaveState(`Saved ${fmtWhen(sim.updated_at)}`);
   drawBar(); render();
 }
