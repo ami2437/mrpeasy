@@ -490,8 +490,12 @@ function askDialog({ title, body = "", buttons = [], tone = "" }) {
       <div class="btn-row" style="margin-top:14px;">${buttons.map((b, i) => `<button type="button" class="${b.cls || ""}" data-i="${i}">${escapeHtml(b.label)}</button>`).join("")}</div></div>`;
     const done = value => { document.removeEventListener("keydown", onKey); back.remove(); resolve({ value, el: back }); };
     const onKey = e => { if (e.key === "Escape") done(null); };
+    // only a click that starts AND ends on the backdrop closes it: picking from a dropdown list that hangs
+    // below the box hides the list on mousedown, so its click would otherwise land on the backdrop and cancel
+    let downOnBack = false;
+    back.addEventListener("mousedown", e => { downOnBack = e.target === back; });
     back.addEventListener("click", e => {
-      if (e.target === back) return done(null);
+      if (e.target === back) { if (downOnBack) done(null); return; }
       const btn = e.target.closest("button[data-i]");
       if (btn) { const b = buttons[+btn.dataset.i]; done(b.value); }
     });

@@ -319,8 +319,13 @@ async function ensureInsights(ids, customerId = null) {
 // ================= adding demand / sources =================
 const fromDocLine = (item_id, code, desc, qty, price) => ({ id: uid(), item_id: item_id || null, code: code || "", desc: desc || "", qty: num(qty) || 0, price: price ?? "" });
 async function pickFrom(title, options, label) {
-  const { value, el } = await askDialog({ title, body: `<select id="sim-pick" data-searchable><option value="">${label}</option>${options}</select>`,
+  // picking from the list adds it right away (the Add button does the same)
+  const ask = askDialog({ title, body: `<select id="sim-pick" data-searchable><option value="">${label}</option>${options}</select>
+      <p class="muted small" style="margin:6px 0 0;">Type to search, then pick one.</p>`,
     buttons: [{ label: "Add", value: "ok", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  const sel = document.querySelector(".ask-dialog #sim-pick");
+  if (sel) sel.addEventListener("change", () => { if (sel.value) sel.closest(".ask-dialog").querySelector("button[data-i='0']").click(); });
+  const { value, el } = await ask;
   return value ? el.querySelector("#sim-pick").value : null;
 }
 async function pasteDialog(title, side) {
