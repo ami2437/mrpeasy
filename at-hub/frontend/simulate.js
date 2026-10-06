@@ -250,24 +250,27 @@ function costsTable(path, costs, blockId) {
 // The comparison table is built once and kept: each change redraws only its rows, so the header's sort and
 // ▾ filters (shared table tools) and the quick chips stay as you set them while you edit the numbers.
 let CMP = null, CMP_CHIP = "";
-const CMP_CHIPS = [["", "All"], ["need", "On this job"], ["nocost", "Needs a cost"], ["order", "To order"], ["loss", "Losing money"],
-                   ["generic", "Generic nuts"], ["nodb", "Not in DB"]];
+const CMP_CHIPS = [["", "All"], ["nocost", "Needs a cost"], ["order", "To order"], ["loss", "Losing money"],
+                   ["generic", "From generic nuts"], ["nodb", "Not in DB"]];
 const chipTest = {
   need: r => r.need > 0, nocost: r => r.need > 0 && r.cost == null, order: r => r.toOrder > 0 || (r.via && r.viaQty > 0),
   loss: r => r.profit != null && r.profit < 0, generic: r => r.generic || r.via, nodb: r => r.notInDb };
 function drawCompare(c) {
   const host = document.getElementById("sim-compare");
   if (!host) return;
-  if (!c.rows.length) { host.innerHTML = `<p class="muted">Add customer demand on the left and sources on the right — the comparison appears here.</p>`; CMP = null; return; }
+  // only what we deliver: items on the customer side. Source-only items (other PO lines, the generic nuts
+  // themselves) stay out of here -- what we buy for them shows in the Order Tracker
+  const rows = c.rows.filter(r => r.need > 0);
+  if (!rows.length) { host.innerHTML = `<p class="muted">Add customer demand on the left and sources on the right — the comparison appears here.</p>`; CMP = null; return; }
   if (!CMP) {
     const wrap = document.createElement("div");
     wrap.innerHTML = `<div class="sim-chips-row" id="sim-cmp-chips"></div><div class="sim-cmp-scroll">${compareHead()}<tbody></tbody></table></div>`;
     CMP = wrap;
   }
   if (CMP.parentNode !== host) host.replaceChildren(CMP);
-  const shown = CMP_CHIP ? c.rows.filter(chipTest[CMP_CHIP]) : c.rows;
+  const shown = CMP_CHIP ? rows.filter(chipTest[CMP_CHIP]) : rows;
   CMP.querySelector("#sim-cmp-chips").innerHTML = CMP_CHIPS.map(([k, l]) => {
-    const n = k ? c.rows.filter(chipTest[k]).length : c.rows.length;
+    const n = k ? rows.filter(chipTest[k]).length : rows.length;
     return `<a class="pack-chip ${CMP_CHIP === k ? "on" : ""}" onclick="CMP_CHIP = '${k}'; drawCompare(calc())">${l} <b>${n}</b></a>`;
   }).join("");
   const tb = CMP.querySelector("tbody");
