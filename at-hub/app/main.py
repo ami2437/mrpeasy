@@ -392,6 +392,8 @@ from app.routes import pod as pod_routes  # noqa: E402
 app.include_router(pod_routes.router)
 from app.routes import analytics as analytics_routes  # noqa: E402
 app.include_router(analytics_routes.router)
+from app.routes import simulations as simulations_routes  # noqa: E402
+app.include_router(simulations_routes.router)
 from app.services.backups import start_scheduler  # noqa: E402
 start_scheduler()
 

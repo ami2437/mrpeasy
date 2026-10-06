@@ -1122,7 +1122,7 @@ async function downloadFile(path, filename) {
 // A link's third entry is the permission that shows it (any of several, space separated) -- set per role on
 // Users & Roles. A group with no links left isn't shown.
 const NAV_GROUPS = [
-  { label: null, links: [["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"], ["todo.html", "To-Do", ""], ["tasks.html", "Tasks", "tasks"], ["ai-desk.html", "AI Desk", "ai"]] },
+  { label: null, links: [["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"], ["todo.html", "To-Do", ""], ["notes.html", "Sticky Notes", "orders.view purchasing shipments.view"], ["tasks.html", "Tasks", "tasks"], ["ai-desk.html", "AI Desk", "ai"]] },
   { label: "CRM", links: [
     ["customers.html", "Customers", "customers.view"],
     ["customer-orders.html", "Customer Orders", "orders.view"],
@@ -1999,7 +1999,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "notes.html": "sticky", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [

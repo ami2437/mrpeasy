@@ -1187,3 +1187,17 @@ class StickyNote(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Simulation(Base):
+    """A profit / loss simulation (Simulate page): customer demand on one side, sources on the other, extra costs, the
+    item-by-item comparison. The working document is one JSON doc (app/routes/simulations.py)."""
+    __tablename__ = "simulations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    doc = Column(Text, nullable=False, default="{}")
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

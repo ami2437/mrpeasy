@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Sticky Notes</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+  <style>
+    .nb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; align-items: start; }
+    .nb-grid .sticky-note { width: auto; min-height: 0; }
+    .nb-origin { width: 100%; border-collapse: collapse; font-size: 11.5px; background: rgba(255, 255, 255, .45); border-radius: 4px; overflow: hidden; }
+    .nb-origin td { padding: 3px 6px; border-top: 1px solid rgba(0, 0, 0, .08); vertical-align: top; color: #1f2937; }
+    .nb-origin td:first-child { width: 72px; color: rgba(31, 41, 55, .65); font-weight: 600; white-space: nowrap; }
+    .nb-origin a.link { color: #1d4ed8; font-weight: 700; }
+    .nb-done { opacity: .62; }
+    .nb-done .sticky-text { text-decoration: line-through; }
+    .nb-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .nb-chip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 13px; }
+    .nb-chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .nb-edit textarea { min-height: 70px; background: rgba(255, 255, 255, .6); color: #111827; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">Sticky Notes</h1>
+      <input type="search" id="nb-q" placeholder="Search note text, order / PO / shipment #, customer, vendor, PO # or job #..." style="flex:1; min-width:260px;">
+      <div class="nb-filters" id="nb-status"></div>
+      <select id="nb-kind" style="width:auto;"><option value="">Every record</option><option value="customer_order">Customer orders</option>
+        <option value="purchase_order">Purchase orders</option><option value="shipment">Shipments</option></select>
+    </div>
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">Every sticky note in one place. Click a record # to peek at it without leaving this page.
+        Notes are written on the order, PO or shipment itself (the <b>Add Sticky Note</b> button under its header).</p>
+      <div id="nb-list" class="nb-grid"><p class="muted">Loading...</p></div>
+    </div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requirePerm("orders.view", "purchasing", "shipments.view");
+    document.getElementById("sidebar").innerHTML = renderSidebar("notes.html");
+    const KIND = { customer_order: "Order", purchase_order: "PO", shipment: "Shipment" };
+    const me = (AuthGuard.getUser() || {}).username;
+    let status = "open", notes = [], editing = null, timer = null;
+
+    function statusChips() {
+      document.getElementById("nb-status").innerHTML = [["open", "Open"], ["due", "Reminders due"], ["done", "Done"], ["all", "All"]].map(([k, l]) =>
+        `<span class="nb-chip ${status === k ? "on" : ""}" onclick="status = '${k}'; load()">${l}</span>`).join("");
+    }
+    function origin(n) {
+      const r = n.record;
+      if (!r) return `<table class="nb-origin"><tr><td>Record</td><td class="muted">no longer exists</td></tr></table>`;
+      const rows = [[KIND[r.type] || r.type, `<a class="link" href="${r.link}">${escapeHtml(r.code)}</a> <span class="tag ${escapeHtml(r.status || "")}" style="font-size:10px;">${escapeHtml((r.status || "").replace("_", " "))}</span>`],
+        [r.type === "purchase_order" ? "Vendor" : "Customer", escapeHtml(r.who || "—")]];
+      if (r.order_code) rows.push(["Order", `<a class="link" href="customer-orders.html?id=${r.order_id}">${escapeHtml(r.order_code)}</a>`]);
+      if (r.po_number) rows.push(["Cust. PO #", escapeHtml(r.po_number)]);
+      if (r.job_number) rows.push(["Job #", escapeHtml(r.job_number)]);
+      if (r.vendor_so) rows.push(["Vendor SO #", escapeHtml(r.vendor_so)]);
+      return `<table class="nb-origin">${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>`;
+    }
+    function remind(n) {
+      if (!n.remind_date) return "";
+      const due = !n.done && String(n.remind_date).slice(0, 10) <= todayISO();
+      return `<span class="sticky-when ${due ? "due" : ""}">${icon("bell")} ${fmtDate(n.remind_date, { month: "short", day: "numeric" })}${n.remind_at ? " " + fmtTime(n.remind_at) : ""}</span>`;
+    }
+    function card(n) {
+      const canDel = n.created_by === me || AuthGuard.can("money.view");
+      const body = editing === n.id
+        ? `<div class="nb-edit"><textarea id="nb-text-${n.id}">${escapeHtml(n.text)}</textarea>
+             <div style="display:flex; gap:6px; margin-top:6px;"><button class="small-btn" onclick="saveText(${n.id})">Save</button>
+             <button class="secondary small-btn" onclick="editing = null; render()">Cancel</button></div></div>`
+        : `<div class="sticky-text">${escapeHtml(n.text)}</div>`;
+      return `<div class="sticky-note sticky-${n.color} ${n.done ? "nb-done" : ""}">
+          ${body}
+          ${origin(n)}
+          <div class="sticky-foot">${remind(n)}<span class="muted">${escapeHtml(n.updated_by || n.created_by || "")} · ${fmtDate(n.updated_at || n.created_at, { month: "short", day: "numeric" })}</span>
+            <span class="sticky-acts">
+              <a title="${n.done ? "Reopen" : "Done"}" onclick="toggle(${n.id})">${icon(n.done ? "undo" : "check")}</a>
+              ${!n.done ? `<a title="Edit" onclick="editing = ${n.id}; render()">${icon("pencil")}</a>` : ""}
+              ${canDel ? `<a title="Delete" onclick="del(${n.id})">${icon("trash")}</a>` : ""}</span></div>
+          ${n.done && n.done_by ? `<div class="small" style="color:rgba(31,41,55,.65);">Done by ${escapeHtml(n.done_by)} · ${fmtDate(n.done_at)}</div>` : ""}
+        </div>`;
+    }
+    function render() {
+      statusChips();
+      const shown = status === "due" ? notes.filter(n => !n.done && n.remind_date && String(n.remind_date).slice(0, 10) <= todayISO()) : notes;
+      document.getElementById("nb-list").innerHTML = shown.length ? shown.map(card).join("")
+        : `<p class="muted">${document.getElementById("nb-q").value.trim() ? "No notes match your search." : status === "done" ? "No notes marked done yet." : "No sticky notes here."}</p>`;
+    }
+    async function load() {
+      const q = encodeURIComponent(document.getElementById("nb-q").value.trim());
+      const st = status === "due" ? "open" : status;
+      try { notes = await apiFetch(`/api/notes/all?status=${st}&kind=${document.getElementById("nb-kind").value}&q=${q}`); render(); }
+      catch (e) { document.getElementById("nb-list").innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+    }
+    async function toggle(id) { await apiFetch(`/api/notes/${id}/done`, { method: "POST" }); load(); if (window.TopBar) TopBar.badge(); }
+    async function saveText(id) {
+      try { await apiFetch(`/api/notes/${id}`, { method: "PUT", body: JSON.stringify({ text: document.getElementById(`nb-text-${id}`).value }) }); editing = null; load(); }
+      catch (e) { toast(e.message); }
+    }
+    async function del(id) {
+      if (!confirm("Delete this note for good?")) return;
+      try { await apiFetch(`/api/notes/${id}`, { method: "DELETE" }); load(); } catch (e) { toast(e.message); }
+    }
+    document.getElementById("nb-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(load, 250); });
+    document.getElementById("nb-kind").addEventListener("change", load);
+    load();
+  </script>
+</body>
+</html>

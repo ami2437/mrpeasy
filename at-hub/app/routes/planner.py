@@ -56,14 +56,23 @@ def _record_label(db: Session, entity_type: Optional[str], entity_id: Optional[i
     rec = db.get(model, entity_id)
     if not rec:
         return None
-    who = ""
+    who, extra = "", {}
     if entity_type == "customer_order":
         c = db.get(Customer, rec.customer_id)
         who = c.name if c else ""
+        extra = {"po_number": rec.po_number, "job_number": rec.job_number}
     elif entity_type == "purchase_order":
         v = db.get(Vendor, rec.vendor_id)
         who = v.name if v else ""
-    return {"type": entity_type, "id": entity_id, "code": rec.code, "who": who, "link": f"{page}?id={entity_id}"}
+        extra = {"vendor_so": rec.vendor_so_number}
+    elif entity_type == "shipment":
+        o = db.get(CustomerOrder, rec.order_id)
+        c = db.get(Customer, o.customer_id) if o else None
+        who = c.name if c else ""
+        extra = {"order_id": o.id if o else None, "order_code": o.code if o else None, "po_number": o.po_number if o else None,
+                 "job_number": o.job_number if o else None}
+    return {"type": entity_type, "id": entity_id, "code": rec.code, "who": who, "status": rec.status,
+            "link": f"{page}?id={entity_id}", **extra}
 
 
 # ---------- To-Do ----------
@@ -315,6 +324,28 @@ def notes(entity_type: str, entity_id: int, db: Session = Depends(get_db), user:
     rows = (db.query(StickyNote).filter(StickyNote.entity_type == entity_type, StickyNote.entity_id == entity_id)
             .order_by(StickyNote.done, StickyNote.id.desc()).all())
     return [_note_out(db, n) for n in rows]
+
+
+@router.get("/notes/all")
+def notes_all(q: str = "", status: str = "open", kind: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Every sticky note this person can see (Sticky Notes page): status open | done | all, kind = a record type,
+    q searches the text, author, and the record's #, customer / vendor, PO # and job #."""
+    nq = _notes_user_can_see(db, user)
+    if nq is None:
+        return []
+    if status in ("open", "done"):
+        nq = nq.filter(StickyNote.done.is_(status == "done"))
+    if kind in NOTE_ENTITIES:
+        nq = nq.filter(StickyNote.entity_type == kind)
+    out = [_note_out(db, n) for n in nq.order_by(StickyNote.updated_at.desc()).limit(1000).all()]
+    words = [w for w in (q or "").lower().split() if w]
+    if words:
+        def hay(n):
+            r = n["record"] or {}
+            return " ".join(str(x or "") for x in (n["text"], n["created_by"], n["updated_by"], r.get("code"), r.get("who"), r.get("po_number"),
+                                                    r.get("job_number"), r.get("order_code"), r.get("vendor_so"))).lower()
+        out = [n for n in out if all(w in hay(n) for w in words)]
+    return out
 
 
 @router.get("/notes/counts")

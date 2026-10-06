@@ -5,30 +5,89 @@
   <title>AT-HUB — Simulate</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <style>
+    /* the notebook: two pages side by side with a binding down the middle */
+    .sim-book { display: grid; grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr); margin-bottom: 16px; border-radius: 14px;
+      border: 1px solid var(--border); background: var(--surface); box-shadow: 0 8px 24px rgba(15, 23, 42, .07); overflow: hidden; }
+    .sim-page { padding: 14px 14px 18px; min-width: 0;
+      background-image: repeating-linear-gradient(to bottom, transparent 0 31px, color-mix(in srgb, var(--border) 45%, transparent) 31px 32px); }
+    .sim-left { border-left: 4px solid color-mix(in srgb, #16a34a 55%, transparent); }
+    .sim-right { border-right: 4px solid color-mix(in srgb, #2563eb 55%, transparent); }
+    .sim-binding { background: linear-gradient(to right, rgba(0,0,0,.10), rgba(0,0,0,.02) 40%, rgba(0,0,0,.02) 60%, rgba(0,0,0,.10));
+      background-color: var(--bg); position: relative; }
+    .sim-binding::before { content: ""; position: absolute; inset: 18px 4px; background: radial-gradient(circle, var(--border) 2px, transparent 2.5px) center top / 6px 26px repeat-y; }
+    .sim-page-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .sim-page-head h3 { margin: 0; flex: 1; min-width: 150px; }
+    .sim-add { display: flex; gap: 6px; flex-wrap: wrap; }
+    .sim-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 12px; }
+    .sim-block.is-demand { border-top: 3px solid #16a34a; }
+    .sim-block.is-source { border-top: 3px solid #2563eb; }
+    .sim-block.is-shared { border-top: 3px dashed var(--border); }
+    .sim-bhead, .sim-bfoot, .sim-party, .sim-bactions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sim-bhead .sim-label { font-weight: 700; flex: 1; min-width: 120px; border-color: transparent; background: transparent; padding-left: 2px; }
+    .sim-bhead .sim-label:hover, .sim-bhead .sim-label:focus { border-color: var(--border); background: var(--surface); }
+    .sim-party { margin: 6px 0; } .sim-party select { width: auto; max-width: 100%; min-width: 180px; }
+    .sim-mult { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
+    .sim-mult input { width: 58px; }
+    .sim-lines { width: 100%; table-layout: fixed; }
+    .sim-lines th:nth-child(1) { width: auto; }
+    .sim-lines th:nth-child(2) { width: 74px; } .sim-lines th:nth-child(3) { width: 86px; }
+    .is-source .sim-lines th:nth-child(4) { width: 62px; }
+    .sim-lines th.num:nth-last-child(2) { width: 82px; } .sim-lines th:last-child { width: 20px; }
+    .sim-lines td { vertical-align: top; }
+    .sim-item { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .sim-code { width: 110px !important; font-weight: 600; } .sim-desc { flex: 1; min-width: 100px; }
+    .sim-num { width: 100%; text-align: right; }
+    .sim-cand { width: 100%; font-size: 12px; }
+    .sim-x { cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 3px; text-decoration: none; }
+    .sim-x:hover { color: #dc2626; }
+    .sim-bfoot { margin-top: 6px; } .sim-bprofit { margin-top: 6px; padding: 6px 8px; border-radius: 8px; background: var(--bg); }
+    .sim-bactions { margin-top: 8px; justify-content: flex-end; }
+    .sim-costs { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+    .sim-costs-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+    .sim-costs table { width: 100%; } .sim-costs td { padding: 3px 4px; }
+    .sim-costs td:nth-child(2) select { min-width: 112px; } .sim-costs td:nth-child(4) select { min-width: 100px; }
+    .sim-costs td:nth-child(3) { width: 90px; } .sim-costs td:last-child { width: 18px; }
+    .sim-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .sim-chips .pack-chip { cursor: pointer; font-size: 11.5px; }
+    /* not in our database: a mild amber glow */
+    tr.sim-unknown > td { background: color-mix(in srgb, #f59e0b 9%, transparent); }
+    tr.sim-unknown > td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+    tr.sim-unknown .sim-code { box-shadow: 0 0 0 2px color-mix(in srgb, #f59e0b 35%, transparent), 0 0 10px color-mix(in srgb, #f59e0b 35%, transparent); }
+    .sim-tag { font-size: 10.5px; font-weight: 700; color: #92400e; background: #fef3c7; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+    .sim-warn { color: #b45309; }
+    .pos { color: #15803d; } .neg { color: #dc2626; }
+    .sim-compare { width: 100%; }
+    .sim-est { width: 92px; box-shadow: 0 0 0 2px color-mix(in srgb, #f59e0b 30%, transparent); }
+    #sim-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    /* spreadsheet */
+    .sim-sheet-modal { width: min(1200px, 96vw); max-width: none; max-height: 92vh; display: flex; flex-direction: column; }
+    .sim-sheet-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .sim-ai { display: flex; gap: 6px; align-items: center; padding: 6px; border-radius: 10px; flex-wrap: wrap;
+      background: linear-gradient(90deg, color-mix(in srgb, #7c3aed 10%, transparent), color-mix(in srgb, #2563eb 8%, transparent)); }
+    .sim-ai input { flex: 1; min-width: 220px; }
+    .sim-ai-badge { font-weight: 800; font-size: 11px; color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb); border-radius: 6px; padding: 3px 6px; }
+    #sim-ai-note { min-height: 18px; margin: 4px 2px; }
+    .sim-sheet-wrap { overflow: auto; flex: 1; border: 1px solid var(--border); border-radius: 8px; }
+    .sim-grid { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+    .sim-grid th { position: sticky; top: 0; background: var(--bg); z-index: 1; text-align: left; white-space: nowrap; }
+    .sim-grid th, .sim-grid td { border: 1px solid var(--border); padding: 4px 6px; }
+    .sim-grid td[contenteditable] { min-width: 70px; outline: none; }
+    .sim-grid td[contenteditable]:focus { box-shadow: inset 0 0 0 2px var(--accent); background: var(--surface); }
+    .sim-grid .sim-rn { color: var(--muted); font-size: 11px; text-align: right; width: 28px; background: var(--bg); }
+    @media (max-width: 1100px) { .sim-book { grid-template-columns: 1fr; } .sim-binding { height: 10px; } .sim-binding::before { display: none; } }
+  </style>
 </head>
 <body>
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card page-toolbar"><h1 class="page-title">Simulate</h1>
-      <span class="muted small">What-if runs on a copy of the data. Nothing here changes real orders, stock or money.</span></div>
-    <div class="card" style="max-width:820px;">
-      <h3 style="margin-top:0;">Coming next</h3>
-      <p>This module is set up (menu, page and its own permission on Users &amp; Roles) and waiting for us to decide what it simulates.
-        Some directions it could take:</p>
-      <ul>
-        <li><strong>Stock what-if</strong>: add a big order or a late PO and see which orders go short, and when.</li>
-        <li><strong>Price / cost what-if</strong>: change a cost or a price and see the margin on open orders.</li>
-        <li><strong>Cash flow</strong>: invoices due and vendor bills due over the next weeks, with "what if this customer pays late".</li>
-        <li><strong>Practice mode</strong>: a full sandbox copy of AT-HUB to train new staff without touching live data.</li>
-      </ul>
-      <p class="muted small" style="margin-bottom:0;">Tell Claude which one (or something else) and it will be built here.</p>
-    </div>
+    <div class="card page-toolbar" id="sim-bar"><h1 class="page-title">Simulate</h1></div>
+    <p class="muted small" style="margin:-4px 0 12px 4px;">What would this make? Put what customers want on the left, where it comes from on the right.
+      Nothing here changes real orders, stock or money until you press a <b>Create</b> button.</p>
+    <div id="sim-main"><div class="card"><p class="muted">Loading...</p></div></div>
   </main>
   </div>
-  <script>
-    AuthGuard.requirePerm("simulate");
-    document.getElementById("sidebar").innerHTML = renderSidebar("simulate.html");
-  </script>
+  <script src="simulate.js"></script>
 </body>
 </html>
