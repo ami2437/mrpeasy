@@ -308,6 +308,9 @@
       return { order, shipment, customer: customers.find(c => c.id === invoice.customer_id) || {} };
     }
 
+    async function renameInvoice(id, code) {
+      if (await renameRecord("invoice", code, `/api/invoices/${id}/code`)) { await loadInvoices(); showDetail(id); }
+    }
     async function showDetail(id) {
       const [invoice, check] = await Promise.all([apiFetch(`/api/invoices/${id}`), apiFetch(`/api/invoices/${id}/billing-check`).catch(() => ({ delivered: {}, differences: [] }))]);
       billingCheck = check;
@@ -320,7 +323,8 @@
       const mergeable = editable ? invoices.filter(i => i.id !== invoice.id && i.order_id && i.order_id === invoice.order_id
         && i.status === "draft" && !i.payments.length && !i.emails.length && i.funding_amount == null) : [];
       card.innerHTML = `
-        <h3 style="margin-top:0;">${invoice.code}${combinedBadge(invoice)} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
+        <h3 style="margin-top:0;">${invoice.code}${invoice.status !== "void" ? ` <button type="button" class="icon-btn" title="Change the invoice #"
+          onclick="renameInvoice(${invoice.id}, '${escapeHtml(invoice.code)}')">${icon("pencil")}</button>` : ""}${combinedBadge(invoice)} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
         <p class="muted" style="margin:0 0 4px;">${escapeHtml(customerName(invoice.customer_id))} — dated ${fmtDate(invoice.invoice_date)}</p>
         <div id="invoice-refs" class="muted"></div>
 
@@ -755,7 +759,7 @@
           </div>
           <label>Subject</label><input type="text" id="em-subject" value="${escapeHtml(`Invoice ${invoice.code} from ${company.name || ""}`.trim())}">
           <label>Message</label><textarea id="em-body" rows="11">${escapeHtml(body)}</textarea>
-          <label style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="em-attach" checked style="width:auto;"> Attach invoice PDF (${escapeHtml(invoice.code)}.pdf)</label>
+          <label style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="em-attach" checked style="width:auto;"> Attach invoice PDF (${escapeHtml(docFileName(invoice.code, orderField(invoice, "po_number"), "Invoice"))}.pdf)</label>
           ${invoice.status === "draft" ? `<p class="muted small">Sending marks this draft invoice as <strong>sent</strong>.</p>` : ""}
           <div class="btn-row">
             <button id="em-send" onclick="sendEmail(${invoice.id})" ${emailConfig.configured ? "" : "disabled"}>Send Email</button>

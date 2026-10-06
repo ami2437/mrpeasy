@@ -931,11 +931,11 @@ async function printWithTemplate(docType, labels, win) {
     templateDefaults = templateDefaults || await apiFetch("/api/templates/defaults");
     if (!templateDefaults[docType]) return false;
     const custs = [...new Set(labels.map(l => l.customer_id).filter(Boolean))];
-    const res = await fetch(`${API_BASE}/api/templates/render-labels`, { method: "POST",
+    const res = await fetch(`${API_BASE}/api/templates/render-labels?as_link=1`, { method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` },
       body: JSON.stringify({ doc_type: docType, labels, customer_id: custs.length === 1 ? custs[0] : null }) });
     if (!res.ok) return false;
-    const url = URL.createObjectURL(await res.blob());
+    const url = await pdfUrl(res);  // a real link, so saving keeps the file name (SH...-PO-Labels.pdf)
     if (win) win.location.href = url; else window.open(url, "_blank");
     return true;
   } catch (e) { return false; }
@@ -951,7 +951,36 @@ async function printBoxLabels(labels, title) {
   printLabelCards(labels.map(l => boxLabelHtml(l, company, location.origin)).join(""), title, win);
 }
 
-// Opens a server-rendered PDF (needs the auth header, so it's fetched as a blob).
+// A PDF asked for with ?as_link=1 comes back as {url} -- a short-lived real link whose file name is the document's
+// (SH215771-M219-30B-4156926-Packing List.pdf), so the browser's PDF viewer saves it under that name.
+async function pdfUrl(response) {
+  if ((response.headers.get("content-type") || "").includes("application/json")) return API_BASE + (await response.json()).url;
+  return URL.createObjectURL(await response.blob());
+}
+// <record #>-<customer PO #>-<what>: the name a document is saved under (same as the server's filenames.py)
+function docFileName(code, po, what) {
+  const clean = v => String(v || "").replace(/[\\/:*?"<>|\r\n\t]+/g, "-").replace(/^[\s.-]+|[\s.-]+$/g, "");
+  return [clean(code), clean(po)].filter(Boolean).concat(what).join("-");
+}
+
+// Change a record's # (shipment / invoice): asks for the new one, saves it with PUT <path>. Resolves to the saved record or null.
+async function renameRecord(what, current, path) {
+  const { value, el } = await askDialog({ title: `Change ${what} #`,
+    body: `<label>New ${escapeHtml(what)} #</label><input type="text" id="rename-code" value="${escapeHtml(current)}" maxlength="40" style="width:100%;">
+      <p class="muted small" style="margin:6px 0 0;">Letters, digits and - _ . only. It prints on the documents from now on; ones already sent keep the old #.</p>
+      <div class="error" id="rename-error"></div>`,
+    buttons: [{ label: "Save", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value !== "go") return null;
+  const code = el.querySelector("#rename-code").value.trim();
+  if (!code || code === current) return null;
+  try {
+    const saved = await apiFetch(path, { method: "PUT", body: JSON.stringify({ code }) });
+    toast(`${current} is now ${saved.code}`);
+    return saved;
+  } catch (e) { alert(e.message); return null; }
+}
+
+// Opens a server-rendered PDF (needs the auth header, so it's fetched first).
 // The tab is opened synchronously so pop-up blockers allow it.
 async function openPdf(path) {
   const win = window.open("", "_blank");
@@ -961,9 +990,9 @@ async function openPdf(path) {
   }
   win.document.write("<p style='font-family:sans-serif;padding:20px;color:#555'>Preparing PDF…</p>");
   try {
-    const response = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+    const response = await fetch(`${API_BASE}${path}${path.includes("?") ? "&" : "?"}as_link=1`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
     if (!response.ok) throw new Error(`Could not generate the PDF (${response.status})`);
-    win.location.href = URL.createObjectURL(await response.blob());
+    win.location.href = await pdfUrl(response);
   } catch (err) {
     win.document.body.innerHTML = `<p style='font-family:sans-serif;padding:20px;color:#dc2626'>${escapeHtml(err.message)}</p>`;
   }

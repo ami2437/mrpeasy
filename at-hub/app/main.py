@@ -188,6 +188,47 @@ def recycle_bin_purge(entry_id: int, authorization: str = Header(None)):
     return Response(status_code=204)
 
 
+# ---- PDFs as real links: ?as_link=1 on any PDF request answers {"url": "/api/files/<random>/<file name>"} instead of
+# the file. The browser opens that URL, so its PDF viewer saves under the document's own name (a blob: URL would save
+# under a random one). The file is kept in memory for 10 minutes; the random id is the only key.
+import secrets as _secrets  # noqa: E402
+import time as _time  # noqa: E402
+from urllib.parse import quote as _quote  # noqa: E402
+
+_FILE_LINKS = {}  # id -> (created, bytes, content type, file name)
+_FILE_TTL = 600
+
+
+@app.middleware("http")
+async def pdf_as_link(request, call_next):
+    if request.query_params.get("as_link") != "1" or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    response = await call_next(request)
+    ctype = response.headers.get("content-type", "")
+    if response.status_code != 200 or "application/json" in ctype:
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    cd = response.headers.get("content-disposition", "")
+    m = re.search(r"filename\*=UTF-8''([^;]+)", cd) or re.search(r'filename="([^"]+)"', cd)
+    from urllib.parse import unquote
+    name = unquote(m.group(1)) if m else "document.pdf"
+    now = _time.time()
+    for k in [k for k, v in _FILE_LINKS.items() if now - v[0] > _FILE_TTL]:
+        _FILE_LINKS.pop(k, None)
+    fid = _secrets.token_urlsafe(24)
+    _FILE_LINKS[fid] = (now, body, ctype or "application/pdf", name)
+    return JSONResponse({"url": f"/api/files/{fid}/{_quote(name)}", "name": name})
+
+
+@app.get("/api/files/{fid}/{name}")
+def file_link(fid: str, name: str):
+    hit = _FILE_LINKS.get(fid)
+    if not hit or _time.time() - hit[0] > _FILE_TTL:
+        raise HTTPException(status_code=404, detail="This link has expired -- open the document again")
+    from app.services.filenames import disposition
+    return Response(hit[1], media_type=hit[2], headers={"Content-Disposition": disposition(hit[3]), "Cache-Control": "no-store"})
+
+
 # ---- activity history: every successful change to an order or PO, with who and what ----
 ACTIVITY_PATH = re.compile(r"^/api/(customer-orders|purchase-orders)/(\d+)(?:/(.*))?$")
 

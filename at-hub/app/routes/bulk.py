@@ -49,6 +49,9 @@ def send(data: SendIn, db: Session = Depends(get_db), user: User = Depends(get_c
     return {"results": bulk_docs.send(db, groups, data.edits, user.username)}
 
 
+from app.services.filenames import disposition  # noqa: E402
+
+
 @router.get("/documents.pdf")
 def documents_pdf(shipment_ids: str = "", invoice_ids: str = "", kinds: str = Query("packing_list"), split: bool = False,
                   db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
@@ -58,6 +61,7 @@ def documents_pdf(shipment_ids: str = "", invoice_ids: str = "", kinds: str = Qu
     _check(user, data)
     if split:
         return Response(bulk_docs.split_zip(db, data.shipment_ids, data.invoice_ids, data.kinds, has(user, "invoices")),
-                        media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="Documents.zip"'})
+                        media_type="application/zip", headers={"Content-Disposition": disposition("Documents.zip", inline=False)})
     pdf = bulk_docs.merged_pdf(db, data.shipment_ids, data.invoice_ids, data.kinds, has(user, "invoices"))
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="Documents.pdf"'})
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": disposition(bulk_docs.single_name(
+        db, data.shipment_ids, data.invoice_ids, data.kinds) or "Documents.pdf")})

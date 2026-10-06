@@ -220,4 +220,7 @@ def render_labels(data: LabelsIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No label template is set as the default")
     ctxs = [doc_context.label_context(db, data.doc_type, l) for l in data.labels]
     pdf = template_engine.render_labels(json.loads(t.spec), ctxs)
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="labels.pdf"'})
+    from app.services.filenames import disposition, doc_name
+    ships = {(l.get("shipment") or "", l.get("po") or "") for l in data.labels}
+    name = doc_name(*ships.pop(), "Labels") if len(ships) == 1 else "Labels.pdf"  # one shipment: SH...-PO-Labels.pdf
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": disposition(name)})

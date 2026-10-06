@@ -120,7 +120,8 @@ def send_invoice(db: Session, invoice: Invoice, to: str, cc: str, subject: str, 
                  attach_pdf: bool, sent_by: str) -> InvoiceEmail:
     if invoice.status == "void":
         raise HTTPException(status_code=400, detail="This invoice is void -- it can't be emailed")
-    attachment = (invoice_pdf(db, invoice), f"{invoice.code}.pdf") if attach_pdf else None
+    from app.services.filenames import invoice_name
+    attachment = (invoice_pdf(db, invoice), invoice_name(db, invoice)) if attach_pdf else None
     to_list, cc_list = _send(db, to, cc, subject, body, _invoice_rows(invoice), attachment)
     log = InvoiceEmail(
         invoice_id=invoice.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,

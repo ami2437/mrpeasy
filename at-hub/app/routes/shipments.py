@@ -1,5 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import PodEmailRequest, ShipmentEmailResponse
@@ -9,6 +10,7 @@ from app.dependencies import get_current_active_user, require_any, require_perm
 from app.services.permissions import has
 from app.models import User
 from app.services.pdf import packing_list_pdf
+from app.services import filenames
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(require_any("shipments.view", "shipments.work", "orders.view", "invoices", "pod.upload"))])
 
@@ -61,12 +63,12 @@ def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: boo
         if raw.strip().isdigit():
             shipment = ShipmentService.get(db, int(raw))
             files.append((packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
-                                           include_pallet_boxes=pallet_boxes), f"Packing-List-{shipment.code}.pdf", "application/pdf"))
+                                           include_pallet_boxes=pallet_boxes), filenames.packing_list_name(db, shipment), "application/pdf"))
     if split:
         return Response(zip_files(files), media_type="application/zip",
-                        headers={"Content-Disposition": 'attachment; filename="Packing-Lists.zip"'})
+                        headers={"Content-Disposition": filenames.disposition("Packing Lists.zip", inline=False)})
     return Response(merge_pdfs(files), media_type="application/pdf",
-                    headers={"Content-Disposition": 'inline; filename="Packing-Lists.pdf"'})
+                    headers={"Content-Disposition": filenames.disposition(files[0][1] if len(files) == 1 else "Packing Lists.pdf")})
 
 
 @router.get("/pack-suggestions")
@@ -112,7 +114,17 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
     shipment = ShipmentService.get(db, shipment_id)
     return Response(packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
                                      include_pallet_boxes=pallet_boxes), media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="Packing-List-{shipment.code}.pdf"'})
+                    headers={"Content-Disposition": filenames.disposition(filenames.packing_list_name(db, shipment))})
+
+
+class RenameIn(BaseModel):
+    code: str
+
+
+@router.put("/{shipment_id}/code", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
+def rename(shipment_id: int, data: RenameIn, db: Session = Depends(get_db)):
+    """Change the shipment # (unique; printed on its documents from now on)."""
+    return with_pods(db, ShipmentService.rename(db, shipment_id, data.code))
 
 
 @router.put("/{shipment_id}/boxes", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])

@@ -10,6 +10,7 @@ from app.schemas import (
 )
 from app.services.crud import InvoiceService, InvoicePaymentService
 from app.services import email as email_service
+from app.services import filenames
 from app.services.pdf import invoice_pdf
 from app.config.settings import settings
 from app.dependencies import get_current_active_user, require_perm, require_any
@@ -44,7 +45,17 @@ def get_invoice_pdf(invoice_id: int, notes: bool = True, db: Session = Depends(g
     """?notes=false leaves every line note off this print."""
     invoice = InvoiceService.get(db, invoice_id)
     return Response(invoice_pdf(db, invoice, show_notes=notes), media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="{invoice.code}.pdf"'})
+                    headers={"Content-Disposition": filenames.disposition(filenames.invoice_name(db, invoice))})
+
+
+class RenameIn(BaseModel):
+    code: str
+
+
+@router.put("/{invoice_id}/code", response_model=InvoiceResponse)
+def rename_invoice(invoice_id: int, data: RenameIn, db: Session = Depends(get_db)):
+    """Change the invoice # (unique; printed on it from now on)."""
+    return InvoiceService.rename(db, invoice_id, data.code)
 
 
 @router.post("/{invoice_id}/email", response_model=InvoiceResponse)

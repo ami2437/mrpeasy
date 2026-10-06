@@ -1,8 +1,10 @@
+import re
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
+from app.services import filenames
 
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
@@ -34,8 +36,8 @@ def get_company_profile(db: Session) -> CompanyProfile:
 def _next_in_series(existing, prefix: str, width: int) -> str:
     """One past the highest number in use for prefix+digits. (Counting rows would hand out a
     code that already exists once any record has been deleted.)"""
-    n = max((int(c[len(prefix):]) for c in existing
-             if c and c.startswith(prefix) and c[len(prefix):].isdigit() and len(c) - len(prefix) == width), default=0)
+    pat = re.compile(re.escape(prefix) + r"(\d{%d})(?!\d)" % width)  # SH215741-M219-30D counts as 215741
+    n = max((int(m.group(1)) for c in existing if c and (m := pat.match(c))), default=0)
     return f"{prefix}{n + 1:0{width}d}"
 
 
@@ -49,6 +51,22 @@ def generate_code(db: Session, model, prefix: str) -> str:
         return _next_in_series([c for (c,) in codes] + [c for c in binned if c.startswith(series.prefix)], series.prefix, series.width)
     codes = db.query(model.code).filter(model.code.like(f"{prefix}-%")).all()
     return _next_in_series([c for (c,) in codes] + [c for c in binned if c.startswith(f"{prefix}-")], f"{prefix}-", 4)
+
+
+def _new_code(db: Session, model, record, code: str, what: str) -> str:
+    """A changed record # (shipment / invoice): letters, digits and - _ . only, not used by another record (or one in the
+    recycle bin)."""
+    code = (code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail=f"Enter the new {what} #")
+    if len(code) > 40 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", code):
+        raise HTTPException(status_code=400, detail=f"A {what} # can have letters, digits and - _ . only (no spaces), up to 40 characters")
+    if code == record.code:
+        return code
+    taken = db.query(model).filter(func.lower(model.code) == code.lower(), model.id != record.id).first()
+    if taken or code.lower() in (c.lower() for c in _binned_codes(db, model.__tablename__)):
+        raise HTTPException(status_code=400, detail=f"{code} is already used by another {what}")
+    return code
 
 
 def _binned_codes(db: Session, table: str) -> List[str]:
@@ -999,8 +1017,9 @@ class CustomerOrderService:
         if not requested:
             raise HTTPException(status_code=400, detail="Enter a quantity to book on at least one line")
 
+        job = filenames.clean(order.job_number or "").replace(" ", "-")
         shipment = Shipment(
-            code=generate_code(db, Shipment, "SH"),
+            code=generate_code(db, Shipment, "SH") + (f"-{job}" if job else ""),  # SH215771-M219-30B, as MRPeasy named them
             order_id=order.id,
             status="new",
             carrier=data.carrier,
@@ -1133,6 +1152,14 @@ class ShipmentService:
             raise HTTPException(status_code=400, detail="Cannot edit a cancelled shipment")
         for key, value in data.dict(exclude_unset=True).items():
             setattr(shipment, key, value)
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
+    def rename(db: Session, shipment_id: int, code: str) -> Shipment:
+        shipment = ShipmentService.get(db, shipment_id)
+        shipment.code = _new_code(db, Shipment, shipment, code, "shipment")
         db.commit()
         db.refresh(shipment)
         return shipment
@@ -1826,6 +1853,14 @@ class InvoiceService:
         db.commit()
         db.refresh(target)
         return target
+
+    @staticmethod
+    def rename(db: Session, invoice_id: int, code: str) -> Invoice:
+        invoice = InvoiceService.get(db, invoice_id)
+        invoice.code = _new_code(db, Invoice, invoice, code, "invoice")
+        db.commit()
+        db.refresh(invoice)
+        return invoice
 
     @staticmethod
     def update(db: Session, invoice_id: int, data, by: str = None) -> Invoice:

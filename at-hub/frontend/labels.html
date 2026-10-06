@@ -200,7 +200,7 @@
       const base = shipmentLabelBase(s);
       const o = byId(orders, s.order_id);
       printBoxLabels(s.boxes.map(b => ({ ...base, customer_id: o.customer_id, item_code: byId(items, b.item_id).code, item_title: byId(items, b.item_id).title,
-        qty: b.quantity_in_box, lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: o.ship_to_address || "" })), `${s.code}-Labels`);
+        qty: b.quantity_in_box, lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: o.ship_to_address || "" })), docFileName(s.code, o.po_number, "Labels"));
     }
 
     function fillAddressFromOrder(id) {

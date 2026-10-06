@@ -11,6 +11,7 @@ Invoices that go out are logged and a draft becomes sent, exactly as when sent f
 is logged on its shipments too."""
 import io
 import json
+from app.services import filenames
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
@@ -151,20 +152,20 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
         g = group_for(key_for(order, cust, f"shipment-{sh.id}"), order, cust)
         g["shipments"].append({"id": sh.id, "code": sh.code})
         if "packing_list" in kinds:
-            g["attachments"].append({"kind": "packing_list", "name": f"Packing-List-{sh.code}.pdf"})
+            g["attachments"].append({"kind": "packing_list", "sid": sh.id, "name": filenames.packing_list_name(db, sh)})
         if "labels" in kinds:
             if sh.boxes:
-                g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf", "detail": f"{len(sh.boxes)} labels"})
+                g["attachments"].append({"kind": "labels", "sid": sh.id, "name": filenames.labels_name(db, sh), "detail": f"{len(sh.boxes)} labels"})
             elif sh.status in ShipmentService.OPEN_STATUSES:
                 g["warnings"].append(f"{sh.code} isn't packed yet -- no labels")
             else:
-                g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf", "detail": "from current pack sizes"})
+                g["attachments"].append({"kind": "labels", "sid": sh.id, "name": filenames.labels_name(db, sh), "detail": "from current pack sizes"})
                 g["warnings"].append(f"{sh.code} has no saved packing -- its labels use today's pack sizes")
         if "invoice" in kinds:
             inv = _invoice_of(db, sh)
             if inv and inv.id not in [i["id"] for i in g["invoices"]]:
                 g["invoices"].append({"id": inv.id, "code": inv.code, "status": inv.status})
-                g["attachments"].append({"kind": "invoice", "name": f"{inv.code}.pdf"})
+                g["attachments"].append({"kind": "invoice", "iid": inv.id, "name": filenames.invoice_name(db, inv)})
             elif not inv:
                 g["warnings"].append(f"{sh.code} has no invoice yet")
         if "pod" in kinds:
@@ -181,13 +182,13 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
         cust = db.get(Customer, inv.customer_id)
         g = group_for(key_for(order, cust, f"invoice-{inv.id}") if group_by == "customer" else f"invoice-{inv.id}", order, cust)
         g["invoices"].append({"id": inv.id, "code": inv.code, "status": inv.status})
-        g["attachments"].append({"kind": "invoice", "name": f"{inv.code}.pdf"})
+        g["attachments"].append({"kind": "invoice", "iid": inv.id, "name": filenames.invoice_name(db, inv)})
         for sh in inv.shipments:
             g["shipments"].append({"id": sh.id, "code": sh.code})
             if "packing_list" in kinds:
-                g["attachments"].append({"kind": "packing_list", "name": f"Packing-List-{sh.code}.pdf"})
+                g["attachments"].append({"kind": "packing_list", "sid": sh.id, "name": filenames.packing_list_name(db, sh)})
             if "labels" in kinds:  # an invoiced shipment has left: saved boxes, else today's pack sizes
-                g["attachments"].append({"kind": "labels", "name": f"Labels-{sh.code}.pdf",
+                g["attachments"].append({"kind": "labels", "sid": sh.id, "name": filenames.labels_name(db, sh),
                                          "detail": f"{len(sh.boxes)} labels" if sh.boxes else "from current pack sizes"})
 
     out = []
@@ -219,6 +220,19 @@ def plan(db: Session, shipment_ids: List[int], invoice_ids: List[int], kinds: Li
     return out
 
 
+def single_name(db: Session, shipment_ids, invoice_ids, kinds) -> Optional[str]:
+    """One document of one record: its own file name (SH...-PO-Packing List.pdf); otherwise None."""
+    kinds = [k for k in kinds if k != "pod"]
+    if len(kinds) != 1 or len(shipment_ids or []) + len(invoice_ids or []) != 1:
+        return None
+    if shipment_ids and kinds[0] in ("packing_list", "labels"):
+        sh = ShipmentService.get(db, shipment_ids[0])
+        return (filenames.packing_list_name if kinds[0] == "packing_list" else filenames.labels_name)(db, sh)
+    if invoice_ids and kinds[0] == "invoice":
+        return filenames.invoice_name(db, InvoiceService.get(db, invoice_ids[0]))
+    return None
+
+
 def _files_for(db: Session, g: dict) -> List[tuple]:
     files, seen = [], set()
     for a in g["attachments"]:
@@ -226,15 +240,15 @@ def _files_for(db: Session, g: dict) -> List[tuple]:
             continue
         seen.add(a["name"])
         if a["kind"] == "packing_list":
-            sh = next(ShipmentService.get(db, s["id"]) for s in g["shipments"] if a["name"] == f"Packing-List-{s['code']}.pdf")
+            sh = ShipmentService.get(db, a["sid"])
             files.append((packing_list_pdf(db, sh, include_pallets=any(b.pallet_number for b in sh.boxes)), a["name"], "application/pdf"))
         elif a["kind"] == "labels":
-            sh = next(ShipmentService.get(db, s["id"]) for s in g["shipments"] if a["name"] == f"Labels-{s['code']}.pdf")
+            sh = ShipmentService.get(db, a["sid"])
             pdf = labels_pdf(db, sh)
             if pdf:
                 files.append((pdf, a["name"], "application/pdf"))
         elif a["kind"] == "invoice":
-            inv = next(InvoiceService.get(db, i["id"]) for i in g["invoices"] if a["name"] == f"{i['code']}.pdf")
+            inv = InvoiceService.get(db, a["iid"])
             files.append((invoice_pdf(db, inv), a["name"], "application/pdf"))
     if any(a["kind"] == "pod" for a in g["attachments"]):
         for s in g["shipments"]:

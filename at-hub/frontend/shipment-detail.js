@@ -1106,6 +1106,11 @@ function lotCodeForLine(orderLineId) {
   return codes.join(", ");
 }
 
+async function renameShipment(id) {
+  const sh = shipmentsById[id];
+  if (await renameRecord("shipment", sh.code, `/api/shipments/${id}/code`)) { await reloadList(); await showDetail(id); }
+}
+
 async function showDetail(id) {
   const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => []),
     packSuggest[id] ? null : loadPackSuggestions([id])]);
@@ -1124,7 +1129,8 @@ async function showDetail(id) {
   card.classList.toggle("ship-done", shipped);
 
   card.innerHTML = `
-    <h3>${shipment.code} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
+    <h3>${shipment.code}${AuthGuard.can("shipments.work") && shipment.status !== "cancelled" ? ` <button type="button" class="icon-btn" title="Change the shipment #"
+      onclick="renameShipment(${shipment.id})">${icon("pencil")}</button>` : ""} <span class="tag ${shipment.status}">${shipment.status}</span></h3>
     <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>${ord && ord.po_number
       ? ` · PO <a class="link" href="customer-orders.html?id=${shipment.order_id}">${escapeHtml(ord.po_number)}</a>` : ""}
       — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
@@ -1265,13 +1271,12 @@ async function printLabels(shipmentId) {
     return;
   }
   const ord = order(shipment.order_id);
-  const job = ord && ord.job_number ? `-${ord.job_number}` : "";
   printBoxLabels(shipment.boxes.map(b => ({
     customer: customerName(ord ? ord.customer_id : null), customer_id: ord ? ord.customer_id : null, shipment: shipment.code,
     order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
     item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
     lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord ? ord.ship_to_address || "" : "",
-  })), `${shipment.code}${job}-Labels`);
+  })), docFileName(shipment.code, ord ? ord.po_number : "", "Labels"));
 }
 
 function printPackingList(shipmentId) {

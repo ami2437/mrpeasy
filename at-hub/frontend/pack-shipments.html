@@ -531,7 +531,7 @@
           lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord.ship_to_address || "",
         }));
       });
-      printBoxLabels(labels, "Batch Labels");
+      printBoxLabels(labels, fresh.length === 1 ? docFileName(fresh[0].code, (order(fresh[0].order_id) || {}).po_number, "Labels") : "Labels");
     }
 
     async function printSelectedPackingLists() {
@@ -541,7 +541,7 @@
       const mode = await askOneOrEach("Packing lists", chosen.length);
       if (!mode) return;
       const path = `/api/shipments/packing-lists.pdf?ids=${chosen.map(s => s.id).join(",")}&${plQuery()}`;
-      if (mode === "each") return downloadZip(`${path}&split=true`, "Packing-Lists.zip");
+      if (mode === "each") return downloadZip(`${path}&split=true`, "Packing Lists.zip");
       openPdf(path);
     }
     // Several shipments' documents: all in one PDF, or a ZIP with one file per shipment? (one shipment: no question)

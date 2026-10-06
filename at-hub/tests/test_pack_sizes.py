@@ -78,7 +78,7 @@ def test_one_pdf_or_one_file_each_and_per_customer_emails(api, client, admin_hea
 
     r = client.get(f"/api/shipments/packing-lists.pdf?ids={ids}&split=true", headers=admin_headers)
     assert r.headers["content-type"] == "application/zip"
-    assert sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist()) == sorted([f"Packing-List-{s1['code']}.pdf", f"Packing-List-{s2['code']}.pdf"])
+    assert sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist()) == sorted([f"{s['code']}-{o['po_number']}-Packing List.pdf" for s, o in ((s1, o1), (s2, o2))])
     r = client.get(f"/api/shipments/packing-lists.pdf?ids={ids}", headers=admin_headers)
     assert len(PdfReader(io.BytesIO(r.content)).pages) >= 2
     r = client.get(f"/api/bulk/documents.pdf?shipment_ids={ids}&kinds=labels,packing_list&split=true", headers=admin_headers)
