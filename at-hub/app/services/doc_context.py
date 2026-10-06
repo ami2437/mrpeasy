@@ -17,9 +17,9 @@ from app.services.money import line_amount
 
 DOC_TYPES = {
     "invoice": "Invoice", "packing_list": "Packing list", "purchase_order": "Purchase order", "quote": "Quote",
-    "box_label": "Box label", "address_label": "Address label",
+    "box_label": "Box label", "address_label": "Address label", "pallet_label": "Shipment pallet label",
 }
-LABEL_TYPES = {"box_label", "address_label"}
+LABEL_TYPES = {"box_label", "address_label", "pallet_label"}
 
 
 # ---------- formatting ----------
@@ -98,6 +98,13 @@ FIELDS = {
                   ("label.ship_to", "Ship-to address"), ("label.footer", "Footer text")],
     "address_label": [("company.name", "Our company name"), ("label.from", "From address"), ("label.to", "Ship-to address"),
                       ("label.attn", "Attention"), ("label.ref", "Reference"), ("label.note", "Note")],
+    "pallet_label": [("company.name", "Our company name"), ("company.contact_line", "Our phone · email · website"),
+                     ("label.po", "Customer PO #"), ("label.job", "Job #"), ("label.customer", "Customer"), ("label.ship_to", "Ship-to address"),
+                     ("label.shipment", "Shipment #"), ("label.order", "Order #"), ("label.ship_date", "Ship date"), ("label.carrier", "Carrier"),
+                     ("label.pallet", "This label's pallet # (one label per pallet)"), ("label.pallet_of", "Pallet 3 of 5"),
+                     ("label.badge_caption", "Badge caption (Pallet / Shipment)"), ("label.badge", "Badge (3 of 5 / 5 pallets)"),
+                     ("label.pallets", "Number of pallets"), ("label.boxes", "Number of boxes"), ("label.weight", "Total weight"),
+                     ("label.sheet", "Sheet 1 of 2 (when the list runs over)")],
 }
 COLUMNS = {
     "invoice": [("line_no", "#"), ("item_code", "Item #"), ("description", "Description"), ("item_code_desc", "Item # + description"),
@@ -304,10 +311,60 @@ def _quote(db, q, opt):
     return ctx, rows
 
 
+def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True) -> list:
+    """A shipment's pallet labels: every pallet and the customer item #s on it, with PO # and job #. per_pallet: one
+    label per pallet with its own row highlighted ("PALLET 3 OF 5"); else one summary label. The item list follows
+    the packing list's rules (a nut rides on its bolt's pallet)."""
+    from app.services.nut_pairing import line_order, pallets_by_line
+    from app.services.clock import local
+    company_row, company = _company(db)
+    order = db.get(CustomerOrder, sh.order_id)
+    cust = db.get(Customer, order.customer_id) if order else None
+    items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in sh.lines} or {0})).all()}
+    codes = {i: it.code for i, it in items.items()}
+    eff = pallets_by_line(sh, codes)
+    ols = {l.order_line_id: l.order_line for l in sh.lines if l.order_line}
+    ordered_ids = [ol.id for ol in line_order(list(ols.values()), lambda ol: codes.get(ol.item_id, ""))]
+    on_pallet, boxes_on = {}, {}
+    for lid in ordered_ids:
+        for pn in eff.get(lid, []):
+            on_pallet.setdefault(pn, []).append(codes.get(ols[lid].item_id, ""))
+    for b in sh.boxes:
+        if b.pallet_number:
+            boxes_on[b.pallet_number] = boxes_on.get(b.pallet_number, 0) + 1
+    saved = {p.pallet_number: p for p in sh.pallets}
+    names = sorted(on_pallet, key=_natural)
+    rows = [{"pallet": pn, "items": ", ".join(dict.fromkeys(c for c in on_pallet[pn] if c)), "boxes": str(boxes_on.get(pn, "") or ""),
+             "weight": qty(saved[pn].weight) if pn in saved and saved[pn].weight else "",
+             "dimensions": (saved[pn].dimensions or "") if pn in saved else ""} for pn in names]
+    weight = sum(p.weight or 0 for p in sh.pallets)
+    base = {"po": (order.po_number or "") if order else "", "job": (order.job_number or "") if order else "",
+            "customer": cust.name if cust else "", "ship_to": addr((order.ship_to_address if order else None) or (cust.shipping_address if cust else None)),
+            "shipment": sh.code, "order": order.code if order else "", "ship_date": date(local(sh.ship_date)) if sh.ship_date else date(local(sh.created_at)),
+            "carrier": sh.carrier or "", "pallets": str(len(rows)), "boxes": str(len(sh.boxes)), "weight": f"{weight:,.0f} lbs" if weight else "",
+            "pallet": "", "pallet_of": "", "sheet": "", "continued": "",
+            "badge_caption": "Shipment", "badge": f"{len(rows)} pallet{'' if len(rows) == 1 else 's'}"}
+    common = {"company": company, "_logo": company_row.logo_data, "doc": {"title": "PALLET LABEL", "number": sh.code}}
+    if not per_pallet or not rows:
+        return [{**common, "label": base, "pallet_rows": rows}]
+    return [{**common, "label": {**base, "pallet": r["pallet"], "pallet_of": f"{i} of {len(rows)}", "badge_caption": "Pallet",
+                                 "badge": f"{r['pallet']} of {len(rows)}"},
+             "pallet_rows": [{**x, "_hi": x["pallet"] == r["pallet"]} for x in rows]} for i, r in enumerate(rows, 1)]
+
+
+SAMPLE_PALLETS = [("1", "15422, 15422-NUTS, 16642, 16713, 16718, 58268, 58268-NUTS", "9"), ("2", "15420, 15420-NUTS, 16716, 33797, 33806", "8"),
+                  ("3", "15437, 15437-NUTS, 15439, 15439-NUTS, 77183-HPC, 77183-HPC-NUTS", "11"), ("4", "15421, 15421-NUTS, 41575, 41575-NUT", "6"),
+                  ("5", "41574, 41574-NUTS", "3")]
+
+
 def label_context(db, doc_type: str, label: dict) -> dict:
     """A label's own data (as the label screens build it) -> context."""
     company_row, company = _company(db)
     l = {k: ("" if v is None else str(v)) for k, v in (label or {}).items()}
+    if doc_type == "pallet_label":
+        rows = [{"pallet": p, "items": i, "boxes": n, "weight": "", "dimensions": "", "_hi": p == l.get("pallet")} for p, i, n in SAMPLE_PALLETS]
+        return {"company": company, "label": l, "_logo": company_row.logo_data, "doc": {"title": "PALLET LABEL", "number": l.get("shipment", "")},
+                "pallet_rows": (label or {}).get("pallet_rows") or rows}
     if doc_type == "box_label":
         if l.get("qty"):
             l["qty"] = qty(l["qty"])
@@ -320,4 +377,8 @@ SAMPLE_LABEL = {"box_label": {"customer": "Hudson Products", "shipment": "SH2157
                               "item_code": "56014-HPC", "item_title": "BOLT_HH_7/8-9x3-1/4_A325_TYPE1_HDG", "qty": 225, "box": "3", "boxes": "10",
                               "lot": "L00512", "pallet": "PLT-1", "ship_to": "HUDSON PRODUCTS CORPORATION\n9660 GRUNWALD ROAD\nBEASLEY TEXAS 77417"},
                 "address_label": {"from": "American Traders LLC\n1217 Business 71\nColumbus, TX", "to": "HUDSON PRODUCTS CORPORATION\n9660 GRUNWALD ROAD\nBEASLEY TEXAS 77417",
-                                  "attn": "Receiving", "ref": "PO 4179869", "note": "Fragile"}}
+                                  "attn": "Receiving", "ref": "PO 4179869", "note": "Fragile"},
+                "pallet_label": {"po": "4156932", "job": "M219-30C", "customer": "Hudson Products", "shipment": "SH215741-M219-30C", "order": "C89117",
+                                 "ship_date": "Oct 06, 2026", "carrier": "Customer pickup", "pallet": "3", "pallet_of": "3 of 5", "pallets": "5", "boxes": "37",
+                                 "weight": "4,820 lbs", "sheet": "", "continued": "", "badge_caption": "Pallet", "badge": "3 of 5",
+                                 "ship_to": "HUDSON PRODUCTS CORPORATION\n9660 GRUNWALD ROAD\nBEASLEY TEXAS 77417"}}

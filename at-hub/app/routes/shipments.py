@@ -98,6 +98,34 @@ def packing_lists_export(fmt: str, ids: str, part: str = "lines", boxes: bool = 
     return _export(db, ships, fmt, part, boxes, pallets, lots, notes, name)
 
 
+def _pallet_labels(db, ships, per_pallet: bool, template_id=None):
+    """Shipment pallet labels (4 x 6): the customer's / general default design, else the built-in Classic."""
+    import json
+    from app.models import CustomerOrder, DocTemplate
+    from app.services import doc_context, template_engine, template_starters
+    from app.services.templates import default_for
+    out = b""
+    from app.services.bulk_docs import merge_pdfs
+    files = []
+    for sh in ships:
+        order = db.get(CustomerOrder, sh.order_id)
+        t = db.get(DocTemplate, template_id) if template_id else default_for(db, "pallet_label", order.customer_id if order else None)
+        spec = json.loads(t.spec) if t and t.doc_type == "pallet_label" else template_starters.classic_pallet_label()
+        ctxs = doc_context.pallet_label_contexts(db, sh, per_pallet=per_pallet)
+        files.append((template_engine.render_labels(spec, ctxs), filenames.doc_name(sh.code, order.po_number if order else None, "Pallet Labels"), "application/pdf"))
+    return merge_pdfs(files) if len(files) > 1 else files[0][0] if files else out
+
+
+@router.get("/pallet-labels.pdf")
+def pallet_labels_many(ids: str, per_pallet: bool = True, db: Session = Depends(get_db)):
+    """Pallet labels for several shipments in one PDF (?ids=3,7,9)."""
+    ships = [ShipmentService.get(db, int(x)) for x in ids.split(",") if x.strip().isdigit()]
+    if not ships:
+        raise HTTPException(status_code=400, detail="Pick at least one shipment")
+    name = filenames.doc_name(ships[0].code, None, "Pallet Labels") if len(ships) == 1 else "Pallet Labels.pdf"
+    return Response(_pallet_labels(db, ships, per_pallet), media_type="application/pdf", headers={"Content-Disposition": filenames.disposition(name)})
+
+
 @router.get("/pack-suggestions")
 def pack_suggestions(ids: str, db: Session = Depends(get_db)):
     """The pack size each line of these shipments pre-fills, and why: {shipment_id: {order_line_id: {size, source, label}}}."""
@@ -142,6 +170,19 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
     return Response(packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
                                      include_pallet_boxes=pallet_boxes), media_type="application/pdf",
                     headers={"Content-Disposition": filenames.disposition(filenames.packing_list_name(db, shipment))})
+
+
+@router.get("/{shipment_id}/pallet-labels.pdf")
+def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Shipment pallet labels: per_pallet=true -> one per pallet (its row highlighted, "Pallet 3 of 5");
+    false -> one summary label. Every label lists every pallet with its customer item #s, PO # and job #."""
+    shipment = ShipmentService.get(db, shipment_id)
+    if not any(b.pallet_number for b in shipment.boxes):
+        raise HTTPException(status_code=400, detail=f"{shipment.code} has no pallets yet -- set pallet #s when packing (Process Shipment)")
+    from app.models import CustomerOrder
+    order = db.get(CustomerOrder, shipment.order_id)
+    return Response(_pallet_labels(db, [shipment], per_pallet, template_id), media_type="application/pdf",
+                    headers={"Content-Disposition": filenames.disposition(filenames.doc_name(shipment.code, order.po_number if order else None, "Pallet Labels"))})
 
 
 @router.get("/{shipment_id}/packing-list.{fmt}")

@@ -259,6 +259,16 @@ function blockEl(b, scale, interactive, bandKey) {
         <span style="width:${lw}px;font-size:${(st.label_size || (st.size || 8.8) - 0.8) * PT * scale}px;color:${st.label_color || "#64748b"}">${escapeHtml(k.trim())}</span>
         <b style="font-weight:${st.plain ? 400 : 600};color:${st.color || "#1e293b"}">${val}</b></div>` : "";
     }).join("");
+  } else if (b.type === "table") {
+    const cols = (b.columns || []).filter(c => c.key && !c.hidden), rows = sample.context[b.source || "rows"] || [];
+    const fs = (st.size || 10.5) * PT * scale, hs = (st.header_size || 7) * PT * scale, pad = (st.pad || 3) * PT * scale, big = st.big_scale || 1.35;
+    el.innerHTML = `<table class="no-table-tools no-col-bands" style="width:100%;border-collapse:collapse;font-size:${fs}px;color:#0f172a">
+      <colgroup>${cols.map(c => `<col style="${parseFloat(c.w) ? `width:${c.w * PX * scale}px` : ""}">`).join("")}</colgroup>
+      <thead><tr style="background:${st.header_bg || "#e5e7eb"}">${cols.map(c => `<th style="padding:${pad}px;font-size:${hs}px;text-transform:uppercase;text-align:${c.align || "left"};border-bottom:${1.2 * PT * scale}px solid ${st.rule_color || "#0f172a"}">${escapeHtml(c.header || "")}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(r => `<tr style="${r._hi ? `background:${st.hi_bg || "#e5e7eb"};outline:${1.6 * PT * scale}px solid #000;outline-offset:-${PT * scale}px;font-weight:700;` : ""}">${cols.map(c =>
+        `<td style="padding:${pad}px;text-align:${c.align || "left"};border-bottom:0.5px solid ${st.grid || "#94a3b8"};${c.big ? `font-size:${fs * big}px;font-weight:700;` : ""}">${escapeHtml(String(r[c.key] ?? ""))}</td>`).join("")}</tr>`).join("")
+        || `<tr><td colspan="${cols.length}" style="padding:${pad}px;color:#94a3b8">(the shipment's pallets go here)</td></tr>`}</tbody></table>`;
+    el.style.overflow = "hidden";
   } else if (b.type === "image") {
     el.innerHTML = `<img src="${logoUrl}" alt="" style="object-position:${st.align === "right" ? "right" : st.align === "center" ? "center" : "left"} top">`;
   } else if (b.type === "barcode") {
@@ -481,7 +491,7 @@ function drawEditProps(el) {
   const b = blockOf();
   if (b) {
     const st = b.style || {};
-    const kind = { text: "Text", kv: "Label / value list", image: "Logo", barcode: "Barcode", qr: "QR code", rect: "Box", line: "Line" }[b.type];
+    const kind = { text: "Text", kv: "Label / value list", image: "Logo", barcode: "Barcode", qr: "QR code", rect: "Box", line: "Line", table: "Pallet table" }[b.type];
     el.innerHTML = `<div class="props-head"><h3>${kind}</h3><span class="muted small">${escapeHtml(bandsOf().find(x => x[0] === sel.band)?.[1] || "")}</span></div>
       ${b.type === "text" ? field("Text — {{fields}} fill in; a line whose fields are empty is left out", `<textarea id="p-text" rows="5" data-path="text" oninput="setProp(this)">${escapeHtml(b.text || "")}</textarea>${fieldPicker("text")}
           <div class="muted small">Tags: &lt;b&gt;bold&lt;/b&gt; &lt;i&gt;italic&lt;/i&gt; &lt;font size=14&gt;big&lt;/font&gt; · {{field|—}} shows — when empty</div>`, true) : ""}
@@ -491,6 +501,14 @@ function drawEditProps(el) {
              ${field("Value color", col("style.color", st.color))}${field("Label color", col("style.label_color", st.label_color))}</div>
              ${field("Show for an empty value (blank = leave the row out)", `<input type="text" value="${escapeHtml(st.empty || "")}" data-path="style.empty" oninput="setProp(this)" placeholder="e.g. —">`)}
              <div class="pchecks">${chk("style.plain", st.plain, "Values not bold")}</div>` : ""}
+      ${b.type === "table" ? `<p class="muted small" style="margin:0 0 6px;">One row per pallet. The text shrinks (down to the smallest size) to fit them all; more than that carries on to a second label ("Sheet 1 of 2").</p>
+          <div class="pgrid">${field("Text size", num("style.size", st.size || 10.5, 0.5, 5))}${field("Smallest size", num("style.min_size", st.min_size || 6, 0.5, 4))}
+             ${field("Header size", num("style.header_size", st.header_size || 7, 0.5, 4))}${field("Pallet # scale", num("style.big_scale", st.big_scale || 1.35, 0.05, 1))}
+             ${field("Header fill", col("style.header_bg", st.header_bg || "#e5e7eb"))}${field("Row lines", col("style.grid", st.grid || "#94a3b8"))}</div>
+          ${(b.columns || []).map((c, i) => `<div class="pgrid">${field(`Column: ${escapeHtml({ pallet: "pallet #", items: "items", boxes: "boxes", weight: "weight", dimensions: "dimensions" }[c.key] || c.key)}`,
+              `<input type="text" value="${escapeHtml(c.header || "")}" data-path="columns.${i}.header" oninput="setProp(this)">`)}
+              ${field("Width (in, 0 = rest)", num(`columns.${i}.w`, c.w || 0, 0.05, 0))}</div>
+              <div class="pchecks">${chk(`columns.${i}.hidden`, c.hidden, "Hide this column")}</div>`).join("")}` : ""}
       ${["barcode", "qr"].includes(b.type) ? field("Value", `<input type="text" id="p-value" value="${escapeHtml(b.value || "")}" data-path="value" oninput="setProp(this)">${fieldPicker("value")}`, true) : ""}
       <div class="pgrid">${field("X (in)", num("x", b.x))}${field("Y (in)", num("y", b.y))}${field("Width", num("w", b.w, 0.01, 0.02))}${field("Height", num("h", b.h, 0.01, 0.01))}</div>
       ${b.type === "text" ? `<div class="pgrid">${field("Size (pt)", num("style.size", st.size || 9, 0.5, 4))}${field("Color", col("style.color", st.color))}

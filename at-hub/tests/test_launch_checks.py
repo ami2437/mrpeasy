@@ -166,3 +166,39 @@ def test_packing_list_as_excel_and_csv(make, api, client, admin_headers):
     r = client.get(f"/api/shipments/packing-lists.xlsx?ids={sh['id']},{sh['id']}", headers=admin_headers)
     assert load_workbook(io.BytesIO(r.content)).sheetnames[:2] == ["Lines", "Shipments"]
     assert client.get(f"/api/shipments/{sh['id']}/packing-list.doc", headers=admin_headers).status_code == 404
+
+
+def test_shipment_pallet_labels(make, api, client, admin_headers):
+    import pypdfium2 as pdfium
+    from app.services import doc_context
+    from app.config.database import SessionLocal
+    from app.models import Shipment
+    bolt = make.item(code=make.item()["code"] + "B")
+    nut = make.item(code=bolt["code"] + "-NUT", group="Nut")
+    washer = make.item()
+    for it in (bolt, nut, washer):
+        make.stock(it, 100)
+    o = make.order(lines=[(bolt, 40, 1), (nut, 40, 1), (washer, 20, 1)], po_number="4156932", job_number="M219-30C")
+    sh = make.ship(o)
+    bl, nl, wl = [l["id"] for l in o["lines"]]
+    api.put(f"/api/shipments/{sh['id']}/boxes", json={"boxes": [
+        {"order_line_id": bl, "item_id": bolt["id"], "box_number": 1, "quantity_in_box": 40, "pallet_number": "1"},
+        {"order_line_id": nl, "item_id": nut["id"], "box_number": 1, "quantity_in_box": 40},                     # rides on its bolt's pallet
+        {"order_line_id": wl, "item_id": washer["id"], "box_number": 1, "quantity_in_box": 20, "pallet_number": "2"}]})
+    db = SessionLocal()
+    ctxs = doc_context.pallet_label_contexts(db, db.get(Shipment, sh["id"]))
+    db.close()
+    assert [c["label"]["badge"] for c in ctxs] == ["1 of 2", "2 of 2"] and ctxs[0]["label"]["po"] == "4156932"
+    assert ctxs[0]["pallet_rows"][0]["items"] == f"{bolt['code']}, {nut['code']}" and ctxs[0]["pallet_rows"][0]["_hi"]
+    r = client.get(f"/api/shipments/{sh['id']}/pallet-labels.pdf", headers=admin_headers)
+    assert r.status_code == 200 and len(pdfium.PdfDocument(r.content)) == 2               # one per pallet
+    r = client.get(f"/api/shipments/{sh['id']}/pallet-labels.pdf?per_pallet=false", headers=admin_headers)
+    assert len(pdfium.PdfDocument(r.content)) == 1
+
+
+def test_pallet_table_carries_on_to_a_second_label():
+    import pypdfium2 as pdfium
+    from app.services import template_engine, template_starters
+    rows = [{"pallet": str(i), "items": "15422, 15422-NUTS, 16642, 16713, 16718, 58268, 58268-NUTS, 77183-HPC, 77183-HPC-NUTS", "boxes": "9"} for i in range(1, 16)]
+    pdf = template_engine.render_labels(template_starters.classic_pallet_label(), [{"label": {"po": "1"}, "pallet_rows": rows}])
+    assert len(pdfium.PdfDocument(pdf)) >= 2

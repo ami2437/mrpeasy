@@ -256,6 +256,7 @@
     function drawStageActions() {
       const today = todayISO();
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
+        <button class="secondary" onclick="printSelectedPalletLabels()" title="4x6 shipment pallet labels for every selected shipment">Pallet Labels</button>
         <button class="secondary" onclick="printSelectedPackingLists()" title="Every selected packing list -- one PDF, or one file each">Packing Lists</button>`
         + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;
       const process = `<button class="next-step" onclick="openBulkProcess()" title="Pick, pack and ship the ticked shipments together -- same steps as one shipment">${icon("package")} Process Selected</button>`;
@@ -502,6 +503,13 @@
       const chosen = selectedShipments().filter(s => s.status === "delivered");
       if (!chosen.length) { showError("Tick the delivered shipments to bill."); return; }
       offerBilling(chosen);
+    }
+
+    async function printSelectedPalletLabels() {
+      showError("");
+      const chosen = selectedShipments().filter(s => (s.boxes || []).some(b => b.pallet_number));
+      if (!chosen.length) { showError("Tick shipments that have pallets (set pallet #s when packing)."); return; }
+      printPalletLabels(null, chosen.map(s => s.id).join(","));
     }
 
     async function printSelectedLabels() {

@@ -17,8 +17,8 @@ from app.services.templates import default_for
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 admin = [Depends(require_perm("templates"))]
-CUSTOMER_DOCS = {"invoice", "packing_list", "quote", "box_label"}
-RECORD_MODEL = {"invoice": Invoice, "packing_list": Shipment, "purchase_order": PurchaseOrder, "quote": Quote}
+CUSTOMER_DOCS = {"invoice", "packing_list", "quote", "box_label", "pallet_label"}
+RECORD_MODEL = {"invoice": Invoice, "packing_list": Shipment, "purchase_order": PurchaseOrder, "quote": Quote, "pallet_label": Shipment}
 
 
 def _out(t: DocTemplate, with_spec=True):
@@ -156,7 +156,7 @@ def records(doc_type: str, db: Session = Depends(get_db)):
     for r in rows:
         who = ""
         cid = getattr(r, "customer_id", None)
-        if doc_type == "packing_list":
+        if doc_type in ("packing_list", "pallet_label"):
             o = db.get(CustomerOrder, r.order_id)
             cid = o.customer_id if o else None
         if cid:
@@ -167,6 +167,11 @@ def records(doc_type: str, db: Session = Depends(get_db)):
 
 
 def _context(db, doc_type, record_id):
+    if doc_type == "pallet_label":  # a real shipment's pallets (the designer's record picker), else the sample
+        sh = db.get(Shipment, record_id) if record_id else None
+        if sh:
+            ctxs = doc_context.pallet_label_contexts(db, sh)
+            return ctxs[min(len(ctxs) - 1, 0)], []
     if doc_type in doc_context.LABEL_TYPES:
         return doc_context.label_context(db, doc_type, doc_context.SAMPLE_LABEL[doc_type]), []
     model = RECORD_MODEL[doc_type]

@@ -3,7 +3,7 @@ import copy
 from app.services import template_starters
 from app.services.print_safe import make_safe, luminance, DARK, THIN, _inside
 
-DOC_TYPES = ("invoice", "quote", "purchase_order", "packing_list", "box_label", "address_label")
+DOC_TYPES = ("invoice", "quote", "purchase_order", "packing_list", "box_label", "address_label", "pallet_label")
 
 
 def _dark_text_boxes(spec):

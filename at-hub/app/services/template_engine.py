@@ -267,6 +267,8 @@ def draw_block(c, b, ctx, ox, oy):
             kp.drawOn(c, ix, yy - kh)
             vp.drawOn(c, ix + lw, yy - vh)
             yy -= max(step, vh + size * 0.4)
+    elif t == "table":
+        _draw_table_block(c, b, st, ctx, ix, iy, iw, ih)
     elif t == "image":
         data = ctx.get("_logo") if b.get("src", "logo") == "logo" else None
         if not data or "," not in data:
@@ -309,6 +311,96 @@ def draw_block(c, b, ctx, ox, oy):
         d = Drawing(size, size, transform=[size / (bx[2] - bx[0]), 0, 0, size / (bx[3] - bx[1]), 0, 0])
         d.add(wdg)
         renderPDF.draw(d, c, ix, iy + ih - size)
+
+
+def _table_layout(b, st, rows, iw, size):
+    """Column widths and wrapped cells at a font size -> (widths, header, [(row, cells, height)])."""
+    cols = [col for col in (b.get("columns") or []) if col.get("key") and not col.get("hidden")]
+    fixed = sum(float(col.get("w") or 0) * inch for col in cols)
+    flex = [col for col in cols if not float(col.get("w") or 0)]
+    widths = [float(col.get("w") or 0) * inch or max(20, (iw - fixed) / max(1, len(flex))) for col in cols]
+    pad = float(st.get("pad", 4))
+    hsize = float(st.get("header_size", max(6, size - 2)))
+    hst = ParagraphStyle("th", fontName=FONT_BOLD, fontSize=hsize, leading=hsize * 1.2,
+                         textColor=color(st.get("header_color"), colors.HexColor("#0f172a")))
+    header = []
+    for col, w in zip(cols, widths):
+        para = Paragraph(escape(str(col.get("header", ""))).upper() if st.get("header_upper", True) else escape(str(col.get("header", ""))),
+                         ParagraphStyle("h", parent=hst, alignment=ALIGN.get(col.get("align", "left"), TA_LEFT)))
+        para.wrap(w - 2 * pad, 1000)
+        header.append(para)
+    head_h = max([p.height for p in header] + [hsize]) + 2 * pad
+    laid = []
+    for r in rows:
+        cells = []
+        for col, w in zip(cols, widths):
+            big = col.get("big")
+            fs = size * (float(st.get("big_scale", 1.35)) if big else 1)
+            cst = ParagraphStyle("td", fontName=FONT_BOLD if (big or r.get("_hi")) else FONT, fontSize=fs, leading=fs * 1.12,
+                                 textColor=color(st.get("color"), colors.HexColor("#0f172a")), alignment=ALIGN.get(col.get("align", "left"), TA_LEFT))
+            para = Paragraph(escape(str(r.get(col["key"], "") or "")).replace("\n", "<br/>"), cst)
+            para.wrap(w - 2 * pad, 10000)
+            cells.append(para)
+        laid.append((r, cells, max([p.height for p in cells] + [size]) + 2 * pad))
+    return cols, widths, header, head_h, laid, pad
+
+
+def _draw_table_block(c, b, st, ctx, ix, iy, iw, ih):
+    """Rows from ctx[b.source]; the font shrinks (down to style.min_size) until every row fits. Rows that still don't fit
+    are left in ctx["_overflow"] for the next label (render_labels prints a continuation label)."""
+    rows = list(ctx.get(b.get("source") or "rows") or [])
+    size, min_size = float(st.get("size", 11)), float(st.get("min_size", 7))
+    while True:
+        cols, widths, header, head_h, laid, pad = _table_layout(b, st, rows, iw, size)
+        if head_h + sum(h for _, _, h in laid) <= ih + 0.5 or size <= min_size:
+            break
+        size -= 0.5
+    rule = color(st.get("rule_color"), colors.HexColor("#334155"))
+    grid = color(st.get("grid"), colors.HexColor("#94a3b8"))
+    top = iy + ih
+    c.saveState()
+    c.setFillColor(color(st.get("header_bg"), colors.HexColor("#e5e7eb")))
+    c.rect(ix, top - head_h, iw, head_h, stroke=0, fill=1)
+    x = ix
+    for para, w in zip(header, widths):
+        para.drawOn(c, x + pad, top - pad - para.height)
+        x += w
+    c.setStrokeColor(rule)
+    c.setLineWidth(float(st.get("header_rule_w", 1.2)))
+    c.line(ix, top - head_h, ix + iw, top - head_h)
+    y = top - head_h
+    drawn = 0
+    for r, cells, h in laid:
+        if y - h < iy - 0.5:
+            break
+        if r.get("_hi"):  # this label's own pallet: a light band and a heavy outline
+            c.setFillColor(color(st.get("hi_bg"), colors.HexColor("#e5e7eb")))
+            c.rect(ix, y - h, iw, h, stroke=0, fill=1)
+            c.setStrokeColor(colors.black)
+            c.setLineWidth(1.6)
+            c.rect(ix + 0.8, y - h + 0.8, iw - 1.6, h - 1.6, stroke=1, fill=0)
+        x = ix
+        for para, w in zip(cells, widths):
+            para.drawOn(c, x + pad, y - pad - para.height)
+            x += w
+        y -= h
+        c.setStrokeColor(grid)
+        c.setLineWidth(0.6)
+        c.line(ix, y, ix + iw, y)
+        drawn += 1
+    x = ix
+    for w in widths[:-1]:  # column rules
+        x += w
+        c.setStrokeColor(grid)
+        c.setLineWidth(0.6)
+        c.line(x, top - head_h, x, y)
+    if not rows:
+        c.setFillColor(colors.HexColor("#64748b"))
+        c.setFont(FONT, 9)
+        c.drawString(ix + pad, top - head_h - 14, st.get("empty") or "Nothing to list.")
+    c.restoreState()
+    ctx["_overflow"] = rows[drawn:] if rows else []
+    ctx["_overflow_source"] = b.get("source") or "rows"
 
 
 def draw_band(c, band, ctx, ox, oy):
@@ -490,10 +582,31 @@ def render_labels(spec, contexts) -> bytes:
     use_family(spec.get("font"))
     page = spec.get("page") or {}
     pw, ph, m = float(page.get("w", 6)) * inch, float(page.get("h", 4)) * inch, float(page.get("margin", 0.15)) * inch
+    band = spec.get("header") or {}
+    pages = []
+    for ctx in contexts or [{}]:
+        # A table that doesn't fit carries on: measure on a scratch canvas, then number the sheets ("1 of 2").
+        sheets, cur = [], copy.copy(ctx)
+        for _ in range(50):
+            scratch = rl_canvas.Canvas(io.BytesIO(), pagesize=(pw, ph))
+            draw_band(scratch, band, cur, m, ph - m)
+            sheets.append(cur)
+            rest = cur.pop("_overflow", None)
+            if not rest:
+                break
+            nxt = copy.copy(ctx)
+            nxt[cur.pop("_overflow_source")] = rest
+            cur = nxt
+        for i, sh in enumerate(sheets, 1):
+            sh = copy.copy(sh)
+            if isinstance(sh.get("label"), dict):
+                sh["label"] = {**sh["label"], "sheet": f"Sheet {i} of {len(sheets)}" if len(sheets) > 1 else "",
+                               "continued": "continued" if i > 1 else ""}
+            pages.append(sh)
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=(pw, ph))
-    for ctx in contexts or [{}]:
-        draw_band(c, spec.get("header") or {}, ctx, m, ph - m)
+    for ctx in pages:
+        draw_band(c, band, ctx, m, ph - m)
         c.showPage()
     c.save()
     return buf.getvalue()

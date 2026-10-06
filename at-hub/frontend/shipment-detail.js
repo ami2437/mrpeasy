@@ -126,6 +126,7 @@ function packingReadOnlyHtml(sh) {
       <tbody>${pallets}</tbody></table>` : ""}
     ${n ? `<div style="margin-top:12px;">
       <button class="secondary" onclick="printLabels(${sh.id})">Print Labels</button>
+      ${used.length ? `<button class="secondary" onclick="printPalletLabels(${sh.id})" title="4x6 shipment pallet labels: PO #, job # and every pallet with its customer item #s" data-icon="layers">Pallet Labels</button>` : ""}
       <button class="secondary" onclick="location.href='labels.html?shipment_id=${sh.id}'" title="Edit a label before printing, print-only">Custom Label</button>
       <button class="secondary" onclick="printPackingList(${sh.id})">Packing List PDF</button>
       <button class="secondary" onclick="exportPackingList(${sh.id}, 'xlsx')" title="The packing list as an Excel workbook: header, lines, boxes and pallets">Excel</button>
@@ -1280,6 +1281,17 @@ async function printLabels(shipmentId) {
     item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
     lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord ? ord.ship_to_address || "" : "",
   })), docFileName(shipment.code, ord ? ord.po_number : "", "Labels"));
+}
+
+// Shipment pallet labels (4x6): one per pallet (its row highlighted) or one summary label.
+async function printPalletLabels(shipmentId, ids = null) {
+  const { value } = await askDialog({ title: "Shipment pallet labels",
+    body: `<p>Every label lists all the pallets with their customer item #s, PO # and job #.</p>`,
+    buttons: [{ label: "One Per Pallet", value: "each", cls: "confirm-btn" }, { label: "One Summary Label", value: "one", cls: "secondary" },
+              { label: "Cancel", value: null, cls: "secondary" }] });
+  if (!value) return;
+  const q = `per_pallet=${value === "each"}`;
+  openPdf(ids ? `/api/shipments/pallet-labels.pdf?ids=${ids}&${q}` : `/api/shipments/${shipmentId}/pallet-labels.pdf?${q}`);
 }
 
 function packingListQuery() {

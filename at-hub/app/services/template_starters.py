@@ -264,6 +264,10 @@ def po_box_label():
 def blank_label(doc_type):
     if doc_type == "address_label":
         return {"name": "Blank", "page": {"w": 6, "h": 4, "margin": 0.15}, "header": {"h": LH, "blocks": [T(0.2, 0.2, 5.3, 0.4, "{{label.to}}", size=14)]}}
+    if doc_type == "pallet_label":
+        return {"name": "Blank", "page": {"w": 6, "h": 4, "margin": 0.15},
+                "header": {"h": LH, "blocks": [B("rect", 0, 0, LW, LH, border=2, border_color="#000000"),
+                                               T(0.2, 0.15, 5.3, 0.5, "PO # {{label.po}}", size=22, bold=True)] + _pallet_table(0.8, 2.75)}}
     return {"name": "Blank", "page": {"w": 6, "h": 4, "margin": 0.15},
             "header": {"h": LH, "blocks": [B("rect", 0, 0, LW, LH, border=2, border_color="#000000"), T(0.2, 0.2, 5.3, 0.5, "{{label.item_code}}", size=20, bold=True)]}}
 
@@ -815,11 +819,64 @@ def portal_invoice():
             "summary": {"h": 0.72, "blocks": summary}}
 
 
+# ---------- shipment pallet labels (4 x 6): PO # and job # big, then every pallet and the customer item #s on it ----------
+PALLET_COLS = [{"key": "pallet", "header": "Pallet", "w": 0.72, "align": "center", "big": True},
+               {"key": "items", "header": "Customer item #", "w": 0},
+               {"key": "boxes", "header": "Boxes", "w": 0.6, "align": "center"}]
+
+
+def _pallet_table(y, h, size=10.5):
+    tb = B("table", 0.1, y, LW - 0.2, h, size=size, min_size=6, header_size=7, header_bg="#e5e7eb", pad=3, grid="#94a3b8", rule_color="#0f172a")
+    tb["source"], tb["columns"] = "pallet_rows", copy.deepcopy(PALLET_COLS)
+    return g("Pallet table", tb)
+
+
+def _pallet_footer(y):
+    return (g("Company", T(0.12, y, 2.9, 0.18, "{{company.name}} · shipped {{label.ship_date}}", size=7, bold=True, color=MUTED))
+            + g("Totals", T(2.9, y, 2.68, 0.18, "{{label.sheet}}   {{label.pallets}} pallets · {{label.boxes}} boxes · {{label.weight}}", size=7.5, bold=True,
+                            color=INK, align="right")))
+
+
+def classic_pallet_label():
+    blocks = ([B("rect", 0, 0, LW, LH, border=2, border_color="#000000")]
+              + g("Customer PO #", [T(0.14, 0.1, 3.3, 0.15, "Customer PO #", size=7, bold=True, color=MUTED, upper=True, spacing=0.6),
+                                    T(0.14, 0.24, 3.38, 0.62, "{{label.po}}", size=34, bold=True, color=INK, valign="middle")])
+              + [B("line", 3.6, 0.0, 0.01, 0.95, border=1.5, color="#000000")]
+              + g("Job #", [T(3.74, 0.1, 1.85, 0.15, "Job #", size=7, bold=True, color=MUTED, upper=True, spacing=0.6),
+                            T(3.74, 0.27, 1.88, 0.58, "{{label.job}}", size=22, bold=True, color=INK, valign="middle")])
+              + [B("line", 0, 0.95, LW, 0.02, border=2, color="#000000")]
+              + g("Customer", [T(0.14, 1.0, 2.75, 0.19, "{{label.customer}}", size=10.5, bold=True, color=INK),
+                               T(0.14, 1.17, 2.75, 0.255, "{{label.ship_to}}", size=6, color=TEXT, lh=1.05)])
+              + g("Shipment", [T(2.95, 1.0, 1.45, 0.14, "Shipment", size=6.5, bold=True, color=MUTED, upper=True),
+                               T(2.95, 1.14, 1.45, 0.24, "{{label.shipment}}", size=9, bold=True, color=INK)])
+              + g("Pallet badge", [B("rect", 4.45, 0.99, 1.15, 0.4, border=1.6, border_color="#000000", radius=5),
+                                   T(4.45, 1.02, 1.15, 0.13, "{{label.badge_caption}}", size=6.5, bold=True, color=INK, align="center", upper=True, spacing=0.8),
+                                   T(4.45, 1.14, 1.15, 0.24, "{{label.badge}}", size=13, bold=True, color=INK, align="center", upper=True)])
+              + [B("line", 0, 1.43, LW, 0.01, border=1, color="#000000")]
+              + _pallet_table(1.5, 1.94) + _pallet_footer(3.47))
+    return {"name": "Classic pallet label", "page": {"w": 6, "h": 4, "margin": 0.15}, "header": {"h": LH, "blocks": blocks}}
+
+
+def barcode_pallet_label():
+    blocks = ([B("rect", 0, 0, LW, LH, border=2, border_color="#000000")]
+              + g("Customer PO #", [T(0.14, 0.08, 2.6, 0.15, "Customer PO #", size=7, bold=True, color=MUTED, upper=True, spacing=0.6),
+                                    T(0.14, 0.22, 3.2, 0.66, "{{label.po}}", size=40, bold=True, color=INK, valign="middle")])
+              + g("PO barcode", B("barcode", 3.45, 0.12, 2.15, 0.62, value="{{label.po}}", show_text=False, align="right"))
+              + g("Job #", T(3.45, 0.74, 2.15, 0.2, "JOB # {{label.job}}", size=11, bold=True, color=INK, align="right"))
+              + [B("line", 0, 0.98, LW, 0.02, border=2, color="#000000")]
+              + g("Customer", T(0.14, 1.04, 3.3, 0.22, "{{label.customer}} · {{label.shipment}}", size=9.5, bold=True, color=INK))
+              + g("Pallet badge", T(3.5, 1.04, 2.08, 0.22, "{{label.badge_caption}} {{label.badge}}", size=11, bold=True, color=INK, align="right", upper=True))
+              + _pallet_table(1.32, 2.12, size=11) + _pallet_footer(3.47))
+    return {"name": "PO + barcode", "page": {"w": 6, "h": 4, "margin": 0.15}, "header": {"h": LH, "blocks": blocks}}
+
+
 def starters(doc_type):
     """[(key, spec)] -- fresh copies every call."""
     if doc_type == "box_label":
         out = [("classic", classic_box_label()), ("big_po", po_box_label()), ("big_item", big_item_box_label()), ("qr_lot", qr_box_label()),
                ("blank", blank_label(doc_type))]
+    elif doc_type == "pallet_label":
+        out = [("classic", classic_pallet_label()), ("barcode", barcode_pallet_label()), ("blank", blank_label(doc_type))]
     elif doc_type == "address_label":
         out = [("classic", classic_address_label()), ("big_to", big_address_label()), ("barcode", barcode_address_label()), ("blank", blank_label(doc_type))]
     else:
