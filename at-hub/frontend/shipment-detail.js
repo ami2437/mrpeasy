@@ -128,6 +128,8 @@ function packingReadOnlyHtml(sh) {
       <button class="secondary" onclick="printLabels(${sh.id})">Print Labels</button>
       <button class="secondary" onclick="location.href='labels.html?shipment_id=${sh.id}'" title="Edit a label before printing, print-only">Custom Label</button>
       <button class="secondary" onclick="printPackingList(${sh.id})">Packing List PDF</button>
+      <button class="secondary" onclick="exportPackingList(${sh.id}, 'xlsx')" title="The packing list as an Excel workbook: header, lines, boxes and pallets">Excel</button>
+      <button class="secondary" onclick="exportPackingList(${sh.id}, 'csv')" title="The packing list lines as a CSV file (opens in Excel, imports anywhere)">CSV</button>
       <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
       <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
       <label class="inline-check"><input type="checkbox" id="pl-pallets" ${used.length ? "checked" : ""}> Pallet info</label>
@@ -1280,13 +1282,26 @@ async function printLabels(shipmentId) {
   })), docFileName(shipment.code, ord ? ord.po_number : "", "Labels"));
 }
 
-function printPackingList(shipmentId) {
+function packingListQuery() {
   const boxes = document.getElementById("pl-boxes")?.checked ?? true;
   const pallets = document.getElementById("pl-pallets")?.checked ?? false;
   const lots = document.getElementById("pl-lots")?.checked ?? false;
   const notes = document.getElementById("pl-notes")?.checked ?? true;
   const palletBoxes = document.getElementById("pl-pallet-boxes")?.checked ?? false;
-  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}&pallet_boxes=${palletBoxes}`);
+  return `boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}&pallet_boxes=${palletBoxes}`;
+}
+
+function printPackingList(shipmentId) {
+  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?${packingListQuery()}`);
+}
+
+// Excel / CSV: the same content as the PDF, with the same ticks (box details, pallet info, lot #, line notes).
+async function exportPackingList(shipmentId, fmt) {
+  const sh = shipments.find(s => s.id === shipmentId) || {};
+  const ord = (typeof orders !== "undefined" ? orders : []).find(o => o.id === sh.order_id) || {};
+  const name = docFileName(sh.code || "Shipment", ord.po_number || "", "Packing List").replace(/\.pdf$/i, "") + "." + fmt;
+  try { await downloadFile(`/api/shipments/${shipmentId}/packing-list.${fmt}?${packingListQuery()}`, name); }
+  catch (e) { toast(e.message); }
 }
 
 async function createInvoice(shipmentId) {

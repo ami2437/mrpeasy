@@ -142,3 +142,27 @@ def test_login_rate_limit(client):
     for _ in range(10):
         assert client.post("/api/auth/login", json={"username": "nobody-here", "password": "wrong"}).status_code == 401
     assert client.post("/api/auth/login", json={"username": "nobody-here", "password": "wrong"}).status_code == 429
+
+
+def test_packing_list_as_excel_and_csv(make, api, client, admin_headers):
+    import csv, io
+    from openpyxl import load_workbook
+    a, b = make.item(), make.item()
+    make.stock(a, 50)
+    make.stock(b, 50)
+    o = make.order(lines=[(a, 20, 1), (b, 10, 1)], po_number="PO-XL-1")
+    sh = make.ship(o)
+    r = client.get(f"/api/shipments/{sh['id']}/packing-list.xlsx?pallets=true", headers=admin_headers)
+    assert r.status_code == 200 and r.headers["content-disposition"].endswith(".xlsx")
+    wb = load_workbook(io.BytesIO(r.content))
+    assert wb.sheetnames == ["Packing List", "Boxes", "Pallets"]
+    rows = [row for row in wb["Packing List"].iter_rows(values_only=True)]
+    head = next(i for i, row in enumerate(rows) if row[0] == "Line")
+    shipped = {row[1]: row[rows[head].index("Qty shipped")] for row in rows[head + 1:] if row[0]}
+    assert shipped == {a["code"]: 20, b["code"]: 10}                      # real numbers, not "20" text
+    r = client.get(f"/api/shipments/{sh['id']}/packing-list.csv", headers=admin_headers)
+    lines = list(csv.DictReader(io.StringIO(r.content.decode("utf-8-sig"))))
+    assert [(l["Part #"], l["Qty shipped"], l["Customer PO #"]) for l in lines] == [(a["code"], "20", "PO-XL-1"), (b["code"], "10", "PO-XL-1")]
+    r = client.get(f"/api/shipments/packing-lists.xlsx?ids={sh['id']},{sh['id']}", headers=admin_headers)
+    assert load_workbook(io.BytesIO(r.content)).sheetnames[:2] == ["Lines", "Shipments"]
+    assert client.get(f"/api/shipments/{sh['id']}/packing-list.doc", headers=admin_headers).status_code == 404

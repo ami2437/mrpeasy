@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -71,6 +71,33 @@ def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: boo
                     headers={"Content-Disposition": filenames.disposition(files[0][1] if len(files) == 1 else "Packing Lists.pdf")})
 
 
+def _export(db, shipments, fmt: str, part: str, boxes: bool, pallets: bool, lots: bool, notes: bool, name: str):
+    """Packing lists as Excel / CSV (app/services/packing_export.py)."""
+    from app.services import packing_export
+    if not shipments:
+        raise HTTPException(status_code=400, detail="Pick at least one shipment")
+    opts = {"boxes": boxes, "pallets": pallets, "lots": lots, "notes": notes}
+    docs = packing_export.collect(db, shipments, opts)
+    base = name[:-4] if name.endswith(".pdf") else name
+    if fmt == "xlsx":
+        return Response(packing_export.to_xlsx(docs, opts), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": filenames.disposition(f"{base}.xlsx", inline=False)})
+    suffix = {"boxes": " Boxes", "pallets": " Pallets"}.get(part, "")
+    return Response(packing_export.to_csv(docs, part), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": filenames.disposition(f"{base}{suffix}.csv", inline=False)})
+
+
+@router.get("/packing-lists.{fmt}")
+def packing_lists_export(fmt: str, ids: str, part: str = "lines", boxes: bool = True, pallets: bool = False, lots: bool = False,
+                         notes: bool = True, db: Session = Depends(get_db)):
+    """Several packing lists as one workbook (fmt=xlsx: Lines / Shipments / Boxes / Pallets sheets) or one CSV (part=lines|boxes|pallets)."""
+    if fmt not in ("xlsx", "csv"):
+        raise HTTPException(status_code=404, detail="Packing lists come as .pdf, .xlsx or .csv")
+    ships = [ShipmentService.get(db, int(x)) for x in ids.split(",") if x.strip().isdigit()]
+    name = filenames.packing_list_name(db, ships[0]) if len(ships) == 1 else "Packing Lists"
+    return _export(db, ships, fmt, part, boxes, pallets, lots, notes, name)
+
+
 @router.get("/pack-suggestions")
 def pack_suggestions(ids: str, db: Session = Depends(get_db)):
     """The pack size each line of these shipments pre-fills, and why: {shipment_id: {order_line_id: {size, source, label}}}."""
@@ -115,6 +142,16 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
     return Response(packing_list_pdf(db, shipment, include_boxes=boxes, include_pallets=pallets, include_lots=lots, show_notes=notes,
                                      include_pallet_boxes=pallet_boxes), media_type="application/pdf",
                     headers={"Content-Disposition": filenames.disposition(filenames.packing_list_name(db, shipment))})
+
+
+@router.get("/{shipment_id}/packing-list.{fmt}")
+def packing_list_export(shipment_id: int, fmt: str, part: str = "lines", boxes: bool = True, pallets: bool = False, lots: bool = False,
+                        notes: bool = True, db: Session = Depends(get_db)):
+    """One packing list as Excel (.xlsx) or CSV (part=lines|boxes|pallets)."""
+    if fmt not in ("xlsx", "csv"):
+        raise HTTPException(status_code=404, detail="Packing lists come as .pdf, .xlsx or .csv")
+    shipment = ShipmentService.get(db, shipment_id)
+    return _export(db, [shipment], fmt, part, boxes, pallets, lots, notes, filenames.packing_list_name(db, shipment))
 
 
 class RenameIn(BaseModel):

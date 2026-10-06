@@ -538,11 +538,18 @@
       showError("");
       const chosen = selectedShipments();
       if (!chosen.length) { showError("Tick at least one shipment."); return; }
-      const mode = await askOneOrEach("Packing lists", chosen.length);
+      const n = chosen.length, ids = chosen.map(s => s.id).join(",");
+      const { value: mode } = await askDialog({ title: `Packing lists for ${n} shipment${n === 1 ? "" : "s"}`,
+        body: `<p>Which format? Excel and CSV have the same lines as the PDF, with the shipment and PO # on every row${n > 1 ? " (one workbook / one file for all of them)" : ""}.</p>`,
+        buttons: [{ label: n > 1 ? "PDF — One Combined" : "PDF", value: "pdf", cls: "confirm-btn" },
+                  ...(n > 1 ? [{ label: "PDF — One Per Shipment (ZIP)", value: "zip", cls: "secondary" }] : []),
+                  { label: "Excel", value: "xlsx", cls: "secondary" }, { label: "CSV", value: "csv", cls: "secondary" },
+                  { label: "Cancel", value: null, cls: "secondary" }] });
       if (!mode) return;
-      const path = `/api/shipments/packing-lists.pdf?ids=${chosen.map(s => s.id).join(",")}&${plQuery()}`;
-      if (mode === "each") return downloadZip(`${path}&split=true`, "Packing Lists.zip");
-      openPdf(path);
+      if (mode === "pdf") return openPdf(`/api/shipments/packing-lists.pdf?ids=${ids}&${plQuery()}`);
+      if (mode === "zip") return downloadZip(`/api/shipments/packing-lists.pdf?ids=${ids}&${plQuery()}&split=true`, "Packing Lists.zip");
+      const one = n === 1 ? docFileName(chosen[0].code, (order(chosen[0].order_id) || {}).po_number, "Packing List").replace(/\.pdf$/i, "") : "Packing Lists";
+      return downloadZip(`/api/shipments/packing-lists.${mode}?ids=${ids}&${plQuery()}`, `${one}.${mode}`);
     }
     // Several shipments' documents: all in one PDF, or a ZIP with one file per shipment? (one shipment: no question)
     async function askOneOrEach(what, n) {
