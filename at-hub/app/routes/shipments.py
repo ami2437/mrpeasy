@@ -98,7 +98,18 @@ def packing_lists_export(fmt: str, ids: str, part: str = "lines", boxes: bool = 
     return _export(db, ships, fmt, part, boxes, pallets, lots, notes, name)
 
 
-def _pallet_labels(db, ships, per_pallet: bool, template_id=None):
+def _pallet_label_spec(spec: dict, opts: dict) -> dict:
+    """Print-time choices: no Boxes column, no company / ship-date line."""
+    if not opts.get("boxes_col", True):
+        for blk in (spec.get("header") or {}).get("blocks") or []:
+            if blk.get("type") == "table":
+                blk["columns"] = [{**c, "hidden": True} if c.get("key") == "boxes" else c for c in blk.get("columns") or []]
+    if not opts.get("company_line", True):
+        spec["hidden"] = list(spec.get("hidden") or []) + ["Company"]
+    return spec
+
+
+def _pallet_labels(db, ships, per_pallet: bool, template_id=None, opts=None):
     """Shipment pallet labels (4 x 6): the customer's / general default design, else the built-in Classic."""
     import json
     from app.models import CustomerOrder, DocTemplate
@@ -111,19 +122,24 @@ def _pallet_labels(db, ships, per_pallet: bool, template_id=None):
         order = db.get(CustomerOrder, sh.order_id)
         t = db.get(DocTemplate, template_id) if template_id else default_for(db, "pallet_label", order.customer_id if order else None)
         spec = json.loads(t.spec) if t and t.doc_type == "pallet_label" else template_starters.classic_pallet_label()
-        ctxs = doc_context.pallet_label_contexts(db, sh, per_pallet=per_pallet)
+        opts = opts or {}
+        spec = _pallet_label_spec(spec, opts)
+        totals = [k for k in ("pallets", "boxes", "weight") if opts.get(f"total_{k}", True)]
+        ctxs = doc_context.pallet_label_contexts(db, sh, per_pallet=per_pallet, totals=totals)
         files.append((template_engine.render_labels(spec, ctxs), filenames.doc_name(sh.code, order.po_number if order else None, "Pallet Labels"), "application/pdf"))
     return merge_pdfs(files) if len(files) > 1 else files[0][0] if files else out
 
 
 @router.get("/pallet-labels.pdf")
-def pallet_labels_many(ids: str, per_pallet: bool = True, db: Session = Depends(get_db)):
+def pallet_labels_many(ids: str, per_pallet: bool = True, boxes_col: bool = True, total_pallets: bool = True, total_boxes: bool = True,
+                       total_weight: bool = True, company_line: bool = True, db: Session = Depends(get_db)):
     """Pallet labels for several shipments in one PDF (?ids=3,7,9)."""
     ships = [ShipmentService.get(db, int(x)) for x in ids.split(",") if x.strip().isdigit()]
     if not ships:
         raise HTTPException(status_code=400, detail="Pick at least one shipment")
     name = filenames.doc_name(ships[0].code, None, "Pallet Labels") if len(ships) == 1 else "Pallet Labels.pdf"
-    return Response(_pallet_labels(db, ships, per_pallet), media_type="application/pdf", headers={"Content-Disposition": filenames.disposition(name)})
+    opts = {"boxes_col": boxes_col, "total_pallets": total_pallets, "total_boxes": total_boxes, "total_weight": total_weight, "company_line": company_line}
+    return Response(_pallet_labels(db, ships, per_pallet, opts=opts), media_type="application/pdf", headers={"Content-Disposition": filenames.disposition(name)})
 
 
 @router.get("/pack-suggestions")
@@ -173,7 +189,9 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
 
 
 @router.get("/{shipment_id}/pallet-labels.pdf")
-def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Optional[int] = None, db: Session = Depends(get_db)):
+def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Optional[int] = None, boxes_col: bool = True,
+                  total_pallets: bool = True, total_boxes: bool = True, total_weight: bool = True, company_line: bool = True,
+                  db: Session = Depends(get_db)):
     """Shipment pallet labels: per_pallet=true -> one per pallet (its row highlighted, "Pallet 3 of 5");
     false -> one summary label. Every label lists every pallet with its customer item #s, PO # and job #."""
     shipment = ShipmentService.get(db, shipment_id)
@@ -181,7 +199,8 @@ def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Option
         raise HTTPException(status_code=400, detail=f"{shipment.code} has no pallets yet -- set pallet #s when packing (Process Shipment)")
     from app.models import CustomerOrder
     order = db.get(CustomerOrder, shipment.order_id)
-    return Response(_pallet_labels(db, [shipment], per_pallet, template_id), media_type="application/pdf",
+    opts = {"boxes_col": boxes_col, "total_pallets": total_pallets, "total_boxes": total_boxes, "total_weight": total_weight, "company_line": company_line}
+    return Response(_pallet_labels(db, [shipment], per_pallet, template_id, opts=opts), media_type="application/pdf",
                     headers={"Content-Disposition": filenames.disposition(filenames.doc_name(shipment.code, order.po_number if order else None, "Pallet Labels"))})
 
 

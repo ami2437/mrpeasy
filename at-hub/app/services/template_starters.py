@@ -833,7 +833,7 @@ def _pallet_table(y, h, size=10.5):
 
 def _pallet_footer(y):
     return (g("Company", T(0.12, y, 2.9, 0.18, "{{company.name}} · shipped {{label.ship_date}}", size=7, bold=True, color=MUTED))
-            + g("Totals", T(2.9, y, 2.68, 0.18, "{{label.sheet}}   {{label.pallets}} pallets · {{label.boxes}} boxes · {{label.weight}}", size=7.5, bold=True,
+            + g("Totals", T(2.9, y, 2.68, 0.18, "{{label.sheet}}   {{label.totals}}", size=7.5, bold=True,
                             color=INK, align="right")))
 
 

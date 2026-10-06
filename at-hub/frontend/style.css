@@ -1845,3 +1845,6 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 .today-tile.warn strong { color: #b45309; }
 .today-tile.neg strong { color: var(--neg); }
 .today-tile.pos strong { color: var(--pos); }
+
+.pl-opts { display: flex; flex-direction: column; gap: 6px; }
+.pl-opts .inline-check { display: flex; align-items: center; gap: 6px; }

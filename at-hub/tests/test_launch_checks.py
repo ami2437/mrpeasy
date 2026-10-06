@@ -202,3 +202,13 @@ def test_pallet_table_carries_on_to_a_second_label():
     rows = [{"pallet": str(i), "items": "15422, 15422-NUTS, 16642, 16713, 16718, 58268, 58268-NUTS, 77183-HPC, 77183-HPC-NUTS", "boxes": "9"} for i in range(1, 16)]
     pdf = template_engine.render_labels(template_starters.classic_pallet_label(), [{"label": {"po": "1"}, "pallet_rows": rows}])
     assert len(pdfium.PdfDocument(pdf)) >= 2
+
+
+def test_pallet_label_print_options():
+    from app.routes.shipments import _pallet_label_spec
+    from app.services import template_engine, template_starters
+    spec = _pallet_label_spec(template_starters.classic_pallet_label(), {"boxes_col": False, "company_line": False})
+    shown = template_engine.visible_spec(spec)["header"]["blocks"]
+    table = next(b for b in shown if b["type"] == "table")
+    assert [c["key"] for c in table["columns"] if not c.get("hidden")] == ["pallet", "items"]
+    assert not any(b.get("group") == "Company" for b in shown)

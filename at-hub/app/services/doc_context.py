@@ -103,6 +103,7 @@ FIELDS = {
                      ("label.shipment", "Shipment #"), ("label.order", "Order #"), ("label.ship_date", "Ship date"), ("label.carrier", "Carrier"),
                      ("label.pallet", "This label's pallet # (one label per pallet)"), ("label.pallet_of", "Pallet 3 of 5"),
                      ("label.badge_caption", "Badge caption (Pallet / Shipment)"), ("label.badge", "Badge (3 of 5 / 5 pallets)"),
+                     ("label.totals", "Totals line (pallets · boxes · weight, as ticked when printing)"),
                      ("label.pallets", "Number of pallets"), ("label.boxes", "Number of boxes"), ("label.weight", "Total weight"),
                      ("label.sheet", "Sheet 1 of 2 (when the list runs over)")],
 }
@@ -311,7 +312,7 @@ def _quote(db, q, opt):
     return ctx, rows
 
 
-def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True) -> list:
+def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pallets", "boxes", "weight")) -> list:
     """A shipment's pallet labels: every pallet and the customer item #s on it, with PO # and job #. per_pallet: one
     label per pallet with its own row highlighted ("PALLET 3 OF 5"); else one summary label. The item list follows
     the packing list's rules (a nut rides on its bolt's pallet)."""
@@ -344,6 +345,10 @@ def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True) -> list:
             "carrier": sh.carrier or "", "pallets": str(len(rows)), "boxes": str(len(sh.boxes)), "weight": f"{weight:,.0f} lbs" if weight else "",
             "pallet": "", "pallet_of": "", "sheet": "", "continued": "",
             "badge_caption": "Shipment", "badge": f"{len(rows)} pallet{'' if len(rows) == 1 else 's'}"}
+    # the footer's totals line, with only the parts asked for at print time
+    parts = {"pallets": f"{len(rows)} pallet{'' if len(rows) == 1 else 's'}", "boxes": f"{len(sh.boxes)} box{'' if len(sh.boxes) == 1 else 'es'}",
+             "weight": base["weight"]}
+    base["totals"] = " · ".join(parts[k] for k in ("pallets", "boxes", "weight") if k in totals and parts[k])
     common = {"company": company, "_logo": company_row.logo_data, "doc": {"title": "PALLET LABEL", "number": sh.code}}
     if not per_pallet or not rows:
         return [{**common, "label": base, "pallet_rows": rows}]
@@ -381,4 +386,5 @@ SAMPLE_LABEL = {"box_label": {"customer": "Hudson Products", "shipment": "SH2157
                 "pallet_label": {"po": "4156932", "job": "M219-30C", "customer": "Hudson Products", "shipment": "SH215741-M219-30C", "order": "C89117",
                                  "ship_date": "Oct 06, 2026", "carrier": "Customer pickup", "pallet": "3", "pallet_of": "3 of 5", "pallets": "5", "boxes": "37",
                                  "weight": "4,820 lbs", "sheet": "", "continued": "", "badge_caption": "Pallet", "badge": "3 of 5",
+                                 "totals": "5 pallets · 37 boxes · 4,820 lbs",
                                  "ship_to": "HUDSON PRODUCTS CORPORATION\n9660 GRUNWALD ROAD\nBEASLEY TEXAS 77417"}}
