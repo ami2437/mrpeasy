@@ -370,7 +370,10 @@ def build_table(tspec, rows, width):
             if r.get("description"):
                 out.append(Paragraph(escape(r["description"]).replace("\n", "<br/>"), muted))
             return out
-        txt = escape(str(r.get(k, ""))).replace("\n", "<br/>")
+        v = str(r.get(k, ""))
+        if v == "—" and "empty" in c:  # column setting: what an empty value prints as (e.g. "0" for no backorder)
+            v = str(c["empty"])
+        txt = escape(v).replace("\n", "<br/>")
         sty = ParagraphStyle("c", parent=bold if c.get("bold") or k == "amount" and st.get("bold_amount", True) else body,
                              alignment=ALIGN.get(a, TA_LEFT))
         return Paragraph(txt, sty)

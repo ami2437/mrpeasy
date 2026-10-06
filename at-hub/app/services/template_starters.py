@@ -777,7 +777,7 @@ def portal_packing_list():
     return {"name": "Portal", "font": "gothic", "page": {"w": 8.5, "h": 11, "margin": 0.3},
             "header": {"h": 2.75, "blocks": header},
             "table": {"columns": [left("item_code", "Part #", 0.87, bold=True), left("description", "Part description", 0),
-                                  left("ordered", "Qty ordered", 0.72), left("shipped", "Qty shipped", 0.72), left("backorder", "Backordered", 0.95),
+                                  left("ordered", "Qty ordered", 0.72), left("shipped", "Qty shipped", 0.72), left("backorder", "Backordered", 0.95, empty="0"),
                                   left("boxes", "Box breakdown", 1.0), left("pallet", "Pallet #", 0.7)], "style": grid},
             "pallets": {"heading": "Pallet Information", "new_page": True, "style": {**grid, "heading_size": 12},
                         "columns": [left("pallet", "Pallet #", 0.7), left("items", "Customer Item #", 0), left("weight", "Weight (lbs)", 0.85),

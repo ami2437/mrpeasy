@@ -288,7 +288,7 @@ function tableEl(t, scale, interactive, rowsIn = null, isPallets = false) {
   const fs = (st.size || 8.6) * PT * scale, hs = (st.header_size || 7.5) * PT * scale, pad = (st.pad || 5) * PT * scale;
   const rows = rowsIn || (sample.rows || []).slice(0, isLabel() ? 0 : 6);
   const cell = (c, r) => c.key === "check" ? "☐" : c.key === "item_code_desc" ? `<b>${escapeHtml(r.item_code || "")}</b><div style="color:#64748b;font-size:${fs * 0.9}px">${escapeHtml(r.description || "")}</div>`
-    : escapeHtml(String(r[c.key] ?? "")).replace(/\n/g, "<br>");
+    : escapeHtml(String(r[c.key] === "—" && c.empty !== undefined ? c.empty : r[c.key] ?? "")).replace(/\n/g, "<br>");
   const el = document.createElement("div");
   el.className = "tbl" + (interactive && sel && sel.table && !isPallets ? " sel" : "");
   el.innerHTML = `<table class="no-table-tools no-col-bands" style="width:${width}px;font-size:${fs}px">
