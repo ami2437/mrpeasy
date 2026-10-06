@@ -107,13 +107,14 @@ function packingReadOnlyHtml(sh) {
       <td class="num">${saved.length ? packSizeFor(sh, e) : `<span class="muted" title="Not packed yet -- what Process Shipment will pre-fill">${packSizeFor(sh, e)}</span>`}</td>
       <td>${saved.length ? formatBoxCounts(byQty) : `<span class="muted">—</span>`}</td><td>${escapeHtml(linePallet(sh, e.order_line_id)) || `<span class="muted">—</span>`}</td></tr>`;
   }).join("");
-  const used = [...new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean))];
+  const used = [...new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean))].sort(byPalletNo);
+  const po = (order(sh.order_id) || {}).po_number || "";
   const pallets = used.map(pn => {
     const p = sh.pallets.find(x => x.pallet_number === pn) || {};
     const boxes = sh.boxes.filter(b => b.pallet_number === pn);
     const missing = `<span class="neg small">missing</span>`;
     return `<tr><td><strong>${escapeHtml(pn)}</strong></td><td class="grow">${escapeHtml([...new Set(boxes.map(b => itemCode(b.item_id)))].join(", "))}</td>
-      <td class="num">${boxes.length}</td><td>${p.weight != null ? `${fmtQty(p.weight)} lbs` : missing}</td><td>${p.dimensions ? escapeHtml(p.dimensions) : missing}</td></tr>`;
+      <td class="num">${boxes.length}</td><td>${p.weight != null ? `${fmtQty(p.weight)} lbs` : missing}</td><td>${escapeHtml(po) || "—"}</td><td>${p.dimensions ? escapeHtml(p.dimensions) : missing}</td></tr>`;
   }).join("");
   return `<h4 class="dsec-title">Packing ${tag}</h4>
     ${sh.packed_at ? `<p class="muted small" style="margin-top:0;">Accepted ${fmtDate(sh.packed_at)}${sh.packed_by ? ` by ${escapeHtml(sh.packed_by)}` : ""}. To change it, use <b>Process Shipment</b>.</p>`
@@ -122,7 +123,7 @@ function packingReadOnlyHtml(sh) {
       <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
       <tbody>${rows}</tbody></table>
     ${used.length ? `<h5 class="dsub-title">Pallets</h5><table class="fit-table no-table-tools">
-      <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight</th><th>Dimensions (L x W x H in)</th></tr></thead>
+      <thead><tr><th>Pallet #</th><th class="grow">Items</th><th class="num">Boxes</th><th>Weight</th><th>Customer PO #</th><th>Dimensions (L x W x H in)</th></tr></thead>
       <tbody>${pallets}</tbody></table>` : ""}
     ${n ? `<div style="margin-top:12px;">
       <button class="secondary" onclick="printLabels(${sh.id})">Print Labels</button>
@@ -783,6 +784,9 @@ function applyPalletToAll(value) {
   renderPalletTable();
 }
 
+// Pallet #s in number order: 1, 2, 10 (and P2 before P10)
+const byPalletNo = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+
 // Normalises "48x54x21", "48 X 54 X 21", "48*54*21", "48in x 54in x 21in" to "48 x 54 x 21" (same as the main portal).
 function normalizeDimensions(raw) {
   const text = String(raw || "").trim();
@@ -809,7 +813,7 @@ function renderPalletTable(pending = {}) {
     const opt = tr.querySelector(".box-line").selectedOptions[0];
     if (opt) entry.items.add(itemCode(parseInt(opt.dataset.item)));
   });
-  const names = Object.keys(byPallet);
+  const names = Object.keys(byPallet).sort(byPalletNo);
   if (!names.length) {
     container.innerHTML = `<p class="muted">No pallets yet. Type a pallet # on a line above to enter its weight and dimensions.</p>`;
     return;

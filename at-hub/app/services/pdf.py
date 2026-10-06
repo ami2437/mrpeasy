@@ -583,15 +583,16 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         story += [Spacer(1, 14), summary]
 
     if include_pallets and pallet_count:
-        prow = []
-        for key, entry in pallets.items():
+        from app.services.doc_context import _natural
+        prow, po_no = [], (order.po_number if order and order.po_number else "—")
+        for key, entry in sorted(pallets.items(), key=lambda kv: _natural(kv[0])):  # by pallet #: 1, 2, 10
             info = next((pw for pw in shipment.pallets if pw.pallet_number == key), None)
             if key == "Unassigned":
                 continue
             prow.append([key, p(", ".join(entry["items"]), "td")] + ([str(entry["boxes"])] if include_pallet_boxes else [])
-                        + [f"{info.weight:,.1f}" if info and info.weight else "—", (info.dimensions if info else None) or "—"])
-        heads = ["Pallet #", "Items"] + (["Boxes"] if include_pallet_boxes else []) + ["Weight (lbs)", "Dimensions (L x W x H in)"]
-        widths = [1.0 * inch, 3.8 * inch if not include_pallet_boxes else 3.0 * inch] + ([0.8 * inch] if include_pallet_boxes else []) + [1.1 * inch, 1.4 * inch]
+                        + [f"{info.weight:,.1f}" if info and info.weight else "—", p(po_no, "td"), p((info.dimensions if info else None) or "—", "td")])
+        heads = ["Pallet #", "Items"] + (["Boxes"] if include_pallet_boxes else []) + ["Weight (lbs)", "Customer PO #", "Dimensions (L x W x H in)"]
+        widths = [0.75 * inch, (3.05 if not include_pallet_boxes else 2.45) * inch] + ([0.6 * inch] if include_pallet_boxes else []) + [1.0 * inch, 1.1 * inch, 1.4 * inch]
         story += [Spacer(1, 16), p("PALLETS", "label"), Spacer(1, 4),
                   _data_table(heads, prow, widths, right_cols=(2, 3) if include_pallet_boxes else (2,))]
 

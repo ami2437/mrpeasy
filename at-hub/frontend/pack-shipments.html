@@ -1021,7 +1021,7 @@
     function bpRenderPallets(sid, pending = {}) {
       const s = byId(sid), box = bpPalBlock(sid);
       if (!s || !box) return;
-      const typed = bpPalletValues(sid), used = bpLinePallets(sid), names = Object.keys(used), stash = bp.stash[sid] = bp.stash[sid] || {};
+      const typed = bpPalletValues(sid), used = bpLinePallets(sid), names = Object.keys(used).sort(byPalletNo), stash = bp.stash[sid] = bp.stash[sid] || {};
       box.querySelector(".bp-pal-sum").textContent = names.length ? `· ${names.length} pallet${names.length === 1 ? "" : "s"}` : "· no pallets";
       box.querySelector(".bp-pal-table").innerHTML = names.length ? `<table class="fit-table no-table-tools no-col-bands pallet-grid"><thead><tr><th>Pallet #</th>
           <th>Weight (lbs)</th><th>Dimensions (L x W x H in)</th></tr></thead><tbody>
