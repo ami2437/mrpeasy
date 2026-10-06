@@ -314,7 +314,7 @@ def _quote(db, q, opt):
 
 
 def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pallets", "boxes", "weight"),
-                          footer=("company", "ship_date")) -> list:
+                          footer=("company", "ship_date"), only_own: bool = False) -> list:
     """A shipment's pallet labels: every pallet and the customer item #s on it, with PO # and job #. per_pallet: one
     label per pallet with its own row highlighted ("PALLET 3 OF 5"); else one summary label. The item list follows
     the packing list's rules (a nut rides on its bolt's pallet)."""
@@ -358,7 +358,8 @@ def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pa
         return [{**common, "label": base, "pallet_rows": rows}]
     return [{**common, "label": {**base, "pallet": r["pallet"], "pallet_of": f"{i} of {len(rows)}", "badge_caption": "Pallet",
                                  "badge": f"{r['pallet']} of {len(rows)}"},
-             "pallet_rows": [{**x, "_hi": x["pallet"] == r["pallet"]} for x in rows]} for i, r in enumerate(rows, 1)]
+             # only_own: just this pallet's row (thermal printers: no highlight box to smear)
+             "pallet_rows": [dict(r)] if only_own else [{**x, "_hi": x["pallet"] == r["pallet"]} for x in rows]} for i, r in enumerate(rows, 1)]
 
 
 SAMPLE_PALLETS = [("1", "15422, 15422-NUTS, 16642, 16713, 16718, 58268, 58268-NUTS", "9"), ("2", "15420, 15420-NUTS, 16716, 33797, 33806", "8"),

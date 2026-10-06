@@ -99,7 +99,13 @@ def packing_lists_export(fmt: str, ids: str, part: str = "lines", boxes: bool = 
 
 
 def _pallet_label_spec(spec: dict, opts: dict) -> dict:
-    """Print-time choices: no Boxes column, no company / ship-date line."""
+    """Print-time choices: no Boxes column; one pallet per label -> its items in bigger type."""
+    if opts.get("only_own"):
+        for blk in (spec.get("header") or {}).get("blocks") or []:
+            if blk.get("type") == "table":
+                st = blk.setdefault("style", {})
+                st["size"] = max(float(st.get("size", 10.5)), 20)  # shrinks back down if the item list is long
+                st["header_size"] = max(float(st.get("header_size", 7)), 8)
     if not opts.get("boxes_col", True):
         for blk in (spec.get("header") or {}).get("blocks") or []:
             if blk.get("type") == "table":
@@ -124,13 +130,13 @@ def _pallet_labels(db, ships, per_pallet: bool, template_id=None, opts=None):
         spec = _pallet_label_spec(spec, opts)
         totals = [k for k in ("pallets", "boxes", "weight") if opts.get(f"total_{k}", True)]
         footer = [k for k in ("company", "ship_date") if opts.get(f"show_{k}", True)]
-        ctxs = doc_context.pallet_label_contexts(db, sh, per_pallet=per_pallet, totals=totals, footer=footer)
+        ctxs = doc_context.pallet_label_contexts(db, sh, per_pallet=per_pallet, totals=totals, footer=footer, only_own=opts.get("only_own", False))
         files.append((template_engine.render_labels(spec, ctxs), filenames.doc_name(sh.code, order.po_number if order else None, "Pallet Labels"), "application/pdf"))
     return merge_pdfs(files) if len(files) > 1 else files[0][0] if files else out
 
 
 @router.get("/pallet-labels.pdf")
-def pallet_labels_many(ids: str, per_pallet: bool = True, boxes_col: bool = True, total_pallets: bool = True, total_boxes: bool = True,
+def pallet_labels_many(ids: str, per_pallet: bool = True, only_own: bool = False, boxes_col: bool = True, total_pallets: bool = True, total_boxes: bool = True,
                        total_weight: bool = True, show_company: bool = True, show_ship_date: bool = True, db: Session = Depends(get_db)):
     """Pallet labels for several shipments in one PDF (?ids=3,7,9)."""
     ships = [ShipmentService.get(db, int(x)) for x in ids.split(",") if x.strip().isdigit()]
@@ -138,7 +144,7 @@ def pallet_labels_many(ids: str, per_pallet: bool = True, boxes_col: bool = True
         raise HTTPException(status_code=400, detail="Pick at least one shipment")
     name = filenames.doc_name(ships[0].code, None, "Pallet Labels") if len(ships) == 1 else "Pallet Labels.pdf"
     opts = {"boxes_col": boxes_col, "total_pallets": total_pallets, "total_boxes": total_boxes, "total_weight": total_weight,
-            "show_company": show_company, "show_ship_date": show_ship_date}
+            "show_company": show_company, "show_ship_date": show_ship_date, "only_own": only_own and per_pallet}
     return Response(_pallet_labels(db, ships, per_pallet, opts=opts), media_type="application/pdf", headers={"Content-Disposition": filenames.disposition(name)})
 
 
@@ -189,7 +195,7 @@ def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lo
 
 
 @router.get("/{shipment_id}/pallet-labels.pdf")
-def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Optional[int] = None, boxes_col: bool = True,
+def pallet_labels(shipment_id: int, per_pallet: bool = True, only_own: bool = False, template_id: Optional[int] = None, boxes_col: bool = True,
                   total_pallets: bool = True, total_boxes: bool = True, total_weight: bool = True, show_company: bool = True, show_ship_date: bool = True,
                   db: Session = Depends(get_db)):
     """Shipment pallet labels: per_pallet=true -> one per pallet (its row highlighted, "Pallet 3 of 5");
@@ -200,7 +206,7 @@ def pallet_labels(shipment_id: int, per_pallet: bool = True, template_id: Option
     from app.models import CustomerOrder
     order = db.get(CustomerOrder, shipment.order_id)
     opts = {"boxes_col": boxes_col, "total_pallets": total_pallets, "total_boxes": total_boxes, "total_weight": total_weight,
-            "show_company": show_company, "show_ship_date": show_ship_date}
+            "show_company": show_company, "show_ship_date": show_ship_date, "only_own": only_own and per_pallet}
     return Response(_pallet_labels(db, [shipment], per_pallet, template_id, opts=opts), media_type="application/pdf",
                     headers={"Content-Disposition": filenames.disposition(filenames.doc_name(shipment.code, order.po_number if order else None, "Pallet Labels"))})
 

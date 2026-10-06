@@ -1294,7 +1294,8 @@ async function printPalletLabels(shipmentId, ids = null) {
   const { value, el } = await askDialog({ title: "Shipment pallet labels",
     body: `<p class="muted small" style="margin-top:0;">Every label shows the PO #, job # and each pallet with its customer item #s. Tick what else to print.</p>
       <div class="pl-opts">
-        <label class="inline-check"><input type="radio" name="pl-mode" value="each" ${saved.mode !== "one" ? "checked" : ""}> <b>One label per pallet</b> <span class="muted small">(its own pallet highlighted)</span></label>
+        <label class="inline-check"><input type="radio" name="pl-mode" value="each" ${!["one", "own"].includes(saved.mode) ? "checked" : ""}> <b>One label per pallet</b> <span class="muted small">(its own pallet highlighted)</span></label>
+        <label class="inline-check"><input type="radio" name="pl-mode" value="own" ${saved.mode === "own" ? "checked" : ""}> <b>One label per pallet, only that pallet's items</b> <span class="muted small">(best on thermal printers)</span></label>
         <label class="inline-check"><input type="radio" name="pl-mode" value="one" ${saved.mode === "one" ? "checked" : ""}> <b>One summary label</b></label>
         <hr style="margin:8px 0;">
         ${PALLET_LABEL_OPTS.map(([k, l]) => `<label class="inline-check"><input type="checkbox" data-opt="${k}" ${on(k) ? "checked" : ""}> ${l}</label>`).join("")}
@@ -1304,7 +1305,7 @@ async function printPalletLabels(shipmentId, ids = null) {
   const opts = { mode: el.querySelector("input[name=pl-mode]:checked").value };
   el.querySelectorAll("[data-opt]").forEach(c => { opts[c.dataset.opt] = c.checked; });
   try { localStorage.setItem("at_hub_pallet_label_opts", JSON.stringify(opts)); } catch (e) {}
-  const q = `per_pallet=${opts.mode === "each"}&` + PALLET_LABEL_OPTS.map(([k]) => `${k}=${opts[k]}`).join("&");
+  const q = `per_pallet=${opts.mode !== "one"}&only_own=${opts.mode === "own"}&` + PALLET_LABEL_OPTS.map(([k]) => `${k}=${opts[k]}`).join("&");
   openPdf(ids ? `/api/shipments/pallet-labels.pdf?ids=${ids}&${q}` : `/api/shipments/${shipmentId}/pallet-labels.pdf?${q}`);
 }
 

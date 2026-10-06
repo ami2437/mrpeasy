@@ -194,6 +194,13 @@ def test_shipment_pallet_labels(make, api, client, admin_headers):
     assert r.status_code == 200 and len(pdfium.PdfDocument(r.content)) == 2               # one per pallet
     r = client.get(f"/api/shipments/{sh['id']}/pallet-labels.pdf?per_pallet=false", headers=admin_headers)
     assert len(pdfium.PdfDocument(r.content)) == 1
+    db = SessionLocal()
+    own = doc_context.pallet_label_contexts(db, db.get(Shipment, sh["id"]), only_own=True)
+    db.close()
+    assert [[r["pallet"] for r in c["pallet_rows"]] for c in own] == [["1"], ["2"]]          # only its own pallet
+    assert not any(r.get("_hi") for c in own for r in c["pallet_rows"])                      # no highlight box
+    r = client.get(f"/api/shipments/{sh['id']}/pallet-labels.pdf?only_own=true", headers=admin_headers)
+    assert len(pdfium.PdfDocument(r.content)) == 2
 
 
 def test_pallet_table_carries_on_to_a_second_label():
