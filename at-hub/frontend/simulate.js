@@ -19,7 +19,7 @@ const money = v => v == null || isNaN(v) ? "—" : fmtMoney(v);
 const price = v => v == null || isNaN(v) ? "—" : fmtPrice(v);
 
 function blankDoc() {
-  return { demand: [], sources: [], shared_costs: [], estimates: {}, generic_off: {}, use_stock: false, sheet_cols: [], summary: {} };
+  return { demand: [], sources: [], shared_costs: [], estimates: {}, generic_off: {}, stock_off: {}, use_stock: false, sheet_cols: [], summary: {} };
 }
 
 // ================= the numbers =================
@@ -61,6 +61,8 @@ function calc() {
       x.need += q; x.revenue += q * num(l.price); x.demandBlocks.add(b.id);
     }
   }
+  // on-hand counts can be wrong while stock is being cleaned up: count it only when switched on, and not for items ticked off
+  const stockOf = r => d.use_stock && !(d.stock_off || {})[r.key] ? r.onHand : 0;
   const estOf = key => { const e = d.estimates[key]; return e !== undefined && e !== "" ? num(e) : null; };
   const base = Object.values(items).map(x => {
     const ins = x.item_id ? INSIGHT[x.item_id] : null;
@@ -77,7 +79,7 @@ function calc() {
     if (!opts.length) continue;
     const o = opts.find(o => byItem[o.generic_id] && byItem[o.generic_id].supply) || opts[0];
     const g = byItem[o.generic_id] || null;
-    const short = Math.max(0, r.need - r.supply - (d.use_stock ? r.onHand : 0));
+    const short = Math.max(0, r.need - r.supply - stockOf(r));
     r.via = { id: o.generic_id, code: GEN.generics[o.generic_id].code, match: o.match, g };
     r.viaQty = short;
     if (g) { g.servedBy.push(r); g.rolled = (g.rolled || 0) + short; }
@@ -97,7 +99,7 @@ function calc() {
     return { ...x, cost, viaCost, extras: x.eff != null && x.vendor != null ? x.eff - x.vendor : null, estimated: x.eff == null && !x.via && cost != null,
              custPrice, profitUnit: custPrice != null && cost != null ? custPrice - cost : null,
              profit: cost != null && x.need ? x.revenue - x.need * cost : null,
-             toOrder: x.via ? 0 : Math.max(0, want - x.supply - (d.use_stock ? x.onHand : 0)) };
+             toOrder: x.via ? 0 : Math.max(0, want - x.supply - stockOf(x)) };
   }).sort((a, b) => (b.need > 0 || b.servedBy.length > 0) - (a.need > 0 || a.servedBy.length > 0) || String(a.code).localeCompare(String(b.code)));
   const costOf = Object.fromEntries(rows.map(r => [r.key, r.cost]));
   const orders = d.demand.map(b => {
@@ -196,7 +198,7 @@ function compareTable(c) {
         ${r.notInDb ? `<span class="sim-tag">not in DB</span>` : ""}${genNote(r)}</td>
       <td class="num">${fmtQty(r.need)}${r.rolled ? `<div class="small sim-gen-txt" title="Specific nuts on the left that this generic nut stands in for">+ ${fmtQty(r.rolled)} for nuts</div>` : ""}</td>
       <td class="num">${r.supply ? fmtQty(r.supply) : "—"}${r.supply && r.supply < r.need + (r.rolled || 0) && !r.via ? `<div class="sim-warn small">short ${fmtQty(r.need + (r.rolled || 0) - r.supply)}</div>` : ""}</td>
-      <td class="num">${r.item_id ? fmtQty(r.onHand) : "—"}</td>
+      <td class="num">${r.item_id ? onHandCell(r) : "—"}</td>
       <td class="num">${r.toOrder ? `<b>${fmtQty(r.toOrder)}</b>` : r.via && r.viaQty ? `<span class="small sim-gen-txt">as ${escapeHtml(r.via.code)}</span>` : "—"}</td>
       <td class="num">${price(r.custPrice)}</td><td class="num">${price(r.vendor)}</td>
       <td class="num">${r.extras ? "+" + fmtPrice(r.extras) : "—"}</td>
@@ -248,7 +250,10 @@ function render() {
         <div class="sim-block is-shared">${costsTable("shared", doc.shared_costs, "shared")}</div></section>
     </div>
     <div class="card"><div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;"><h3 style="margin:0;">Item By Item</h3>
-        <label class="check-label"><input type="checkbox" ${doc.use_stock ? "checked" : ""} onchange="doc.use_stock = this.checked; changed(true)"> Use stock on hand before ordering</label>
+        <label class="check-label" title="Off: order everything as if the shelf were empty. On: stock on hand covers part of the need -- untick any item whose count you don't trust.">
+          <input type="checkbox" ${doc.use_stock ? "checked" : ""} onchange="doc.use_stock = this.checked; changed(true)"> Count stock on hand</label>
+        ${doc.use_stock && Object.keys(doc.stock_off || {}).length ? `<span class="muted small">${Object.keys(doc.stock_off).length} item${Object.keys(doc.stock_off).length === 1 ? "" : "s"} ignored ·
+          <a class="link" onclick="doc.stock_off = {}; changed(true)">count all</a></span>` : ""}
         <span class="spacer"></span><button class="secondary small-btn" onclick="makePoFromShort()" title="A draft PO for everything still to order">Create PO For What's Short</button></div>
       <div id="sim-compare">${compareTable(c)}</div></div>
     <div class="card"><h3 style="margin-top:0;">Profit Per Order</h3><div id="sim-orders">${ordersTable(c) || `<p class="muted small">Add demand to see each order's profit.</p>`}</div></div>`;
@@ -366,6 +371,14 @@ function genNote(r) {
   if (doc.generic_off[r.key] && GEN.serves[r.item_id]) return `<div class="small muted">not using generic stock · <a class="link" onclick="setGenericOff('${escapeHtml(r.key)}', false)">use ${escapeHtml((GEN.generics[GEN.serves[r.item_id][0].generic_id] || {}).code || "generic")}</a></div>`;
   return "";
 }
+// On hand column: with stock counted, each item has its own tick -- untick to ignore a count you don't trust
+function onHandCell(r) {
+  if (!doc.use_stock) return `<span class="muted" title="Stock isn't counted (switch on Count stock on hand)">${fmtQty(r.onHand)}</span>`;
+  const on = !(doc.stock_off || {})[r.key];
+  return `<label class="sim-stock ${on ? "" : "off"}" title="${on ? "Counted -- untick if this count is wrong" : "Ignored -- tick to count it"}">
+    <input type="checkbox" ${on ? "checked" : ""} onchange="setStockOff('${escapeHtml(r.key)}', !this.checked)"> ${fmtQty(r.onHand)}</label>`;
+}
+function setStockOff(key, off) { doc.stock_off ||= {}; if (off) doc.stock_off[key] = true; else delete doc.stock_off[key]; changed(true); }
 function setGenericOff(key, off) { if (off) doc.generic_off[key] = true; else delete doc.generic_off[key]; changed(true); }
 
 // ================= adding demand / sources =================
@@ -563,7 +576,7 @@ async function openSim(id) {
   sim = await apiFetch(`/api/simulations/${id}`);
   doc = Object.assign(blankDoc(), sim.doc || {});
   history.replaceState(null, "", `simulate.html?id=${id}`);
-  doc.generic_off ||= {};
+  doc.generic_off ||= {}; doc.stock_off ||= {};
   await ensureInsights([...doc.demand, ...doc.sources].flatMap(b => b.lines.map(l => l.item_id)).filter(Boolean));
   genKey = ""; await refreshGeneric();
   setSaveState(`Saved ${fmtWhen(sim.updated_at)}`);
