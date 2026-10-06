@@ -203,7 +203,7 @@
       const lowStock = items.filter(i => i.reorder_point && i.available <= i.reorder_point);
       document.getElementById("low-stock-body").innerHTML = lowStock.length
         ? lowStock.map(i => `
-          <tr><td>${i.code}</td><td>${i.title}</td><td>${i.on_hand}</td><td>${i.booked}</td>
+          <tr><td>${escapeHtml(i.code)}</td><td>${escapeHtml(i.title)}</td><td>${i.on_hand}</td><td>${i.booked}</td>
               <td style="color:#dc2626;font-weight:600;">${i.available}</td><td>${i.reorder_point}</td></tr>
         `).join("")
         : `<tr><td colspan="6" class="muted">Nothing below reorder point.</td></tr>`;
@@ -215,7 +215,7 @@
             return `
               <tr>
                 <td><a class="link" href="customer-orders.html?id=${o.id}">${o.code}</a></td>
-                <td>${customerName(o.customer_id)}</td>
+                <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
                 <td><span class="tag ${o.status}">${o.status}</span></td>
                 <td>${fmtDate(o.order_date)}</td>
                 <td>${money(openValue)}</td>
@@ -231,7 +231,7 @@
             return `
               <tr>
                 <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>
-                <td>${vendorName(o.vendor_id)}</td>
+                <td>${escapeHtml(String(vendorName(o.vendor_id)))}</td>
                 <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
                 <td>${fmtDate(o.order_date)}</td>
                 <td>${money(openValue)}</td>
@@ -251,7 +251,7 @@
       const salesRows = Object.entries(byCustomer).sort((a, b) => b[1].total - a[1].total);
       document.getElementById("sales-body").innerHTML = salesRows.length
         ? salesRows.map(([id, agg]) => `
-          <tr><td><a class="link" href="customers.html">${customerName(parseInt(id))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
+          <tr><td><a class="link" href="customers.html">${escapeHtml(String(customerName(parseInt(id))))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
         `).join("")
         : `<tr><td colspan="3" class="muted">No orders yet.</td></tr>`;
 
@@ -266,7 +266,7 @@
       const purchasingRows = Object.entries(byVendor).sort((a, b) => b[1].total - a[1].total);
       document.getElementById("purchasing-body").innerHTML = purchasingRows.length
         ? purchasingRows.map(([id, agg]) => `
-          <tr><td><a class="link" href="vendors.html">${vendorName(parseInt(id))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
+          <tr><td><a class="link" href="vendors.html">${escapeHtml(String(vendorName(parseInt(id))))}</a></td><td>${agg.count}</td><td>${money(agg.total)}</td></tr>
         `).join("")
         : `<tr><td colspan="3" class="muted">No purchase orders yet.</td></tr>`;
 
@@ -293,7 +293,7 @@
       const agingCell = (v, late) => `<td${late && v > 0 ? ' style="color:#dc2626;font-weight:600;"' : ''}>${v > 0 ? money(v) : ''}</td>`;
       document.getElementById("ar-aging-body").innerHTML = agingRows.length
         ? agingRows.map(([id, b, total]) => `
-          <tr><td>${customerName(parseInt(id))}</td>${buckets.map(k => agingCell(b[k], k !== "current")).join("")}<td><strong>${money(total)}</strong></td></tr>
+          <tr><td>${escapeHtml(String(customerName(parseInt(id))))}</td>${buckets.map(k => agingCell(b[k], k !== "current")).join("")}<td><strong>${money(total)}</strong></td></tr>
         `).join("") + `
           <tr><td><strong>Total</strong></td>${buckets.map(k => `<td><strong>${agingTotals[k] > 0 ? money(agingTotals[k]) : ''}</strong></td>`).join("")}
               <td><strong>${money(agingRows.reduce((s, r) => s + r[2], 0))}</strong></td></tr>`
@@ -313,7 +313,7 @@
       const apRows = Object.entries(byVendorAP).sort((a, b) => (b[1].value - b[1].paid) - (a[1].value - a[1].paid));
       document.getElementById("ap-body").innerHTML = apRows.length
         ? apRows.map(([id, agg]) => `
-          <tr><td>${vendorName(parseInt(id))}</td><td>${agg.count}</td><td>${money(agg.value)}</td><td>${money(agg.paid)}</td><td><strong>${money(agg.value - agg.paid)}</strong></td></tr>
+          <tr><td>${escapeHtml(String(vendorName(parseInt(id))))}</td><td>${agg.count}</td><td>${money(agg.value)}</td><td>${money(agg.paid)}</td><td><strong>${money(agg.value - agg.paid)}</strong></td></tr>
         `).join("")
         : `<tr><td colspan="5" class="muted">No unpaid purchase orders.</td></tr>`;
 
@@ -324,7 +324,7 @@
             return `
               <tr>
                 <td><a class="link" href="invoices.html?id=${inv.id}">${inv.code}</a></td>
-                <td>${customerName(inv.customer_id)}</td>
+                <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
                 <td>${fmtDate(inv.due_date)}</td>
                 <td style="color:#dc2626;font-weight:600;">${daysOverdue}</td>
                 <td>${money(inv.total)}</td>
@@ -342,8 +342,8 @@
             const expired = new Date(lot.expiry_date) < today;
             return `
               <tr>
-                <td>${lot.lot_code}</td>
-                <td>${item ? `${item.code} — ${item.title}` : lot.item_id}</td>
+                <td>${escapeHtml(lot.lot_code)}</td>
+                <td>${item ? `${escapeHtml(item.code)} — ${escapeHtml(item.title)}` : lot.item_id}</td>
                 <td>${lot.quantity}</td>
                 <td style="${expired ? 'color:#dc2626;font-weight:600;' : ''}">${fmtDate(lot.expiry_date)}${expired ? " (expired)" : ""}</td>
               </tr>

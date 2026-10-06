@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
-from app.schemas import PodEmailRequest, ShipmentEmailResponse
+from app.schemas import PodEmailRequest, ShipmentEmailResponse, ShipmentComboInput
 from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest, UnshipRequest
 from app.services.crud import ShipmentService
 from app.dependencies import get_current_active_user, require_any, require_perm
@@ -236,6 +236,36 @@ def rename(shipment_id: int, data: RenameIn, db: Session = Depends(get_db)):
 def set_boxes(shipment_id: int, data: SetBoxesRequest, db: Session = Depends(get_db)):
     """Set the packing-list/box breakdown for this shipment, used to print box labels."""
     return ShipmentService.set_boxes(db, shipment_id, data)
+
+
+@router.get("/{shipment_id}/combo-suggestions")
+def combo_suggestions(shipment_id: int, db: Session = Depends(get_db)):
+    """Bolt + $0 nut pairs booked on this shipment that could go out as assembled units (not combined yet)."""
+    from app.services import nut_combos
+    return nut_combos.suggestions(db, ShipmentService.get(db, shipment_id))
+
+
+@router.post("/{shipment_id}/combos", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
+def combine_lines(shipment_id: int, data: ShipmentComboInput, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_active_user)):
+    """Send a bolt line and a nut line together as assembled units (or change how many). The packing is re-checked after."""
+    from app.services import nut_combos
+    shipment = ShipmentService.get(db, shipment_id)
+    nut_combos.combine(db, shipment, data, current_user.username)
+    db.commit()
+    db.refresh(shipment)
+    return with_pods(db, shipment)
+
+
+@router.delete("/{shipment_id}/combos/{combo_id}", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])
+def split_lines(shipment_id: int, combo_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Bolts and nuts go out separately again (this shipment only)."""
+    from app.services import nut_combos
+    shipment = ShipmentService.get(db, shipment_id)
+    nut_combos.uncombine(db, shipment, combo_id, current_user.username)
+    db.commit()
+    db.refresh(shipment)
+    return with_pods(db, shipment)
 
 
 @router.put("/{shipment_id}/pallet-weights", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.work"))])

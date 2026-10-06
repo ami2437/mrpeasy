@@ -68,7 +68,7 @@ def _root(obj):
     name = type(obj).__name__
     if name in ("CustomerOrder", "PurchaseOrder", "Shipment", "Invoice", "Quote", "Customer", "Vendor"):
         return obj
-    parent = {"CustomerOrderLine": "order", "ShipmentLine": "shipment", "ShipmentBox": "shipment", "PalletWeight": "shipment",
+    parent = {"CustomerOrderLine": "order", "ShipmentLine": "shipment", "ShipmentBox": "shipment", "PalletWeight": "shipment", "ShipmentCombo": "shipment",
               "PurchaseOrderLine": "purchase_order", "PurchaseOrderCharge": "purchase_order", "PurchaseOrderPayment": "purchase_order",
               "VendorBill": "purchase_order", "InvoiceLine": "invoice", "InvoicePayment": "invoice", "QuoteLine": "quote"}.get(name)
     if not parent:

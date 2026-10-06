@@ -60,7 +60,7 @@
           <summary><strong>${escapeHtml(cat)}</strong> <span class="muted">(${ts.length})</span></summary>
           ${ts.map(t => `<div class="task-row ${t.status !== "open" ? "task-done" : ""}">
             <input type="checkbox" ${t.status !== "open" ? "checked" : ""} title="${t.status === "open" ? "Mark done" : "Reopen"}" onchange="setStatus(${t.id}, this.checked ? 'done' : 'open')">
-            <div class="task-main"><div>${t.link ? `<a class="link" href="${escapeHtml(t.link)}" target="_blank">${escapeHtml(t.title)}</a>` : escapeHtml(t.title)}
+            <div class="task-main"><div>${safeHref(t.link) ? `<a class="link" href="${safeHref(t.link)}" target="_blank" rel="noopener">${escapeHtml(t.title)}</a>` : escapeHtml(t.title)}
               ${t.key ? '<span class="tag draft" title="Raised by AT-HUB from the data">auto</span>' : ""}</div>
               ${t.detail ? `<div class="small muted">${escapeHtml(t.detail)}</div>` : ""}
               ${t.status !== "open" ? `<div class="small muted">${t.status === "dismissed" ? "Dismissed" : "Done"} by ${escapeHtml(t.done_by || "")} ${t.done_at ? fmtDateTime(t.done_at) : ""}</div>` : ""}

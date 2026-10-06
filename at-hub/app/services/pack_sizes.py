@@ -20,7 +20,7 @@ from typing import Dict, Iterable, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import CompanyProfile, Customer, CustomerOrder, PackSizeHistory, Shipment, ShipmentBox, StockItem
+from app.models import CompanyProfile, Customer, CustomerOrder, PackSizeHistory, Shipment, ShipmentBox, ShipmentCombo, StockItem
 
 RULES = {  # key: (short name for the menu, what it does)
     "smart": ("Smart", "The customer's last size, else the last size anyone packed; an item default changed since then wins"),
@@ -55,6 +55,9 @@ def usage(db: Session, item_ids: Optional[Iterable[int]] = None, limit: int = 10
     ships = {s.id: s for s in db.query(Shipment).filter(Shipment.id.in_({r[0] for r in rows})).all()} if rows else {}
     orders = {o.id: o for o in db.query(CustomerOrder).filter(CustomerOrder.id.in_({s.order_id for s in ships.values()})).all()} if ships else {}
     custs = {c.id: c.name for c in db.query(Customer).all()} if orders else {}
+    # bolts boxed with their nuts (assembled units) pack differently from bare bolts: kept apart
+    assembled = set(db.query(ShipmentCombo.shipment_id, ShipmentCombo.lead_line_id)
+                    .filter(ShipmentCombo.shipment_id.in_(list(ships))).all()) if ships else set()
     out = defaultdict(list)
     for sid, line_id, item_id, biggest, n, recorded, total in rows:
         sh = ships.get(sid)
@@ -68,7 +71,7 @@ def usage(db: Session, item_ids: Optional[Iterable[int]] = None, limit: int = 10
         when = _when(sh)
         out[item_id].append({
             "item_id": item_id, "pack_size": size, "sure": bool(recorded) or n > 1, "boxes": n, "quantity": total,
-            "shipment_id": sid, "shipment": sh.code, "order_line_id": line_id,
+            "shipment_id": sid, "shipment": sh.code, "order_line_id": line_id, "assembled": (sid, line_id) in assembled,
             "order": o.code if o else "", "po": (o.po_number if o else "") or "", "customer_id": o.customer_id if o else None,
             "customer": custs.get(o.customer_id, "") if o else "", "date": when.isoformat() if when else None,
             "_when": when or datetime.min,
@@ -129,7 +132,9 @@ def _pick(item: StockItem, uses: List[dict], customer_id: Optional[int], rule: s
 
 
 def suggest(db: Session, item_ids: Iterable[int], customer_id: Optional[int] = None, rule: Optional[str] = None,
-            _uses: Optional[dict] = None) -> Dict[int, dict]:
+            _uses: Optional[dict] = None, assembled: bool = False) -> Dict[int, dict]:
+    """assembled: the bolt goes out with its nuts (app/services/nut_combos.py) -- earlier assembled packings of it are
+    used first; with none, its ordinary packing. Ordinary lines never learn from assembled ones."""
     ids = set(item_ids)
     if not ids:
         return {}
@@ -137,7 +142,19 @@ def suggest(db: Session, item_ids: Iterable[int], customer_id: Optional[int] = N
     uses = _uses if _uses is not None else usage(db, ids, limit=50)
     changed = _default_changed(db, ids)
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_(ids)).all()}
-    return {iid: _pick(items[iid], uses.get(iid, []), customer_id, rule, changed.get(iid)) for iid in ids if iid in items}
+    out = {}
+    for iid in ids:
+        if iid not in items:
+            continue
+        mine = [u for u in uses.get(iid, []) if bool(u.get("assembled")) == assembled]
+        if assembled and any(u["sure"] for u in mine):
+            pick = _pick(items[iid], mine, customer_id, rule, None)
+            out[iid] = dict(pick, label=f"Assembled · {pick['label']}")
+            continue
+        if assembled:
+            mine = [u for u in uses.get(iid, []) if not u.get("assembled")]
+        out[iid] = _pick(items[iid], mine, customer_id, rule, changed.get(iid))
+    return out
 
 
 def suggestions_for_shipments(db: Session, shipment_ids: Iterable[int], rule: Optional[str] = None) -> Dict[int, dict]:
@@ -157,10 +174,15 @@ def suggestions_for_shipments(db: Session, shipment_ids: Iterable[int], rule: Op
             by_customer[cid] = suggest(db, all_items, cid, rule, _uses=uses)
         sug = by_customer[cid]
         out[s.id] = {l.order_line_id: sug.get(l.item_id) for l in s.lines if l.order_line_id}
+        for c in s.combos:  # bolts going out assembled: their own packing memory
+            lead = next((l for l in s.lines if l.order_line_id == c.lead_line_id), None)
+            if lead:
+                out[s.id][c.lead_line_id] = suggest(db, [lead.item_id], cid, rule, _uses=uses, assembled=True).get(lead.item_id)
     return out
 
 
-def size_for_line(db: Session, shipment: Shipment, item_id: int) -> Optional[int]:
+def size_for_line(db: Session, shipment: Shipment, item_id: int, order_line_id: Optional[int] = None) -> Optional[int]:
     """The pre-filled size for one line, server side (accepting packing with no boxes, labels for old shipments)."""
     order = db.get(CustomerOrder, shipment.order_id)
-    return (suggest(db, [item_id], order.customer_id if order else None).get(item_id) or {}).get("size")
+    assembled = bool(order_line_id) and any(c.lead_line_id == order_line_id for c in shipment.combos)
+    return (suggest(db, [item_id], order.customer_id if order else None, assembled=assembled).get(item_id) or {}).get("size")

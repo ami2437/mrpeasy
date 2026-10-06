@@ -94,3 +94,19 @@ def test_restore_refused_when_stock_is_gone(api, client, admin_headers, make):
     entry = next(e for e in client.get("/api/recycle-bin", headers=admin_headers).json() if sh["code"] in e["label"])
     r = client.post(f"/api/recycle-bin/{entry['id']}/restore", headers=admin_headers)
     assert r.status_code == 400 and "used since" in r.json()["detail"]
+
+
+def test_restore_refused_when_the_order_line_was_booked_again(api, client, admin_headers, make):
+    """Found by the random walk: a deleted open shipment restored after the same order line was booked again
+    would book the line twice over (shipped + booked above what was ordered)."""
+    a = make.item(price=2)
+    make.stock(a, 100)  # plenty of stock: only the order line can say no
+    o = make.order(lines=[(a, 10, 2)])
+    sh = api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": o["lines"][0]["id"], "quantity": 10}]})
+    api.delete(f"/api/shipments/{sh['id']}")
+    api.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": [{"line_id": o["lines"][0]["id"], "quantity": 8}]})
+    entry = next(e for e in client.get("/api/recycle-bin", headers=admin_headers).json() if sh["code"] in e["label"])
+    r = client.post(f"/api/recycle-bin/{entry['id']}/restore", headers=admin_headers)
+    assert r.status_code == 400 and "still open" in r.json()["detail"], r.text
+    line = api.get(f"/api/customer-orders/{o['id']}")["lines"][0]
+    assert line["booked_quantity"] == 8 and api.get(f"/api/stock-items/{a['id']}")["booked"] == 8

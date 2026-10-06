@@ -175,9 +175,25 @@ def _check_rebooking(db: Session, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         free = (lot.quantity if lot else 0) - sum(h.quantity for h in held)
         if free + 1e-9 < q:
             short.append(f"lot {lot.lot_code if lot else lot_id}: needs {q:g}, {max(0, free):g} free")
+    # ...and the order line must still have that much open: it may have been booked / shipped again since
+    from app.models import CustomerOrderLine
+    by_line = {}
+    for l in lines:
+        by_line[l["order_line_id"]] = by_line.get(l["order_line_id"], 0) + (l["quantity"] or 0)
+    over = []
+    for line_id, q in by_line.items():
+        ol = db.get(CustomerOrderLine, line_id)
+        if ol is None:
+            continue  # the order comes back in this same entry: nothing else can hold its lines
+        still_open = ol.quantity - ol.shipped_quantity - ol.booked_quantity
+        if still_open + 1e-9 < q:
+            over.append(f"{ol.order.code if ol.order else 'order'} line #{ol.line_no}: needs {q:g}, {max(0, still_open):g} still open")
     if short:
         raise HTTPException(status_code=400, detail="Can't book this shipment again -- the stock has been used since it was deleted: "
                                                     + "; ".join(short) + ". Create a new shipment instead.")
+    if over:
+        raise HTTPException(status_code=400, detail="Can't book this shipment again -- its order lines were booked or shipped since it was "
+                                                    "deleted: " + "; ".join(over) + ". Create a new shipment for what's left instead.")
     orders = {r["cols"].get("order_id") for r in rows if r["table"] == "shipments" and r["cols"]["id"] in open_ids}
     return {"by_item": by_item, "orders": orders}
 

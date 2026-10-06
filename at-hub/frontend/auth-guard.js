@@ -308,6 +308,13 @@ function tzAbbrev(date = new Date()) {
   catch (e) { return ""; }
 }
 
+// A link someone typed, made safe to click: web addresses and AT-HUB pages only (never javascript: / data:). null if not.
+function safeHref(url) {
+  const u = String(url || "").trim(), bare = u.replace(/[\s\u0000-\u001f]+/g, "");  // browsers drop these inside a URL ("java\nscript:")
+  if (!u) return null;
+  return /^[a-z][a-z0-9+.-]*:/i.test(bare) && !/^https?:\/\//i.test(bare) ? null : escapeHtml(u);
+}
+
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -475,6 +482,79 @@ function splitPasteRow(row, allowSpaces = true) {
   if (t.includes("\t")) return t.split("\t").map(c => c.trim());
   if (t.includes(",")) return t.split(",").map(c => c.trim());
   return allowSpaces ? t.split(/\s+/) : [t];
+}
+
+// ---- Status underlays: a record's card takes its status colour, and drafts plus finished / void / cancelled records
+// also carry a faint watermark word -- the amber DRAFT order, applied everywhere. setUnderlay(el, null) clears it.
+// Tones: amber (draft) · blue (open, waiting) · pink (in progress) · green (done) · red (needs attention) · grey (closed) · teal
+const UNDERLAY_TONES = { amber: "#d97706", blue: "#2563eb", pink: "#db2777", green: "#16a34a", red: "#dc2626", grey: "#64748b", teal: "#0d9488" };
+// The watermark is an SVG picture on a card-sized layer, so it never pushes or clips the card's content (a long
+// table still scrolls); the word scales with the card. Light and dark versions: the dark one a touch stronger.
+function watermarkSvg(word, color, opacity) {
+  const size = Math.min(190, Math.round(1500 / Math.max(word.length, 1)));  // longer words, smaller type
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420"><text x="500" y="250" text-anchor="middle"
+    font-family="Segoe UI, system-ui, Arial, sans-serif" font-weight="800" font-size="${size}" letter-spacing="${Math.round(size * .12)}"
+    fill="${color}" fill-opacity="${opacity}" transform="rotate(-16 500 210)">${escapeHtml(word)}</text></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+function setUnderlay(el, tone, word = "") {
+  if (!el) return;
+  Object.keys(UNDERLAY_TONES).forEach(t => el.classList.remove(`uw-${t}`));
+  el.classList.toggle("uw", !!tone);
+  if (tone) el.classList.add(`uw-${tone}`);
+  if (tone && word) {
+    el.dataset.wm = word;
+    el.style.setProperty("--wm-img", watermarkSvg(word, UNDERLAY_TONES[tone], .075));
+    el.style.setProperty("--wm-img-dark", watermarkSvg(word, UNDERLAY_TONES[tone], .14));
+  } else {
+    delete el.dataset.wm;
+    el.style.removeProperty("--wm-img");
+    el.style.removeProperty("--wm-img-dark");
+  }
+}
+// Status -> [tone, watermark] for each kind of record (one place, so every screen reads the same)
+const UNDERLAYS = {
+  order(o) {
+    if (o.status === "draft") return ["amber", "DRAFT"];
+    if (o.status === "cancelled") return ["grey", "CANCELLED"];
+    if (o.status === "invoiced") return ["green", "COMPLETE"];
+    if (o.status === "shipped") return ["green"];
+    return (o.lines || []).some(l => l.shipped_quantity > 0 || l.booked_quantity > 0) ? ["pink"] : ["blue"];
+  },
+  quote(q) {
+    if (!q.id) return [null];
+    if (q.status === "draft") return ["amber", "DRAFT"];
+    if (q.status === "converted") return ["green", "CONVERTED"];
+    if (q.status === "accepted") return ["green"];
+    if (q.status === "declined") return ["grey", "DECLINED"];
+    if (q.valid_until && new Date(q.valid_until) < new Date(new Date().toDateString())) return ["grey", "EXPIRED"];
+    return ["blue"];
+  },
+  po(p) {
+    return { draft: ["amber", "DRAFT"], ordered: ["blue"], partially_received: ["pink"], received: ["green", "RECEIVED"],
+             cancelled: ["grey", "CANCELLED"] }[p.status] || [null];
+  },
+  invoice(inv) {
+    if (inv.status === "void") return ["grey", "VOID"];
+    if (inv.status === "draft") return ["amber", "DRAFT"];
+    if (inv.status === "paid" || (inv.balance <= 0.005 && (inv.total || 0) > 0)) return ["green", "PAID"];
+    if (inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString())) return ["red", "OVERDUE"];
+    return inv.amount_paid > 0 ? ["pink"] : ["blue"];
+  },
+  shipment(s) {
+    return s.status === "cancelled" ? ["grey", "CANCELLED"] : [null];  // open / shipped: .ship-inproc / .ship-done
+  },
+  active(rec, word = "INACTIVE") { return rec && rec.is_active === false ? ["grey", word] : [null]; },
+  lot(l) { return { on_hold: ["amber", "ON HOLD"], rejected: ["red", "REJECTED"] }[l.status] || [null]; },
+};
+// The same colours as a soft wash on a list row -- only for the tones asked for (attention states, not every row).
+function rowUnderlay(kind, rec, tones = ["red"]) {
+  const [tone] = UNDERLAYS[kind](rec);
+  return tone && tones.includes(tone) ? `row-uw uw-${tone}` : "";
+}
+function applyUnderlay(el, kind, rec, ...extra) {
+  const [tone, word] = UNDERLAYS[kind](rec, ...extra);
+  setUnderlay(el, tone, word);
 }
 
 // A small choice pop-up: resolves to the clicked button's value (null on Esc / click outside),
@@ -1851,6 +1931,7 @@ Thank you.</textarea>
 
 // ---- Icons: a small inline SVG set (Lucide-style strokes), no external library ----
 const ICON_PATHS = {
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   sticky: '<path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/>',
@@ -2041,21 +2122,21 @@ document.addEventListener("DOMContentLoaded", () => {
 // ---- Action items (Reports + Dashboard): stuck shipments, missing PODs, vendor follow-ups ----
 // Each section is collapsible; sections with nothing to do collapse to a green "all clear" line.
 const ACTION_COLUMNS = {
-  not_delivered: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Carrier / Tracking", r => [r.carrier, r.tracking_number].filter(Boolean).join(" · ")], ["Shipped", r => actDate(r.ship_date)], ["Days", r => r.days]],
-  missing_pod: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Shipped", r => actDate(r.ship_date)], ["Delivered?", r => r.delivered ? "Yes" : "No"], ["Days", r => r.days]],
-  not_shipped: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Status", r => r.status], ["Days Waiting", r => r.days]],
-  late_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Due", r => actDate(r.due)], ["Days Late", r => r.days]],
-  vendor_shipped: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => r.vendor], ["Vendor Invoices", r => r.bills], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Since Invoice", r => r.days]],
-  po_overdue: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => r.vendor], ["Expected", r => actDate(r.expected)], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Late", r => r.days]],
-  bills_due: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => r.vendor], ["Invoice #", r => r.bill_number], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => r.days]],
-  unapplied_payments: [["Payment", r => r.code], ["Vendor", r => r.vendor], ["Paid", r => actDate(r.paid_date)], ["Amount", r => fmtMoney(r.amount)], ["Unapplied", r => fmtMoney(r.unapplied)], ["Days", r => r.days]],
-  mtr_unlinked: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["File", r => r.filename], ["Uploaded (Days Ago)", r => r.days]],
-  items_verify: [["Item", r => actLink("item.html", r.id, r.code)], ["Title", r => escapeHtml(r.title || "")], ["Group", r => escapeHtml(r.group || "")], ["Days Waiting", r => r.days]],
-  no_invoice: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Shipped", r => actDate(r.ship_date)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
-  draft_invoices: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => r.customer], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
-  invoices_overdue: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Customer", r => r.customer], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => r.days]],
-  not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
-  draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
+  not_delivered: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Carrier / Tracking", r => [r.carrier, r.tracking_number].filter(Boolean).join(" · ")], ["Shipped", r => actDate(r.ship_date)], ["Days", r => escapeHtml(r.days ?? "")]],
+  missing_pod: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Shipped", r => actDate(r.ship_date)], ["Delivered?", r => r.delivered ? "Yes" : "No"], ["Days", r => escapeHtml(r.days ?? "")]],
+  not_shipped: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Status", r => escapeHtml(r.status ?? "")], ["Days Waiting", r => escapeHtml(r.days ?? "")]],
+  late_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Due", r => actDate(r.due)], ["Days Late", r => escapeHtml(r.days ?? "")]],
+  vendor_shipped: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Vendor Invoices", r => escapeHtml(r.bills ?? "")], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Since Invoice", r => escapeHtml(r.days ?? "")]],
+  po_overdue: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Expected", r => actDate(r.expected)], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Late", r => escapeHtml(r.days ?? "")]],
+  bills_due: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Invoice #", r => escapeHtml(r.bill_number ?? "")], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => escapeHtml(r.days ?? "")]],
+  unapplied_payments: [["Payment", r => escapeHtml(r.code ?? "")], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Paid", r => actDate(r.paid_date)], ["Amount", r => fmtMoney(r.amount)], ["Unapplied", r => fmtMoney(r.unapplied)], ["Days", r => escapeHtml(r.days ?? "")]],
+  mtr_unlinked: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["File", r => escapeHtml(r.filename ?? "")], ["Uploaded (Days Ago)", r => escapeHtml(r.days ?? "")]],
+  items_verify: [["Item", r => actLink("item.html", r.id, r.code)], ["Title", r => escapeHtml(r.title || "")], ["Group", r => escapeHtml(r.group || "")], ["Days Waiting", r => escapeHtml(r.days ?? "")]],
+  no_invoice: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Shipped", r => actDate(r.ship_date)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  draft_invoices: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  invoices_overdue: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => escapeHtml(r.days ?? "")]],
+  not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
 };
 function actLink(page, id, text) { return id ? `<a class="link" href="${page}?id=${id}">${escapeHtml(text || "")}</a>` : escapeHtml(text || ""); }
 function actDate(v) { return fmtDate(v); }

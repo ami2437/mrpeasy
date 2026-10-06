@@ -134,7 +134,7 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td class="line-no"></td>
-        <td class="grow"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${i.code} — ${i.title} (${fmtQty(i.available)} free)${itemPickNote(i, true)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
+        <td class="grow"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-price="${i.selling_price || 0}">${escapeHtml(i.code)} — ${escapeHtml(i.title)} (${fmtQty(i.available)} free)${itemPickNote(i, true)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
         <td class="num"><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
         <td class="num">${priceInput("l-price", 0)}<div data-price-delta data-kind="sale" data-price-input=".l-price"></div></td>
         <td class="num subtotal"></td>
@@ -626,7 +626,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${customerName(o.customer_id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
@@ -648,7 +648,7 @@
         return `
         <tr class="${done ? "order-done" : ""}">
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
-          <td>${customerName(o.customer_id)}</td>
+          <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
@@ -700,6 +700,8 @@
         <div class="cell-entry" id="alloc-${line.id}-${s.shipment_id}">
           <a class="link" href="shipments.html?id=${s.shipment_id}">${s.code}</a>
           <div class="muted small">${fmtQty(s.quantity)} · ${s.status === "ready" ? `${fmtQty(s.picked_quantity)} picked` : s.status}</div>
+          ${s.combined ? `<div class="combo-note small" title="${escapeHtml(s.combined.note || "Bolts and nuts combined")} on ${escapeHtml(s.code)} only: the next shipment can send them separately">${icon("link")}${s.combined.role === "lead"
+            ? `${fmtQty(s.combined.units)} assembled with #${s.combined.with_line_no ?? ""}` : `${fmtQty(s.combined.quantity)} sent with #${s.combined.with_line_no ?? ""}`}</div>` : ""}
           ${canUnbook ? `<a class="link small" onclick="showUnbook(${line.id}, ${s.shipment_id}, ${unpicked})">Unbook</a>` : ""}
         </div>`;
       }).join("");
@@ -771,7 +773,7 @@
       });
       return Object.values(byLine).sort((a, b) => (a.line_no || 0) - (b.line_no || 0)).map(x => {
         const i = items.find(i => i.id === x.item_id);
-        return `<span class="line-no">#${x.line_no ?? "?"}</span> ${i ? i.code : x.item_id} × ${fmtQty(x.qty)}`;
+        return `<span class="line-no">#${x.line_no ?? "?"}</span> ${escapeHtml(i ? i.code : x.item_id)} × ${fmtQty(x.qty)}`;
       }).join(", ");
     }
 
@@ -833,6 +835,7 @@
 
       const isDraft = order.status === "draft";
       card.classList.toggle("order-draft", isDraft);
+      applyUnderlay(card, "order", order);  // open blue · in progress pink · shipped green · COMPLETE · CANCELLED
       // Converted from a quote: the quote links back to it (managers have quotes loaded); else the "From quote Q-…" note
       const fromQuote = (typeof quotes !== "undefined" ? quotes : []).find(q => q.order_id === order.id);
       const fromQuoteCode = fromQuote ? fromQuote.code : ((order.notes || "").match(/From quote (Q-?\d+)/) || [])[1];
@@ -921,7 +924,7 @@
         </div>
         ${editable ? `
           <div class="row add-line-row" style="margin-top:8px; max-width:760px;">
-            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
             <div class="fixed price-cell"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
               <div data-price-delta data-kind="sale" data-item="" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
@@ -1511,7 +1514,7 @@
         apiFetch("/api/customer-orders/"),
       ]);
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
-      document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+      document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
       Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);  // paperclips fill in a moment later
       if (AuthGuard.can("quotes")) loadQuotes().then(renderOrders);

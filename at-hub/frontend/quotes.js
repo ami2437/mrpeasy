@@ -130,6 +130,7 @@ function drawQuote() {
   const card = document.getElementById("detail-card");
   card.style.display = "block";
   card.classList.remove("order-draft");
+  applyUnderlay(card, "quote", x);  // DRAFT · sent blue · CONVERTED · DECLINED / EXPIRED
   card.innerHTML = `
     <h3 class="detail-head" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${x.id ? `Quote ${escapeHtml(x.code)}` : "New Quote"}
       ${x.id ? `<span class="tag ${QUOTE_TAG[x.status]}">${x.status}</span>` : ""}

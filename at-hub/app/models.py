@@ -334,9 +334,17 @@ class CustomerOrderLine(Base):
                 "shipment_id": sh.id, "code": sh.code, "status": sh.status,
                 "quantity": 0, "picked_quantity": 0,
                 "boxes": sum(1 for b in sh.boxes if b.order_line_id == self.id),
+                "combined": None,
             })
             entry["quantity"] += sl.quantity
             entry["picked_quantity"] += sl.picked_quantity or 0
+            for c in sh.combos:  # sent assembled with another line on that shipment (bolt + nut)
+                if self.id in (c.lead_line_id, c.member_line_id) and not entry["combined"]:
+                    lead = c.lead_line_id == self.id
+                    other = c.member_line if lead else c.lead_line
+                    entry["combined"] = {"role": "lead" if lead else "member", "with_line_no": other.line_no if other else None,
+                                         "with_line_id": other.id if other else None, "units": c.quantity,
+                                         "quantity": c.quantity if lead else c.member_quantity, "ratio": c.ratio, "note": c.note}
         return list(by_shipment.values())
 
     @property
@@ -620,6 +628,7 @@ class Shipment(Base):
     lines = relationship("ShipmentLine", backref="shipment", cascade="all, delete-orphan")
     boxes = relationship("ShipmentBox", backref="shipment", cascade="all, delete-orphan")
     pallets = relationship("PalletWeight", backref="shipment", cascade="all, delete-orphan")
+    combos = relationship("ShipmentCombo", backref="shipment", cascade="all, delete-orphan", order_by="ShipmentCombo.id")
 
 
 class ShipmentLine(Base):
@@ -640,6 +649,31 @@ class ShipmentLine(Base):
     @property
     def line_no(self):
         return self.order_line.line_no if self.order_line else None
+
+
+class ShipmentCombo(Base):
+    """Bolts and nuts sent together as assembled units on ONE shipment: `quantity` of the lead (bolt) line, each with
+    `ratio` of the member (nut) line, go out as `quantity` units. Stock, lots and each order line's shipped qty stay per
+    item; only packing, labels and the packing list count them once (app/services/nut_combos.py). The next shipment of
+    the same order starts uncombined."""
+    __tablename__ = "shipment_combos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False, index=True)
+    lead_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=False)  # the bolt: boxes + labels are its
+    member_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=False)  # the nut riding on it
+    quantity = Column(Float, nullable=False)  # assembled units = bolts combined
+    ratio = Column(Float, nullable=False, default=1)  # nuts per bolt
+    note = Column(String, nullable=True)  # printed on the packing list, e.g. "Bolts and nuts combined"
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lead_line = relationship("CustomerOrderLine", foreign_keys=[lead_line_id])
+    member_line = relationship("CustomerOrderLine", foreign_keys=[member_line_id])
+
+    @property
+    def member_quantity(self) -> float:
+        return self.quantity * (self.ratio or 1)
 
 
 class ShipmentBox(Base):

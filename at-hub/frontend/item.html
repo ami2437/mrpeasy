@@ -80,6 +80,9 @@
 
       const v = x => escapeHtml(x ?? "");
       const ro = isManager ? "" : "disabled";
+      // archived: grey + ARCHIVED; generic bulk stock (58-NUT): teal, like its transfers and draws
+      const [tone, word] = item.is_active === false ? ["grey", "ARCHIVED"] : item.is_generic ? ["teal"] : [null];
+      setUnderlay(document.getElementById("item-card"), tone, word);
       document.getElementById("item-card").innerHTML = `
         <div class="field-grid">
           <div><label>Code</label><input type="text" value="${v(item.code)}" disabled></div>

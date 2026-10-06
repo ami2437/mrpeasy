@@ -101,7 +101,7 @@
           .join("");
         const missing = lot.unit_cost == null;
         return `
-          <tr>
+          <tr class="${rowUnderlay("lot", lot, ["amber", "red"])}">
             <td><strong>${escapeHtml(lot.lot_code)}</strong></td>
             <td>${item ? `${escapeHtml(item.code)}<div class="muted small">${escapeHtml(item.title)}</div>` : lot.item_id}</td>
             <td class="num">${fmtQty(lot.quantity)}${lot.initial_quantity ? `<div class="muted small">Of ${fmtQty(lot.initial_quantity)}</div>` : ""}</td>

@@ -229,10 +229,20 @@ def _packing_list(db, sh: Shipment, opt):
         e = previous.setdefault(sl.order_line_id, {}).setdefault(s.id, {"code": s.code, "qty": 0, "when": s.delivered_at or s.ship_date})
         e["qty"] += sl.quantity
     from app.services.nut_pairing import line_order, pallets_by_line
+    from app.services.nut_combos import absorbed
     codes = {i: it.code for i, it in items.items()}
     eff_pallets = pallets_by_line(sh, codes)
+    inside = absorbed(sh)  # nuts sent inside assembled units: counted once, on the bolt's row
+    combo_of_lead = {c.lead_line_id: c for c in sh.combos}
+    for lid, q in inside.items():
+        if lid in by_line:
+            by_line[lid] = max(0, by_line[lid] - q)
+    for lid in [lid for lid, q in by_line.items() if q <= 1e-9]:
+        eff_pallets.pop(lid, None)  # a nut fully inside the bolt's boxes isn't a pallet item of its own
     rows = []
     for lid in [ol.id for ol in line_order(list(ols.values()), lambda ol: codes.get(ol.item_id, ""))]:
+        if by_line.get(lid, 0) <= 1e-9:
+            continue
         ol = ols[lid]
         it = items.get(ol.item_id)
         counts = {}
@@ -240,7 +250,13 @@ def _packing_list(db, sh: Shipment, opt):
             if b.order_line_id == lid:
                 counts[b.quantity_in_box] = counts.get(b.quantity_in_box, 0) + 1
         back = max(0, ol.quantity - ol.shipped_quantity - ol.booked_quantity)
-        rows.append({"line_no": str(ol.line_no or ""), "item_code": it.code if it else "", "description": _desc(it.title if it else "", ol, show_notes),
+        desc = _desc(it.title if it else "", ol, show_notes)
+        c = combo_of_lead.get(lid)
+        if c:  # always printed: it's how this shipment went out, not a line note
+            desc = f"{desc}\n{combo_text(c, by_line[lid], ols.get(c.member_line_id), codes)}"
+        elif lid in inside:
+            desc = f"{desc}\nPlus {qty(inside[lid])} sent assembled with its bolts"
+        rows.append({"line_no": str(ol.line_no or ""), "item_code": it.code if it else "", "description": desc,
                      "lot": ", ".join(dict.fromkeys(lots_by_line.get(lid, []))), "ordered": qty(ol.quantity), "shipped": qty(by_line[lid]),
                      "backorder": qty(back) if back else "—",
                      "previous": "\n".join(f"{e['code']}: {qty(e['qty'])}" + (f" · {moment(e['when'])}" if e["when"] else "") for e in previous.get(lid, {}).values()),
@@ -269,6 +285,17 @@ def _packing_list(db, sh: Shipment, opt):
                         "pod_url": f"{base}/pod.html?id={sh.id}" if base else f"/pod.html?id={sh.id}"},
            "_pallet_rows": pallet_rows}
     return ctx, rows
+
+
+def combo_text(c, lead_qty, member_line, codes) -> str:
+    """The packing-list note under a bolt sent with its nuts: "Bolts and nuts combined (15420-NUT, 2 per bolt, 400 of 500)"."""
+    bits = [codes.get(member_line.item_id, "") if member_line else ""]
+    if (c.ratio or 1) != 1:
+        bits.append(f"{qty(c.ratio)} per bolt")
+    if c.quantity < lead_qty - 1e-9:
+        bits.append(f"{qty(c.quantity)} of {qty(lead_qty)}")
+    bits = ", ".join(b for b in bits if b)
+    return (c.note or "Bolts and nuts combined") + (f" ({bits})" if bits else "")
 
 
 def _purchase_order(db, po: PurchaseOrder, opt):
@@ -326,6 +353,9 @@ def pallet_label_contexts(db, sh: Shipment, per_pallet: bool = True, totals=("pa
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in sh.lines} or {0})).all()}
     codes = {i: it.code for i, it in items.items()}
     eff = pallets_by_line(sh, codes)
+    from app.services.nut_combos import fully_combined_lines
+    for lid in fully_combined_lines(sh):
+        eff.pop(lid, None)  # a nut inside assembled units: the label lists the bolt only
     ols = {l.order_line_id: l.order_line for l in sh.lines if l.order_line}
     ordered_ids = [ol.id for ol in line_order(list(ols.values()), lambda ol: codes.get(ol.item_id, ""))]
     on_pallet, boxes_on = {}, {}

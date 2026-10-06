@@ -235,7 +235,7 @@
         `;
         loadItems();
       } catch (err) {
-        resultEl.innerHTML = `<div class="error">${err.message}</div>`;
+        resultEl.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
       }
     }
 
@@ -493,7 +493,7 @@
         items = await apiFetch(`/api/stock-items/?${params.toString()}`);
         renderItems();
       } catch (err) {
-        document.getElementById("items-body").innerHTML = `<tr><td colspan="12" class="error">${err.message}</td></tr>`;
+        document.getElementById("items-body").innerHTML = `<tr><td colspan="12" class="error">${escapeHtml(err.message)}</td></tr>`;
       }
     }
 

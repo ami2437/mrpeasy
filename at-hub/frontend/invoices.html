@@ -171,9 +171,9 @@
         return;
       }
       tbody.innerHTML = filtered.map(inv => `
-        <tr class="${inv.is_combined ? "row-combined" : ""}">
+        <tr class="${inv.is_combined ? "row-combined" : ""} ${rowUnderlay("invoice", inv, ["red"])}">
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}</td>
-          <td>${customerName(inv.customer_id)}</td>
+          <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
           <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
           <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
@@ -315,6 +315,7 @@
       billingCheck = check;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
+      applyUnderlay(card, "invoice", invoice);  // DRAFT · sent blue · part paid pink · OVERDUE red · PAID · VOID
       const editable = invoice.status !== "void";  // sent/paid invoices can be corrected too
 
       const zeroLines = invoice.lines.filter(l => Math.abs(lineAmount(l.quantity, l.unit_price)) < 0.005).length;

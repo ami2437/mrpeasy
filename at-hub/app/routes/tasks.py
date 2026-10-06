@@ -1,10 +1,11 @@
 """Admin task list: manual to-dos plus tasks suggested from the data (payments to record,
 vendor invoices without an amount, orders missing their customer PO...)."""
+import re
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -89,6 +90,18 @@ class TaskIn(BaseModel):
     detail: Optional[str] = None
     category: Optional[str] = None
     link: Optional[str] = None
+
+    @field_validator("link")
+    @classmethod
+    def _safe_link(cls, v):
+        """A web address or a page of AT-HUB -- never javascript: / data: (it's put straight into a clickable link)."""
+        v = (v or "").strip()
+        if not v:
+            return None
+        bare = re.sub(r"[\s\x00-\x1f]+", "", v)  # browsers drop these inside a URL ("java\nscript:")
+        if re.match(r"^[a-z][a-z0-9+.-]*:", bare, re.I) and not re.match(r"^https?://", bare, re.I):
+            raise ValueError("The link has to be a web address (https://...) or an AT-HUB page")
+        return v
 
 
 @router.post("/")

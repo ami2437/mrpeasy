@@ -75,15 +75,15 @@
         document.getElementById("activity-body").innerHTML = activity.length ? activity.map(t => `
           <tr>
             <td>${fmtDateTime(t.created_at)}</td>
-            <td>${itemsById[t.item_id] ? itemsById[t.item_id].code : t.item_id}</td>
+            <td>${escapeHtml(itemsById[t.item_id] ? itemsById[t.item_id].code : t.item_id)}</td>
             <td>${t.type}</td>
             <td style="color:${t.quantity_delta < 0 ? '#dc2626' : '#166534'};font-weight:600;">${t.quantity_delta > 0 ? '+' : ''}${t.quantity_delta}</td>
-            <td>${t.reference || ''}</td>
-            <td class="muted">${t.created_by || ''}</td>
+            <td>${escapeHtml(t.reference || '')}</td>
+            <td class="muted">${escapeHtml(t.created_by || '')}</td>
           </tr>
         `).join("") : `<tr><td colspan="6" class="muted">No activity yet.</td></tr>`;
       } catch (err) {
-        document.getElementById("summary").innerHTML = `<div class="error">${err.message}</div>`;
+        document.getElementById("summary").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
       }
     }
     const hr = new Date().getHours();

@@ -1,3 +1,4 @@
+import re
 from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Optional, List
@@ -10,6 +11,12 @@ def _round_price(v):
     return round(v, PRICE_DECIMALS) if v is not None else v
 
 
+def _is_response(cls) -> bool:
+    """A *Response model that inherits an input model (ShipmentBoxResponse, InvoiceLineResponse...) is reading what's
+    stored: the input rules don't apply there -- an old / imported record must never turn a page into a server error."""
+    return cls.__name__.endswith("Response")
+
+
 class InputModel(BaseModel):
     """Shared input rules: prices/costs are rounded to PRICE_DECIMALS, and quantities
     must be whole numbers (stock is counted in whole units everywhere)."""
@@ -19,10 +26,31 @@ class InputModel(BaseModel):
     def _round(cls, v):
         return _round_price(v)
 
+    @field_validator("code", "lot_code", "adjustment_lot_code", "pallet_number", mode="after", check_fields=False)
+    @classmethod
+    def _plain_code(cls, v):
+        """Item / lot / pallet codes print on labels, lists and barcodes: no markup characters (< > " ' `) or control chars."""
+        if v is None or _is_response(cls):
+            return v
+        if re.search(r"[<>\"'`\x00-\x1f]", v):
+            raise ValueError("Codes can't contain < > \" ' ` or line breaks")
+        return v
+
+    @field_validator("default_pack_size", mode="after", check_fields=False)
+    @classmethod
+    def _pack_size(cls, v):
+        if _is_response(cls):
+            return v
+        if v is None or v == 0:
+            return None  # 0 = no pack size (one box per line)
+        if v < 0:
+            raise ValueError("Pack size must be 1 or more (leave it empty for none)")
+        return v
+
     @field_validator("quantity", "quantity_in_box", "on_hand", "reorder_point", mode="after", check_fields=False)
     @classmethod
     def _whole_qty(cls, v):
-        if v is None:
+        if v is None or _is_response(cls):
             return v
         if abs(v - round(v)) > 1e-9:
             raise ValueError("Quantity must be a whole number")
@@ -231,8 +259,20 @@ class LotCostUpdate(BaseModel):
 
 
 # ---- Customers / Vendors ----
+def _party_name(v):
+    if v is None:
+        return v
+    v = " ".join(str(v).split())
+    if not v:
+        raise ValueError("A name is needed")
+    if len(v) > 200:
+        raise ValueError("Keep the name under 200 characters")
+    return v
+
+
 class PartyCreate(BaseModel):
     name: str
+    _name = field_validator("name")(classmethod(lambda cls, v: _party_name(v)))
     contact_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -242,6 +282,7 @@ class PartyCreate(BaseModel):
 
 class PartyUpdate(BaseModel):
     name: Optional[str] = None
+    _name = field_validator("name")(classmethod(lambda cls, v: _party_name(v)))
     contact_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -307,6 +348,16 @@ class CustomerOrderCreate(BaseModel):
     lines: List[CustomerOrderLineCreate]
 
 
+class LineCombined(BaseModel):
+    role: str  # lead (the bolt the boxes / labels belong to) | member (the nut riding on it)
+    with_line_no: Optional[int] = None
+    with_line_id: Optional[int] = None
+    units: float  # assembled units
+    quantity: float  # of THIS line inside them
+    ratio: float = 1
+    note: Optional[str] = None
+
+
 class LineShipmentAllocation(BaseModel):
     shipment_id: int
     code: str
@@ -314,6 +365,7 @@ class LineShipmentAllocation(BaseModel):
     quantity: float
     picked_quantity: float
     boxes: int
+    combined: Optional[LineCombined] = None  # sent assembled with another line on this shipment
 
 
 class LineBookingSource(BaseModel):
@@ -541,6 +593,36 @@ class PackSizeHistoryEntry(BaseModel):
     changed_at: Optional[datetime] = None
 
 
+class ShipmentComboResponse(BaseModel):
+    id: int
+    lead_line_id: int
+    member_line_id: int
+    quantity: float  # assembled units (bolts)
+    ratio: float = 1  # nuts per bolt
+    member_quantity: float  # nuts inside them
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ShipmentComboInput(InputModel):
+    lead_line_id: int
+    member_line_id: int
+    quantity: float
+    ratio: float = 1
+    note: Optional[str] = None
+
+    @field_validator("quantity", "ratio")
+    @classmethod
+    def _whole(cls, v):
+        if v is None or v < 1 or abs(v - round(v)) > 1e-9:
+            raise ValueError("Use a whole number of 1 or more")
+        return float(round(v))
+
+
 class ShipmentResponse(BaseModel):
     id: int
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
@@ -562,6 +644,7 @@ class ShipmentResponse(BaseModel):
     lines: List[ShipmentLineResponse] = []
     boxes: List[ShipmentBoxResponse] = []
     pallets: List[PalletWeightResponse] = []
+    combos: List[ShipmentComboResponse] = []  # bolt + nut lines sent assembled on this shipment
     pods: List["PodFile"] = []  # proof-of-delivery attachments (filled in by the route)
     invoice_id: Optional[int] = None  # the live invoice billing this shipment (filled in by the route)
     invoice_code: Optional[str] = None

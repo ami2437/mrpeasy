@@ -160,7 +160,7 @@
     function addLine() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="min-width:280px;"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
+        <td style="min-width:280px;"><select class="l-item" data-searchable><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}" data-cost="${i.cost_price || 0}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select>${lineNoteBox("", true)}</td>
         <td><input type="text" class="l-vcode" style="width:130px;" placeholder="Vendor Part #"><div class="vcode-hint small"></div></td>
         <td><input type="text" class="l-vdesc" style="min-width:200px;" placeholder="Vendor Description"></td>
         <td><input type="number" step="1" min="1" class="l-qty qty-input" value="1"></td>
@@ -441,7 +441,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${vendorName(o.vendor_id)}${soLine(o)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(o.order_total)}</td><td class="num">${fmtMoney(o.amount_paid)}</td><td class="num">${fmtMoney(o.order_total - o.amount_paid)}</td>
           <td></td><td><span class="tag cancelled">cancelled</span></td>
@@ -465,7 +465,7 @@
         return `
         <tr class="${poDone(o) ? "order-done" : ""}">
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
-          <td>${vendorName(o.vendor_id)}${soLine(o)}</td>
+          <td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(total)}</td>
@@ -510,6 +510,7 @@
       currentOrder = order;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
+      applyUnderlay(card, "po", order);  // DRAFT · ordered blue · receiving pink · RECEIVED · CANCELLED
       const canReceive = !["received", "cancelled"].includes(order.status);
       const editable = order.status !== "cancelled";
       const canCancel = order.status !== "cancelled" && order.lines.every(l => l.received_quantity === 0);
@@ -605,7 +606,7 @@
         </div>
         ${editable ? `
           <div class="row add-line-row" style="margin-top:8px; max-width:1100px;">
-            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${i.code} — ${i.title}${itemPickNote(i)}</option>`).join("")}</select></div>
+            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></div>
             <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
                 onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
             <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>

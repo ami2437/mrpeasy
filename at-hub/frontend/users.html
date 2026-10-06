@@ -266,6 +266,7 @@
       const self = u.id === me.id;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
+      applyUnderlay(card, "active", u);
       card.innerHTML = `
         <h3 style="margin-top:0;">${escapeHtml(u.username)} ${roleTag(u.role)}
           ${u.is_active ? "" : `<span class="tag cancelled">Deactivated</span>`}</h3>

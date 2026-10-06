@@ -125,6 +125,7 @@ const ContactCards = {
       return notes.length ? `<div class="used-for">${notes.join(" · ")}</div>` : "";
     };
 
+    applyUnderlay(document.getElementById("cc-card"), "active", rec);  // inactive: grey + INACTIVE
     document.getElementById("cc-card").innerHTML = `
       <div class="card-actions"><button class="secondary small-btn" onclick="ContactCards.edit()">Edit</button></div>
       <div class="card-head">
@@ -174,6 +175,7 @@ const ContactCards = {
   cancel() {
     if (this.currentId) return this.show(this.currentId);
     this.draft = null;
+    setUnderlay(document.getElementById("cc-card"), null);
     document.getElementById("cc-card").innerHTML = `<div class="empty-pick">Pick one to see the card.</div>`;
   },
   // inputs write straight into the draft: ContactCards.set('emails', 2, 'label', value)
@@ -206,6 +208,7 @@ const ContactCards = {
     const d = this.draft.details;
     const a = v => escapeHtml(v || "");
     const hint = key => this.cfg.hints && this.cfg.hints[key] ? ` <span class="used-for">${this.cfg.hints[key]}</span>` : "";
+    applyUnderlay(document.getElementById("cc-card"), "active", this.draft);
     document.getElementById("cc-card").innerHTML = `
       <div class="card-actions">
         <button class="secondary small-btn" onclick="ContactCards.cancel()">Cancel</button>

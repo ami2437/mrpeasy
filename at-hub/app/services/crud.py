@@ -509,9 +509,11 @@ class StockItemService:
             taken[lot.id] = (lot, take)
             remaining -= take
         if remaining > 1e-9:
-            for lot in db.query(Lot).filter(
-                Lot.item_id == item.id, Lot.status == "available", Lot.quantity > 0
-            ).order_by(Lot.received_date).all():
+            # then booked stock, then lots on hold / rejected: they're on the shelf too, so a recount that finds less
+            # comes out of them before the shortfall is booked against no lot at all (on hand must match the lots)
+            rank = {"available": 0, "on_hold": 1, "rejected": 2}
+            for lot in sorted(db.query(Lot).filter(Lot.item_id == item.id, Lot.quantity > 0).all(),
+                              key=lambda l: (rank.get(l.status, 3), l.received_date or datetime.min)):
                 if remaining <= 1e-9:
                     break
                 already = taken.get(lot.id, (lot, 0))[1]
@@ -1283,14 +1285,14 @@ class ShipmentService:
         """Boxes by each order line's pre-filled pack size (app/services/pack_sizes.py: the customer's / last packed size or
         the item default; none = one box), as the packing screen proposes."""
         from app.services import pack_sizes
-        out, qty = [], {}
+        out = []
         first = {}
         for l in shipment.lines:
-            qty[l.order_line_id] = qty.get(l.order_line_id, 0) + l.quantity
             first.setdefault(l.order_line_id, l)
+        qty, _ = ShipmentService.packing_quantities(shipment)  # a combined nut has no boxes of its own
         for ol_id, total in qty.items():
             l = first[ol_id]
-            known = pack_sizes.size_for_line(db, shipment, l.item_id)
+            known = pack_sizes.size_for_line(db, shipment, l.item_id, ol_id)
             pack = int(known or 0) or int(total)
             n, left = 0, total
             while left > 1e-9:
@@ -1406,6 +1408,7 @@ class ShipmentService:
             item.booked = max(0, item.booked - line.quantity)
         db.query(ShipmentBox).filter(ShipmentBox.shipment_id == shipment.id).delete()
         db.query(PalletWeight).filter(PalletWeight.shipment_id == shipment.id).delete()
+        shipment.combos.clear()  # nothing is going out together any more
         shipment.status = "cancelled"
         db.commit()
         db.refresh(shipment)
@@ -1601,9 +1604,12 @@ class ShipmentService:
         for box in [b for b in shipment.boxes if b.order_line_id in touched_lines]:
             shipment.boxes.remove(box)
             shipment.packed_at = shipment.packed_by = None  # its packing changed: re-checked and accepted again
+        from app.services.nut_combos import fit_to_bookings
+        fit_to_bookings(db, shipment)  # bolts + nuts combined: fewer full sets left -> fewer assembled units
         if not shipment.lines:
             shipment.boxes.clear()
             shipment.pallets.clear()
+            shipment.combos.clear()
             shipment.status = "cancelled"
         db.commit()
         db.refresh(shipment)
@@ -1618,7 +1624,7 @@ class ShipmentService:
 
         # Packing is per order line, never merged by item: the same item on two lines is
         # boxed (and labelled) as two separate lines.
-        shipped_by_line, order_lines = ShipmentService.quantities_by_order_line(shipment)
+        shipped_by_line, order_lines = ShipmentService.packing_quantities(shipment)
         lines_by_item = {}
         for ol in order_lines.values():
             lines_by_item.setdefault(ol.item_id, []).append(ol)
@@ -1671,12 +1677,19 @@ class ShipmentService:
     @staticmethod
     def quantities_by_order_line(shipment: Shipment):
         """(quantity per order line id, order line by id) -- a line booked from several lots
-        is still one line."""
+        is still one line. What actually ships (and is billed): see packing_quantities for boxing."""
         qty, lines = {}, {}
         for sl in shipment.lines:
             qty[sl.order_line_id] = qty.get(sl.order_line_id, 0) + sl.quantity
             lines[sl.order_line_id] = sl.order_line
         return qty, lines
+
+    @staticmethod
+    def packing_quantities(shipment: Shipment):
+        """Like quantities_by_order_line, but what gets BOXED: a nut combined with its bolt rides in the bolt's boxes
+        (app/services/nut_combos.py), so only its separate part (if any) has boxes of its own."""
+        from app.services.nut_combos import packing_quantities
+        return packing_quantities(shipment)
 
     @staticmethod
     def set_pallet_weights(db: Session, shipment_id: int, data) -> Shipment:
@@ -1697,7 +1710,7 @@ class ShipmentService:
     @staticmethod
     def _packing_mismatch(shipment: Shipment) -> bool:
         """Some order line's boxes don't add up to what the shipment holds of it."""
-        shipped_by_line, _ = ShipmentService.quantities_by_order_line(shipment)
+        shipped_by_line, _ = ShipmentService.packing_quantities(shipment)
         boxed_by_line = {}
         for box in shipment.boxes:
             boxed_by_line[box.order_line_id] = boxed_by_line.get(box.order_line_id, 0) + box.quantity_in_box
