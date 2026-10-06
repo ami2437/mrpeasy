@@ -1286,7 +1286,7 @@ async function printLabels(shipmentId) {
 // Shipment pallet labels (4x6): one per pallet (its row highlighted) or one summary label.
 // What goes on the label: ticked in the pop-up each time, remembered on this computer for next time.
 const PALLET_LABEL_OPTS = [["boxes_col", "Boxes column (boxes on each pallet)"], ["total_pallets", "Total pallets"],
-                           ["total_boxes", "Total boxes"], ["total_weight", "Total weight"], ["company_line", "Our company name and ship date"]];
+                           ["total_boxes", "Total boxes"], ["total_weight", "Total weight"], ["show_company", "Our company name"], ["show_ship_date", "Ship date"]];
 async function printPalletLabels(shipmentId, ids = null) {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("at_hub_pallet_label_opts") || "{}"); } catch (e) {}

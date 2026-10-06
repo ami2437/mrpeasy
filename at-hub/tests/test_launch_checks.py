@@ -207,8 +207,25 @@ def test_pallet_table_carries_on_to_a_second_label():
 def test_pallet_label_print_options():
     from app.routes.shipments import _pallet_label_spec
     from app.services import template_engine, template_starters
-    spec = _pallet_label_spec(template_starters.classic_pallet_label(), {"boxes_col": False, "company_line": False})
+    spec = _pallet_label_spec(template_starters.classic_pallet_label(), {"boxes_col": False})
     shown = template_engine.visible_spec(spec)["header"]["blocks"]
     table = next(b for b in shown if b["type"] == "table")
     assert [c["key"] for c in table["columns"] if not c.get("hidden")] == ["pallet", "items"]
-    assert not any(b.get("group") == "Company" for b in shown)
+
+
+def test_pallet_label_footer_parts(make, api):
+    from app.services import doc_context
+    from app.config.database import SessionLocal
+    from app.models import Shipment
+    a = make.item()
+    make.stock(a, 10)
+    sh = make.ship(make.order(lines=[(a, 5, 1)]))
+    api.put(f"/api/shipments/{sh['id']}/boxes", json={"boxes": [{"order_line_id": sh["lines"][0]["order_line_id"], "item_id": a["id"],
+                                                                 "box_number": 1, "quantity_in_box": 5, "pallet_number": "1"}]})
+    db = SessionLocal()
+    s = db.get(Shipment, sh["id"])
+    both = doc_context.pallet_label_contexts(db, s)[0]["label"]["footer_info"]
+    name_only = doc_context.pallet_label_contexts(db, s, footer=("company",))[0]["label"]["footer_info"]
+    none = doc_context.pallet_label_contexts(db, s, footer=())[0]["label"]["footer_info"]
+    db.close()
+    assert "shipped" in both and "shipped" not in name_only and name_only and none == ""
