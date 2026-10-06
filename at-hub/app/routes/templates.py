@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Customer, CustomerOrder, DocTemplate, Invoice, PurchaseOrder, Quote, Shipment, User
+from app.services.print_safe import make_safe
 from app.services import doc_context, template_engine, template_starters
 from app.services.templates import default_for
 
@@ -84,7 +85,7 @@ def create(data: TemplateIn, db: Session = Depends(get_db), user: User = Depends
         spec = next((s for k, s in template_starters.starters(data.doc_type) if k == (data.starter or "blank")), None)
         if spec is None:
             raise HTTPException(status_code=400, detail="Unknown starting design")
-    t = DocTemplate(doc_type=data.doc_type, name=(data.name or "").strip() or spec.get("name") or "Untitled", spec=json.dumps(spec),
+    t = DocTemplate(doc_type=data.doc_type, name=(data.name or "").strip() or spec.get("name") or "Untitled", spec=json.dumps(make_safe(spec)),
                     starter=data.starter, customer_id=data.customer_id if data.doc_type in CUSTOMER_DOCS else None,
                     created_by=user.username, updated_by=user.username)
     db.add(t)
@@ -107,7 +108,7 @@ def update(tid: int, data: TemplateUpdate, db: Session = Depends(get_db), user: 
             raise HTTPException(status_code=400, detail="Give the template a name")
         t.name = data.name.strip()
     if data.spec is not None:
-        t.spec = json.dumps(data.spec)
+        t.spec = json.dumps(make_safe(data.spec))  # a dark fill picked in the designer prints light
     if data.clear_customer:
         t.customer_id = None
     elif data.customer_id is not None and t.doc_type in CUSTOMER_DOCS:

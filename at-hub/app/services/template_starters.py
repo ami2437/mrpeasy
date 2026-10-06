@@ -660,7 +660,7 @@ def charcoal(doc_type):
             + g("Title", [T(3.3, -0.3, 4.0, 0.36, "{{doc.title}}", size=22, bold=True, color="#ffffff", align="right"),
                           T(3.3, 0.1, 4.0, 0.22, "{{doc.number}}", size=11, bold=True, color="#fdba74", align="right")]))
     head += _three(1.02, d, color=ORANGE)
-    head += _strip(2.12, d["facts"], highlight=True, hi_bg=ORANGE_T, hi_color=ORANGE)
+    head += _strip(2.12, d["facts"], highlight=True, hi_bg=ORANGE_T, hi_color="#9a3412")  # deep orange: still dark in grey
     return _doc("Charcoal", "ui", head, 2.12 + 0.576 + 0.25, _tbl(d, header_bg=CHAR, header_color="#ffffff", zebra="#f9fafb"),
                 _summary_n(d, ORANGE), _footer_ab(False), _running_ab())
 
@@ -827,4 +827,5 @@ def starters(doc_type):
                + [(k, f(doc_type)) for k, f in MORE_DOCS] + [("blank", blank(doc_type))])
         if doc_type in ("packing_list", "invoice"):
             out.insert(3, ("portal", portal_packing_list() if doc_type == "packing_list" else portal_invoice()))
-    return [(k, copy.deepcopy(s)) for k, s in out]
+    from app.services.print_safe import make_safe  # no dark fills reach paper (black-and-white printers)
+    return [(k, make_safe(copy.deepcopy(s))) for k, s in out]

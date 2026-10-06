@@ -26,6 +26,8 @@ ACCENT = colors.HexColor("#2563eb")
 LIGHT = colors.HexColor("#f3f6fb")
 ZEBRA = colors.HexColor("#f8fafc")
 BORDER = colors.HexColor("#d9dee7")
+# Fills stay light so a black-and-white printer keeps every word readable (dark fills print near-black).
+HEAD_BG = colors.HexColor("#e5e7eb")
 MUTED = colors.HexColor("#5b6472")
 GREEN = colors.HexColor("#15803d")
 RED = colors.HexColor("#b91c1c")
@@ -69,8 +71,8 @@ S = {
     "docno": _style("docno", fontName=FONT_BOLD, fontSize=11, leading=14, alignment=TA_RIGHT),
     "label": _style("label", fontName=FONT_BOLD, fontSize=7.5, leading=10, textColor=MUTED),
     "party": _style("party", fontName=FONT_BOLD, fontSize=11, leading=14),
-    "th": _style("th", fontName=FONT_BOLD, fontSize=8, leading=10, textColor=colors.white),
-    "th_r": _style("th_r", fontName=FONT_BOLD, fontSize=8, leading=10, textColor=colors.white, alignment=TA_RIGHT),
+    "th": _style("th", fontName=FONT_BOLD, fontSize=8, leading=10, textColor=NAVY),
+    "th_r": _style("th_r", fontName=FONT_BOLD, fontSize=8, leading=10, textColor=NAVY, alignment=TA_RIGHT),
     "td": _style("td", fontSize=9, leading=11.5),
     "td_r": _style("td_r", fontSize=9, leading=11.5, alignment=TA_RIGHT),
     "td_muted": _style("td_muted", fontSize=7.5, leading=10, textColor=MUTED),
@@ -78,8 +80,8 @@ S = {
     "meta_v": _style("meta_v", fontName=FONT_BOLD, fontSize=8.5, leading=11, alignment=TA_RIGHT),
     "total_k": _style("total_k", fontSize=9.5, leading=12),
     "total_v": _style("total_v", fontSize=9.5, leading=12, alignment=TA_RIGHT),
-    "grand_k": _style("grand_k", fontName=FONT_BOLD, fontSize=11, leading=14, textColor=colors.white),
-    "grand_v": _style("grand_v", fontName=FONT_BOLD, fontSize=12, leading=14, textColor=colors.white, alignment=TA_RIGHT),
+    "grand_k": _style("grand_k", fontName=FONT_BOLD, fontSize=11, leading=14, textColor=NAVY),
+    "grand_v": _style("grand_v", fontName=FONT_BOLD, fontSize=12, leading=14, textColor=NAVY, alignment=TA_RIGHT),
     "thanks": _style("thanks", fontName=FONT_ITALIC, fontSize=10, leading=13, textColor=ACCENT),
 }
 
@@ -255,10 +257,10 @@ def _header(company, title: str, doc_number: str, status_label: str = None, stat
         right.append(Spacer(1, 4))
         label = status_label.upper()
         pill = Table([[Paragraph(escape(label), _style(
-            "pill", fontName=FONT_BOLD, fontSize=7.5, leading=9, textColor=colors.white))]],
+            "pill", fontName=FONT_BOLD, fontSize=7.5, leading=9, textColor=status_color or MUTED))]],
             colWidths=[pdfmetrics.stringWidth(label, FONT_BOLD, 7.5) + 16])
         pill.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), status_color or MUTED),
+            ("BOX", (0, 0), (-1, -1), 1, status_color or MUTED),  # outlined, not filled: prints on any printer
             ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
             ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
             ("ROUNDEDCORNERS", [6, 6, 6, 6]),
@@ -314,7 +316,7 @@ def _data_table(header, rows, col_widths, right_cols=(), repeat=1):
         body.append([c if not isinstance(c, str) else p(c, "td_r" if i in right_cols else "td") for i, c in enumerate(r)])
     t = Table([head] + body, colWidths=col_widths, repeatRows=repeat)
     style = [
-        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG), ("LINEBELOW", (0, 0), (-1, 0), 1, NAVY),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, 0), 6), ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
         ("TOPPADDING", (0, 1), (-1, -1), 5), ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
@@ -427,7 +429,7 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("LINEBELOW", (0, 0), (-1, -2), 0.4, BORDER),
-        ("BACKGROUND", (0, -1), (-1, -1), ACCENT),
+        ("BACKGROUND", (0, -1), (-1, -1), HEAD_BG), ("BOX", (0, -1), (-1, -1), 1, NAVY),
         ("TOPPADDING", (0, -1), (-1, -1), 7), ("BOTTOMPADDING", (0, -1), (-1, -1), 7),
     ]))
     totals.hAlign = "RIGHT"
@@ -667,7 +669,7 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False,
 
     totals = Table([[p("Total", "grand_k"), p(money(total), "grand_v")]], colWidths=[1.5 * inch, 1.4 * inch])
     totals.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), ACCENT),
+        ("BACKGROUND", (0, 0), (-1, -1), HEAD_BG), ("BOX", (0, 0), (-1, -1), 1, NAVY),
         ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
@@ -709,7 +711,7 @@ def quote_pdf(db: Session, q) -> bytes:
                              [0.35 * inch, code_w, 7.3 * inch - 0.35 * inch - code_w - 3.1 * inch, 0.9 * inch, 1.05 * inch, 1.15 * inch],
                              right_cols=(3, 4, 5)))
     totals = Table([[p("Quote total", "grand_k"), p(money(total), "grand_v")]], colWidths=[1.5 * inch, 1.4 * inch])
-    totals.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ACCENT), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
+    totals.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), HEAD_BG), ("BOX", (0, 0), (-1, -1), 1, NAVY), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
     totals.hAlign = "RIGHT"
     story += [Spacer(1, 10), KeepTogether(totals)]
     story += _notes_box([("NOTES", q.notes), ("TERMS", f"Prices valid until {date(q.valid_until)}." if q.valid_until else None)])
