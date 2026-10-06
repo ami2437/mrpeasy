@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from app.services import filenames
+from app.services.clock import business_now, to_business
 
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
@@ -20,6 +21,18 @@ def not_for_sale(item: StockItem) -> None:
     if item is not None and item.is_generic:
         raise HTTPException(status_code=400, detail=f"{item.code} is generic bulk stock and isn't sold directly -- put the specific item "
                                                     f"on the order (e.g. 15420-NUT); it draws from {item.code} when the shipment is booked")
+
+
+def set_fields(obj, updates: dict) -> None:
+    """Apply an edit's fields. A blank (None) sent for a required column or a yes/no flag is ignored rather than
+    crashing the save (or leaving a flag that is neither)."""
+    from sqlalchemy import Boolean
+    columns = obj.__table__.columns
+    for key, value in updates.items():
+        column = columns.get(key)
+        if value is None and column is not None and (not column.nullable or isinstance(column.type, Boolean)):
+            continue
+        setattr(obj, key, value)
 
 
 def get_company_profile(db: Session) -> CompanyProfile:
@@ -401,6 +414,8 @@ class StockItemService:
             updates["category"] = ProductGroupService.require(db, updates["category"])
 
         new_on_hand = updates.pop("on_hand", None)
+        if new_on_hand is not None and new_on_hand < 0:
+            raise HTTPException(status_code=400, detail="On hand can't be below 0")
         adj_cost = updates.pop("adjustment_unit_cost", None)
         adj_lot_code = (updates.pop("adjustment_lot_code", None) or "").strip()
         adj_note = (updates.pop("adjustment_note", None) or "").strip()
@@ -414,8 +429,7 @@ class StockItemService:
         if updates.get("is_generic") and (updates.get("parent_item_id") or (item.parent_item_id and "parent_item_id" not in updates)):
             raise HTTPException(status_code=400, detail="A generic item can't itself draw from another item")
 
-        for key, value in updates.items():
-            setattr(item, key, value)
+        set_fields(item, updates)
 
         if new_on_hand is not None and abs(new_on_hand - item.on_hand) > 1e-9:
             StockItemService._adjust(db, item, new_on_hand - item.on_hand, adj_cost, adj_lot_code, adj_note, created_by)
@@ -577,8 +591,7 @@ class PartyService:
         party = self.get(db, party_id)
         updates = data.dict(exclude_unset=True)
         details = updates.pop("details", None)
-        for key, value in updates.items():
-            setattr(party, key, value)
+        set_fields(party, updates)
         if details is not None:
             party.details = details  # after the single fields: the card decides them
         db.commit()
@@ -797,8 +810,7 @@ class CustomerOrderService:
                 raise HTTPException(status_code=400, detail="Customer not found")
         if "po_number" in updates and (updates["po_number"] or "").strip().lower() != (order.po_number or "").strip().lower():
             order.duplicate_po_ok = None  # a different PO # needs its own check
-        for key, value in updates.items():
-            setattr(order, key, value)
+        set_fields(order, updates)
         db.commit()
         db.refresh(order)
         return order
@@ -891,6 +903,8 @@ class CustomerOrderService:
         else:
             updates.pop("item_id", None)
         if "quantity" in updates and updates["quantity"] is not None:
+            if updates["quantity"] <= 0:
+                raise HTTPException(status_code=400, detail="Quantity must be greater than 0 -- remove the line instead")
             if updates["quantity"] < line.allocated_quantity - 1e-9:
                 raise HTTPException(
                     status_code=400,
@@ -901,8 +915,7 @@ class CustomerOrderService:
             updates["notes"] = (updates["notes"] or "").strip() or None
         if updates.get("print_notes", False) is None:
             updates.pop("print_notes")
-        for key, value in updates.items():
-            setattr(line, key, value)
+        set_fields(line, updates)
         db.flush()
         CustomerOrderService._recompute_status(order)
         db.commit()
@@ -1150,8 +1163,7 @@ class ShipmentService:
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status == "cancelled":
             raise HTTPException(status_code=400, detail="Cannot edit a cancelled shipment")
-        for key, value in data.dict(exclude_unset=True).items():
-            setattr(shipment, key, value)
+        set_fields(shipment, data.dict(exclude_unset=True))
         db.commit()
         db.refresh(shipment)
         return shipment
@@ -1271,8 +1283,9 @@ class ShipmentService:
         shipment = ShipmentService.get(db, shipment_id)
         if shipment.status not in ShipmentService.OPEN_STATUSES:
             raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- packing is accepted before it ships")
-        if not shipment.boxes:
-            for box in ShipmentService.default_boxes(db, shipment):
+        boxed = {b.order_line_id for b in shipment.boxes}
+        for box in ShipmentService.default_boxes(db, shipment):  # lines with no boxes yet get them from pack sizes
+            if box.order_line_id not in boxed:
                 db.add(box)
         shipment.packed_at, shipment.packed_by = datetime.utcnow(), by
         db.commit()
@@ -1322,6 +1335,8 @@ class ShipmentService:
             raise HTTPException(status_code=400, detail=f"{len(short)} line(s) aren't fully picked yet -- pick everything before shipping")
         if not shipment.packed_at:
             raise HTTPException(status_code=400, detail="Review and accept the packing before shipping")
+        if ShipmentService._packing_mismatch(shipment):
+            raise HTTPException(status_code=400, detail="The boxes no longer add up to what's on the shipment -- re-check the packing and accept it again")
         ShipmentService._close(db, shipment, created_by)
         db.commit()
         db.refresh(shipment)
@@ -1353,7 +1368,7 @@ class ShipmentService:
                 created_by=created_by,
             ))
         shipment.status = "shipped"
-        shipment.ship_date = datetime.utcnow()
+        shipment.ship_date = business_now()
         db.flush()
         order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
         CustomerOrderService._recompute_status(order)
@@ -1379,7 +1394,7 @@ class ShipmentService:
         invoiced one keeps its status but gets the date (it's used on the invoice)."""
         if shipment.status not in ShipmentService.SHIPPED_STATUSES:
             raise HTTPException(status_code=400, detail=f"{shipment.code} is {shipment.status} -- it has to ship before it can be delivered")
-        when = delivered_at or datetime.utcnow()
+        when = to_business(delivered_at) or business_now()
         if shipment.ship_date and when < shipment.ship_date.replace(hour=0, minute=0, second=0, microsecond=0):
             raise HTTPException(status_code=400, detail=f"{shipment.code} shipped on {shipment.ship_date:%b %d, %Y} -- it can't be delivered before that")
         shipment.delivered_at = when
@@ -1561,6 +1576,7 @@ class ShipmentService:
 
         for box in [b for b in shipment.boxes if b.order_line_id in touched_lines]:
             shipment.boxes.remove(box)
+            shipment.packed_at = shipment.packed_by = None  # its packing changed: re-checked and accepted again
         if not shipment.lines:
             shipment.boxes.clear()
             shipment.pallets.clear()
@@ -1655,16 +1671,21 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def _packing_mismatch(shipment: Shipment) -> bool:
+        """Some order line's boxes don't add up to what the shipment holds of it."""
+        shipped_by_line, _ = ShipmentService.quantities_by_order_line(shipment)
+        boxed_by_line = {}
+        for box in shipment.boxes:
+            boxed_by_line[box.order_line_id] = boxed_by_line.get(box.order_line_id, 0) + box.quantity_in_box
+        return any(abs(boxed_by_line.get(line_id, 0) - qty) > 1e-6 for line_id, qty in shipped_by_line.items())
+
+    @staticmethod
     def unpacked(db: Session) -> List[Shipment]:
         """Open (new / ready) shipments whose boxed quantity doesn't match their quantity -- still to be
         packed. Shipped ones are out of the building whatever their box records say."""
         result = []
         for shipment in db.query(Shipment).filter(Shipment.status.in_(ShipmentService.OPEN_STATUSES)).order_by(Shipment.id.desc()).all():
-            shipped_by_line, _ = ShipmentService.quantities_by_order_line(shipment)
-            boxed_by_line = {}
-            for box in shipment.boxes:
-                boxed_by_line[box.order_line_id] = boxed_by_line.get(box.order_line_id, 0) + box.quantity_in_box
-            if any(abs(boxed_by_line.get(line_id, 0) - qty) > 1e-6 for line_id, qty in shipped_by_line.items()):
+            if ShipmentService._packing_mismatch(shipment):
                 result.append(shipment)
         return result
 
@@ -1909,10 +1930,13 @@ class InvoiceService:
         return invoice
 
     @staticmethod
-    def set_status(db: Session, invoice_id: int, status: str, reason: Optional[str] = None) -> Invoice:
+    def set_status(db: Session, invoice_id: int, status: str, reason: Optional[str] = None, by: Optional[str] = None) -> Invoice:
         if status not in ("sent", "paid", "void"):
             raise HTTPException(status_code=400, detail="status must be sent, paid, or void")
         invoice = InvoiceService.get(db, invoice_id)
+        if invoice.status == "void":
+            # its shipments were released to be billed again -- a void invoice stays void
+            raise HTTPException(status_code=400, detail=f"{invoice.code} is void -- make a new invoice for its shipments instead")
         if status == "void" and invoice.payments:
             raise HTTPException(status_code=400, detail="Invoice has payments recorded against it, cannot void")
         if status == "paid" and invoice.balance > 0.005:  # paid means the payments cover it -- record them first
@@ -1920,7 +1944,7 @@ class InvoiceService:
         if status == "void":
             from app.services import billing
             billing.clear_variances(db, invoice)  # a void invoice bills nothing
-            invoice.voided_at, invoice.voided_by = datetime.utcnow(), None
+            invoice.voided_at, invoice.voided_by = datetime.utcnow(), by
             if reason and reason.strip():
                 invoice.void_reason = reason.strip()
             # Its shipments become billable again (they can go on a new or combined invoice).
@@ -1991,14 +2015,15 @@ class InvoicePaymentService:
         invoice = InvoiceService.get(db, invoice_id)
         if invoice.status != "sent":
             raise HTTPException(status_code=400, detail=f"Invoice is {invoice.status} -- payments can only be recorded against a sent invoice")
+        data.amount = round(data.amount or 0, 2)
         if data.amount <= 0:
-            raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+            raise HTTPException(status_code=400, detail="Payment amount must be at least $0.01")
         if data.amount > invoice.balance + 0.005:
             raise HTTPException(status_code=400, detail=f"Payment of {data.amount:.2f} exceeds the open balance of {invoice.balance:.2f}")
         db.add(InvoicePayment(
             invoice_id=invoice.id,
             amount=data.amount,
-            paid_date=data.paid_date or datetime.utcnow(),
+            paid_date=to_business(data.paid_date) or business_now(),
             method=data.method,
             reference=data.reference,
             note=data.note,
@@ -2108,6 +2133,13 @@ class VendorItemService:
             VendorItemService.upsert(db, vendor_id, item_id, code, desc, unit_cost, ordered=True)
 
 
+def _check_po_line(quantity, unit_cost, where: str = "") -> None:
+    if quantity is not None and quantity <= 0:
+        raise HTTPException(status_code=400, detail=f"{where}Quantity must be greater than 0")
+    if unit_cost is not None and unit_cost < 0:
+        raise HTTPException(status_code=400, detail=f"{where}Unit cost can't be negative")
+
+
 class PurchaseOrderService:
     @staticmethod
     def list(db: Session, status: Optional[str] = None) -> List[PurchaseOrder]:
@@ -2147,6 +2179,7 @@ class PurchaseOrderService:
         db.flush()
 
         for pos, line in enumerate(data.lines):
+            _check_po_line(line.quantity, line.unit_cost, f"Line #{pos + 1}: ")
             item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, line)
             db.add(PurchaseOrderLine(
                 po_id=po.id,
@@ -2183,8 +2216,7 @@ class PurchaseOrderService:
         if "vendor_id" in updates and updates["vendor_id"] is not None:
             if not db.query(Vendor).filter(Vendor.id == updates["vendor_id"]).first():
                 raise HTTPException(status_code=400, detail="Vendor not found")
-        for key, value in updates.items():
-            setattr(po, key, value)
+        set_fields(po, updates)
         db.commit()
         db.refresh(po)
         return po
@@ -2194,6 +2226,7 @@ class PurchaseOrderService:
         po = PurchaseOrderService.get(db, po_id)
         if po.status == "cancelled":
             raise HTTPException(status_code=400, detail="Order is cancelled")
+        _check_po_line(data.quantity, data.unit_cost)
         item_id, code, desc = VendorItemService.resolve_line(db, po.vendor_id, data)
         db.add(PurchaseOrderLine(po_id=po.id, item_id=item_id, quantity=data.quantity, unit_cost=data.unit_cost,
                                  vendor_item_code=code, vendor_description=desc,
@@ -2229,6 +2262,7 @@ class PurchaseOrderService:
                 raise HTTPException(status_code=400, detail=f"{new_item.code} is archived")
         else:
             updates.pop("item_id", None)
+        _check_po_line(updates.get("quantity"), updates.get("unit_cost"))
         if "quantity" in updates and updates["quantity"] is not None:
             if updates["quantity"] < line.received_quantity - 1e-9:
                 raise HTTPException(
@@ -2241,8 +2275,7 @@ class PurchaseOrderService:
                 updates[key] = (updates[key] or "").strip() or None
         if updates.get("print_notes", False) is None:
             updates.pop("print_notes")
-        for key, value in updates.items():
-            setattr(line, key, value)
+        set_fields(line, updates)
         VendorItemService.learn(db, po.vendor_id, line.item_id, line.vendor_item_code, line.vendor_description, line.unit_cost)
         if cost_changed:
             # A corrected PO price flows into lots already received on this line.
@@ -2366,7 +2399,7 @@ class PurchaseOrderService:
                 base_unit_cost=line.unit_cost,
                 unit_cost=round(line.unit_cost + landed, 6),
                 po_line_id=line.id,
-                received_date=datetime.utcnow(),
+                received_date=business_now(),
                 expiry_date=recv_line.expiry_date,
                 status="available",
                 source="purchase",
@@ -2449,7 +2482,7 @@ class VendorBillService:
         shipping = round(data.shipping_amount or 0, 2)
         if shipping < 0 or shipping > data.amount + 0.005:
             raise HTTPException(status_code=400, detail="S&H on the invoice must be between 0 and the invoice amount")
-        bill = VendorBill(po_id=po.id, bill_number=number, bill_date=data.bill_date or datetime.utcnow(),
+        bill = VendorBill(po_id=po.id, bill_number=number, bill_date=to_business(data.bill_date) or business_now(),
                           due_date=data.due_date, amount=round(data.amount, 2), note=data.note,
                           attachment_id=data.attachment_id, created_by=created_by)
         db.add(bill)
@@ -2548,7 +2581,7 @@ class VendorPaymentService:
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
         vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=round(data.amount, 2),
-                           paid_date=data.paid_date or datetime.utcnow(), method=data.method, reference=data.reference,
+                           paid_date=to_business(data.paid_date) or business_now(), method=data.method, reference=data.reference,
                            note=data.note, created_by=created_by)
         db.add(vp)
         db.commit()

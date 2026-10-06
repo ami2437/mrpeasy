@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import List
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -134,8 +134,9 @@ def billing_check(invoice_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{invoice_id}/status", response_model=InvoiceResponse)
-def set_invoice_status(invoice_id: int, data: InvoiceStatusUpdate, db: Session = Depends(get_db)):
-    return InvoiceService.set_status(db, invoice_id, data.status, reason=data.reason)
+def set_invoice_status(invoice_id: int, data: InvoiceStatusUpdate, db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_active_user)):
+    return InvoiceService.set_status(db, invoice_id, data.status, reason=data.reason, by=current_user.username)
 
 
 @router.post("/{invoice_id}/payments", response_model=InvoiceResponse)
@@ -160,6 +161,8 @@ def remove_invoice_payment(invoice_id: int, payment_id: int, db: Session = Depen
 @router.put("/{invoice_id}/funding", response_model=InvoiceResponse, dependencies=[Depends(require_perm("invoices.funding"))])
 def set_invoice_funding(invoice_id: int, data: InvoiceFundingUpdate, db: Session = Depends(get_db)):
     """Edit disbursement date / funding amount / discount by hand. Payments aren't touched."""
+    if any(v is not None and v < 0 for v in (data.funding_amount, data.funding_discount)):
+        raise HTTPException(status_code=400, detail="Funding amount and discount can't be negative")
     invoice = InvoiceService.get(db, invoice_id)
     for key, value in data.model_dump().items():
         setattr(invoice, key, value)

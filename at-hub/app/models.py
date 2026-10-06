@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
+from app.services.clock import business_now
 from typing import Optional
 
 Base = declarative_base()
@@ -102,7 +103,7 @@ class Lot(Base):
     base_unit_cost = Column(Float, nullable=True)  # acquisition cost per unit: PO line unit_cost, or what the user entered on an adjustment
     unit_cost = Column(Float, nullable=True)  # landed cost per unit: base_unit_cost + landed costs allocated to its PO line
     po_line_id = Column(Integer, ForeignKey("purchase_order_lines.id"), nullable=True, index=True)  # the receipt this lot came from
-    received_date = Column(DateTime, nullable=False, default=datetime.utcnow)
+    received_date = Column(DateTime, nullable=False, default=business_now)
     expiry_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="available")  # available | on_hold | rejected
     source = Column(String, nullable=True)  # purchase | adjustment
@@ -685,7 +686,7 @@ class Invoice(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)
     shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=True)
-    invoice_date = Column(DateTime, default=datetime.utcnow)
+    invoice_date = Column(DateTime, default=business_now)
     due_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | sent | paid | void
     void_reason = Column(Text, nullable=True)  # why it was voided (e.g. its shipment was undone)

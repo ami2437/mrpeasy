@@ -15,3 +15,4 @@ openpyxl>=3.1
 httpx>=0.25
 anyio>=4.10,<5
 anthropic>=1.11  # optional "Ask Claude" document reading (cloud; only on an explicit click)
+tzdata>=2024.1  # time zones for BUSINESS_TIMEZONE (Windows has none built in)

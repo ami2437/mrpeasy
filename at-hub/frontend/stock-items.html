@@ -113,7 +113,7 @@
     <div id="bulk-bar" class="card bulk-bar" style="display:none;"></div>
     <div class="card">
       <table class="list-fit">
-        <thead><tr><th class="sel-col"><input type="checkbox" id="sel-all" title="Tick every item in this list" onchange="selectAll(this.checked)"></th><th>Code</th><th>Title</th><th>Group</th><th>Unit</th><th class="sum">On hand</th><th class="sum">Booked</th><th class="sum">Available</th><th>Cost</th><th>Selling</th><th>Reorder pt</th><th>Pack size</th></tr></thead>
+        <thead><tr><th class="sel-col"><input type="checkbox" id="sel-all" title="Tick every item in this list" onchange="selectAll(this.checked)"></th><th>Code</th><th>Title</th><th>Group</th><th>Unit</th><th class="num sum">On hand</th><th class="num sum">Booked</th><th class="num sum">Available</th><th class="num">Cost</th><th class="num">Selling</th><th class="num">Reorder pt</th><th>Pack size</th></tr></thead>
         <tbody id="items-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -464,10 +464,10 @@
           <td>${item.unit || ""}</td>
           <td class="num">${fmtQty(item.on_hand)}</td>
           <td class="num muted">${fmtQty(item.booked)}</td>
-          <td style="${item.reorder_point && item.available <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${fmtQty(item.available)}</td>
+          <td class="num" style="${item.reorder_point && item.available <= item.reorder_point ? 'color:#dc2626;font-weight:600;' : ''}">${fmtQty(item.available)}</td>
           <td class="num">${fmtPrice(item.cost_price)}</td>
           <td class="num">${fmtPrice(item.selling_price)}</td>
-          <td>${item.reorder_point ?? 0}</td>
+          <td class="num">${item.reorder_point ?? 0}</td>
           <td class="nowrap">${item.default_pack_size ?? ""} <a class="link small" onclick="showPackSizeHistory(${item.id})" title="Earlier pack sizes">History</a></td>
         </tr>
       `;

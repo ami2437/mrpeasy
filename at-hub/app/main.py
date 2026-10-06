@@ -409,5 +409,14 @@ def presence(data: dict, authorization: str = Header(None)):
 
 
 frontend_dir = Path(__file__).parent.parent / "frontend"
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Browsers ask for /favicon.ico on every page; the icon is an SVG (pages also link it directly)."""
+    from fastapi.responses import FileResponse
+    return FileResponse(frontend_dir / "favicon.svg", media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="static")

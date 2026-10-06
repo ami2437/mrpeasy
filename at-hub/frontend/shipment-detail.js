@@ -1406,7 +1406,7 @@ async function openPackSizeManager(onChange) {
         <td><input type="number" step="1" min="1" class="qty-input pm-size" value="${i.default_pack_size ?? ""}" placeholder="None"></td>
         <td class="nowrap"><a class="link" onclick="pmSave(${i.id})">Save</a>
           ${i.default_pack_size ? ` · <a class="link" onclick="pmClear(${i.id})">Clear</a>` : ""}</td>
-        <td>${old.length ? old.map(h => `<span class="pack-chip" title="${escapeHtml(`${new Date(h.changed_at).toLocaleString()} · ${h.source || ""} · ${h.changed_by || ""}${h.reference ? " · " + h.reference : ""}`)}">
+        <td>${old.length ? old.map(h => `<span class="pack-chip" title="${escapeHtml(`${utcTime(h.changed_at).toLocaleString()} · ${h.source || ""} · ${h.changed_by || ""}${h.reference ? " · " + h.reference : ""}`)}">
             ${h.previous_pack_size ?? "None"} → ${h.pack_size ?? "None"}
             <a onclick="pmDeleteHistory(${h.id})" title="Delete this history entry" style="cursor:pointer;color:#b91c1c;margin-left:3px;">×</a></span>`).join(" ")
           : `<span class="muted small">—</span>`}</td>

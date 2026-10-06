@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     ai_vision_model: str = "qwen2.5vl:7b"  # reads photos and scanned PDFs (PODs, scanned invoices)
     ai_timeout_seconds: int = 180
 
+    # Ship / invoice / received / paid dates are the business's local date (app/services/clock.py).
+    # e.g. America/Chicago; blank = this server's time zone. Set it on a cloud server (those run on UTC).
+    business_timezone: str = ""
+
     # Keep TEST-* products, a test customer/vendor and an open test order ready at every startup.
     test_data_enabled: bool = False
 

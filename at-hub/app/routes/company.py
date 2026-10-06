@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, Fil
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import CompanyProfileResponse, CompanyProfileUpdate
-from app.services.crud import get_company_profile
+from app.services.crud import get_company_profile, set_fields
 from app.dependencies import get_current_active_user, require_perm, require_any
 
 router = APIRouter(prefix="/api/company", tags=["company"])
@@ -21,10 +21,8 @@ def get_company(db: Session = Depends(get_db)):
 @router.put("/", response_model=CompanyProfileResponse, dependencies=[Depends(require_perm("company"))])
 def update_company(data: CompanyProfileUpdate, db: Session = Depends(get_db)):
     profile = get_company_profile(db)
-    for key, value in data.dict(exclude_unset=True).items():
-        if key == "name" and not (value or "").strip():
-            continue  # name is required on printed invoices -- ignore a blank
-        setattr(profile, key, value)
+    # name is required on printed invoices -- a blank one is ignored
+    set_fields(profile, {k: v for k, v in data.dict(exclude_unset=True).items() if k != "name" or (v or "").strip()})
     db.commit()
     db.refresh(profile)
     return profile

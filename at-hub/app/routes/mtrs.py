@@ -190,7 +190,7 @@ def for_customer_order(order_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/email")
+@router.post("/email", dependencies=[Depends(require_any("orders.view", "stock.view", "purchasing"))])  # not drivers
 def email_mtrs(data: MtrEmailRequest, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Email chosen MTR files to a customer, logged against the order."""
     from app.routes.attachments import upload_root

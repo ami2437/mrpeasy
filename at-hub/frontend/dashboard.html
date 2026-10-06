@@ -31,7 +31,7 @@
     if (AuthGuard.requireLogin() && homePage() !== "dashboard.html") location.replace(homePage());  // e.g. drivers: straight to POD
     document.getElementById("sidebar").innerHTML = renderSidebar("dashboard.html");
 
-    function fmtDateTime(d) { return d ? new Date(d).toLocaleString() : ""; }
+    function fmtDateTime(d) { return d ? utcTime(d).toLocaleString() : ""; }
 
     async function loadSummary() {
       try {

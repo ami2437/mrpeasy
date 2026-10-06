@@ -86,7 +86,7 @@
       if (inv.status === "void") return `<span class="muted">—</span>`;
       const total = inv.total || invoiceTotal(inv);
       const pct = total ? inv.amount_paid / total * 100 : 0;
-      const overdue = inv.balance > 0.005 && inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString());
+      const overdue = inv.status !== "draft" && inv.balance > 0.005 && inv.due_date && new Date(inv.due_date) < new Date(new Date().toDateString());  // a draft hasn't gone out
       const state = inv.balance <= 0.005 && total > 0 ? `<span class="tag shipped">Paid</span>`
         : overdue ? `<span class="tag overdue">Overdue</span>`
         : inv.amount_paid > 0 ? `<span class="tag confirmed">Partially paid</span>`

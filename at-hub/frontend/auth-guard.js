@@ -1,5 +1,10 @@
 const API_BASE = "";
 
+// The tab icon, on every page (each one loads this file)
+if (document.head && !document.querySelector("link[rel~='icon']")) {
+  document.head.insertAdjacentHTML("beforeend", '<link rel="icon" type="image/svg+xml" href="favicon.svg">');
+}
+
 const AuthGuard = {
   getToken() {
     return localStorage.getItem("at_hub_token");
@@ -79,7 +84,12 @@ async function apiFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase(), key = recordKey(path);
   if (method !== "GET" && key && recordVersions[key] != null && !headers["X-Force-Save"]) headers["X-Row-Version"] = String(recordVersions[key]);
 
-  const response = await fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
+  } catch (e) {
+    throw new Error("Can't reach AT-HUB -- check the internet connection and try again");
+  }
 
   if (response.status === 401) {
     AuthGuard.clearSession();
@@ -88,7 +98,11 @@ async function apiFetch(path, options = {}) {
   }
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) {
+    // not JSON: a crash page or a proxy's error page
+    throw new Error(response.ok ? "The server sent a reply AT-HUB couldn't read" : `Server error (${response.status}) -- try again; if it keeps happening, tell an admin`);
+  }
 
   if (response.status === 409 && data && data.conflict) {
     const choice = await conflictDialog(data.conflict);
@@ -222,6 +236,14 @@ function progressBar(label, pct, kind, title = "") {
   return `<div class="progress-line" title="${escapeHtml(title)}">${label ? `<span class="progress-label">${label}</span>` : ""}`
     + `<span class="pct-bar ${kind}"><span style="width:${v}%"></span></span><span class="progress-pct">${v}%</span></div>`;
 }
+// A server audit stamp (created_at, changed_at, deleted_at...) is UTC without a zone -- read it as UTC so it shows
+// in local time. Business dates (ship / invoice / due dates) are already local: keep using new Date() for those.
+function utcTime(v) {
+  if (!v) return null;
+  const s = String(v);
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) || !s.includes("T") ? s : s + "Z");
+}
+
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -1549,7 +1571,8 @@ const TableTools = {
   refreshTotals(table) {
     const ths = Array.from(table.tHead.rows[0].cells);
     const rows = Array.from(table.tBodies).flatMap(tb => Array.from(tb.rows))
-      .filter(tr => tr.style.display !== "none" && !tr.querySelector("td[colspan]"));
+      .filter(tr => tr.style.display !== "none" && !tr.querySelector("td[colspan]") && !tr.classList.contains("skeleton-row"));
+    if (!rows.length && table.querySelector("tr.skeleton-row")) { table.tFoot.innerHTML = ""; return; }  // still loading
     const sums = ths.map(() => ({ v: 0, money: false }));
     rows.forEach(tr => Array.from(tr.cells).forEach((td, i) => {
       if (!sums[i] || !ths[i].classList.contains("sum")) return;
@@ -1670,7 +1693,7 @@ async function showPackSizeHistory(itemId) {
       ${rows.length ? `<table class="compact-table no-table-tools">
         <thead><tr><th>Changed</th><th class="num">From</th><th class="num">To</th><th>How</th><th>For</th><th>By</th></tr></thead>
         <tbody>${rows.map(h => `<tr>
-          <td>${new Date(h.changed_at).toLocaleString()}</td><td class="num">${h.previous_pack_size ?? "—"}</td><td class="num"><strong>${h.pack_size ?? "—"}</strong></td>
+          <td>${utcTime(h.changed_at).toLocaleString()}</td><td class="num">${h.previous_pack_size ?? "—"}</td><td class="num"><strong>${h.pack_size ?? "—"}</strong></td>
           <td>${escapeHtml(h.source || "")}</td><td class="small">${escapeHtml(h.reference || "")}</td><td>${escapeHtml(h.changed_by || "")}</td></tr>`).join("")}</tbody>
       </table>` : `<p class="muted">No Changes Recorded Yet (History Starts From This Update).</p>`}
       <button class="secondary" style="margin-top:12px;" onclick="document.getElementById('pack-history-modal').remove()">Close</button>
@@ -2477,6 +2500,16 @@ function skeletonizeLoading(root = document) {
   });
 }
 document.addEventListener("DOMContentLoaded", () => skeletonizeLoading());
+// A page's loading failed (server error, lost connection): say so where the list was going to be,
+// instead of leaving the placeholder rows up for ever.
+window.addEventListener("unhandledrejection", e => {
+  const msg = (e.reason && e.reason.message) || String(e.reason || "unknown error");
+  document.querySelectorAll("tbody").forEach(tb => {
+    if (!tb.querySelector("tr.skeleton-row")) return;
+    tb.innerHTML = `<tr><td colspan="${tb.rows[0].cells.length}" class="error">Couldn't load this list: ${escapeHtml(msg)}
+      · <a class="link" onclick="location.reload()">Reload</a></td></tr>`;
+  });
+});
 
 // ---- print the record on screen (order / PO / invoice): the browser's print, laid out for paper ----
 // Print asks what to include: every section of the record on screen, money ones unticked by default.

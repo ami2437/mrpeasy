@@ -72,8 +72,8 @@
         </table>
       </div>
       <table class="list-fit" id="orders-table">
-        <thead><tr><th>Code</th><th>Vendor</th><th title="The vendor's sales order / confirmation #">Vendor SO #</th><th title="When the PO was entered">Created</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
-        <tbody id="orders-body"><tr><td colspan="12">Loading...</td></tr></tbody>
+        <thead><tr><th>Code</th><th title="Vendor, and their sales order / confirmation #">Vendor / SO #</th><th title="When the PO was entered">Created</th><th>Expected</th><th class="num sum">Order total</th><th class="num sum">Paid</th><th class="num sum">Balance</th><th>Progress</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+        <tbody id="orders-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -349,6 +349,8 @@
     function poDone(o) {
       return o.status !== "draft" && o.lines.length > 0 && o.lines.every(l => l.received_quantity >= l.quantity - 1e-9);
     }
+    const soLine = o => o.vendor_so_number ? `<div class="muted small">SO ${escapeHtml(o.vendor_so_number)}</div>` : "";
+
     function renderOrders() {
       const tbody = document.getElementById("orders-body");
       const q = document.getElementById("search").value.trim();
@@ -361,13 +363,13 @@
       if (listView === "items") { renderItemLines(q); return; }
       const filtered = listView === "cancelled" ? cancelledOnes : searched.filter(o => o.status !== "cancelled");
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="12" class="muted">${listView === "cancelled" ? "No cancelled purchase orders." : orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="11" class="muted">${listView === "cancelled" ? "No cancelled purchase orders." : orders.length ? "No purchase orders match your search." : "No purchase orders yet."}</td></tr>`;
         return;
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td><td>${vendorName(o.vendor_id)}</td>
-          <td>${escapeHtml(o.vendor_so_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td><td>${vendorName(o.vendor_id)}${soLine(o)}</td>
+          <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(o.order_total)}</td><td class="num">${fmtMoney(o.amount_paid)}</td><td class="num">${fmtMoney(o.order_total - o.amount_paid)}</td>
           <td></td><td><span class="tag cancelled">cancelled</span></td>
           <td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
@@ -386,8 +388,7 @@
         return `
         <tr class="${poDone(o) ? "order-done" : ""}">
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td>
-          <td>${vendorName(o.vendor_id)}</td>
-          <td>${escapeHtml(o.vendor_so_number || "")}</td>
+          <td>${vendorName(o.vendor_id)}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(total)}</td>
@@ -403,9 +404,9 @@
         </tr>
       `;
       };
-      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="12" class="muted">No purchase orders in progress${q ? " match your search" : ""}.</td></tr>`)
+      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="11" class="muted">No purchase orders in progress${q ? " match your search" : ""}.</td></tr>`)
         + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
-            <td colspan="12"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed purchase orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — fully received${expanded ? "" : " · click to show"}</span></td></tr>`
+            <td colspan="11"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed purchase orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — fully received${expanded ? "" : " · click to show"}</span></td></tr>`
           + (expanded ? finished.map(row).join("") : "") : "");
     }
 
@@ -848,12 +849,12 @@ Thank you.</textarea>
         <h4 style="margin-top:14px; display:flex; align-items:center; gap:10px;">Vendor Invoices ${aiScanButton("vendor_invoice", "applyInvoiceScan", { poId: order.id, title: "Scan the vendor's invoice: fills the row below and checks it against this PO's lines" })}</h4>
         <p class="muted small" style="margin:0 0 6px;">Goods + S&amp;H must add up to the invoice total. The S&amp;H is added to the PO lines automatically, linked to its invoice.</p>
         <table class="compact-table no-table-tools bill-table">
-          <thead><tr><th>Vendor Invoice #</th><th>Date</th><th>Due</th><th class="num">Invoice Total</th><th class="num">Goods</th><th class="num" title="Shipping &amp; handling on this invoice">S&amp;H</th><th class="num" title="Goods + S&amp;H, must match the invoice total">Goods + S&amp;H</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th><th>File</th><th></th></tr></thead>
+          <thead><tr><th>Vendor Invoice #</th><th>Date / Due</th><th class="num">Invoice Total</th><th class="num">Goods</th><th class="num" title="Shipping &amp; handling on this invoice">S&amp;H</th><th class="num" title="Goods + S&amp;H, must match the invoice total">Goods + S&amp;H</th><th class="num">Paid</th><th class="num">Balance</th><th>Status</th><th>File</th><th></th></tr></thead>
           <tbody>
             ${order.bills.map(b => `
               <tr>
                 <td><strong>${escapeHtml(b.bill_number)}</strong>${b.note ? `<div class="muted small">${escapeHtml(b.note)}</div>` : ""}</td>
-                <td>${fmtDate(b.bill_date)}</td><td>${fmtDate(b.due_date)}</td>
+                <td>${fmtDate(b.bill_date)}${b.due_date ? `<div class="muted small">due ${fmtDate(b.due_date)}</div>` : ""}</td>
                 ${(() => { const sh = order.charges.filter(c => c.vendor_bill_id === b.id).reduce((s, c) => s + c.amount, 0);
                   return `<td class="num">${fmtMoney(b.amount)}</td><td class="num">${fmtMoney(b.amount - sh)}</td>
                     <td class="num muted">${sh ? fmtMoney(sh) : "—"}</td><td class="num"><span class="pos">✓</span> ${fmtMoney(b.amount)}</td>`; })()}
@@ -863,11 +864,11 @@ Thank you.</textarea>
                 <td>${b.attachment_id ? `<a class="link small" onclick="openAttachment(${b.attachment_id})">Open</a>` : `<span class="muted small">—</span>`}</td>
                 <td class="nowrap">${b.balance > 0.005 ? `<a class="link small" onclick="payBill(${b.id}, ${b.balance})">Pay</a>` : ""}
                   ${canDelete && !b.amount_paid ? ` <a class="link small" onclick="deleteBill(${order.id}, ${b.id})">Delete</a>` : ""}</td>
-              </tr>`).join("") || `<tr><td colspan="12" class="muted">No Vendor Invoices Recorded Yet.</td></tr>`}
+              </tr>`).join("") || `<tr><td colspan="11" class="muted">No Vendor Invoices Recorded Yet.</td></tr>`}
             <tr class="add-row">
               <td><input type="text" id="bill-number" placeholder="Vendor Invoice #" style="width:130px;"></td>
-              <td><input type="date" id="bill-date" value="${today}" style="width:135px;"></td>
-              <td><input type="date" id="bill-due" style="width:135px;"></td>
+              <td><input type="date" id="bill-date" value="${today}" title="Invoice date" style="width:135px;">
+                <input type="date" id="bill-due" title="Due date" style="width:135px; margin-top:4px; display:block;"></td>
               <td class="num">${priceInput("bill-amount-input", "", 'id="bill-amount" oninput="checkBillSum()"')}</td>
               <td class="num" title="Goods on this invoice (pre-filled with what isn't billed yet)">${priceInput("bill-goods-input", unbilledGoods(order).toFixed(2), 'id="bill-goods" oninput="checkBillSum()"')}</td>
               <td class="num" title="Shipping &amp; handling on this invoice, added to the PO lines and linked to this invoice">${priceInput("bill-ship-input", "", 'id="bill-shipping" oninput="checkBillSum()"')}</td>
