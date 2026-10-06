@@ -538,20 +538,38 @@ function trackGroups(track) {
   }
   return groups;
 }
+// Lines ticked for the next "Create Draft POs" (only lines still to order with a vendor and one of our items).
+// Not saved: a fresh pick each visit. A vendor's group row ticks all of its lines.
+let TRK_SEL = new Set();
+const trkReady = t => t.status === "todo" && t.vendor_id && t.r.item_id && t.qty > 0;
+function trackerProgress(c) {
+  const all = c.track, done = all.filter(t => t.status !== "todo");
+  const v = ls => ls.reduce((s, t) => s + t.value, 0);
+  const pct = all.length ? Math.round(done.length / all.length * 100) : 0;
+  const by = s => all.filter(t => t.status === s).length;
+  return `<div class="trk-progress"><div class="trk-bar"><span style="width:${pct}%"></span></div>
+    <span><b>${done.length} of ${all.length}</b> lines handled (${pct}%) · ${money(v(done))} of ${money(v(all))}</span>
+    <span class="muted small">${by("onpo")} on PO · ${by("draft")} draft PO · ${by("ordered")} ordered elsewhere · <b>${by("todo")} still to order (${money(v(all.filter(t => t.status === "todo")))})</b></span></div>`;
+}
 function trackerTable(c) {
   if (!c.track.length) return `<p class="muted">Nothing to buy: the need is covered${plan().stock !== "none" ? " by stock and" : " by"} the sources above.</p>`;
+  const live = new Set(c.track.filter(trkReady).map(t => t.key));
+  TRK_SEL = new Set([...TRK_SEL].filter(k => live.has(k)));  // drop ticks on lines that were ordered / changed
   const vendorOpts = id => `<option value="">Vendor…</option>${VENDORS.map(v => `<option value="${v.id}" ${v.id === id ? "selected" : ""}>${escapeHtml(v.name)}</option>`).join("")}`;
   const k = t => escapeHtml(t.key);
   const why = r => [`need ${fmtQty(r.need)}`, r.rolled ? `+ ${fmtQty(r.rolled)} for nuts` : "", r.stock ? `− stock ${fmtQty(r.stock)}` : "",
                     r.incoming ? `− incoming ${fmtQty(r.incoming)}` : "", num(plan().buffer) ? `+ ${plan().buffer}%` : ""].filter(Boolean).join(" ");
-  const row = t => `<tr class="${t.r.notInDb ? "sim-unknown" : ""}">
+  const tick = t => trkReady(t) ? `<input type="checkbox" class="trk-tick" ${TRK_SEL.has(t.key) ? "checked" : ""} data-keys="${escapeHtml(JSON.stringify([t.key]))}" onchange="trkTickEl(this)" title="Include in the next Create Draft POs">`
+    : t.status === "todo" ? `<span class="muted small" title="${t.r.item_id ? "Pick a vendor first" : "Not in our database"}">—</span>` : "";
+  const row = t => `<tr class="${t.r.notInDb ? "sim-unknown" : ""} ${TRK_SEL.has(t.key) ? "trk-picked" : ""}">
+      <td class="trk-c">${tick(t)}</td>
       <td><b>${escapeHtml(t.r.code || "")}</b> <span class="muted small">${escapeHtml((t.r.desc || "").slice(0, 44))}</span>
         ${t.r.notInDb ? `<span class="sim-tag" title="Add the item to AT-HUB before it can go on a PO">not in DB</span>` : ""}
         ${t.part && !t.fixed ? `<div class="small muted">quoted on ${escapeHtml(t.part.b.label || "a source")}</div>` : ""}</td>
       <td class="num">${fmtQty(t.need)}<div class="small muted">${why(t.r)}</div></td>
-      <td class="num">${t.fixed ? fmtQty(t.qty) : `<input type="number" class="sim-num" min="0" step="1" value="${t.qty}" onchange="setTrack('${k(t)}', 'qty', this.value)">
+      <td class="num">${t.fixed || t.status !== "todo" ? fmtQty(t.qty) : `<input type="number" class="sim-num" min="0" step="1" value="${t.qty}" onchange="setTrack('${k(t)}', 'qty', this.value)">
         ${t.qty !== t.suggested ? `<div class="small"><a class="link" onclick="setTrack('${k(t)}', 'qty', '')">suggested ${fmtQty(t.suggested)}</a></div>` : t.pack ? `<div class="small muted">pack ${fmtQty(t.pack)}</div>` : ""}`}</td>
-      <td class="num">${t.fixed ? price(t.price) : `<input type="number" class="sim-num" min="0" step="any" value="${t.price ?? ""}" placeholder="price" onchange="setTrack('${k(t)}', 'price', this.value)">`}</td>
+      <td class="num">${t.fixed || t.status !== "todo" ? price(t.price) : `<input type="number" class="sim-num" min="0" step="any" value="${t.price ?? ""}" placeholder="price" onchange="setTrack('${k(t)}', 'price', this.value)">`}</td>
       <td class="num">${money(t.value)}</td>
       <td>${t.fixed || t.status === "draft" ? escapeHtml(partyName(VENDORS, t.vendor_id) || "—") : `<select onchange="setTrack('${k(t)}', 'vendor_id', parseInt(this.value) || null)">${vendorOpts(t.vendor_id)}</select>${t.vendorHint ? `<div class="small muted">${t.vendorHint}</div>` : ""}`}</td>
       <td>${t.fixed ? `<span class="trk-st onpo">On PO</span>` : `<select onchange="setTrack('${k(t)}', 'status', this.value)" style="width:auto;">
@@ -561,24 +579,45 @@ function trackerTable(c) {
           `<input value="${escapeHtml(t.ref)}" placeholder="PO # / note" style="width:96px;" onchange="setTrack('${k(t)}', 'ref', this.value)">`}</td></tr>`;
   const groups = trackGroups(c.track);
   const todo = c.track.filter(t => t.status === "todo");
-  const ready = todo.filter(t => t.vendor_id && t.r.item_id && t.qty > 0);
-  const vendors = new Set(ready.map(t => t.vendor_id));
-  return `<table class="compact-table sim-track no-table-tools"><thead><tr><th>Item</th><th class="num">Still need</th><th class="num">Order qty</th><th class="num">Price</th>
+  const ready = todo.filter(trkReady);
+  const picked = ready.filter(t => TRK_SEL.has(t.key));
+  const pickedVendors = new Set(picked.map(t => t.vendor_id));
+  const groupTick = g => {
+    const rl = g.lines.filter(trkReady);
+    if (!rl.length) return "";
+    const n = rl.filter(t => TRK_SEL.has(t.key)).length;
+    return `<input type="checkbox" class="trk-tick" ${n === rl.length ? "checked" : ""} data-some="${n > 0 && n < rl.length ? 1 : ""}"
+      data-keys="${escapeHtml(JSON.stringify(rl.map(t => t.key)))}" onchange="trkTickEl(this)" title="Tick every line for this vendor">`;
+  };
+  return `${trackerProgress(c)}
+    <table class="compact-table sim-track no-table-tools"><thead><tr><th class="trk-c">${ready.length ? `<input type="checkbox" class="trk-tick" ${picked.length && picked.length === ready.length ? "checked" : ""}
+        data-some="${picked.length && picked.length < ready.length ? 1 : ""}" data-keys="${escapeHtml(JSON.stringify(ready.map(t => t.key)))}" onchange="trkTickEl(this)" title="Tick every line ready to order">` : ""}</th>
+      <th>Item</th><th class="num">Still need</th><th class="num">Order qty</th><th class="num">Price</th>
       <th class="num">Value</th><th>Vendor</th><th>Status</th><th>PO / reference</th></tr></thead><tbody>
-    ${groups.map(g => `<tr class="trk-group"><td colspan="4"><span class="trk-st ${g.status}">${TRACK_STATUS[g.status]}</span> ${escapeHtml(g.label.replace(TRACK_STATUS[g.status] + " · ", ""))}</td>
+    ${groups.map(g => `<tr class="trk-group"><td class="trk-c">${g.status === "todo" ? groupTick(g) : ""}</td><td colspan="4"><span class="trk-st ${g.status}">${TRACK_STATUS[g.status]}</span> ${escapeHtml(g.label.replace(TRACK_STATUS[g.status] + " · ", ""))}</td>
         <td class="num">${money(g.lines.reduce((s, t) => s + t.value, 0))}</td><td colspan="3" class="muted small">${g.lines.length} line${g.lines.length === 1 ? "" : "s"}</td></tr>
       ${g.lines.map(row).join("")}`).join("")}</tbody>
-    <tfoot><tr><td colspan="4">${todo.length} to order · ${c.track.filter(t => t.status !== "todo").length} ordered / on PO</td>
+    <tfoot><tr><td colspan="5">${picked.length ? `<b>${picked.length} ticked</b> · ${pickedVendors.size} vendor${pickedVendors.size === 1 ? "" : "s"} · ${money(picked.reduce((s, t) => s + t.value, 0))}`
+        : `Tick the lines (or a vendor) to order now${todo.length > ready.length ? ` · <span class="muted">${todo.length - ready.length} line${todo.length - ready.length === 1 ? "" : "s"} need a vendor${todo.some(t => t.r.notInDb) ? " or aren't in our database" : ""}</span>` : ""}`}</td>
       <td class="num">${money(todo.reduce((s, t) => s + t.value, 0))}</td><td colspan="3">
-      <button class="small-btn" ${ready.length ? "" : "disabled"} onclick="createTrackerPos()" title="One draft PO per vendor for the lines still to order">Create ${vendors.size || ""} Draft PO${vendors.size === 1 ? "" : "s"}</button>
-      ${todo.length > ready.length ? `<span class="muted small">${todo.length - ready.length} line${todo.length - ready.length === 1 ? "" : "s"} need a vendor${todo.some(t => t.r.notInDb) ? " or aren't in our database" : ""}</span>` : ""}</td></tr></tfoot></table>`;
+      <button class="small-btn" ${picked.length ? "" : "disabled"} onclick="createTrackerPos()" title="One draft PO per vendor, for the ticked lines only">
+        Create ${pickedVendors.size || ""} Draft PO${pickedVendors.size === 1 ? "" : "s"}${picked.length ? ` (${picked.length} line${picked.length === 1 ? "" : "s"})` : ""}</button></td></tr></tfoot></table>`;
+}
+function trkTickEl(el) { trkTick(JSON.parse(el.dataset.keys), el.checked); }
+function trkTick(keys, on) {
+  keys.forEach(key => on ? TRK_SEL.add(key) : TRK_SEL.delete(key));
+  const c = calc();
+  const host = document.getElementById("sim-track");
+  if (host) host.innerHTML = trackerTable(c);
+  host.querySelectorAll("input.trk-tick[data-some='1']").forEach(x => { x.indeterminate = true; });
 }
 function drawTracker(c) {
   const host = document.getElementById("sim-track"), bar = document.getElementById("sim-plan");
   if (!host) return;
   if (bar && !bar.contains(document.activeElement)) bar.innerHTML = planBar(c);
-  if (host.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;  // typing: leave the box alone
+  if (host.contains(document.activeElement) && document.activeElement.matches("input:not([type=checkbox])")) return;  // typing: leave the box alone
   host.innerHTML = trackerTable(c);
+  host.querySelectorAll("input.trk-tick[data-some='1']").forEach(x => { x.indeterminate = true; });
 }
 function setTrack(key, field, value) {
   plan();
@@ -587,15 +626,18 @@ function setTrack(key, field, value) {
   if (field === "status" && value === "todo") { delete T.po_id; delete T.po_code; }
   setTimeout(() => changed(false));
 }
-// one draft PO per vendor from the lines still to order; the lines then show "Draft PO" with its link
+// one draft PO per vendor from the TICKED lines; they then show "Draft PO" with its link, the rest stay "To order"
 async function createTrackerPos() {
   const c = calc();
-  const ready = c.track.filter(t => t.status === "todo" && t.vendor_id && t.r.item_id && t.qty > 0);
+  const ready = c.track.filter(t => trkReady(t) && TRK_SEL.has(t.key));
+  if (!ready.length) { toast("Tick the lines to order first"); return; }
   const byVendor = {};
   ready.forEach(t => (byVendor[t.vendor_id] ||= []).push(t));
+  const left = c.track.filter(t => t.status === "todo").length - ready.length;
   const list = Object.entries(byVendor).map(([v, ls]) => `<li><b>${escapeHtml(partyName(VENDORS, +v))}</b>: ${ls.length} line${ls.length === 1 ? "" : "s"}, ${money(ls.reduce((s, t) => s + t.value, 0))}</li>`).join("");
   const { value } = await askDialog({ title: `Create ${Object.keys(byVendor).length} draft PO${Object.keys(byVendor).length === 1 ? "" : "s"}?`,
-    body: `<ul style="margin:0 0 8px 18px;">${list}</ul><p class="muted small" style="margin:0;">Drafts only: nothing is sent to vendors until you open each PO and order it.</p>`,
+    body: `<ul style="margin:0 0 8px 18px;">${list}</ul>${left > 0 ? `<p class="small" style="margin:0 0 6px;">${left} other line${left === 1 ? "" : "s"} stay${left === 1 ? "s" : ""} on the tracker as <b>To order</b>.</p>` : ""}
+      <p class="muted small" style="margin:0;">Drafts only: nothing is sent to vendors until you open each PO and order it.</p>`,
     buttons: [{ label: "Create Drafts", value: "ok", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
   if (!value) return;
   plan();
@@ -604,7 +646,7 @@ async function createTrackerPos() {
     try {
       const r = await apiFetch("/api/simulations/create-po", { method: "POST", body: JSON.stringify({ vendor_id: +v,
         lines: ls.map(t => ({ item_id: t.r.item_id, quantity: Math.ceil(t.qty), price: t.price || 0 })), notes: `From simulation "${sim.name}" (order tracker)` }) });
-      ls.forEach(t => { doc.tracker[t.key] = { ...(doc.tracker[t.key] || {}), vendor_id: +v, status: "draft", po_id: r.id, po_code: r.code, qty: t.qty, price: t.price }; });
+      ls.forEach(t => { doc.tracker[t.key] = { ...(doc.tracker[t.key] || {}), vendor_id: +v, status: "draft", po_id: r.id, po_code: r.code, qty: t.qty, price: t.price }; TRK_SEL.delete(t.key); });
       made.push(r.code);
     } catch (e) { toast(`${partyName(VENDORS, +v)}: ${e.message}`); }
   }
@@ -793,7 +835,7 @@ async function openSim(id) {
   if (!id) return;
   if (saveTimer) await saveNow();
   sim = await apiFetch(`/api/simulations/${id}`);
-  CMP = null; CMP_CHIP = "";  // a fresh table (and filters) per simulation
+  CMP = null; CMP_CHIP = ""; TRK_SEL = new Set();  // a fresh table (and filters, ticks) per simulation
   doc = Object.assign(blankDoc(), sim.doc || {});
   history.replaceState(null, "", `simulate.html?id=${id}`);
   doc.generic_off ||= {}; doc.stock_off ||= {};
