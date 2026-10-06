@@ -79,6 +79,9 @@ def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db), c
         user.full_name = data.full_name
     if data.email is not None:
         user.email = data.email
+    if data.timezone is not None:
+        from app.services.clock import check_zone
+        user.timezone = check_zone(data.timezone)
     db.commit()
     db.refresh(user)
     return user

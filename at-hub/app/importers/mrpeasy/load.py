@@ -68,9 +68,12 @@ def f(v) -> float:
 
 
 def dt(v):
-    """MRPeasy sends unix timestamps as strings."""
+    """MRPeasy sends unix timestamps as strings -> MRPeasy's own (Eastern) wall clock, whatever this machine's zone.
+    tz_migrate.normalize_import() then turns the moments into UTC once everything is loaded."""
+    from zoneinfo import ZoneInfo
+    from app.services.tz_migrate import MRP_TZ
     try:
-        return datetime.fromtimestamp(int(v)) if v not in (None, "", "0", 0) else None
+        return datetime.fromtimestamp(int(v), ZoneInfo(MRP_TZ)).replace(tzinfo=None) if v not in (None, "", "0", 0) else None
     except (TypeError, ValueError):
         return None
 
@@ -496,6 +499,9 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     if LIVE_DB.exists():  # files, learned matches, notes... made in AT-HUB since the last import
         from .carry_over import carry_over
         carry_over(db, LIVE_DB, rep)
+    from app.services.tz_migrate import normalize_import
+    db.flush()
+    normalize_import(db)  # moments -> UTC, calendar dates -> midnight (app/services/clock.py)
     db.commit()
     (snapshot / "load-notes.json").write_text(json.dumps(rep.dump(), indent=1), encoding="utf-8")
     print(f"Loaded into {target}")

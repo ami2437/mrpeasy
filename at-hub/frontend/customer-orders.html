@@ -105,7 +105,6 @@
     let currentOrder = null;  // the order open in the detail card (the Create Shipment pop-up reads it)
     let poIdByCode = {};  // booking source links: lot.source_reference is a PO code
 
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
@@ -627,7 +626,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td><td>${customerName(o.customer_id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
@@ -648,7 +647,7 @@
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
         <tr class="${done ? "order-done" : ""}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
           <td>${customerName(o.customer_id)}</td>
           <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
@@ -780,7 +779,7 @@
     function quickDeliverCell(s, isManager) {
       if (s.delivered_at) return `${icon("checkCircle", "pos")} ${fmtDate(s.delivered_at)}${s.pods && s.pods.length ? ` <span class="muted small">· POD</span>` : ""}`;
       if (!["shipped", "invoiced"].includes(s.status) || !isManager) return `<span class="muted">—</span>`;
-      const today = new Date().toISOString().substring(0, 10), min = s.ship_date ? s.ship_date.substring(0, 10) : "";
+      const today = todayISO(), min = s.ship_date ? dayISO(s.ship_date) : "";
       return `<span class="quick-deliver"><input type="date" class="qd-date" value="${min > today ? min : today}" ${min ? `min="${min}"` : ""}>
         <button class="small-btn confirm-btn" onclick="quickDeliver(${s.id}, this)" title="Mark delivered on this date (no POD needed)">Delivered</button></span>`;
     }
@@ -850,6 +849,7 @@
           ${isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)">Confirm Order</button>` : ""}</div>` : ""}
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
+        <div id="co-sticky" class="sticky-strip"></div>
         ${orderTimeline(order, orderShipments, orderInvoices)}
         ${orderMoneyTiles(order, orderInvoices)}
 
@@ -996,6 +996,7 @@
           if (tr && e.target.matches(".e-line-qty, .e-line-price, .e-line-delivery, .ln-text, .ln-print")) autoSaveLine(order.id, tr);
         });
       }
+      stickyNotes("co-sticky", "customer_order", order.id);
       renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "invoice", "packing_list", "bol", "mtr", "other"],
         { onChange: () => renderFileStrip("co-file-strip", "customer_order", order.id) });
       renderFileStrip("co-file-strip", "customer_order", order.id);
@@ -1488,7 +1489,7 @@
     }
 
     async function loadOrders() {
-      loadAttachCounts("customer_order").then(renderOrders);
+      Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);
       [orders, shipments, items, invoices] = await Promise.all([
         apiFetch("/api/customer-orders/"),
         apiFetch("/api/shipments/"),
@@ -1512,7 +1513,7 @@
       purchaseOrders.forEach(po => { poIdByCode[po.code] = po.id; });
       document.getElementById("f-customer").innerHTML = customers.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
       document.getElementById("search").addEventListener("input", renderOrders);
-      loadAttachCounts("customer_order").then(renderOrders);  // paperclips fill in a moment later
+      Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);  // paperclips fill in a moment later
       if (AuthGuard.can("quotes")) loadQuotes().then(renderOrders);
       enableLineDrag(document.getElementById("lines-body"));  // new order: lines saved in the order shown
       renderOrders();

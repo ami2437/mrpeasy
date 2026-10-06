@@ -654,7 +654,7 @@ tr.completed-toggle .caret { display: inline-block; width: 14px; color: var(--mu
 tr.order-done td { color: var(--text-2); }
 
 /* ---- Record pages (auth-guard.js recordPages): the open record replaces the list ---- */
-main.record-mode > *:not(#detail-card) { display: none !important; }
+main.record-mode > *:not(#detail-card):not(#topbar) { display: none !important; }
 main.record-mode > #detail-card { margin-top: 0; }
 .record-backbar { margin: -4px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
 
@@ -1739,3 +1739,79 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 .pallet-grid { width: auto; }
 .pal-clash { margin: 8px 0; }
 .pal-clash-opt { display: flex; align-items: center; gap: 6px; margin: 4px 0 0 12px; font-weight: 400; text-transform: none; font-size: 13px; }
+
+
+/* ---- top bar: date / time in the user's zone, calendar, To-Do, theme (TopBar in auth-guard.js) ---- */
+.topbar { position: relative; display: flex; justify-content: flex-end; align-items: center; margin: -6px 0 10px; min-height: 34px; }
+.tb-right { display: flex; align-items: center; gap: 6px; }
+.tb-btn, .tb-clock { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface); color: var(--text, #1e293b); font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; position: relative; box-shadow: none; }
+.tb-btn:hover, .tb-clock:hover, .tb-btn:focus, .tb-clock:focus, .tb-btn:active, .tb-clock:active { background: var(--surface); border-color: var(--accent, #2f6fed); color: var(--accent, #2f6fed); }
+.tb-clock:hover .tb-time, .tb-clock:focus .tb-time { color: var(--accent, #2f6fed); }
+.tb-btn .ico, .tb-clock .ico { width: 16px; height: 16px; }
+.tb-date { font-weight: 600; white-space: nowrap; }
+.tb-time { color: var(--muted, #64748b); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tb-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #dc2626; color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.tb-cal { position: absolute; top: 40px; right: 0; z-index: 60; width: 340px; max-width: calc(100vw - 32px); background: var(--surface);
+  border: 1px solid var(--border, #e2e8f0); border-radius: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .18); padding: 12px; }
+.tb-cal-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.tb-cal-head strong { flex: 1; text-align: center; font-size: 14px; }
+.tb-nav, .tb-today { height: 28px; min-width: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border, #e2e8f0); background: transparent;
+  color: var(--text, #1e293b); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; box-shadow: none; }
+.tb-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.tb-wd { text-align: center; font-size: 11px; font-weight: 600; color: var(--muted, #64748b); padding: 2px 0 4px; }
+.tb-day { height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--text, #1e293b); cursor: pointer; display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-start; padding: 4px 0 0; font: inherit; font-size: 13px; box-shadow: none; }
+.tb-day:hover, .tb-day:focus { background: var(--accent-soft, #e8f0fe); color: var(--text); }
+.tb-nav:hover, .tb-today:hover { background: var(--accent-soft); color: var(--text); }
+.tb-day.out { color: var(--faint, #94a3b8); }
+.tb-day.today span { background: #dc2626; color: #fff; border-radius: 50%; width: 22px; height: 22px; line-height: 22px; font-weight: 700; }
+.tb-day.picked { background: var(--accent-soft, #e8f0fe); outline: 1.5px solid var(--accent, #2f6fed); }
+.tb-day i { display: flex; gap: 2px; margin-top: 3px; height: 5px; }
+.tb-day i b, .tb-legend b, .tb-ev > b { display: inline-block; width: 5px; height: 5px; border-radius: 50%; }
+.tb-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted, #64748b); margin: 8px 0 6px; }
+.tb-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.tb-agenda { border-top: 1px solid var(--border, #e2e8f0); padding-top: 8px; max-height: 220px; overflow-y: auto; }
+.tb-agenda-day { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.tb-ev { display: flex; align-items: baseline; gap: 8px; padding: 5px 4px; border-radius: 6px; color: var(--text, #1e293b); text-decoration: none; font-size: 13px; }
+.tb-ev:hover { background: var(--accent-soft, #e8f0fe); }
+.tb-ev > b { width: 8px; height: 8px; flex: none; }
+@media print { .topbar { display: none !important; } }
+@media (max-width: 700px) { .tb-time { display: none; } }
+
+
+/* ---- sticky notes on records (stickyNotes in auth-guard.js) ---- */
+.sticky-strip:empty { display: none; }
+.sticky-strip { margin: 8px 0 12px; }
+.sticky-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+.sticky-note { width: 220px; min-height: 92px; padding: 10px 12px 8px; border-radius: 3px 3px 12px 3px; box-shadow: 0 2px 6px rgba(15, 23, 42, .14);
+  display: flex; flex-direction: column; gap: 6px; color: #1f2937; font-size: 13px; transform: rotate(-.4deg); }
+.sticky-note:nth-child(2n) { transform: rotate(.5deg); }
+.sticky-yellow { background: #fef08a; }
+.sticky-pink { background: #fbcfe8; }
+.sticky-green { background: #bbf7d0; }
+.sticky-blue { background: #bfdbfe; }
+.sticky-text { white-space: pre-wrap; word-break: break-word; flex: 1; }
+.sticky-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; }
+.sticky-foot .muted { color: rgba(31, 41, 55, .65); }
+.sticky-acts { margin-left: auto; display: flex; gap: 6px; }
+.sticky-acts a { cursor: pointer; color: rgba(31, 41, 55, .7); }
+.sticky-acts a:hover { color: #111827; }
+.sticky-when { display: inline-flex; align-items: center; gap: 3px; font-weight: 600; }
+.sticky-when .ico, .sticky-acts .ico { width: 13px; height: 13px; }
+.sticky-when.due { color: #b91c1c; }
+.sticky-add { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 8px; border: 1px dashed var(--border-strong);
+  background: transparent; color: var(--text-2); cursor: pointer; box-shadow: none; font: inherit; font-size: 13px; }
+.sticky-add:hover { border-color: #ca8a04; color: #a16207; }
+.sticky-editing { transform: none !important; width: 260px; }
+.sticky-editing textarea { min-height: 70px; background: rgba(255, 255, 255, .55); border: 1px solid rgba(0, 0, 0, .12); color: #111827; }
+.sticky-colors { display: flex; gap: 6px; }
+.sticky-colors .sw { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .2); padding: 0; cursor: pointer; box-shadow: none; }
+.sticky-colors .sw.on { outline: 2px solid #111827; outline-offset: 1px; }
+.sticky-remind { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sticky-remind input { width: auto; padding: 3px 6px; font-size: 12px; background: rgba(255, 255, 255, .6); color: #111827; }
+.sticky-done { margin-top: 6px; }
+.list-note { display: inline-flex; margin-left: 4px; color: #ca8a04; vertical-align: middle; }
+.list-note .ico { width: 13px; height: 13px; }
+@media print { .sticky-strip, .sticky-add { display: none !important; } }

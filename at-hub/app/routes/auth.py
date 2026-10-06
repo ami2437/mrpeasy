@@ -1,5 +1,7 @@
 from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.services.auth import AuthService
@@ -55,3 +57,21 @@ def change_password(data: PasswordChange, db: Session = Depends(get_db),
     db.commit()
     db.refresh(current_user)
     return current_user
+
+
+class TimezoneIn(BaseModel):
+    timezone: Optional[str] = None  # "" / None = the company's
+
+
+@router.put("/timezone", response_model=UserResponse)
+def set_my_timezone(data: TimezoneIn, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """Each person's own time zone: every time on their screens is shown in it (like Outlook)."""
+    from app.services.clock import check_zone
+    from app.services.permissions import KEYS, role_name
+    user = db.get(User, current_user.id)
+    user.timezone = check_zone(data.timezone)
+    db.commit()
+    db.refresh(user)
+    user.permissions = sorted(current_user.permissions, key=KEYS.index)
+    user.role_name = role_name(db, user.role)
+    return user

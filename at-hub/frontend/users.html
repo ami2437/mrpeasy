@@ -81,8 +81,6 @@
       f.value = v;
     }
 
-    function fmtDateTime(d) { return d ? new Date(d + (d.endsWith("Z") ? "" : "Z")).toLocaleString() : ""; }
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
     // Readable temporary password: no 0/O/1/l look-alikes.
     function randomPassword() {
@@ -117,7 +115,7 @@
         <tr class="${u.is_active ? "" : "muted"}">
           <td><a class="link" onclick="showDetail(${u.id})">${escapeHtml(u.username)}</a>${u.id === me.id ? ` <span class="muted small">(you)</span>` : ""}</td>
           <td>${escapeHtml(u.full_name || "")}</td>
-          <td>${escapeHtml(u.email || "")}</td>
+          <td>${escapeHtml(u.email || "")}${u.timezone ? `<div class="muted small">${escapeHtml(u.timezone)}</div>` : ""}</td>
           <td>${roleTag(u.role)}</td>
           <td>${u.is_active
             ? (u.must_change_password ? `<span class="tag draft">Must Set Password</span>` : `<span class="tag shipped">Active</span>`)
@@ -276,6 +274,7 @@
           <div><label>Full name</label><input type="text" id="e-full-name" value="${escapeHtml(u.full_name || "")}"></div>
           <div><label>Email</label><input type="text" id="e-email" value="${escapeHtml(u.email || "")}"></div>
           <div><label>Role</label><select id="e-role">${roleOptions(u.role)}</select></div>
+          <div><label>Time zone</label><select id="e-tz">${timezoneOptions(u.timezone || "", "Company default (Central)")}</select></div>
         </div>
         <button onclick="saveUser(${u.id})" style="margin-top:10px;">Save Changes</button>
 
@@ -324,6 +323,7 @@
           full_name: document.getElementById("e-full-name").value.trim(),
           email: document.getElementById("e-email").value.trim(),
           role: document.getElementById("e-role").value,
+          timezone: document.getElementById("e-tz").value,
         }),
       }, "Saved.");
     }

@@ -43,7 +43,7 @@
     <div class="pod-top">
       <div class="brand"><img src="/api/company/logo" alt="" onerror="this.remove()">Proof of Delivery</div>
       <span class="pod-nav"><a class="link" href="dashboard.html" id="pod-home">⌂ Home</a>
-        <a class="link" href="shipments.html">Shipments</a></span>
+        <a class="link" href="shipments.html" id="pod-shipments">Shipments</a></span>
     </div>
     <div id="app"></div>
   </div>
@@ -52,24 +52,22 @@
   <script>
     AuthGuard.requirePerm("pod.upload");
     document.getElementById("pod-home").href = homePage();
-    let shipments = [], orders = [], customers = [];
+    if (!AuthGuard.can("shipments.view")) document.getElementById("pod-shipments").remove();  // drivers: deliveries only
+    let shipments = [];  // deliveries from /api/pod/deliveries: only what a driver needs (items, boxes, pallets)
     let selected = new Set();   // shipment ids the photos will go on
     let pending = [];           // photos taken but not uploaded yet
     let filter = "shipped";     // shipped = waiting for POD; all = also delivered/invoiced
 
-    const customerName = id => (customers.find(c => c.id === id) || {}).name || "";
-    const orderOf = s => orders.find(o => o.id === s.order_id) || {};
     const byId = id => shipments.find(s => s.id === id);
+    async function loadDeliveries() { shipments = await apiFetch(`/api/pod/deliveries?scope=${filter === "shipped" ? "shipped" : "all"}`); }
 
     // Step 1: tick every delivery these photos cover (one stop can be several shipments).
     function renderPicker() {
       const qEl = document.getElementById("pick-q");
       const q = (qEl ? qEl.value : "").toLowerCase();
       const statuses = filter === "shipped" ? ["shipped"] : ["shipped", "delivered", "invoiced"];
-      const list = shipments.filter(s => statuses.includes(s.status)).filter(s => {
-        const o = orderOf(s);
-        return searchMatch(q, s.code, o.code, o.po_number, o.job_number, customerName(o.customer_id));
-      }).slice(0, 50);
+      const list = shipments.filter(s => statuses.includes(s.status))
+        .filter(s => searchMatch(q, s.code, s.order_code, s.po_number, s.job_number, s.customer)).slice(0, 50);
       if (!qEl) {
         document.getElementById("app").innerHTML = `<div class="card">
           <h2>Which deliveries?</h2>
@@ -83,20 +81,19 @@
       }
       document.querySelectorAll(".filter-chips a").forEach(a => a.classList.toggle("on", a.dataset.f === filter));
       document.getElementById("pick-list").innerHTML = list.map(s => {
-        const o = orderOf(s);
         const on = selected.has(s.id);
         return `<label class="pick-row ${on ? "selected" : ""}">
           <input type="checkbox" ${on ? "checked" : ""} onchange="toggleShipment(${s.id}, this.checked)">
           <div class="info">
             <strong>${escapeHtml(s.code)}</strong> <span class="tag ${s.status}">${s.status}</span>
-            <div>${escapeHtml(customerName(o.customer_id))}</div>
-            <div class="muted small">${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}${s.ship_date ? ` · shipped ${new Date(s.ship_date).toLocaleDateString()}` : ""}</div>
+            <div>${escapeHtml(s.customer || "")}</div>
+            <div class="muted small">${s.po_number ? `PO ${escapeHtml(s.po_number)} · ` : ""}${s.boxes} box${s.boxes === 1 ? "" : "es"}${s.pallets.length ? ` · ${s.pallets.length} pallet${s.pallets.length === 1 ? "" : "s"}` : ""}${s.ship_date ? ` · shipped ${fmtDate(s.ship_date)}` : ""}</div>
           </div></label>`;
       }).join("") || `<p class="muted">${filter === "shipped" ? "Nothing waiting for proof of delivery." : "No shipments match."}</p>`;
       renderSticky();
     }
 
-    function setFilter(f) { filter = f; renderPicker(); }
+    async function setFilter(f) { filter = f; await loadDeliveries(); renderPicker(); }
 
     function toggleShipment(id, on) {
       if (on) selected.add(id); else selected.delete(id);
@@ -113,21 +110,21 @@
     async function renderUpload() {
       document.getElementById("sticky").style.display = "none";
       const chosen = [...selected].map(byId).filter(Boolean);
-      const existing = await Promise.all(chosen.map(s =>
-        apiFetch(`/api/attachments/?entity_type=shipment&entity_id=${s.id}`).then(fs => fs.filter(f => f.category === "pod"))));
       document.getElementById("app").innerHTML = `
         <div class="card">
           <a class="link small" onclick="backToPicker()">← change deliveries</a>
           <h2 style="margin-top:6px;">${chosen.length} deliver${chosen.length === 1 ? "y" : "ies"}</h2>
-          ${chosen.map((s, i) => {
-            const o = orderOf(s);
-            return `<div class="stop">
-              <strong>${escapeHtml(s.code)}</strong> <span class="tag ${s.status}">${s.status}</span> · ${escapeHtml(customerName(o.customer_id))}
-              <div class="muted small">${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}${o.job_number ? ` · Job ${escapeHtml(o.job_number)}` : ""}
-                ${existing[i].length ? ` · <span class="pos">${existing[i].length} photo${existing[i].length === 1 ? "" : "s"} already</span>` : ""}</div>
-              ${o.ship_to_address ? `<p class="address">${escapeHtml(o.ship_to_address)}</p>` : ""}
-            </div>`;
-          }).join("")}
+          ${chosen.map(s => `<div class="stop">
+              <strong>${escapeHtml(s.code)}</strong> <span class="tag ${s.status}">${s.status}</span> · ${escapeHtml(s.customer || "")}
+              <div class="muted small">${s.po_number ? `PO ${escapeHtml(s.po_number)}` : ""}${s.job_number ? ` · Job ${escapeHtml(s.job_number)}` : ""}
+                ${s.pods ? ` · <span class="pos">${s.pods} photo${s.pods === 1 ? "" : "s"} already</span>` : ""}</div>
+              ${s.ship_to ? `<p class="address">${escapeHtml(s.ship_to)}</p>` : ""}
+              <table class="compact-table no-table-tools pod-items"><thead><tr><th>Item</th><th class="num">Qty</th></tr></thead><tbody>
+                ${s.lines.map(l => `<tr><td><strong>${escapeHtml(l.item_code)}</strong><div class="muted small">${escapeHtml(l.description)}</div></td><td class="num">${fmtQty(l.quantity)}</td></tr>`).join("")}
+              </tbody></table>
+              <div class="small" style="margin-top:6px;"><strong>${s.boxes} box${s.boxes === 1 ? "" : "es"}</strong>${s.pallets.length ? ` on <strong>${s.pallets.length} pallet${s.pallets.length === 1 ? "" : "s"}</strong>` : ""}</div>
+              ${s.pallets.length ? `<div class="muted small">${s.pallets.map(p => `Pallet ${escapeHtml(p.pallet_number)}: ${p.boxes} box${p.boxes === 1 ? "" : "es"}${p.weight ? ` · ${fmtQty(p.weight)} lbs` : ""}${p.dimensions ? ` · ${escapeHtml(p.dimensions)}` : ""}`).join("<br>")}</div>` : ""}
+            </div>`).join("")}
         </div>
         <div class="card">
           <label class="big-btn camera-btn">📷 Take photo
@@ -217,7 +214,7 @@
         const codes = ids.map(id => (byId(id) || {}).code).join(", ");
         pending = [];
         selected = new Set();
-        shipments = await apiFetch("/api/shipments/");
+        await loadDeliveries();
         document.getElementById("app").innerHTML = `<div class="card">
           <div class="done">✓ Proof of delivery saved on ${escapeHtml(codes)} — marked delivered.</div>
           <button class="big-btn light-btn" onclick="backToPicker()">Next delivery</button></div>`;
@@ -229,13 +226,18 @@
     }
 
     async function init() {
-      [shipments, orders, customers] = await Promise.all([
-        apiFetch("/api/shipments/"), apiFetch("/api/customer-orders/"), apiFetch("/api/customers/"),
-      ]);
       // pod.html?id=5 (or ?id=5,7) opens straight on those shipments.
       const ids = (new URLSearchParams(location.search).get("id") || "").split(",").map(Number).filter(Boolean);
-      if (ids.length) {
-        ids.forEach(id => selected.add(id));
+      if (ids.length) filter = "all";
+      await loadDeliveries();
+      const found = ids.filter(id => byId(id));
+      if (ids.length && !found.length) {
+        document.getElementById("app").innerHTML = `<div class="card"><div class="notice">That shipment hasn't shipped yet (or isn't one you can deliver),
+          so there's nothing to prove delivery for.</div><button class="big-btn light-btn" onclick="backToPicker()">See deliveries</button></div>`;
+        return;
+      }
+      if (found.length) {
+        found.forEach(id => selected.add(id));
         renderUpload();
       } else {
         renderPicker();

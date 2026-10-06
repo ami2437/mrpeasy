@@ -47,6 +47,11 @@ def qty(v):
 def date(d):
     return d.strftime("%b %d, %Y") if d else ""
 
+def moment(d) -> str:
+    """The day of a stored moment (UTC), in the company's time zone -- documents are read where the company is."""
+    from app.services.clock import local
+    return date(local(d)) if d else ""
+
 
 def lines(*parts):
     return "\n".join(p.strip() for p in parts if p and str(p).strip())
@@ -177,7 +182,7 @@ def _invoice(db, inv: Invoice, opt):
         sh = by_id.get(l.shipment_id)
         rows.append({"line_no": str(i), "item_code": it.code if it else "", "description": _desc(desc, l, show_notes),
                      "shipment": sh.code if sh else "", "qty": qty(l.quantity), "price": price(l.unit_price),
-                     "delivery": date((sh.delivered_at if sh else None) or (order.delivery_date if order else None)),
+                     "delivery": moment(sh.delivered_at) if sh and sh.delivered_at else date(order.delivery_date if order else None),
                      "amount": money(line_amount(l.quantity, l.unit_price)), "_shipping": _is_shipping(l, it)})
     total = sum(line_amount(l.quantity, l.unit_price) for l in printed)
     shipping = sum(line_amount(l.quantity, l.unit_price) for l in printed if _is_shipping(l, items.get(l.item_id)))
@@ -186,8 +191,8 @@ def _invoice(db, inv: Invoice, opt):
     ctx = {"doc": {"title": "INVOICE", "number": inv.code, "date": date(inv.invoice_date), "status": inv.status},
            "customer": _customer(cust, order_ship_to), "order": _order(order),
            "invoice": {"date": date(inv.invoice_date), "due_date": date(due), "terms": "Net 30",
-                       "shipments": ", ".join(s.code for s in ships), "shipped": date(ships[0].ship_date) if ships else "",
-                       "delivered": date(ships[0].delivered_at) if ships else "",
+                       "shipments": ", ".join(s.code for s in ships), "shipped": moment(ships[0].ship_date) if ships else "",
+                       "delivered": moment(ships[0].delivered_at) if ships else "",
                        "notes": inv.free_text if inv.free_text and inv.free_text != "Generated via AT-HUB" else ""},
            "totals": {"subtotal": money(total), "items_subtotal": money(total - shipping), "shipping": money(shipping),
                       "tax": money(0), "total": money(total), "lines": str(len(rows))},
@@ -229,7 +234,7 @@ def _packing_list(db, sh: Shipment, opt):
         rows.append({"line_no": str(ol.line_no or ""), "item_code": it.code if it else "", "description": _desc(it.title if it else "", ol, show_notes),
                      "lot": ", ".join(dict.fromkeys(lots_by_line.get(lid, []))), "ordered": qty(ol.quantity), "shipped": qty(by_line[lid]),
                      "backorder": qty(back) if back else "—",
-                     "previous": "\n".join(f"{e['code']}: {qty(e['qty'])}" + (f" · {date(e['when'])}" if e["when"] else "") for e in previous.get(lid, {}).values()),
+                     "previous": "\n".join(f"{e['code']}: {qty(e['qty'])}" + (f" · {moment(e['when'])}" if e["when"] else "") for e in previous.get(lid, {}).values()),
                      "boxes": "\n".join(f"{n} × {qty(q)}" for q, n in sorted(counts.items(), reverse=True)) or "—",
                      "pallet": ", ".join(eff_pallets.get(lid, [])),
                      "check": ""})
@@ -247,9 +252,9 @@ def _packing_list(db, sh: Shipment, opt):
     ship_to = (order.ship_to_address if order else None)
     from app.services.concurrency import REQUEST_BASE
     base = (settings.public_url or REQUEST_BASE.get() or "").rstrip("/")  # PUBLIC_URL once launched; else the address in use
-    ctx = {"doc": {"title": "PACKING LIST", "number": sh.code, "date": date(sh.ship_date or sh.created_at)},
+    ctx = {"doc": {"title": "PACKING LIST", "number": sh.code, "date": moment(sh.ship_date or sh.created_at)},
            "customer": _customer(cust, ship_to), "order": _order(order),
-           "shipment": {"code": sh.code, "ship_date": date(sh.ship_date), "carrier": sh.carrier or "", "tracking": sh.tracking_number or "",
+           "shipment": {"code": sh.code, "ship_date": moment(sh.ship_date), "carrier": sh.carrier or "", "tracking": sh.tracking_number or "",
                         "notes": sh.notes or "", "lines": str(len(rows)), "units": qty(sum(by_line.values())), "boxes": str(len(sh.boxes) or ""),
                         "pallets": str(len(pallets)) if pallets else "", "weight": f"{weight:,.0f} lbs" if weight else "",
                         "pod_url": f"{base}/pod.html?id={sh.id}" if base else f"/pod.html?id={sh.id}"},

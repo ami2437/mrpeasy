@@ -42,7 +42,7 @@
       copies = r.copies;
       document.getElementById("b-body").innerHTML = r.backups.map(b => {
         const [label, cls] = KIND[b.kind] || [b.kind, "draft"];
-        return `<tr><td>${new Date(b.created).toLocaleString()}</td><td><span class="tag ${cls}">${label}</span></td>
+        return `<tr><td>${fmtWhen(b.created)}</td><td><span class="tag ${cls}">${label}</span></td>
           <td class="num">${(b.size / 1048576).toFixed(1)} MB</td><td class="small muted">${escapeHtml(b.name)}</td>
           <td>${b.copies.map((ok, i) => `<span class="tag ${ok ? "shipped" : "overdue"}" title="${escapeHtml(copies[i] || "")}">${ok ? "✓" : "missing"}</span>`).join(" ") || '<span class="muted small">—</span>'}</td>
           <td class="nowrap"><a class="link small" onclick="download('${b.name}')">Download</a> &nbsp;

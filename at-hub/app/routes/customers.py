@@ -5,7 +5,7 @@ from app.schemas import CustomerCreate, CustomerUpdate, PartyResponse
 from app.services.crud import customer_service
 from app.dependencies import get_current_active_user, require_perm, require_any
 
-router = APIRouter(prefix="/api/customers", tags=["customers"], dependencies=[Depends(require_any("customers.view", "orders.view", "shipments.view", "invoices", "quotes", "pod.upload"))])
+router = APIRouter(prefix="/api/customers", tags=["customers"], dependencies=[Depends(require_any("customers.view", "orders.view", "shipments.view", "invoices", "quotes"))])  # drivers: /api/pod only
 
 
 @router.get("/", response_model=list[PartyResponse])

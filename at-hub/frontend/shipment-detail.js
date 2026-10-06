@@ -22,7 +22,6 @@ function closeShipmentDetail() {
   if (onShipmentDetailClose) onShipmentDetailClose();
 }
 
-function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 function orderCode(id) { const o = orders.find(o => o.id === id); return o ? o.code : id; }
 function order(id) { return orders.find(o => o.id === id); }
 function itemLabel(id) { const i = items.find(i => i.id === id); return i ? `${i.code} — ${i.title}` : id; }
@@ -554,7 +553,7 @@ function cancelShipment(id) {
 function deliverySectionHtml(shipment) {
   if (!["shipped", "delivered", "invoiced"].includes(shipment.status)) return `<p class="muted">Available once the shipment has shipped.</p>`;
   const canMark = AuthGuard.can("shipments.deliver");
-  const today = new Date().toISOString().substring(0, 10);
+  const today = todayISO();
   return `
     ${shipment.delivered_at
       ? `<p><span class="tag delivered">Delivered</span> <strong>${fmtDate(shipment.delivered_at)}</strong>
@@ -562,7 +561,7 @@ function deliverySectionHtml(shipment) {
       : `<p class="muted">Not delivered yet — uploading a proof of delivery marks it delivered.</p>`}
     ${canMark ? `
       <div class="row" style="max-width:520px; align-items:flex-end;">
-        <div><label>Delivered on</label><input type="date" id="delivered-date" value="${shipment.delivered_at ? shipment.delivered_at.substring(0, 10) : today}" max="${today}"></div>
+        <div><label>Delivered on</label><input type="date" id="delivered-date" value="${shipment.delivered_at ? dayISO(shipment.delivered_at) : today}" max="${today}"></div>
         <div style="flex:0;"><button class="secondary" style="white-space:nowrap;" onclick="markDelivered(${shipment.id})">${shipment.delivered_at ? "Change date" : "Mark Delivered"}</button></div>
         ${shipment.delivered_at ? `<div style="flex:0;"><a class="link small" style="white-space:nowrap;" onclick="clearDelivered(${shipment.id})">Clear Delivery</a></div>` : ""}
       </div>` : ""}
@@ -1112,7 +1111,7 @@ async function renameShipment(id) {
 }
 
 async function showDetail(id) {
-  const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), apiFetch("/api/invoices/").catch(() => []),
+  const [shipment, allInvoices] = await Promise.all([apiFetch(`/api/shipments/${id}`), (AuthGuard.can("invoices") ? apiFetch("/api/invoices/").catch(() => []) : []),
     packSuggest[id] ? null : loadPackSuggestions([id])]);
   const invoicesForShipment = allInvoices.filter(inv => (inv.shipment_ids || [inv.shipment_id]).includes(id) && inv.status !== "void");
   // Other shipments of this order that shipped and aren't billed yet -- can go on the same invoice.
@@ -1134,6 +1133,7 @@ async function showDetail(id) {
     <p class="muted">Order <a class="link" href="customer-orders.html?id=${shipment.order_id}">${orderCode(shipment.order_id)}</a>${ord && ord.po_number
       ? ` · PO <a class="link" href="customer-orders.html?id=${shipment.order_id}">${escapeHtml(ord.po_number)}</a>` : ""}
       — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
+    <div id="shipment-sticky" class="sticky-strip"></div>
 
     <div class="ship-actions-bar">
       ${shipment.status !== "cancelled" ? `<button class="next-step" onclick="openProcess(${shipment.id})" ${open ? "" : "disabled"}
@@ -1188,6 +1188,7 @@ async function showDetail(id) {
     <button class="secondary" onclick="closeShipmentDetail()" style="margin-top:16px;">Close</button>
   `;
   decorateIcons(card);
+  stickyNotes("shipment-sticky", "shipment", shipment.id);
   renderAttachments("shipment-attachments", "shipment", shipment.id, ["pod", "bol", "other"],
     { notePlaceholder: "Note — E.g. Received By / Signed By", onChange: async () => {
       // A POD upload may have just marked it delivered.
@@ -1355,7 +1356,7 @@ Please let us know if you have any questions.`)}</textarea>
     </div>
     <div id="pod-email-error" class="error"></div>
     ${history.length ? `<h4>Sent before</h4><table class="compact-table no-table-tools"><thead><tr><th>When</th><th>To</th><th>Files</th><th>By</th></tr></thead><tbody>
-      ${history.map(h => `<tr><td class="nowrap">${new Date(h.sent_at + (h.sent_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(h.to_address)}</td>
+      ${history.map(h => `<tr><td class="nowrap">${fmtWhen(h.sent_at)}</td><td>${escapeHtml(h.to_address)}</td>
         <td class="small">${escapeHtml(h.files || "")}</td><td>${escapeHtml(h.sent_by || "")}</td></tr>`).join("")}</tbody></table>` : ""}
   </div>`;
 }
@@ -1406,7 +1407,7 @@ async function openPackSizeManager(onChange) {
         <td><input type="number" step="1" min="1" class="qty-input pm-size" value="${i.default_pack_size ?? ""}" placeholder="None"></td>
         <td class="nowrap"><a class="link" onclick="pmSave(${i.id})">Save</a>
           ${i.default_pack_size ? ` · <a class="link" onclick="pmClear(${i.id})">Clear</a>` : ""}</td>
-        <td>${old.length ? old.map(h => `<span class="pack-chip" title="${escapeHtml(`${utcTime(h.changed_at).toLocaleString()} · ${h.source || ""} · ${h.changed_by || ""}${h.reference ? " · " + h.reference : ""}`)}">
+        <td>${old.length ? old.map(h => `<span class="pack-chip" title="${escapeHtml(`${fmtWhen(h.changed_at)} · ${h.source || ""} · ${h.changed_by || ""}${h.reference ? " · " + h.reference : ""}`)}">
             ${h.previous_pack_size ?? "None"} → ${h.pack_size ?? "None"}
             <a onclick="pmDeleteHistory(${h.id})" title="Delete this history entry" style="cursor:pointer;color:#b91c1c;margin-left:3px;">×</a></span>`).join(" ")
           : `<span class="muted small">—</span>`}</td>

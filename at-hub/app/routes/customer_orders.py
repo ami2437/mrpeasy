@@ -11,7 +11,7 @@ from app.dependencies import get_current_active_user, require_perm, require_any
 manager = [Depends(require_perm("orders.edit"))]  # creating/editing/pricing orders
 from app.models import User
 
-router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"], dependencies=[Depends(require_any("orders.view", "shipments.view", "invoices", "quotes", "pod.upload"))])
+router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"], dependencies=[Depends(require_any("orders.view", "shipments.view", "invoices", "quotes"))])  # drivers: /api/pod only
 
 
 @router.get("/", response_model=list[CustomerOrderResponse])

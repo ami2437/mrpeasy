@@ -92,7 +92,6 @@
     AuthGuard.requirePerm("reports");
     document.getElementById("sidebar").innerHTML = renderSidebar("reports.html");
 
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function money(n) { return `$${n.toFixed(2)}`; }
 
     // ---- Money: what's owed to us, what's in the pipeline, what we owe ----

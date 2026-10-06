@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Go-Live Cleanup</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+  <style>
+    .gl-sec { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; margin-bottom: 8px; }
+    .gl-sec > summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+    .gl-sec > summary::-webkit-details-marker { display: none; }
+    .gl-sec .gl-counts { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+    .gl-pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft, #e8f0fe); white-space: nowrap; }
+    .gl-pill.shown { background: #fee2e2; color: #991b1b; }
+    .gl-pill.cut { background: #f1f5f9; color: #475569; }
+    .gl-pill.dis { background: #fef3c7; color: #92400e; }
+    .gl-body { padding: 0 12px 12px; }
+    .gl-body table td, .gl-body table th { font-size: 12.5px; }
+    tr.gl-hidden td { color: var(--muted, #64748b); }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar"><h1 class="page-title">Go-Live Cleanup</h1>
+      <span class="muted small">Migration tool: keeps Needs Attention about work done in AT-HUB. Nothing is deleted. Clear the date and everything shows again.</span></div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Go-live cut-off</h3>
+      <p class="muted small" style="margin-top:0;">Rows dated <strong>before</strong> this date drop out of the ticked sections on the Dashboard and Reports.
+        A shipment is dated by its ship date, an invoice by its invoice date, an order or PO by the day it was entered, a vendor invoice by its date.
+        Sections left unticked always show everything (e.g. orders still waiting to be booked are real work).</p>
+      <div class="row" style="align-items:flex-end; gap:12px; flex-wrap:wrap;">
+        <div style="flex:0 0 auto;"><label>Hide items dated before</label><input type="date" id="gl-date"></div>
+        <button class="secondary" style="flex:0 0 auto;" onclick="setToday()">Today</button>
+        <button style="flex:0 0 auto;" onclick="saveCutoff()" data-icon="save">Save Cut-Off</button>
+        <button class="secondary" style="flex:0 0 auto;" onclick="clearCutoff()">Clear (Show Everything)</button>
+        <span id="gl-saved" class="muted small"></span>
+      </div>
+      <div id="gl-sections-pick" style="margin-top:12px; display:flex; flex-wrap:wrap; gap:6px 16px;"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <h3 style="margin:0;">What Needs Attention will show</h3>
+        <span class="muted small">Expand a section to check rows and dismiss the ones nobody needs to chase.</span>
+        <button class="secondary" style="margin-left:auto;" onclick="dismissTicked()">Dismiss Ticked</button>
+      </div>
+      <div id="gl-preview" style="margin-top:10px;"><p class="muted">Loading...</p></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Dismissed</h3>
+      <div id="gl-dismissed"></div>
+    </div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requirePerm("golive");
+    document.getElementById("sidebar").innerHTML = renderSidebar("golive.html");
+    let data = null;
+
+    function pickSections() {
+      const chosen = new Set(data.cutoff.sections);
+      document.getElementById("gl-sections-pick").innerHTML = data.sections.map(s =>
+        `<label class="small" style="display:flex; gap:6px; align-items:center;"><input type="checkbox" class="gl-pick" value="${s.key}" ${chosen.has(s.key) ? "checked" : ""}> ${escapeHtml(s.title)}</label>`).join("");
+    }
+
+    function rowText(r) {
+      return [r.code || r.order_code, r.customer || r.vendor, r.po_number ? `PO ${r.po_number}` : "", r.bill_number, r.filename, r.title]
+        .filter(Boolean).map(escapeHtml).join(" · ");
+    }
+
+    function render() {
+      document.getElementById("gl-date").value = data.cutoff.date || "";
+      document.getElementById("gl-saved").textContent = data.cutoff.date
+        ? `Hiding items before ${fmtDay(data.cutoff.date)}${data.cutoff.updated_by ? " · set by " + data.cutoff.updated_by : ""}` : "No cut-off: everything shows.";
+      pickSections();
+      document.getElementById("gl-preview").innerHTML = data.sections.map(s => {
+        const shown = s.rows.filter(r => !r.hidden_by), cut = s.rows.filter(r => r.hidden_by === "cutoff"), dis = s.rows.filter(r => r.hidden_by === "dismissed");
+        const sorted = [...shown, ...dis, ...cut];
+        return `<details class="gl-sec"><summary><strong>${escapeHtml(s.title)}</strong>
+            <span class="gl-counts"><span class="gl-pill shown">${shown.length} shown</span>${cut.length ? `<span class="gl-pill cut">${cut.length} before go-live</span>` : ""}${dis.length ? `<span class="gl-pill dis">${dis.length} dismissed</span>` : ""}</span></summary>
+          <div class="gl-body">${sorted.length ? `<table class="compact-table no-table-tools"><thead><tr><th style="width:28px;"><input type="checkbox" onchange="tickAll(this, '${s.key}')"></th><th>Record</th><th>Dated</th><th class="num">Days</th><th>Status</th></tr></thead><tbody>
+            ${sorted.map(r => `<tr class="${r.hidden_by ? "gl-hidden" : ""}">
+              <td>${r.hidden_by ? "" : `<input type="checkbox" class="gl-tick" data-key="${s.key}" data-id="${r.record_id}">`}</td>
+              <td>${rowText(r)}</td><td>${r.dated ? fmtDay(r.dated) : ""}</td><td class="num">${r.days ?? ""}</td>
+              <td>${r.hidden_by === "cutoff" ? "Before go-live (hidden)" : r.hidden_by === "dismissed" ? "Dismissed" : "Shows"}</td></tr>`).join("")}
+          </tbody></table>` : `<p class="muted small">Nothing here.</p>`}</div></details>`;
+      }).join("");
+      document.getElementById("gl-dismissed").innerHTML = data.dismissed.length ? `<table class="compact-table no-table-tools">
+          <thead><tr><th>Section</th><th>Record</th><th>Dismissed</th><th></th></tr></thead><tbody>
+          ${data.dismissed.map(d => `<tr><td>${escapeHtml((data.sections.find(s => s.key === d.key) || {}).title || d.key)}</td><td>${escapeHtml(d.label || "#" + d.record_id)}</td>
+            <td class="small">${escapeHtml(d.by || "")} · ${fmtWhen(d.at)}</td><td><a class="link" onclick="restore([${d.id}])">Restore</a></td></tr>`).join("")}
+          </tbody></table>${data.dismissed.length > 1 ? `<button class="secondary" style="margin-top:8px;" onclick="restore(${JSON.stringify(data.dismissed.map(d => d.id))})">Restore All</button>` : ""}`
+        : `<p class="muted small" style="margin:0;">Nothing dismissed.</p>`;
+    }
+
+    function tickAll(box, key) { document.querySelectorAll(`.gl-tick[data-key="${key}"]`).forEach(c => { c.checked = box.checked; }); }
+    function setToday() { document.getElementById("gl-date").value = todayISO(); }
+
+    async function load() {
+      try { data = await apiFetch("/api/golive/"); render(); }
+      catch (e) { document.getElementById("gl-preview").innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+    }
+    async function saveCutoff() {
+      const date = document.getElementById("gl-date").value;
+      if (!date) { toast("Pick the go-live date first"); return; }
+      const sections = [...document.querySelectorAll(".gl-pick:checked")].map(c => c.value);
+      await apiFetch("/api/golive/cutoff", { method: "PUT", body: JSON.stringify({ date, sections }) });
+      toast("Cut-off saved");
+      load();
+    }
+    async function clearCutoff() {
+      if (!confirm("Show everything on Needs Attention again, however old?")) return;
+      await apiFetch("/api/golive/cutoff", { method: "PUT", body: JSON.stringify({ date: null, sections: data.cutoff.sections }) });
+      load();
+    }
+    async function dismissTicked() {
+      const items = [...document.querySelectorAll(".gl-tick:checked")].map(c => ({ key: c.dataset.key, id: parseInt(c.dataset.id) }));
+      if (!items.length) { toast("Tick the rows to dismiss first"); return; }
+      const r = await apiFetch("/api/golive/dismiss", { method: "POST", body: JSON.stringify({ items }) });
+      toast(`Dismissed ${r.dismissed}`);
+      load();
+    }
+    async function restore(ids) {
+      await apiFetch("/api/golive/restore", { method: "POST", body: JSON.stringify({ ids }) });
+      load();
+    }
+    load();
+  </script>
+</body>
+</html>

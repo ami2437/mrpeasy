@@ -78,7 +78,6 @@
 
     const TYPE_LABEL = { freight: "Freight", tariff: "Tariff / duty", customs: "Customs", brokerage: "Brokerage", insurance: "Insurance", other: "Other" };
 
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function vendorName(id) { const v = vendors.find(v => v.id === id); return v ? v.name : id; }
     function itemCode(id) { const i = items.find(i => i.id === id); return i ? i.code : id; }
     function poCode(id) { const p = pos.find(p => p.id === id); return p ? p.code : id; }

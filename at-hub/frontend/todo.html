@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — To-Do</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+  <style>
+    .td-wrap { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .td-side { padding: 14px; }
+    .td-smart { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .td-tile { border: 0; border-radius: 12px; padding: 10px 12px; background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left;
+      display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; gap: 2px 8px; box-shadow: none; font: inherit; }
+    .td-tile .dot { grid-row: 1; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; }
+    .td-tile .dot .ico { width: 15px; height: 15px; }
+    .td-tile .n { grid-column: 2; grid-row: 1; justify-self: end; font-size: 22px; font-weight: 700; }
+    .td-tile .l { grid-column: 1 / 3; font-size: 13px; font-weight: 600; color: var(--text-2); }
+    .td-tile.on { outline: 2px solid var(--accent); }
+    .td-tile.wide { grid-column: 1 / 3; }
+    .td-lists h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .td-list { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+    .td-list:hover { background: var(--row-hover); }
+    .td-list.on { background: var(--accent-soft); }
+    .td-list .ldot { width: 22px; height: 22px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: #fff; }
+    .td-list .ldot .ico { width: 12px; height: 12px; }
+    .td-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .td-list .cnt { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .td-main { padding: 16px 20px; min-height: 420px; }
+    .td-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+    .td-title h2 { margin: 0; font-size: 26px; }
+    .td-title .n { margin-left: auto; font-size: 26px; font-weight: 700; }
+    .td-item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--border); align-items: start; }
+    .td-check { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-strong); background: transparent; cursor: pointer; padding: 0; margin-top: 1px; box-shadow: none; }
+    .td-check.done { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--surface); }
+    .td-item.is-done .td-t { color: var(--muted); text-decoration: line-through; }
+    .td-t { font-weight: 500; cursor: pointer; word-break: break-word; }
+    .td-meta { font-size: 12.5px; color: var(--muted); margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+    .td-meta .late { color: var(--neg); font-weight: 600; }
+    .td-notes { font-size: 12.5px; color: var(--text-2); margin-top: 3px; white-space: pre-wrap; }
+    .td-prio { color: #ea580c; font-weight: 800; margin-right: 4px; }
+    .td-flag { color: #ea580c; }
+    .td-sticky { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; background: #fef08a; color: #713f12; }
+    .td-add { display: grid; grid-template-columns: 26px 1fr; gap: 10px; padding: 9px 2px; align-items: center; }
+    .td-add input { border: 0; background: transparent; padding: 4px 0; box-shadow: none; font-size: 14px; }
+    .td-add input:focus { outline: none; border-bottom: 1px solid var(--accent); }
+    .td-plus { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; }
+    .td-plus .ico { width: 13px; height: 13px; }
+    .td-edit { grid-column: 2 / 4; background: var(--surface-2); border-radius: 10px; padding: 12px; margin-top: 4px; display: grid; gap: 8px; }
+    .td-edit .row2 { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+    .td-edit .row2 > div { flex: 0 1 auto; }
+    .td-edit textarea { min-height: 60px; }
+    .td-icon-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 2px 4px; box-shadow: none; }
+    .td-icon-btn:hover { color: var(--accent); }
+    .td-icon-btn.on { color: #ea580c; }
+    @media (max-width: 900px) { .td-wrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="td-wrap">
+      <div class="card td-side">
+        <div class="td-smart" id="td-smart"></div>
+        <div class="td-lists" id="td-lists"></div>
+        <div style="margin-top:10px;"><a class="link small" onclick="newList()">+ Add List</a></div>
+      </div>
+      <div class="card td-main" id="td-main"><p class="muted">Loading...</p></div>
+    </div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requireLogin();
+    document.getElementById("sidebar").innerHTML = renderSidebar("todo.html");
+    const SMART = [
+      ["today", "Today", "#2f6fed", "calendar"], ["scheduled", "Scheduled", "#dc2626", "clock"],
+      ["all", "All", "#475569", "list"], ["flagged", "Flagged", "#ea580c", "pin"], ["completed", "Completed", "#64748b", "check"],
+    ];
+    const params = new URLSearchParams(location.search);
+    let view = params.get("view") || "today", listId = null, lists = [], counts = {}, items = [], openId = null;
+    const PRIO = ["None", "Low", "Medium", "High"];
+
+    function smartTiles() {
+      document.getElementById("td-smart").innerHTML = SMART.map(([k, l, c, ic], i) => `
+        <button type="button" class="td-tile ${view === k ? "on" : ""} ${i === SMART.length - 1 ? "wide" : ""}" onclick="pickView('${k}')">
+          <span class="dot" style="background:${c}">${icon(ic)}</span><span class="n">${counts[k] ?? ""}</span><span class="l">${l}</span></button>`).join("");
+    }
+    function listRows() {
+      const mine = lists.filter(l => !l.shared), shared = lists.filter(l => l.shared);
+      const row = l => `<div class="td-list ${view === "list" && listId === l.id ? "on" : ""}" onclick="pickList(${l.id})">
+          <span class="ldot" style="background:${escapeHtml(l.color || "#2f6fed")}">${icon("listTodo")}</span>
+          <span class="name">${escapeHtml(l.name)}${l.shared && !l.mine ? ` <span class="muted small">· ${escapeHtml(l.owner)}</span>` : ""}</span><span class="cnt">${l.open}</span></div>`;
+      document.getElementById("td-lists").innerHTML = `<h4>My Lists</h4>${mine.map(row).join("")}`
+        + (shared.length ? `<h4>Shared With Everyone</h4>${shared.map(row).join("")}` : "");
+    }
+    function titleFor() {
+      if (view === "list") { const l = lists.find(x => x.id === listId) || {}; return [l.name || "", l.color || "#2f6fed", l]; }
+      const s = SMART.find(x => x[0] === view); return [s[1], s[2], null];
+    }
+    function dueText(r) {
+      const day = r.due_date || r.remind_date, at = r.due_at || r.remind_at;
+      if (!day) return "";
+      const iso = String(day).slice(0, 10), today = todayISO();
+      const late = iso < today && !r.done;
+      const label = iso === today ? "Today" : fmtDate(day, { weekday: "short", month: "short", day: "numeric" });
+      return `<span class="${late ? "late" : ""}">${icon("calendar")} ${label}${at ? ", " + fmtTime(at) : ""}</span>`;
+    }
+    function itemRow(r) {
+      const isNote = r.kind === "note";
+      const rec = r.record ? `<a class="link" href="${r.record.link}">${escapeHtml(r.record.code)}${r.record.who ? " · " + escapeHtml(r.record.who) : ""}</a>` : "";
+      const title = isNote ? r.text : r.title;
+      const meta = [dueText(r), isNote ? `<span class="td-sticky">Sticky note</span>` : "", rec,
+                    !isNote && view !== "list" ? `<span>${escapeHtml(r.list_name)}</span>` : "",
+                    r.done && r.done_at ? `<span>Done ${fmtWhen(r.done_at)}${r.done_by ? " · " + escapeHtml(r.done_by) : ""}</span>` : ""].filter(Boolean);
+      return `<div class="td-item ${r.done ? "is-done" : ""}" id="td-${r.kind}-${r.id}">
+        <button type="button" class="td-check ${r.done ? "done" : ""}" title="${r.done ? "Mark not done" : "Mark done"}" onclick="toggle('${r.kind}', ${r.id})"></button>
+        <div><div class="td-t" onclick="${isNote ? `location.href='${r.record ? r.record.link : "#"}'` : `openItem(${r.id})`}">
+            ${r.priority ? `<span class="td-prio">${"!".repeat(r.priority)}</span>` : ""}${escapeHtml(title)}</div>
+          ${!isNote && r.notes && openId !== r.id ? `<div class="td-notes">${escapeHtml(r.notes)}</div>` : ""}
+          ${meta.length ? `<div class="td-meta">${meta.join("")}</div>` : ""}</div>
+        <div>${!isNote ? `<button type="button" class="td-icon-btn ${r.flagged ? "on" : ""}" title="Flag" onclick="flag(${r.id}, ${!r.flagged})">${icon("pin")}</button>` : ""}</div>
+        ${openId === r.id && !isNote ? editor(r) : ""}</div>`;
+    }
+    function editor(r) {
+      return `<div class="td-edit">
+        <input type="text" id="e-title" value="${escapeHtml(r.title)}">
+        <textarea id="e-notes" placeholder="Notes">${escapeHtml(r.notes || "")}</textarea>
+        <div class="row2">
+          <div><label>Date</label><input type="date" id="e-date" value="${r.due_date ? String(r.due_date).slice(0, 10) : ""}"></div>
+          <div><label>Time <span class="muted small">(${escapeHtml(tzAbbrev())})</span></label><input type="time" id="e-time" value="${r.due_at ? utcTime(r.due_at).toLocaleTimeString("en-GB", { timeZone: userTz(), hour: "2-digit", minute: "2-digit" }) : ""}"></div>
+          <div><label>Priority</label><select id="e-prio">${PRIO.map((p, i) => `<option value="${i}" ${i === r.priority ? "selected" : ""}>${p}</option>`).join("")}</select></div>
+          <div><label>List</label><select id="e-list">${lists.map(l => `<option value="${l.id}" ${l.id === r.list_id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}</select></div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button onclick="saveItem(${r.id})">Save</button><button class="secondary" onclick="openItem(null)">Close</button>
+          <button class="secondary" style="margin-left:auto;" onclick="delItem(${r.id})">Delete</button></div></div>`;
+    }
+    function render() {
+      smartTiles(); listRows();
+      const [name, color, lst] = titleFor();
+      const open = items.filter(i => !i.done).length;
+      const canAdd = view !== "completed";
+      document.getElementById("td-main").innerHTML = `
+        <div class="td-title"><h2 style="color:${escapeHtml(color)}">${escapeHtml(name)}</h2>
+          ${lst && lst.mine ? `<a class="link small" onclick="editList(${lst.id})">Edit list</a>` : ""}
+          <span class="n" style="color:${escapeHtml(color)}">${view === "completed" ? items.length : open}</span></div>
+        ${items.map(itemRow).join("") || (canAdd ? "" : `<p class="muted">Nothing completed yet.</p>`)}
+        ${canAdd ? `<div class="td-add"><span class="td-plus">${icon("plus")}</span>
+          <input type="text" id="new-title" placeholder="New to-do — press Enter${view === "today" ? " (due today)" : ""}" onkeydown="if (event.key === 'Enter') addItem()"></div>` : ""}
+        ${!items.length && canAdd ? `<p class="muted small" style="margin-top:12px;">${view === "today" ? "Nothing due today. Sticky-note reminders on orders, POs and shipments show here too." : "Nothing here yet."}</p>` : ""}`;
+    }
+    async function load() {
+      try {
+        [lists, counts] = await Promise.all([apiFetch("/api/todo/lists"), apiFetch("/api/todo/counts")]);
+        if (view === "list" && !lists.some(l => l.id === listId)) view = "today";
+        items = await apiFetch(`/api/todo/items?view=${view}${view === "list" ? "&list_id=" + listId : ""}`);
+        render();
+        TopBar.badge();
+      } catch (e) { document.getElementById("td-main").innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+    }
+    function pickView(v) { view = v; listId = null; openId = null; load(); }
+    function pickList(id) { view = "list"; listId = id; openId = null; load(); }
+    function openItem(id) { openId = id; render(); if (id) { const t = document.getElementById("e-title"); if (t) t.focus(); } }
+    async function addItem(day) {
+      const el = document.getElementById("new-title"), title = el.value.trim();
+      if (!title) return;
+      const body = { title };
+      if (view === "list") body.list_id = listId;
+      if (view === "today" || view === "scheduled") body.due_date = day || todayISO();
+      if (view === "flagged") body.flagged = true;
+      await apiFetch("/api/todo/items", { method: "POST", body: JSON.stringify(body) });
+      await load();
+      const again = document.getElementById("new-title"); if (again) again.focus();
+    }
+    async function saveItem(id) {
+      const body = { title: document.getElementById("e-title").value, notes: document.getElementById("e-notes").value,
+        due_date: document.getElementById("e-date").value, due_time: document.getElementById("e-date").value ? document.getElementById("e-time").value : "",
+        priority: parseInt(document.getElementById("e-prio").value), list_id: parseInt(document.getElementById("e-list").value) };
+      try { await apiFetch(`/api/todo/items/${id}`, { method: "PUT", body: JSON.stringify(body) }); openId = null; load(); }
+      catch (e) { toast(e.message); }
+    }
+    async function toggle(kind, id) {
+      await apiFetch(kind === "note" ? `/api/notes/${id}/done` : `/api/todo/items/${id}/toggle`, { method: "POST" });
+      const row = document.getElementById(`td-${kind}-${id}`);
+      if (row && view !== "completed" && view !== "list") { row.classList.add("is-done"); row.querySelector(".td-check").classList.add("done"); setTimeout(load, 600); }
+      else load();
+    }
+    async function flag(id, on) { await apiFetch(`/api/todo/items/${id}`, { method: "PUT", body: JSON.stringify({ flagged: on }) }); load(); }
+    async function delItem(id) {
+      if (!confirm("Delete this to-do?")) return;
+      await apiFetch(`/api/todo/items/${id}`, { method: "DELETE" }); openId = null; load();
+    }
+    async function newList() {
+      const name = prompt("Name of the new list");
+      if (!name || !name.trim()) return;
+      const shared = confirm("Share this list with everyone? (OK = shared, Cancel = just you)");
+      const r = await apiFetch("/api/todo/lists", { method: "POST", body: JSON.stringify({ name, shared }) });
+      pickList(r.id);
+    }
+    async function editList(id) {
+      const l = lists.find(x => x.id === id);
+      const name = prompt("List name (empty the box to delete the list)", l.name);
+      if (name === null) return;
+      if (!name.trim()) {
+        if (!confirm(`Delete "${l.name}" and its to-dos?`)) return;
+        try { await apiFetch(`/api/todo/lists/${id}`, { method: "DELETE" }); pickView("today"); } catch (e) { toast(e.message); }
+        return;
+      }
+      const shared = confirm(`Share "${name}" with everyone? (OK = shared, Cancel = just you)`);
+      await apiFetch(`/api/todo/lists/${id}`, { method: "PUT", body: JSON.stringify({ name, shared }) });
+      load();
+    }
+    (async () => {
+      await load();
+      const day = params.get("new");
+      if (day) {  // "+ To-do on this day" from the calendar
+        view = "scheduled"; await load();
+        const el = document.getElementById("new-title");
+        if (el) { el.placeholder = `New to-do on ${fmtDate(day)} — press Enter`; el.onkeydown = e => { if (e.key === "Enter") addItem(day); }; el.focus(); }
+      }
+    })();
+  </script>
+</body>
+</html>

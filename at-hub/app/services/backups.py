@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -85,7 +85,7 @@ def list_backups() -> List[dict]:
         kind = "-".join(parts[3:]) or "manual"
         out.append({"name": f.name, "size": f.stat().st_size, "kind": kind,
                     "copies": [(d / f.name).exists() for d in copy_dirs()],
-                    "created": datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")})
+                    "created": datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")})
     return out
 
 

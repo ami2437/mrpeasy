@@ -524,7 +524,7 @@
                 || `<tr><td colspan="4" class="muted">Nothing Shipped In This Period.</td></tr>`}</tbody></table></div>`}
             <div><h4>Slow Movers</h4>
               <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">On Hand</th><th>Last Out</th></tr></thead>
-              <tbody>${a.slow_movers.map(r => `<tr><td>${itemCell(r)}</td><td class="num">${fmtQty(r.on_hand)}</td><td>${r.last_out ? new Date(r.last_out).toLocaleDateString() : `<span class="muted">Never</span>`}</td></tr>`).join("")
+              <tbody>${a.slow_movers.map(r => `<tr><td>${itemCell(r)}</td><td class="num">${fmtQty(r.on_hand)}</td><td>${r.last_out ? fmtDate(r.last_out) : `<span class="muted">Never</span>`}</td></tr>`).join("")
                 || `<tr><td colspan="3" class="muted">Everything In Stock Moved In This Period.</td></tr>`}</tbody></table></div>
           </div>`;
       } catch (err) { el.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
@@ -559,7 +559,7 @@
           <table class="compact-table">
             <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th>Reference</th><th>Note</th><th>By</th></tr></thead>
             <tbody>${m.movements.map(t => `<tr>
-              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${typeTag(t.type)}</td>
+              <td class="nowrap">${fmtWhen(t.date)}</td><td>${typeTag(t.type)}</td>
               <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
               <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td>${refLink(t.reference)}</td>
               <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")

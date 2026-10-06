@@ -38,10 +38,6 @@
     let lots = [];
     let itemsById = {};
 
-    function fmtDate(d) {
-      return d ? new Date(d).toLocaleDateString() : "";
-    }
-
     async function setStatus(lotId, status) {
       try {
         await apiFetch(`/api/lots/${lotId}/status`, { method: "PUT", body: JSON.stringify({ status }) });

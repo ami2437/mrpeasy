@@ -28,7 +28,6 @@
     document.getElementById("contacts").innerHTML = contactCardShell("+ New Vendor");
 
     let orders = [];
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
 
     ContactCards.init({
       endpoint: "/api/vendors/",
@@ -54,7 +53,7 @@
         if ((key === "phones" || key === "emails") && i === 0) n.push("main");
         return n;
       },
-      loadExtra: async () => { orders = await apiFetch("/api/purchase-orders/"); },
+      loadExtra: async () => { orders = AuthGuard.can("purchasing") ? await apiFetch("/api/purchase-orders/") : []; },
       headExtra: v => v.code ? `<div style="margin-bottom:8px;"><span class="tag draft">${escapeHtml(v.code)}</span></div>` : "",
       quickExtra: v => `<a href="purchase-orders.html?new=${v.id}"><b>＋</b>PO</a>`,
       body(v) {
@@ -96,7 +95,7 @@
                 <td><strong>${escapeHtml(m.vendor_item_code)}</strong></td>
                 <td>${escapeHtml(m.vendor_description || "")}</td>
                 <td class="num">${m.last_unit_cost != null ? fmtPrice(m.last_unit_cost) : ""}</td>
-                <td>${m.last_ordered_at ? new Date(m.last_ordered_at).toLocaleDateString() : ""}</td>
+                <td>${m.last_ordered_at ? fmtDate(m.last_ordered_at) : ""}</td>
                 <td class="line-actions">${trashBtn(`deleteXref(${vendorId}, ${m.id})`, "Remove this cross-reference")}</td>
               </tr>`;
             }).join("") || `<tr><td colspan="6" class="muted">No Part # Mappings Yet.</td></tr>`}

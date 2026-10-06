@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from app.services import filenames
-from app.services.clock import business_now, to_business
+from app.services import clock
 
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
@@ -1368,7 +1368,7 @@ class ShipmentService:
                 created_by=created_by,
             ))
         shipment.status = "shipped"
-        shipment.ship_date = business_now()
+        shipment.ship_date = datetime.utcnow()  # a moment: UTC (app/services/clock.py)
         db.flush()
         order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
         CustomerOrderService._recompute_status(order)
@@ -1389,14 +1389,15 @@ class ShipmentService:
         return shipment
 
     @staticmethod
-    def mark_delivered(db: Session, shipment: Shipment, delivered_at: Optional[datetime], by: str, commit: bool = True) -> Shipment:
+    def mark_delivered(db: Session, shipment: Shipment, delivered_at: Optional[datetime], by: str, commit: bool = True,
+                       tz_name: Optional[str] = None) -> Shipment:
         """Record the delivery date. A shipped shipment moves to "delivered"; an already
         invoiced one keeps its status but gets the date (it's used on the invoice)."""
         if shipment.status not in ShipmentService.SHIPPED_STATUSES:
             raise HTTPException(status_code=400, detail=f"{shipment.code} is {shipment.status} -- it has to ship before it can be delivered")
-        when = to_business(delivered_at) or business_now()
-        if shipment.ship_date and when < shipment.ship_date.replace(hour=0, minute=0, second=0, microsecond=0):
-            raise HTTPException(status_code=400, detail=f"{shipment.code} shipped on {shipment.ship_date:%b %d, %Y} -- it can't be delivered before that")
+        when = clock.moment_from_input(delivered_at, tz_name) or datetime.utcnow()  # a picked date = noon that day, their zone
+        if shipment.ship_date and clock.local(when, tz_name).date() < clock.local(shipment.ship_date, tz_name).date():
+            raise HTTPException(status_code=400, detail=f"{shipment.code} shipped on {clock.local(shipment.ship_date, tz_name):%b %d, %Y} -- it can't be delivered before that")
         shipment.delivered_at = when
         shipment.delivered_by = by
         if shipment.status == "shipped":
@@ -2023,7 +2024,7 @@ class InvoicePaymentService:
         db.add(InvoicePayment(
             invoice_id=invoice.id,
             amount=data.amount,
-            paid_date=to_business(data.paid_date) or business_now(),
+            paid_date=clock.calendar_from_input(data.paid_date) or clock.today(),
             method=data.method,
             reference=data.reference,
             note=data.note,
@@ -2399,7 +2400,7 @@ class PurchaseOrderService:
                 base_unit_cost=line.unit_cost,
                 unit_cost=round(line.unit_cost + landed, 6),
                 po_line_id=line.id,
-                received_date=business_now(),
+                received_date=datetime.utcnow(),
                 expiry_date=recv_line.expiry_date,
                 status="available",
                 source="purchase",
@@ -2482,7 +2483,7 @@ class VendorBillService:
         shipping = round(data.shipping_amount or 0, 2)
         if shipping < 0 or shipping > data.amount + 0.005:
             raise HTTPException(status_code=400, detail="S&H on the invoice must be between 0 and the invoice amount")
-        bill = VendorBill(po_id=po.id, bill_number=number, bill_date=to_business(data.bill_date) or business_now(),
+        bill = VendorBill(po_id=po.id, bill_number=number, bill_date=clock.calendar_from_input(data.bill_date) or clock.today(),
                           due_date=data.due_date, amount=round(data.amount, 2), note=data.note,
                           attachment_id=data.attachment_id, created_by=created_by)
         db.add(bill)
@@ -2581,7 +2582,7 @@ class VendorPaymentService:
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
         vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=round(data.amount, 2),
-                           paid_date=to_business(data.paid_date) or business_now(), method=data.method, reference=data.reference,
+                           paid_date=clock.calendar_from_input(data.paid_date) or clock.today(), method=data.method, reference=data.reference,
                            note=data.note, created_by=created_by)
         db.add(vp)
         db.commit()

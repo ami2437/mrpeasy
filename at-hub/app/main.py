@@ -33,6 +33,8 @@ try:
     backfill_vendor_codes(db)
     from app.services.print_safe import make_safe_saved
     make_safe_saved(db)  # saved designs: no dark fills on paper
+    from app.services.tz_migrate import run_once as tz_v2
+    tz_v2(db)  # once: dates to the per-user time zone rules (app/services/clock.py)
     # Never seed TEST records into a database built by the MRPeasy import (it carries number series).
     if settings.test_data_enabled and not db.query(NumberSeries).first():
         ensure_test_data(db)
@@ -78,6 +80,9 @@ async def no_stale_frontend(request, call_next):
 
 # A role without "money.view" never sees dollar amounts: any money field in an API response is
 # blanked for it, whatever page or endpoint asked for it.
+# Moments are stored in UTC without a zone (app/services/clock.py): mark them "Z" so each screen shows them in its
+# user's own time zone. Calendar dates (delivery_date, due_date, invoice_date...) go out bare and show as that day.
+MOMENT = re.compile(rb'("(?:\w+_at|ship_date|received_date|last_login)": ?"\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?)"')
 MONEY_KEY = re.compile(r"(price|cost|amount|total|balance|paid|revenue|profit|margin|charge|funding|discount)", re.I)
 
 
@@ -113,6 +118,7 @@ async def hide_money(request, call_next):
             body = json.dumps(_scrub(json.loads(body))).encode()
         except ValueError:
             pass
+    body = MOMENT.sub(rb'\1Z"', body)
     headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
     return Response(content=body, status_code=response.status_code, headers=headers, media_type=response.media_type)
 
@@ -333,6 +339,12 @@ from app.routes import backups as backups_routes  # noqa: E402
 app.include_router(backups_routes.router)
 from app.routes import templates as templates_routes  # noqa: E402
 app.include_router(templates_routes.router)
+from app.routes import golive as golive_routes  # noqa: E402
+app.include_router(golive_routes.router)
+from app.routes import planner as planner_routes  # noqa: E402
+app.include_router(planner_routes.router)
+from app.routes import pod as pod_routes  # noqa: E402
+app.include_router(pod_routes.router)
 from app.services.backups import start_scheduler  # noqa: E402
 start_scheduler()
 

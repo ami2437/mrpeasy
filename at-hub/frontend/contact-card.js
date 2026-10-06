@@ -76,7 +76,7 @@ const ContactCards = {
       r.details.people.map(p => [p.name, p.role, p.phone, p.email].filter(Boolean).join(" / ")).join("; "),
       r.address || "", r.shipping_address || "", r.details.notes || ""].map(v => q(String(v))));
     const csv = [head, ...rows].map(r => r.join(",")).join("\r\n");
-    saveBlob(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }), `${document.title.replace("AT-HUB — ", "")}-${new Date().toISOString().substring(0, 10)}.csv`);
+    saveBlob(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }), `${document.title.replace("AT-HUB — ", "")}-${todayISO()}.csv`);
     toast(`Exported ${rows.length} to CSV`);
   },
   allTags() { return [...new Set(this.rows.flatMap(r => r.details.tags))].sort((a, b) => a.localeCompare(b)); },

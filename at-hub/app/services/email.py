@@ -185,7 +185,8 @@ def send_pods(db: Session, shipment, files: list, to: str, cc: str, subject: str
         raise HTTPException(status_code=400, detail="This shipment has no proof of delivery to send")
     rows = [("Shipment", shipment.code)]
     if shipment.delivered_at:
-        rows.append(("Delivered", shipment.delivered_at.strftime("%b %d, %Y")))
+        from app.services.clock import local
+        rows.append(("Delivered", local(shipment.delivered_at).strftime("%b %d, %Y")))
     from app.models import CustomerOrder
     order = db.get(CustomerOrder, shipment.order_id)
     if order and order.po_number:

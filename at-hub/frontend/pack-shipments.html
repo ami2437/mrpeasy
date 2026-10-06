@@ -254,7 +254,7 @@
     }
     // the one next step for this stage is the bright button; the rest are quieter
     function drawStageActions() {
-      const today = new Date().toISOString().substring(0, 10);
+      const today = todayISO();
       const print = `<button class="secondary" onclick="printSelectedLabels()">Labels</button>
         <button class="secondary" onclick="printSelectedPackingLists()" title="Every selected packing list -- one PDF, or one file each">Packing Lists</button>`
         + `<button class="secondary" onclick="openDocsDialog('shipments')" title="Email or print packing lists, labels, invoices and PODs for the selected shipments">${icon("mail")} Send / Print</button>`;

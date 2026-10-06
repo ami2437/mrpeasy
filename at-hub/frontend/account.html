@@ -24,6 +24,17 @@
       <span id="saved" class="muted" style="margin-left:10px;"></span>
       <div id="error" class="error"></div>
     </div>
+    <div class="card" style="max-width:520px;">
+      <h3 style="margin-top:0;">Time Zone</h3>
+      <p class="muted small" style="margin-top:0;">Every time on your screens (shipped, delivered, created, saved...) is shown in your zone, the way Outlook does.
+        Calendar dates (delivery, due, invoice dates) stay the same day for everyone. Printed documents use the company's zone.</p>
+      <select id="tz-pick"></select>
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button onclick="saveTz()">Save Time Zone</button>
+        <button class="secondary" onclick="useComputerTz()">Use This Computer's Zone</button>
+        <span id="tz-saved" class="muted small" style="align-self:center;"></span>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -33,6 +44,23 @@
       document.getElementById("who").textContent = `Signed in as ${user.username}${user.full_name ? ` (${user.full_name})` : ""} · ${escapeHtml(user.role_name || ROLE_LABELS[user.role] || user.role)}`;
       if (user.must_change_password) document.getElementById("force-notice").style.display = "block";
     }
+
+    function showTz() {
+      const u = AuthGuard.getUser() || {};
+      document.getElementById("tz-pick").innerHTML = timezoneOptions(u.timezone || "", "Company default (Central)");
+      document.getElementById("tz-saved").textContent = `Now ${fmtTime(new Date())} ${tzAbbrev()} (${userTz()})`;
+    }
+    async function saveTz(zone) {
+      const tz = zone !== undefined ? zone : document.getElementById("tz-pick").value;
+      try {
+        const updated = await apiFetch("/api/auth/timezone", { method: "PUT", body: JSON.stringify({ timezone: tz }) });
+        AuthGuard.setSession(AuthGuard.getToken(), updated);
+        showTz();
+        toast("Time zone saved: every time now shows in " + updated.effective_timezone);
+      } catch (e) { document.getElementById("tz-saved").textContent = e.message; }
+    }
+    function useComputerTz() { saveTz(Intl.DateTimeFormat().resolvedOptions().timeZone); }
+    showTz();
 
     async function changePassword() {
       const errorEl = document.getElementById("error");

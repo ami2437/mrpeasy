@@ -58,7 +58,6 @@
     let company = {};
     let emailConfig = { configured: false };
 
-    function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ""; }
     function customerName(id) { const c = customers.find(c => c.id === id); return c ? c.name : id; }
     function lineTotal(l) { return lineAmount(l.quantity, l.unit_price); }
     function invoiceTotal(inv) { return sumLines(inv.lines); }
@@ -401,7 +400,7 @@
           <table class="compact-table">
             <thead><tr><th>Sent</th><th>To</th><th>CC</th><th>Subject</th><th>By</th></tr></thead>
             <tbody>${invoice.emails.slice().reverse().map(e => `
-              <tr><td class="nowrap">${new Date(e.sent_at + (e.sent_at.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(e.to_address)}</td>
+              <tr><td class="nowrap">${fmtWhen(e.sent_at)}</td><td>${escapeHtml(e.to_address)}</td>
                   <td>${escapeHtml(e.cc_address || "")}</td><td>${escapeHtml(e.subject)}</td><td>${escapeHtml(e.sent_by || "")}</td></tr>
             `).join("")}</tbody>
           </table></section>
@@ -588,7 +587,7 @@
         el.innerHTML = rows.length ? `<table class="compact-table no-table-tools">
           <thead><tr><th>#</th><th>When</th><th>File</th><th>By</th><th class="num">Updated</th><th class="num">Skipped</th><th>Payments</th><th></th></tr></thead>
           <tbody>${rows.map(b => `<tr>
-            <td>${b.id}</td><td>${new Date(b.created_at + (String(b.created_at).endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${escapeHtml(b.file_name || "")}</td>
+            <td>${b.id}</td><td>${fmtWhen(b.created_at)}</td><td>${escapeHtml(b.file_name || "")}</td>
             <td>${escapeHtml(b.created_by || "")}</td><td class="num">${b.updated_count}</td><td class="num">${b.skipped_count}</td>
             <td>${b.record_payments ? "recorded" : "fields only"}</td>
             <td>${b.rolled_back ? `<span class="tag cancelled">Rolled Back</span>` : AuthGuard.can("invoices.funding") ? `<a class="link" onclick="rollbackFunding(${b.id})">Roll back</a>` : ""}</td>

@@ -70,7 +70,6 @@
           </div>`).join("")}</details>`;
       }).join("") || `<p class="muted">${view === "open" ? "Nothing to do." : "Nothing done yet."}</p>`;
     }
-    const fmtDateTime = d => new Date(d + (d.endsWith("Z") ? "" : "Z")).toLocaleString();
     async function setStatus(id, status) { await apiFetch(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ status }) }); await load(); }
     async function saveNote(id, note) { await apiFetch(`/api/tasks/${id}`, { method: "PUT", body: JSON.stringify({ note }) }); toast("Note saved"); }
     async function delTask(id) { if (!confirm("Delete this task?")) return; await apiFetch(`/api/tasks/${id}`, { method: "DELETE" }); await load(); }

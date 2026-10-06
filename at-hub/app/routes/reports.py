@@ -22,6 +22,14 @@ def _days(since):
 
 @router.get("/action-items")
 def action_items(db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Needs Attention: without rows dismissed or dated before the go-live cut-off (MRP Migrate > Go-Live Cleanup)."""
+    from app.services import golive
+    return golive.apply(db, all_sections(db, user))
+
+
+def all_sections(db: Session, user: User) -> list:
+    """Every action item, each row with its _rid (record id within the section), _date (what it's dated by, for the
+    go-live cut-off) and _label (for the dismissed list)."""
     now = datetime.utcnow()
     orders = {o.id: o for o in db.query(CustomerOrder).all()}
     customers = {c.id: c.name for c in db.query(Customer).all()}
@@ -32,7 +40,8 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
         row = {"id": s.id, "code": s.code, "order_id": s.order_id, "order_code": o.code if o else None,
                "customer": customers.get(o.customer_id) if o else None, "po_number": o.po_number if o else None,
                "carrier": s.carrier, "tracking_number": s.tracking_number,
-               "ship_date": s.ship_date.isoformat() if s.ship_date else None, "days": _days(s.ship_date)}
+               "ship_date": s.ship_date.isoformat() if s.ship_date else None, "days": _days(s.ship_date),
+               "_date": s.ship_date or s.created_at, "_label": s.code}
         row.update(extra or {})
         return row
 
@@ -56,7 +65,8 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
     for o in orders.values():
         if o.status in ("confirmed", "draft") and o.delivery_date and o.delivery_date < now:
             late_orders.append({"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
-                                "status": o.status, "due": o.delivery_date.isoformat(), "days": _days(o.delivery_date)})
+                                "status": o.status, "due": o.delivery_date.isoformat(), "days": _days(o.delivery_date),
+                                "_date": o.created_at, "_label": o.code})
     sections.append({"key": "late_orders", "title": "Customer Orders Past Delivery Date", "page": "customer-orders.html",
                      "help": "Not fully shipped and the requested delivery date has passed.", "rows": sorted(late_orders, key=lambda r: -r["days"])})
 
@@ -68,7 +78,7 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
             received = sum(l.received_quantity for l in po.lines)
             row = {"id": po.id, "code": po.code, "vendor": vendors.get(po.vendor_id), "status": po.status,
                    "expected": po.expected_date.isoformat() if po.expected_date else None,
-                   "ordered_qty": ordered, "received_qty": received}
+                   "ordered_qty": ordered, "received_qty": received, "_date": po.order_date or po.created_at, "_label": po.code}
             row.update(extra or {})
             return row
         # A vendor invoice usually means the goods shipped; if they're still not received, chase it.
@@ -88,13 +98,15 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
         sections.append({"key": "bills_due", "title": "Vendor Invoices Overdue", "page": "purchase-orders.html",
                          "help": "Unpaid vendor invoices past their due date.",
                          "rows": [{"id": b.po_id, "code": po_codes.get(b.po_id, ("", None))[0], "vendor": vendors.get(po_codes.get(b.po_id, ("", None))[1]),
-                                   "bill_number": b.bill_number, "balance": b.balance, "due": b.due_date.isoformat(), "days": _days(b.due_date)}
+                                   "bill_number": b.bill_number, "balance": b.balance, "due": b.due_date.isoformat(), "days": _days(b.due_date),
+                                   "_rid": b.id, "_date": b.bill_date or b.created_at, "_label": f"{b.bill_number} ({po_codes.get(b.po_id, ('', None))[0]})"}
                                   for b in bills if b.balance > 0.005 and b.due_date and b.due_date < now]})
         open_vp = [vp for vp in db.query(VendorPayment).all() if vp.unapplied > 0.005]
         sections.append({"key": "unapplied_payments", "title": "Vendor Payments Not Applied To A PO", "page": "purchase-orders.html",
                          "help": "Money sent to a vendor that isn't tied to a purchase order yet.",
                          "rows": [{"id": vp.id, "code": vp.code, "vendor": vendors.get(vp.vendor_id), "amount": vp.amount, "unapplied": vp.unapplied,
-                                   "paid_date": vp.paid_date.isoformat() if vp.paid_date else None, "days": _days(vp.paid_date)} for vp in open_vp]})
+                                   "paid_date": vp.paid_date.isoformat() if vp.paid_date else None, "days": _days(vp.paid_date),
+                                   "_date": vp.paid_date or vp.created_at, "_label": vp.code} for vp in open_vp]})
         # ---- sales money and data waiting on someone ----
         invoices = db.query(Invoice).filter(Invoice.status != "void").all()
         on_invoice = {sid for (sid,) in db.query(InvoiceShipment.shipment_id).join(Invoice).filter(Invoice.status != "void").all()}
@@ -103,7 +115,7 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
         sections += [
             {"key": "items_verify", "title": "AI-Created Items To Verify", "page": "stock-items.html",
              "help": "Made from a scanned PO; they can't be picked on orders until someone checks and verifies them.",
-             "rows": [{"id": i.id, "code": i.code, "title": i.title, "group": i.category, "days": _days(i.created_at)}
+             "rows": [{"id": i.id, "code": i.code, "title": i.title, "group": i.category, "days": _days(i.created_at), "_date": i.created_at, "_label": i.code}
                       for i in db.query(StockItem).filter(StockItem.created_via == "ai-scan", StockItem.verified_by.is_(None)).all()]},
             {"key": "no_invoice", "title": "Shipped With No Invoice At All", "page": "invoices.html",
              "help": "Shipped or delivered and not on any invoice -- not even a draft.",
@@ -112,24 +124,24 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
             {"key": "draft_invoices", "title": "Draft Invoices Not Sent", "page": "invoices.html",
              "help": "Drafts (including MRPeasy Dummy invoices) -- send them or delete them.",
              "rows": [{"id": i.id, "code": i.code, "order_id": i.order_id, "order_code": orders[i.order_id].code if i.order_id in orders else None,
-                       "customer": customers.get(i.customer_id), "amount": i.total, "days": _days(i.invoice_date)}
+                       "customer": customers.get(i.customer_id), "amount": i.total, "days": _days(i.invoice_date), "_date": i.invoice_date, "_label": i.code}
                       for i in invoices if i.status == "draft"]},
             {"key": "invoices_overdue", "title": "Customer Invoices Overdue", "page": "invoices.html",
              "help": "Sent, not fully paid, and past the due date.",
              "rows": [{"id": i.id, "code": i.code, "customer": customers.get(i.customer_id), "balance": i.balance,
-                       "due": i.due_date.isoformat(), "days": _days(i.due_date)}
+                       "due": i.due_date.isoformat(), "days": _days(i.due_date), "_date": i.invoice_date, "_label": i.code}
                       for i in invoices if i.status != "draft" and i.balance > 0.005 and i.due_date and i.due_date < now]},
             {"key": "not_booked", "title": "Confirmed Orders Not Fully Booked", "page": "customer-orders.html",
              "help": "Quantity still to book into a shipment.",
              "rows": sorted([{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
                               "amount": round(sum(max(0, l.quantity - l.shipped_quantity - l.booked_quantity) * l.unit_price for l in o.lines), 2),
-                              "days": _days(o.created_at)}
+                              "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
                              for o in orders.values() if o.status == "confirmed"
                              and any(l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9 for l in o.lines)], key=lambda r: -r["amount"])},
             {"key": "draft_orders", "title": "Draft Orders Not Confirmed", "page": "customer-orders.html",
              "help": "Entered but never confirmed.",
              "rows": [{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
-                       "amount": round(sum(l.quantity * l.unit_price for l in o.lines), 2), "days": _days(o.created_at)}
+                       "amount": round(sum(l.quantity * l.unit_price for l in o.lines), 2), "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
                       for o in orders.values() if o.status == "draft"]},
         ]
         linked = {a for (a,) in db.query(MtrLink.attachment_id).distinct()}
@@ -137,5 +149,5 @@ def action_items(db: Session = Depends(get_db), user: User = Depends(get_current
         sections.append({"key": "mtr_unlinked", "title": "MTRs Not Linked To PO Lines", "page": "purchase-orders.html",
                          "help": "Uploaded MTRs that won't show up by item until their lines are ticked.",
                          "rows": [{"id": a.entity_id, "code": po_codes.get(a.entity_id, ("", None))[0], "filename": a.filename,
-                                   "days": _days(a.created_at)} for a in mtrs if a.id not in linked]})
+                                   "days": _days(a.created_at), "_rid": a.id, "_date": a.created_at, "_label": a.filename} for a in mtrs if a.id not in linked]})
     return sections

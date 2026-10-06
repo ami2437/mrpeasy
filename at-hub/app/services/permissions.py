@@ -45,6 +45,8 @@ CATALOG = [
     ("imports", "Tools", "Import data from files (CSV)", False, "manager"),
     ("ai", "Tools", "AI Desk, AI order drafting and document scanning", False, "manager"),
     ("recycle_bin", "Tools", "Recycle bin (restore deleted records)", False, "manager"),
+    ("golive", "Tools", "Go-live cleanup: hide alerts from before go-live (MRP Migrate)", False, "admin"),
+    ("simulate", "Tools", "Simulate", False, "admin"),
     # Admin
     ("company", "Admin", "Company settings and logo", False, "admin"),
     ("templates", "Admin", "Template Designer", False, "admin"),
@@ -63,8 +65,8 @@ BUILTIN = {
     "super_admin": ("Super admin", "Everything. Can't be changed, so someone can always manage users."),
 }
 PRESETS = {  # made once, then editable like any other role
-    "driver": ("Driver", "Delivers and uploads proof of delivery. Sees shipments only -- no prices, no other screens.",
-               ["shipments.view", "pod.upload"]),
+    "driver": ("Driver", "Delivers and uploads proof of delivery. Sees only the deliveries -- items, boxes and pallets; no prices, "
+                         "orders, customers or other screens.", ["pod.upload"]),
 }
 
 
@@ -85,7 +87,45 @@ def seed(db: Session) -> None:
     for key, (name, desc, perms) in PRESETS.items():
         if key not in have:
             db.add(Role(key=key, name=name, description=desc, permissions=json.dumps(perms), builtin=False))
+    _grant_new(db, have)
+    _driver_v2(db, have)
     db.commit()
+
+
+def _driver_v2(db: Session, have: dict) -> None:
+    """2026-10-06: the Driver preset went from shipments + POD to POD only. A driver role still on the old default
+    moves with it (one that was edited on the Roles screen is left alone)."""
+    from app.models import AppSetting
+    if db.get(AppSetting, "driver_v2"):
+        return
+    role = have.get("driver")
+    if role and sorted(json.loads(role.permissions or "[]")) == ["pod.upload", "shipments.view"]:
+        role.permissions = json.dumps(["pod.upload"])
+        role.description = PRESETS["driver"][1]
+    db.add(AppSetting(key="driver_v2", value="true"))
+
+
+# Permissions added after roles were first made (tracked from 2026-10-06; earlier ones were all in place already).
+_BEFORE_TRACKING_NEW = {"golive", "simulate"}
+
+
+def _grant_new(db: Session, have: dict) -> None:
+    """A permission new to this database goes once to the built-in roles that have it by default -- after that the
+    Roles screen decides (taking it away sticks)."""
+    from app.models import AppSetting
+    row = db.get(AppSetting, "permissions_seen")
+    seen = set(json.loads(row.value)) if row and row.value else set(KEYS) - _BEFORE_TRACKING_NEW
+    for perm in [k for k in KEYS if k not in seen]:
+        for key in BUILTIN:
+            role = have.get(key)
+            if role and key != "super_admin" and perm in defaults_for(key):
+                perms = json.loads(role.permissions or "[]")
+                if perm not in perms:
+                    role.permissions = json.dumps(perms + [perm])
+    if row is None:
+        db.add(AppSetting(key="permissions_seen", value=json.dumps(KEYS)))
+    else:
+        row.value = json.dumps(KEYS)
 
 
 def perms_for(db: Session, role_key: str) -> Set[str]:

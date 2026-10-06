@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
-from app.services.clock import business_now
+from app.services import clock
 from typing import Optional
 
 Base = declarative_base()
@@ -18,6 +18,12 @@ class User(Base):
     email = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     must_change_password = Column(Boolean, default=False)  # set on creation / reset; user picks their own at next login
+    timezone = Column(String, nullable=True)  # IANA zone, e.g. America/New_York; None = the company's (app/services/clock.py)
+
+    @property
+    def effective_timezone(self) -> str:
+        from app.config.settings import settings
+        return self.timezone or settings.business_timezone
     last_login = Column(DateTime, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -103,7 +109,7 @@ class Lot(Base):
     base_unit_cost = Column(Float, nullable=True)  # acquisition cost per unit: PO line unit_cost, or what the user entered on an adjustment
     unit_cost = Column(Float, nullable=True)  # landed cost per unit: base_unit_cost + landed costs allocated to its PO line
     po_line_id = Column(Integer, ForeignKey("purchase_order_lines.id"), nullable=True, index=True)  # the receipt this lot came from
-    received_date = Column(DateTime, nullable=False, default=business_now)
+    received_date = Column(DateTime, nullable=False, default=datetime.utcnow)  # a moment (UTC)
     expiry_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="available")  # available | on_hold | rejected
     source = Column(String, nullable=True)  # purchase | adjustment
@@ -363,7 +369,7 @@ class PurchaseOrder(Base):
     updated_by = Column(String, nullable=True)
     code = Column(String, unique=True, nullable=False, index=True)  # PO-0001
     vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False)
-    order_date = Column(DateTime, default=datetime.utcnow)
+    order_date = Column(DateTime, default=clock.today)  # a calendar date
     expected_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | ordered | partially_received | received | cancelled
     freight_cost = Column(Float, nullable=True, default=0)
@@ -686,7 +692,7 @@ class Invoice(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True)
     shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=True)
-    invoice_date = Column(DateTime, default=business_now)
+    invoice_date = Column(DateTime, default=clock.today)  # a calendar date: the company's today
     due_date = Column(DateTime, nullable=True)
     status = Column(String, nullable=False, default="draft")  # draft | sent | paid | void
     void_reason = Column(Text, nullable=True)  # why it was voided (e.g. its shipment was undone)
@@ -1093,6 +1099,87 @@ class DocTemplate(Base):
     is_default = Column(Boolean, nullable=False, default=False)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)  # default for this customer only
     starter = Column(String, nullable=True)  # which ready-made design it began from
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """Small app-wide settings by key (JSON value): go-live cut-off, which permissions roles have been given..."""
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AttentionDismissal(Base):
+    """A Needs Attention row someone dismissed (MRP Migrate > Go-Live Cleanup): hidden until restored."""
+    __tablename__ = "attention_dismissals"
+    __table_args__ = (UniqueConstraint("section_key", "record_id", name="uq_attention_dismissal"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    section_key = Column(String, nullable=False, index=True)
+    record_id = Column(Integer, nullable=False)
+    label = Column(String, nullable=True)  # what it was, for the restore list
+    dismissed_by = Column(String, nullable=True)
+    dismissed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TodoList(Base):
+    """A To-Do list (iOS Reminders style). Personal unless shared, then everyone sees and ticks it."""
+    __tablename__ = "todo_lists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    color = Column(String, nullable=True, default="#2f6fed")
+    owner = Column(String, nullable=False, index=True)  # username
+    shared = Column(Boolean, nullable=False, default=False)
+    position = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TodoItem(Base):
+    """One to-do. Due on a day (due_date, a calendar date) and optionally at a time (due_at, a moment in UTC)."""
+    __tablename__ = "todo_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    list_id = Column(Integer, ForeignKey("todo_lists.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    notes = Column(Text, nullable=True)
+    due_date = Column(DateTime, nullable=True)
+    due_at = Column(DateTime, nullable=True)
+    priority = Column(Integer, nullable=False, default=0)  # 0 none, 1 low, 2 medium, 3 high
+    flagged = Column(Boolean, nullable=False, default=False)
+    done = Column(Boolean, nullable=False, default=False)
+    done_at = Column(DateTime, nullable=True)
+    done_by = Column(String, nullable=True)
+    position = Column(Integer, nullable=False, default=0)
+    entity_type = Column(String, nullable=True)  # optional link: customer_order | purchase_order | shipment
+    entity_id = Column(Integer, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StickyNote(Base):
+    """A sticky note on a customer order, PO or shipment: the team's reminder, seen by everyone who opens the record.
+    A reminder (remind_date, a calendar day; remind_at, optional time in UTC) puts it on the calendar, in To-Do's
+    Today / Scheduled and on the reminder badge."""
+    __tablename__ = "sticky_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)
+    entity_id = Column(Integer, nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    color = Column(String, nullable=False, default="yellow")  # yellow | pink | green | blue
+    remind_date = Column(DateTime, nullable=True)
+    remind_at = Column(DateTime, nullable=True)
+    done = Column(Boolean, nullable=False, default=False)
+    done_by = Column(String, nullable=True)
+    done_at = Column(DateTime, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String, nullable=True)

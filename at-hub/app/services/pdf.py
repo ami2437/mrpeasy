@@ -107,6 +107,11 @@ def qty(n) -> str:
 def date(d) -> str:
     return d.strftime("%b %d, %Y") if d else ""
 
+def moment(d) -> str:
+    """The day of a stored moment (UTC), in the company's time zone -- documents are read where the company is."""
+    from app.services.clock import local
+    return date(local(d)) if d else ""
+
 
 def p(text, style="body") -> Paragraph:
     return Paragraph(escape(str(text or "")).replace("\n", "<br/>"), S[style])
@@ -395,8 +400,8 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         ("Job #", order.job_number if order else None),
     ] + ([("Shipments", ", ".join(s.code for s in shipments))] if combined else [
         ("Shipment #", shipments[0].code if shipments else None),
-        ("Shipped", date(shipments[0].ship_date) if shipments else None),
-        ("Delivered", date(shipments[0].delivered_at) if shipments else None),
+        ("Shipped", moment(shipments[0].ship_date) if shipments else None),
+        ("Delivered", moment(shipments[0].delivered_at) if shipments else None),
     ]))
     story += [_two_boxes(bill_to, meta), Spacer(1, 18)]
 
@@ -410,7 +415,7 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         row = [str(i), p(item.code if item else "", "td"), described(invoice_line_description(l, item), l, show_notes)]
         if combined:
             sh = by_id.get(l.shipment_id)
-            row.append(p(f"{sh.code}\n{date(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
+            row.append(p(f"{sh.code}\n{moment(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
         rows.append(row + [qty(l.quantity), price(l.unit_price), money(l.amount)])
     code_w = fit_width([i.code for i in line_items.values()], 0.9 * inch)
     ship_w = 1.0 * inch if combined else 0
@@ -478,7 +483,7 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         ("Order #", order.code if order else None),
         ("Customer PO #", order.po_number if order else None),
         ("Job #", order.job_number if order else None),
-        ("Ship date", date(shipment.ship_date)),
+        ("Ship date", moment(shipment.ship_date)),
         ("Carrier", shipment.carrier),
         ("Tracking #", shipment.tracking_number),
     ])
@@ -507,8 +512,8 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         out = []
         for e in previous.get(line_id, {}).values():
             sh = e["sh"]
-            when = (f"delivered {date(sh.delivered_at)}" if sh.delivered_at
-                    else f"shipped {date(sh.ship_date)}" if sh.ship_date else "")
+            when = (f"delivered {moment(sh.delivered_at)}" if sh.delivered_at
+                    else f"shipped {moment(sh.ship_date)}" if sh.ship_date else "")
             out.append(f"{e['code']}: {qty(e['qty'])}" + (f" · {when}" if when else ""))
         return "\n".join(out)
     show_previous = bool(previous)

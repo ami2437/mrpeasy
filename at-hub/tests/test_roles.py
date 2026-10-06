@@ -34,10 +34,16 @@ def test_custom_role_is_enforced(client, admin_headers, make):
     assert client.get("/api/invoices/", headers=h).status_code == 403
     assert client.get(f"/api/stock-items/{a['id']}/price-history", headers=h).status_code == 403
     assert client.get("/api/stock-items/", headers=h).status_code == 200
-    # the driver preset: shipments + POD only
+    # the driver preset: the deliveries only -- items, boxes, pallets, where to; no orders, customers, stock or prices
     d = _user(client, admin_headers, "driver")
-    assert client.get("/api/shipments/", headers=d).status_code == 200
-    assert client.get("/api/customers/", headers=d).status_code == 200     # the POD page shows who it's for
+    for url in ("/api/shipments/", "/api/customers/", "/api/customer-orders/", "/api/stock-items/", "/api/lots/", "/api/mtrs/"):
+        assert client.get(url, headers=d).status_code == 403, url
+    sh = make.ship(o)
+    rows = client.get("/api/pod/deliveries", headers=d).json()
+    mine = next(r for r in rows if r["id"] == sh["id"])
+    assert set(mine) == {"id", "code", "status", "ship_date", "delivered_at", "customer", "order_code", "po_number", "job_number",
+                         "ship_to", "carrier", "lines", "boxes", "pallets", "pods"}
+    assert set(mine["lines"][0]) == {"item_code", "description", "quantity"} and mine["boxes"] >= 1
     assert client.get("/api/vendors/", headers=d).status_code == 403
     assert client.get("/api/quotes/", headers=d).status_code == 403
     assert client.post(f"/api/customer-orders/{o['id']}/shipments", json={"lines": []}, headers=d).status_code == 403
@@ -62,10 +68,10 @@ def test_view_as_is_read_only(client, admin_headers):
     _user(client, admin_headers, "driver")
     uid = next(u["id"] for u in client.get("/api/users/", headers=admin_headers).json() if u["username"] == "u-driver")
     r = client.post(f"/api/users/{uid}/view-as", headers=admin_headers).json()
-    assert r["user"]["permissions"] == ["shipments.view", "pod.upload"] and r["user"]["view_as_by"] == "admin"
+    assert r["user"]["permissions"] == ["pod.upload"] and r["user"]["view_as_by"] == "admin"
     h = {"Authorization": f"Bearer {r['access_token']}"}
     assert client.get("/api/auth/me", headers=h).json()["username"] == "u-driver"
-    assert client.get("/api/shipments/", headers=h).status_code == 200
+    assert client.get("/api/pod/deliveries", headers=h).status_code == 200
     assert client.get("/api/invoices/", headers=h).status_code == 403            # the driver's own limits
     blocked = client.post("/api/attachments/", headers=h)
     assert blocked.status_code == 403 and "read-only" in blocked.json()["detail"]

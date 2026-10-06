@@ -54,7 +54,6 @@ Thank you.</textarea>
     document.getElementById("sidebar").innerHTML = renderSidebar("mtrs.html");
     const isManager = AuthGuard.can("mtrs.manage");
     let rows = [];
-    const fmtDate = d => d ? new Date(d).toLocaleDateString() : "";
 
     async function init() {
       const items = await apiFetch("/api/stock-items/");

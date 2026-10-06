@@ -12,7 +12,7 @@ from app.models import User
 from app.services.pdf import packing_list_pdf
 from app.services import filenames
 
-router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(require_any("shipments.view", "shipments.work", "orders.view", "invoices", "pod.upload"))])
+router = APIRouter(prefix="/api/shipments", tags=["shipments"], dependencies=[Depends(require_any("shipments.view", "shipments.work", "orders.view", "invoices"))])  # drivers: /api/pod only
 
 
 def with_pods(db: Session, shipments):
@@ -228,7 +228,7 @@ def mark_delivered(shipment_id: int, data: MarkDeliveredRequest, db: Session = D
                    current_user: User = Depends(get_current_active_user)):
     """Mark delivered by hand (managers and up). Uploading a POD does this automatically."""
     shipment = ShipmentService.get(db, shipment_id)
-    return ShipmentService.mark_delivered(db, shipment, data.delivered_at, current_user.username)
+    return ShipmentService.mark_delivered(db, shipment, data.delivered_at, current_user.username, tz_name=current_user.timezone)
 
 
 @router.post("/{shipment_id}/undeliver", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.undo"))])

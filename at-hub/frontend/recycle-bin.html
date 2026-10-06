@@ -45,9 +45,9 @@
       const body = document.getElementById("bin-body");
       if (!list.length) { body.innerHTML = `<tr><td colspan="6" class="muted">${entries.length ? "Nothing matches." : "The recycle bin is empty."}</td></tr>`; return; }
       body.innerHTML = list.map(e => `<tr class="${e.restored_at ? "order-done" : ""}">
-        <td>${utcTime(e.deleted_at).toLocaleString()}</td>
+        <td>${fmtWhen(e.deleted_at)}</td>
         <td><span class="tag draft">${escapeHtml(e.kind)}</span></td>
-        <td><strong>${escapeHtml(e.label)}</strong>${e.restored_at ? `<div class="pos small">Restored ${utcTime(e.restored_at).toLocaleString()} by ${escapeHtml(e.restored_by || "")}</div>` : ""}</td>
+        <td><strong>${escapeHtml(e.label)}</strong>${e.restored_at ? `<div class="pos small">Restored ${fmtWhen(e.restored_at)} by ${escapeHtml(e.restored_by || "")}</div>` : ""}</td>
         <td class="small muted">${Object.entries(e.contents).map(([t, n]) => `${n} ${escapeHtml(TABLE_NAMES[t] || t.replace(/_/g, " "))}${n === 1 ? "" : "s"}`).join(", ")}</td>
         <td>${escapeHtml(e.deleted_by || "")}</td>
         <td class="nowrap">${e.restored_at ? "" : `<button class="small-btn" onclick="restore(${e.id})">Restore</button>

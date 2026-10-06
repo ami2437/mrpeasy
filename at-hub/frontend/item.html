@@ -74,7 +74,7 @@
         `<button class="danger" id="delete-btn" onclick="deleteItem()" style="display:none;">Delete</button>`,
       ].join(" ") : "";
       document.getElementById("verify-banner").innerHTML = needsVerify ? `<div class="card notice">
-        <strong>Created by the AI scan</strong>${item.created_at ? ` on ${new Date(item.created_at).toLocaleDateString()}` : ""} from a customer PO.
+        <strong>Created by the AI scan</strong>${item.created_at ? ` on ${fmtDate(item.created_at)}` : ""} from a customer PO.
         Check the code, title, group and price below, then <strong>Verify</strong>. Until then it can't be picked on new orders.</div>`
         : item.verified_by ? `<p class="muted small" style="margin:0 0 8px;">AI-created item, verified by ${escapeHtml(item.verified_by)}.</p>` : "";
 
@@ -225,7 +225,7 @@
           <div class="table-scroll" style="max-height:60vh;"><table class="compact-table">
             <thead><tr><th>Date</th><th>Type</th><th class="num">In / Out</th><th class="num">Balance</th><th>Lot</th><th class="num">Unit cost</th><th>Documents</th><th>Note</th><th>By</th></tr></thead>
             <tbody>${m.movements.map(t => `<tr>
-              <td class="nowrap">${new Date(t.date + (t.date.endsWith("Z") ? "" : "Z")).toLocaleString()}</td><td>${movementTypeTag(t.type)}</td>
+              <td class="nowrap">${fmtWhen(t.date)}</td><td>${movementTypeTag(t.type)}</td>
               <td class="num ${t.quantity < 0 ? "neg" : "pos"}"><strong>${t.quantity > 0 ? "+" : ""}${fmtQty(t.quantity)}</strong></td>
               <td class="num">${fmtQty(t.balance)}</td><td>${escapeHtml(t.lot || "")}</td><td class="num">${t.unit_cost != null && !hidesMoney() ? fmtPrice(t.unit_cost) : ""}</td><td>${movementLinks(t)}</td>
               <td class="small">${escapeHtml(t.note || "")}</td><td class="muted">${escapeHtml(t.by || "")}</td></tr>`).join("")

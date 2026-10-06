@@ -48,7 +48,7 @@ const AuthGuard = {
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 2, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 2, invoices: 2,
     "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, imports: 2, ai: 2,
-    recycle_bin: 2, company: 3, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
+    recycle_bin: 2, golive: 3, simulate: 3, company: 3, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
     if (!user) return false;
@@ -151,10 +151,10 @@ async function conflictDialog(c) {
       const rows = await (await fetch(`${API_BASE}/api/activity/${kind}/${c.id}`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } })).json();
       const recent = (rows || []).slice(0, 4);
       if (recent.length) changes = `<div class="small" style="margin-top:6px;"><strong>Their recent changes</strong><ul class="conflict-list">${recent.map(r =>
-        `<li>${escapeHtml(r.by || "")} · ${new Date((r.at || "") + (String(r.at).endsWith("Z") ? "" : "Z")).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${escapeHtml(activitySummary(r))}</li>`).join("")}</ul></div>`;
+        `<li>${escapeHtml(r.by || "")} · ${fmtTime(r.at)} · ${escapeHtml(activitySummary(r))}</li>`).join("")}</ul></div>`;
     } catch (e) {}
   }
-  const when = c.at ? new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const when = c.at ? fmtTime(c.at) : "";
   const { value } = await askDialog({ title: `${c.record} was just changed`, tone: "warn",
     body: `<p><strong>${escapeHtml(c.by)}</strong> saved ${escapeHtml(c.record)}${when ? ` at ${when}` : ""} while you had it open, so <strong>your change wasn't saved</strong> -- nothing was overwritten.</p>${changes}
       <p class="muted small">Reload to see their version and redo your change, or save yours over theirs.</p>`,
@@ -236,12 +236,71 @@ function progressBar(label, pct, kind, title = "") {
   return `<div class="progress-line" title="${escapeHtml(title)}">${label ? `<span class="progress-label">${label}</span>` : ""}`
     + `<span class="pct-bar ${kind}"><span style="width:${v}%"></span></span><span class="progress-pct">${v}%</span></div>`;
 }
-// A server audit stamp (created_at, changed_at, deleted_at...) is UTC without a zone -- read it as UTC so it shows
-// in local time. Business dates (ship / invoice / due dates) are already local: keep using new Date() for those.
+// ---- dates & times, Outlook-style (app/services/clock.py) ----
+// Moments (shipped, delivered, created_at...) come from the API in UTC marked "Z" and show in the user's own time zone
+// (Account page; default the company's). Calendar dates (delivery / due / invoice dates) come bare and show as that
+// same day for everyone.
+function userTz() {
+  const u = AuthGuard.getUser();
+  return (u && u.effective_timezone) || "America/Chicago";
+}
+const _ZONED = /([zZ]|[+-]\d\d:?\d\d)$/;
+// A moment as a Date: zoned -> as is; a bare value with a time -> read as UTC (audit stamps); a Date -> itself.
 function utcTime(v) {
   if (!v) return null;
+  if (v instanceof Date) return v;
   const s = String(v);
-  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) || !s.includes("T") ? s : s + "Z");
+  return new Date(_ZONED.test(s) || !s.includes("T") ? s : s + "Z");
+}
+function _calendarDay(v) {
+  const m = String(v).match(/^(\d{4})-(\d\d)-(\d\d)/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+function _isMoment(v) { return v instanceof Date || _ZONED.test(String(v)); }
+// The day: a moment in the user's zone, a calendar date as itself. opts: Intl date options (e.g. { month: "short" }).
+function fmtDate(v, opts = {}) {
+  if (!v) return "";
+  try {
+    if (_isMoment(v)) return utcTime(v).toLocaleDateString(undefined, { timeZone: userTz(), ...opts });
+    const d = _calendarDay(v);
+    return d ? d.toLocaleDateString(undefined, opts) : "";
+  } catch (e) { return String(v).slice(0, 10); }
+}
+// Day and time of a moment, in the user's zone (a bare date shows as just the day).
+function fmtWhen(v) {
+  if (!v) return "";
+  if (!(v instanceof Date) && !String(v).includes("T")) return fmtDate(v);
+  return utcTime(v).toLocaleString(undefined, { timeZone: userTz(), year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function fmtTime(v) {
+  return v ? utcTime(v).toLocaleTimeString(undefined, { timeZone: userTz(), hour: "numeric", minute: "2-digit" }) : "";
+}
+const fmtDateTime = fmtWhen;
+const fmtDay = fmtDate;
+// YYYY-MM-DD for a date input: today in the user's zone, or the day of a stored value.
+function todayISO() { return new Date().toLocaleDateString("en-CA", { timeZone: userTz() }); }
+function dayISO(v) {
+  if (!v) return "";
+  return _isMoment(v) ? utcTime(v).toLocaleDateString("en-CA", { timeZone: userTz() }) : String(v).slice(0, 10);
+}
+// Zones offered on the Account / Users pages (any IANA name works through the API).
+const TIMEZONE_CHOICES = [
+  ["America/Chicago", "Central (Chicago, Texas)"], ["America/New_York", "Eastern (New York)"], ["America/Denver", "Mountain (Denver)"],
+  ["America/Phoenix", "Arizona (no DST)"], ["America/Los_Angeles", "Pacific (Los Angeles)"], ["America/Anchorage", "Alaska"], ["Pacific/Honolulu", "Hawaii"],
+  ["America/Mexico_City", "Mexico City"], ["America/Toronto", "Toronto"], ["Europe/London", "London"], ["Europe/Berlin", "Central Europe (Berlin)"],
+  ["Asia/Dubai", "Dubai"], ["Asia/Kolkata", "India (Kolkata)"], ["Asia/Singapore", "Singapore"], ["Asia/Shanghai", "China (Shanghai)"],
+  ["Asia/Tokyo", "Japan (Tokyo)"], ["Australia/Sydney", "Sydney"], ["UTC", "UTC"],
+];
+function timezoneOptions(selected, companyLabel = "Company default") {
+  const have = TIMEZONE_CHOICES.some(([k]) => k === selected);
+  return `<option value="" ${!selected ? "selected" : ""}>${escapeHtml(companyLabel)}</option>`
+    + (selected && !have ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>` : "")
+    + TIMEZONE_CHOICES.map(([k, l]) => `<option value="${k}" ${k === selected ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+}
+// The short name of the user's zone right now (CDT, IST...).
+function tzAbbrev(date = new Date()) {
+  try { return new Intl.DateTimeFormat(undefined, { timeZone: userTz(), timeZoneName: "short" }).formatToParts(date).find(p => p.type === "timeZoneName").value; }
+  catch (e) { return ""; }
 }
 
 function escapeHtml(v) {
@@ -294,7 +353,7 @@ async function refreshPriceDeltas(root = document) {
 async function deliveredCheckBeforeInvoice(shipments) {
   const pending = (shipments || []).filter(s => s && s.status === "shipped" && !s.delivered_at);
   if (!pending.length) return true;
-  const today = new Date().toISOString().substring(0, 10);
+  const today = todayISO();
   const { value, el } = await askDialog({ title: pending.length === 1 ? "Not delivered yet" : `${pending.length} shipments not delivered yet`, tone: "warn",
     body: `<p>${pending.map(s => `<strong>${escapeHtml(s.code)}</strong>${s.ship_date ? ` shipped ${fmtDate(s.ship_date)}` : ""}`).join(", ")}
         ${pending.length === 1 ? "isn't" : "aren't"} marked delivered. Mark ${pending.length === 1 ? "it" : "them"} delivered to complete the order's flow, or invoice anyway.</p>
@@ -462,7 +521,7 @@ async function showPriceHistory(itemId) {
             const diff = older ? h.unit_price - older.unit_price : null;
             const good = kind === "sale" ? diff > 0 : diff < 0;
             return `<tr>
-              <td>${h.date ? new Date(h.date).toLocaleDateString() : ""}</td>
+              <td>${h.date ? fmtDate(h.date) : ""}</td>
               <td><a class="link" href="${page}?id=${h.doc_id}">${escapeHtml(h.doc_code)}</a></td>
               <td>${escapeHtml(h.party)}</td><td><span class="tag ${h.status}">${h.status.replace("_", " ")}</span></td>
               <td class="num">${fmtQty(h.quantity)}</td><td class="num">${fmtPrice(h.unit_price)}</td>
@@ -778,7 +837,7 @@ async function renderAttachments(container, entityType, entityId, categories, op
             <div class="attach-info">
               ${attachmentTag(f.category)} <a class="link" onclick="openAttachment(${f.id})">${escapeHtml(f.filename)}</a>
               ${canDelete(f) ? `<select class="att-retag" data-retag="${f.id}" title="What kind of document this is">${categories.map(c => `<option value="${c}" ${c === f.category ? "selected" : ""}>${ATTACHMENT_LABELS[c] || c}</option>`).join("")}</select>` : ""}
-              <div class="muted small">${fmtFileSize(f.size)} · ${escapeHtml(f.uploaded_by || "")} · ${new Date(f.created_at + (f.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()}${f.note ? ` · <span style="color:#1a1a1a;">${escapeHtml(f.note)}</span>` : ""}</div>
+              <div class="muted small">${fmtFileSize(f.size)} · ${escapeHtml(f.uploaded_by || "")} · ${fmtWhen(f.created_at)}${f.note ? ` · <span style="color:#1a1a1a;">${escapeHtml(f.note)}</span>` : ""}</div>
             </div>
             ${canDelete(f) ? `<a class="link small" data-del="${f.id}">Delete</a>` : ""}
           </div>`).join("")}
@@ -843,7 +902,7 @@ function groupTag(item) {
 // Items created from a scanned PO carry a small tag until someone has checked them.
 function aiMadeTag(item) {
   return item && item.created_via === "ai-scan"
-    ? `<span class="ai-made-tag" title="Created from a scanned customer PO${item.created_at ? " on " + new Date(item.created_at).toLocaleDateString() : ""} — check the title, group and price">AI</span>` : "";
+    ? `<span class="ai-made-tag" title="Created from a scanned customer PO${item.created_at ? " on " + fmtDate(item.created_at) : ""} — check the title, group and price">AI</span>` : "";
 }
 
 // ---- 4x6 labels: same layout and fields as the main portal's labels, plus our logo ----
@@ -1042,7 +1101,7 @@ async function downloadFile(path, filename) {
 // A link's third entry is the permission that shows it (any of several, space separated) -- set per role on
 // Users & Roles. A group with no links left isn't shown.
 const NAV_GROUPS = [
-  { label: null, links: [["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"], ["tasks.html", "Tasks", "tasks"], ["ai-desk.html", "AI Desk", "ai"]] },
+  { label: null, links: [["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"], ["todo.html", "To-Do", ""], ["tasks.html", "Tasks", "tasks"], ["ai-desk.html", "AI Desk", "ai"]] },
   { label: "CRM", links: [
     ["customers.html", "Customers", "customers.view"],
     ["customer-orders.html", "Customer Orders", "orders.view"],
@@ -1058,8 +1117,8 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs", "landed_costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items", "stock.view"], ["lots.html", "Lots", "stock.view"], ["mtrs.html", "MTR Library", "stock.view"]] },
-  { label: null, links: [["reports.html", "Reports", "reports"], ["company.html", "Company Settings", "company"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
-  { label: "MRP Migrate", links: [["mrp-payments.html", "PO Payments Import", "payments.import"], ["file-matcher.html", "File Matcher", "file_matcher"]] },
+  { label: null, links: [["reports.html", "Reports", "reports"], ["simulate.html", "Simulate", "simulate"], ["company.html", "Company Settings", "company"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
+  { label: "MRP Migrate", links: [["golive.html", "Go-Live Cleanup", "golive"], ["mrp-payments.html", "PO Payments Import", "payments.import"], ["file-matcher.html", "File Matcher", "file_matcher"]] },
   { label: "Admin", links: [["users.html", "Users & Roles", "users"], ["backups.html", "Backups", "backups"]] },
 ];
 
@@ -1512,7 +1571,7 @@ const TableTools = {
   },
   exportName() {
     const page = (document.querySelector(".page-title") || {}).textContent || document.title.replace("AT-HUB — ", "") || "export";
-    return `${page.trim().replace(/[^\w-]+/g, "-")}-${new Date().toISOString().substring(0, 10)}`;
+    return `${page.trim().replace(/[^\w-]+/g, "-")}-${todayISO()}`;
   },
   exportTable(table, kind) {
     const d = this.tableData(table);
@@ -1539,7 +1598,7 @@ const TableTools = {
         table { border-collapse: collapse; width: 100%; } th { background: #eef1f6; text-align: left; } th, td { border-bottom: 1px solid #ddd; padding: 4px 6px; vertical-align: top; }
         td.n, th.n { text-align: right; white-space: nowrap; } tr:nth-child(even) td { background: #fafbfc; }</style></head><body>
         <h1>${escapeHtml((document.querySelector(".page-title") || {}).textContent || "Report")}</h1>
-        <div class="sub">${escapeHtml(company)} · ${new Date().toLocaleString()} · ${d.rows.length} rows</div>
+        <div class="sub">${escapeHtml(company)} · ${fmtWhen(new Date())} · ${d.rows.length} rows</div>
         <table><thead><tr>${d.header.map((h, i) => `<th class="${d.num[i] ? "n" : ""}">${escapeHtml(h)}</th>`).join("")}</tr></thead>
         <tbody>${d.rows.map(r => `<tr>${r.map((v, i) => `<td class="${d.num[i] ? "n" : ""}">${escapeHtml(v)}</td>`).join("")}</tr>`).join("")}</tbody></table>
         <script>window.onload = () => { window.print(); }<\/script></body></html>`);
@@ -1693,7 +1752,7 @@ async function showPackSizeHistory(itemId) {
       ${rows.length ? `<table class="compact-table no-table-tools">
         <thead><tr><th>Changed</th><th class="num">From</th><th class="num">To</th><th>How</th><th>For</th><th>By</th></tr></thead>
         <tbody>${rows.map(h => `<tr>
-          <td>${utcTime(h.changed_at).toLocaleString()}</td><td class="num">${h.previous_pack_size ?? "—"}</td><td class="num"><strong>${h.pack_size ?? "—"}</strong></td>
+          <td>${fmtWhen(h.changed_at)}</td><td class="num">${h.previous_pack_size ?? "—"}</td><td class="num"><strong>${h.pack_size ?? "—"}</strong></td>
           <td>${escapeHtml(h.source || "")}</td><td class="small">${escapeHtml(h.reference || "")}</td><td>${escapeHtml(h.changed_by || "")}</td></tr>`).join("")}</tbody>
       </table>` : `<p class="muted">No Changes Recorded Yet (History Starts From This Update).</p>`}
       <button class="secondary" style="margin-top:12px;" onclick="document.getElementById('pack-history-modal').remove()">Close</button>
@@ -1710,7 +1769,7 @@ function mtrRowHtml(r, checked) {
   return `<label class="check-label" style="white-space:normal;align-items:flex-start;">
     <input type="checkbox" class="om-mtr" value="${r.attachment_id}" ${checked ? "checked" : ""}>
     <span><a class="link" onclick="event.preventDefault(); openAttachment(${r.attachment_id})">${escapeHtml(r.filename)}</a>
-      <span class="muted small"> · ${escapeHtml(r.po_code || "")} · ${escapeHtml(r.vendor || "")} · ${r.po_date ? new Date(r.po_date).toLocaleDateString() : ""}${r.heat_number ? ` · Heat ${escapeHtml(r.heat_number)}` : ""}</span></span></label>`;
+      <span class="muted small"> · ${escapeHtml(r.po_code || "")} · ${escapeHtml(r.vendor || "")} · ${r.po_date ? fmtDate(r.po_date) : ""}${r.heat_number ? ` · Heat ${escapeHtml(r.heat_number)}` : ""}</span></span></label>`;
 }
 
 async function renderOrderMtrs(container, orderId) {
@@ -1748,7 +1807,7 @@ Thank you.</textarea>
         <div id="om-error" class="error"></div>
       </div>` : `<p class="muted small">No MTRs On File For These Items Yet.</p>`}
     ${d.emails.length ? `<div class="muted small" style="margin-top:8px;">${d.emails.map(e =>
-      `Sent ${escapeHtml(e.files || "")} to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${new Date(e.sent_at + "Z").toLocaleString()}`).join("<br>")}</div>` : ""}`;
+      `Sent ${escapeHtml(e.files || "")} to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : ""}`;
   const btn = el.querySelector("#om-send");
   if (!btn) return;
   btn.onclick = async () => {
@@ -1768,6 +1827,14 @@ Thank you.</textarea>
 
 // ---- Icons: a small inline SVG set (Lucide-style strokes), no external library ----
 const ICON_PATHS = {
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  sticky: '<path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/>',
+  flask: '<path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  listTodo: '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/>',
+  chevLeft: '<path d="m15 18-6-6 6-6"/>',
+  chevRight: '<path d="m9 18 6-6-6-6"/>',
   dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
@@ -1911,7 +1978,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "backups.html": "save", "designer.html": "palette",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "simulate.html": "flask", "backups.html": "save", "designer.html": "palette",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [
@@ -1967,7 +2034,7 @@ const ACTION_COLUMNS = {
   draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => r.customer], ["Customer PO", r => r.po_number], ["Amount", r => fmtMoney(r.amount)], ["Days", r => r.days]],
 };
 function actLink(page, id, text) { return id ? `<a class="link" href="${page}?id=${id}">${escapeHtml(text || "")}</a>` : escapeHtml(text || ""); }
-function actDate(v) { return v ? new Date(v).toLocaleDateString() : ""; }
+function actDate(v) { return fmtDate(v); }
 
 async function renderActionItems(container, onlyKeys = null) {
   const el = typeof container === "string" ? document.getElementById(container) : container;
@@ -2178,7 +2245,7 @@ function aiVendorChips(cands, selectId) {
         bar.classList.toggle("changed", !!changed);
         bar.innerHTML = (r.others.length ? `<span class="presence-who">${r.others.map(u => `<b class="presence-avatar" title="${escapeHtml(u)}">${escapeHtml(u.slice(0, 2).toUpperCase())}</b>`).join("")}
             ${escapeHtml(r.others.join(", "))} ${r.others.length === 1 ? "is" : "are"} also viewing this</span>` : "")
-          + (changed ? `<span class="presence-changed">${icon("info")}<strong>${escapeHtml(r.updated_by)}</strong> saved changes${r.updated_at ? ` at ${new Date(r.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+          + (changed ? `<span class="presence-changed">${icon("info")}<strong>${escapeHtml(r.updated_by)}</strong> saved changes${r.updated_at ? ` at ${fmtTime(r.updated_at)}` : ""}
             <a class="link" onclick="presenceReload()">Reload to see them</a></span>` : "");
       },
     };
@@ -2482,7 +2549,7 @@ async function renderActivity(container, entityType, entityId, lineNo = {}) {
       receive: "received stock", "mark-ordered": "marked it ordered", bills: r.method === "DELETE" ? "deleted a vendor invoice" : "added a vendor invoice",
       charges: r.method === "DELETE" ? "removed a charge" : "added a charge", payments: "recorded a payment" }[what]) || `${r.method.toLowerCase()} ${escapeHtml(r.action)}`;
   };
-  el.innerHTML = rows.length ? `<ul class="activity-list">${rows.map(r => `<li><span class="muted small">${new Date(r.at).toLocaleString()}</span>
+  el.innerHTML = rows.length ? `<ul class="activity-list">${rows.map(r => `<li><span class="muted small">${fmtWhen(r.at)}</span>
       <strong>${escapeHtml(r.by || "someone")}</strong> ${say(r)}</li>`).join("")}</ul>`
     : `<p class="muted small" style="margin:0;">No changes recorded yet (history starts from today's update).</p>`;
 }
@@ -2709,7 +2776,7 @@ function saveBlob(blob, filename) {
 // data-nopeek still go to the page. Links inside the pop-up open in it too (‹ goes back).
 const PEEK_PAGES = { "customer-orders.html": "order", "purchase-orders.html": "po", "shipments.html": "shipment", "invoices.html": "invoice", "item.html": "item" };
 const peekCache = {};
-const pkDate = d => d ? new Date(d).toLocaleDateString() : "";
+const pkDate = d => fmtDate(d);
 const peekStack = [];
 function peekGet(url) { return (peekCache[url] ??= apiFetch(url).catch(e => { delete peekCache[url]; throw e; })); }
 async function peekItems() { return peekGet("/api/stock-items/"); }
@@ -2867,4 +2934,192 @@ function movementLinks(t) {
   (t.links || []).forEach(l => parts.push(`<a class="doc-chip k-${l.kind}${l.po ? " cust-po" : ""}" href="${MOVE_PAGE[l.kind]}?id=${l.id}">${escapeHtml(l.label)}</a>`));
   if (!parts.length && t.reference) parts.push(escapeHtml(t.reference));
   return `<div class="move-links">${parts.join("")}</div>`;
+}
+
+
+// ---- top bar on every screen: date / time in the user's zone, calendar, To-Do and reminders, theme ----
+const TopBar = {
+  month: null,       // first day of the month shown in the calendar (local Date)
+  events: {},        // "YYYY-MM-DD" -> [events]
+  picked: null,
+  KIND: { delivery: ["Delivery due", "#2563eb"], po: ["PO expected", "#7c3aed"], invoice: ["Invoice due", "#dc2626"],
+          shipped: ["Shipped", "#16a34a"], todo: ["To-do", "#ea580c"], note: ["Note reminder", "#ca8a04"] },
+  mount() {
+    const main = document.querySelector(".app-shell > main");
+    if (!main || document.getElementById("topbar") || !AuthGuard.getToken()) return;
+    const bar = document.createElement("div");
+    bar.id = "topbar";
+    bar.className = "topbar";
+    bar.innerHTML = `<div class="tb-right">
+        <a class="tb-btn" href="todo.html" title="To-Do and reminders">${icon("listTodo")}<span class="tb-badge" id="tb-todo" hidden></span></a>
+        <button type="button" class="tb-btn" onclick="toggleTheme(); TopBar.themeIcon();" title="Light / dark" id="tb-theme"></button>
+        <button type="button" class="tb-clock" onclick="TopBar.toggle(event)" title="Calendar">
+          ${icon("calendar")}<span class="tb-date" id="tb-date"></span><span class="tb-time" id="tb-time"></span></button>
+      </div>
+      <div class="tb-cal" id="tb-cal" hidden></div>`;
+    main.prepend(bar);
+    this.tick();
+    this.themeIcon();
+    setInterval(() => this.tick(), 20000);
+    this.badge();
+    setInterval(() => this.badge(), 5 * 60000);
+    document.addEventListener("click", e => {
+      const cal = document.getElementById("tb-cal");
+      if (cal && !cal.hidden && !e.target.closest("#tb-cal") && !e.target.closest(".tb-clock")) cal.hidden = true;
+    });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") { const c = document.getElementById("tb-cal"); if (c) c.hidden = true; } });
+  },
+  themeIcon() { const b = document.getElementById("tb-theme"); if (b) b.innerHTML = icon(currentTheme() === "dark" ? "sun" : "moon"); },
+  tick() {
+    const now = new Date(), d = document.getElementById("tb-date"), t = document.getElementById("tb-time");
+    if (!d) return;
+    d.textContent = now.toLocaleDateString(undefined, { timeZone: userTz(), weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    t.textContent = `${fmtTime(now)} ${tzAbbrev(now)}`;
+  },
+  async badge() {
+    try {
+      const c = await apiFetch("/api/todo/counts");
+      const el = document.getElementById("tb-todo");
+      if (el) { el.hidden = !c.today; el.textContent = c.today > 99 ? "99+" : c.today; el.title = `${c.today} due today or overdue`; }
+    } catch (e) { /* the badge is a nicety */ }
+  },
+  toggle(e) {
+    e.stopPropagation();
+    const cal = document.getElementById("tb-cal");
+    cal.hidden = !cal.hidden;
+    if (!cal.hidden) {
+      const t = todayISO();
+      if (!this.month) this.month = new Date(+t.slice(0, 4), +t.slice(5, 7) - 1, 1);
+      this.picked = this.picked || t;
+      this.load();
+    }
+  },
+  shift(n) { this.month = new Date(this.month.getFullYear(), this.month.getMonth() + n, 1); this.load(); },
+  goToday() { const t = todayISO(); this.month = new Date(+t.slice(0, 4), +t.slice(5, 7) - 1, 1); this.picked = t; this.load(); },
+  iso(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; },
+  async load() {
+    const first = new Date(this.month), start = new Date(first);
+    start.setDate(1 - first.getDay());
+    const end = new Date(start); end.setDate(start.getDate() + 41);
+    this.start = start;
+    this.render(start, null);
+    try {
+      const ev = await apiFetch(`/api/calendar?start=${this.iso(start)}&end=${this.iso(end)}`);
+      this.events = {};
+      ev.forEach(x => (this.events[x.date] = this.events[x.date] || []).push(x));
+      this.render(start, true);
+    } catch (e) { this.render(start, e.message); }
+  },
+  render(start, loaded) {
+    const cal = document.getElementById("tb-cal"), today = todayISO(), m = this.month.getMonth();
+    const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+    const head = this.month.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const dayEv = this.events[this.picked] || [];
+    cal.innerHTML = `<div class="tb-cal-head">
+        <button type="button" class="tb-nav" onclick="TopBar.shift(-1)" title="Previous month">${icon("chevLeft")}</button>
+        <strong>${escapeHtml(head)}</strong>
+        <button type="button" class="tb-nav" onclick="TopBar.shift(1)" title="Next month">${icon("chevRight")}</button>
+        <button type="button" class="tb-today" onclick="TopBar.goToday()">Today</button></div>
+      <div class="tb-grid">${["S", "M", "T", "W", "T", "F", "S"].map(w => `<div class="tb-wd">${w}</div>`).join("")}
+        ${days.map(d => { const k = this.iso(d), ev = this.events[k] || [];
+          const kinds = [...new Set(ev.map(e => e.kind))].slice(0, 4);
+          return `<button type="button" class="tb-day${d.getMonth() !== m ? " out" : ""}${k === today ? " today" : ""}${k === this.picked ? " picked" : ""}"
+            onclick="TopBar.pick('${k}')"><span>${d.getDate()}</span><i>${kinds.map(x => `<b style="background:${this.KIND[x][1]}"></b>`).join("")}</i></button>`; }).join("")}</div>
+      <div class="tb-legend">${Object.values(this.KIND).map(([l, c]) => `<span><b style="background:${c}"></b>${l}</span>`).join("")}</div>
+      <div class="tb-agenda"><div class="tb-agenda-day">${escapeHtml(fmtDate(this.picked, { weekday: "long", month: "long", day: "numeric" }))}</div>
+        ${loaded === null ? `<p class="muted small">Loading...</p>` : typeof loaded === "string" ? `<p class="error small">${escapeHtml(loaded)}</p>`
+          : dayEv.length ? dayEv.map(e => `<a class="tb-ev" href="${e.link}"><b style="background:${this.KIND[e.kind][1]}"></b>
+              <span><strong>${escapeHtml(e.title)}</strong>${e.sub ? `<span class="muted small"> · ${escapeHtml(e.sub)}</span>` : ""}</span></a>`).join("")
+          : `<p class="muted small">Nothing on this day.</p>`}
+        <a class="link small" href="todo.html?new=${this.picked}">+ To-do on this day</a></div>`;
+  },
+  pick(k) {
+    this.picked = k;
+    const first = new Date(+k.slice(0, 4), +k.slice(5, 7) - 1, 1);
+    if (first.getMonth() !== this.month.getMonth()) { this.month = first; this.load(); } else this.render(this.start, true);
+  },
+};
+document.addEventListener("DOMContentLoaded", () => TopBar.mount());
+
+
+// ---- sticky notes on a record (customer order, PO, shipment): the team's reminders, seen by everyone who opens it ----
+const STICKY_COLORS = ["yellow", "pink", "green", "blue"];
+async function stickyNotes(container, entityType, entityId) {
+  const el = typeof container === "string" ? document.getElementById(container) : container;
+  if (!el) return;
+  let notes = [];
+  try { notes = await apiFetch(`/api/notes?entity_type=${entityType}&entity_id=${entityId}`); } catch (e) { el.innerHTML = ""; return; }
+  const me = (AuthGuard.getUser() || {}).username;
+  const canDelete = n => n.created_by === me || AuthGuard.can("money.view");
+  const remind = n => n.remind_date ? `<span class="sticky-when ${!n.done && String(n.remind_date).slice(0, 10) <= todayISO() ? "due" : ""}">${icon("bell")}
+      ${fmtDate(n.remind_date, { month: "short", day: "numeric" })}${n.remind_at ? " " + fmtTime(n.remind_at) : ""}</span>` : "";
+  const open = notes.filter(n => !n.done), done = notes.filter(n => n.done);
+  el.innerHTML = `<div class="sticky-row">
+      ${open.map(n => `<div class="sticky-note sticky-${n.color}" data-id="${n.id}">
+        <div class="sticky-text">${escapeHtml(n.text)}</div>
+        <div class="sticky-foot">${remind(n)}<span class="muted">${escapeHtml(n.updated_by || n.created_by || "")} · ${fmtDate(n.updated_at || n.created_at, { month: "short", day: "numeric" })}</span>
+          <span class="sticky-acts"><a title="Done" data-act="done">${icon("check")}</a><a title="Edit" data-act="edit">${icon("pencil")}</a></span></div></div>`).join("")}
+      <button type="button" class="sticky-add" title="Stick a note on this record, with a reminder date if you like">${icon("sticky")}${open.length ? "" : " Add Sticky Note"}</button>
+    </div>
+    ${done.length ? `<details class="sticky-done"><summary class="muted small">${done.length} done note${done.length === 1 ? "" : "s"}</summary>
+      ${done.map(n => `<div class="small muted" data-id="${n.id}" style="margin:3px 0;">✓ ${escapeHtml(n.text)} <span>· ${escapeHtml(n.done_by || "")} ${fmtDate(n.done_at)}</span>
+        <a class="link" data-act="undo">Reopen</a>${canDelete(n) ? ` · <a class="link" data-act="delete">Delete</a>` : ""}</div>`).join("")}</details>` : ""}`;
+  const reload = () => { stickyNotes(el, entityType, entityId); if (window.TopBar) TopBar.badge(); };
+  const editor = (n = {}) => {
+    const box = document.createElement("div");
+    let color = n.color || "yellow";
+    box.className = `sticky-note sticky-${color} sticky-editing`;
+    box.innerHTML = `<textarea placeholder="Reminder for the team...">${escapeHtml(n.text || "")}</textarea>
+      <div class="sticky-colors">${STICKY_COLORS.map(c => `<button type="button" class="sw sticky-${c} ${c === color ? "on" : ""}" data-c="${c}" title="${c}"></button>`).join("")}</div>
+      <div class="sticky-remind"><label class="small">Remind on</label><input type="date" value="${n.remind_date ? String(n.remind_date).slice(0, 10) : ""}">
+        <input type="time" value="${n.remind_at ? utcTime(n.remind_at).toLocaleTimeString("en-GB", { timeZone: userTz(), hour: "2-digit", minute: "2-digit" }) : ""}"></div>
+      <div style="display:flex; gap:6px; margin-top:6px;"><button type="button" class="small-btn" data-save>Save</button>
+        <button type="button" class="secondary small-btn" data-cancel>Cancel</button>
+        ${n.id && canDelete(n) ? `<button type="button" class="secondary small-btn" data-del style="margin-left:auto;">Delete</button>` : ""}</div>`;
+    box.querySelectorAll(".sw").forEach(b => b.onclick = () => {
+      color = b.dataset.c;
+      box.className = `sticky-note sticky-${color} sticky-editing`;
+      box.querySelectorAll(".sw").forEach(x => x.classList.toggle("on", x === b));
+    });
+    box.querySelector("[data-cancel]").onclick = reload;
+    const del = box.querySelector("[data-del]");
+    if (del) del.onclick = async () => {
+      if (!confirm("Delete this note?")) return;
+      await apiFetch(`/api/notes/${n.id}`, { method: "DELETE" });
+      reload();
+    };
+    box.querySelector("[data-save]").onclick = async () => {
+      const [d, t] = box.querySelectorAll(".sticky-remind input");
+      const body = { text: box.querySelector("textarea").value, color, remind_date: d.value, remind_time: d.value ? t.value : "" };
+      try {
+        await apiFetch(n.id ? `/api/notes/${n.id}` : "/api/notes", { method: n.id ? "PUT" : "POST",
+          body: JSON.stringify(n.id ? body : { ...body, entity_type: entityType, entity_id: entityId }) });
+        reload();
+      } catch (e) { toast(e.message); }
+    };
+    return box;
+  };
+  el.querySelector(".sticky-add").onclick = () => {
+    const box = editor();
+    el.querySelector(".sticky-row").insertBefore(box, el.querySelector(".sticky-add"));
+    box.querySelector("textarea").focus();
+  };
+  el.querySelectorAll("[data-act]").forEach(a => a.onclick = async () => {
+    const id = parseInt(a.closest("[data-id]").dataset.id), n = notes.find(x => x.id === id), act = a.dataset.act;
+    if (act === "edit") { a.closest(".sticky-note").replaceWith(editor(n)); return; }
+    if (act === "delete") {
+      if (!confirm("Delete this note for good?")) return;
+      await apiFetch(`/api/notes/${id}`, { method: "DELETE" });
+    } else await apiFetch(`/api/notes/${id}/done`, { method: "POST" });
+    reload();
+  });
+}
+// List pages: a small note marker beside records that have open sticky notes.
+let NOTE_COUNTS = {};
+async function loadNoteCounts(entityType) {
+  try { NOTE_COUNTS = await apiFetch(`/api/notes/counts?entity_type=${entityType}`); } catch (e) { NOTE_COUNTS = {}; }
+}
+function noteMark(id) {
+  const n = NOTE_COUNTS[id];
+  return n ? `<span class="list-note" title="${n} open sticky note${n === 1 ? "" : "s"}">${icon("sticky")}</span>` : "";
 }

@@ -140,6 +140,7 @@
       }
     }
     async function loadEmailStatus() {
+      if (!AuthGuard.can("invoices")) { document.getElementById("email-status").textContent = "Only roles that send invoices see the email setup."; return; }
       const cfg = await apiFetch("/api/invoices/email/config");
       document.getElementById("email-status").innerHTML = cfg.configured
         ? `<span class="tag shipped">Ready</span> Invoices are sent from <strong>${escapeHtml(cfg.from_address)}</strong> via ${escapeHtml(cfg.host)}.

@@ -156,7 +156,7 @@ function drawQuote() {
     </table></div>
     ${locked ? "" : `<button class="secondary" onclick="addQuoteLine()" style="margin-top:8px;">+ Add line</button>`}
     ${x.emails && x.emails.length ? `<div class="muted small" style="margin-top:8px;">${x.emails.map(e =>
-      `Emailed to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${new Date(e.sent_at + "Z").toLocaleString()}`).join("<br>")}</div>` : ""}
+      `Emailed to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : ""}
     <div id="q-error" class="error"></div>
     <div class="btn-row">
       ${locked ? `<span class="muted">Converted to order — <a class="link" onclick="showDetail(${x.order_id})">open it</a>.</span>` : `<button onclick="saveQuote()">Save Quote</button>`}

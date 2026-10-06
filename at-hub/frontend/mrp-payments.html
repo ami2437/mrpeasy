@@ -28,7 +28,6 @@
   <script>
     AuthGuard.requirePerm("payments.import");
     document.getElementById("sidebar").innerHTML = renderSidebar("mrp-payments.html");
-    const fmtDate = d => d ? new Date(d).toLocaleDateString() : "";
     // ---- payments from MRPeasy's PO export ----
     async function payImport(step) {
       const f = document.getElementById("payimp-file").files[0], out = document.getElementById("payimp-out");

@@ -46,22 +46,22 @@ def test_ship_refuses_boxes_that_dont_add_up(make, api):
 
 
 def test_delivered_date_with_a_time_zone(make, api):
-    # "...Z" from an API client crashed comparing it with the naive ship date
+    # "...Z" from an API client crashed comparing it with the naive ship date; moments now come back in UTC, marked Z
     a = make.item()
     make.stock(a, 10)
     o = make.order(lines=[(a, 5, 1)])
     sh = make.ship(o)
-    when = (datetime.utcnow() + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    sh = api.post(f"/api/shipments/{sh['id']}/delivered", json={"delivered_at": when})
-    assert sh["status"] == "delivered" and not sh["delivered_at"].endswith("Z")
+    when = (datetime.utcnow() + timedelta(hours=1)).replace(microsecond=0)
+    sh = api.post(f"/api/shipments/{sh['id']}/delivered", json={"delivered_at": when.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    assert sh["status"] == "delivered" and sh["delivered_at"] == when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def test_ship_date_is_the_business_date(make, api):
-    from app.services.clock import business_now
+def test_ship_date_is_a_utc_moment(make, api):
     a = make.item()
     make.stock(a, 10)
     sh = make.ship(make.order(lines=[(a, 5, 1)]))
-    assert abs(datetime.fromisoformat(sh["ship_date"]) - business_now()) < timedelta(minutes=5)
+    assert sh["ship_date"].endswith("Z")
+    assert abs(datetime.fromisoformat(sh["ship_date"][:-1]) - datetime.utcnow()) < timedelta(minutes=5)
 
 
 def test_line_quantities_must_be_positive(make, api):

@@ -48,6 +48,8 @@ class UserResponse(BaseModel):
     must_change_password: bool = False
     permissions: List[str] = []  # what the role allows (app/services/permissions.py)
     role_name: Optional[str] = None
+    timezone: Optional[str] = None  # their own pick (None = the company's)
+    effective_timezone: Optional[str] = None  # what their screens use
     last_login: Optional[datetime] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -69,6 +71,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    timezone: Optional[str] = None  # "" = back to the company's
 
 
 class PasswordReset(BaseModel):
