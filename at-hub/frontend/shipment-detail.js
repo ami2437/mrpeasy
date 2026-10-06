@@ -142,7 +142,7 @@ function carrierReadOnlyHtml(sh) {
   return `<h4 class="dsec-title">Carrier</h4>
     <div class="carrier-grid ro">
       <div><label>Carrier</label><div>${v(sh.carrier)}</div></div>
-      <div><label>Tracking Number</label><div>${v(sh.tracking_number)}</div></div>
+      <div><label>Tracking Number</label><div>${sh.tracking_number ? trackingLink(sh.carrier, sh.tracking_number) : v(sh.tracking_number)}</div></div>
       ${hidesMoney() ? "" : `<div class="money-field"><label>Shipping Cost</label><div>${sh.shipping_cost != null ? fmtMoney(sh.shipping_cost) : `<span class="muted">—</span>`}</div></div>`}
     </div>
     ${sh.notes ? `<div class="carrier-notes"><label>Notes</label><div>${escapeHtml(sh.notes)}</div></div>` : ""}

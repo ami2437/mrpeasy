@@ -25,6 +25,10 @@
       <div id="error" class="error"></div>
     </div>
     <div class="card" style="max-width:520px;">
+      <h3 style="margin-top:0;">Two-Step Login</h3>
+      <div id="tfa"></div>
+    </div>
+    <div class="card" style="max-width:520px;">
       <h3 style="margin-top:0;">Time Zone</h3>
       <p class="muted small" style="margin-top:0;">Every time on your screens (shipped, delivered, created, saved...) is shown in your zone, the way Outlook does.
         Calendar dates (delivery, due, invoice dates) stay the same day for everyone. Printed documents use the company's zone.</p>
@@ -61,6 +65,42 @@
     }
     function useComputerTz() { saveTz(Intl.DateTimeFormat().resolvedOptions().timeZone); }
     showTz();
+
+    // ---- two-step login with an authenticator app ----
+    function showTfa(setup) {
+      const u = AuthGuard.getUser() || {}, el = document.getElementById("tfa");
+      if (u.totp_enabled) {
+        el.innerHTML = `<p><span class="tag shipped">On</span> Logging in asks for a code from your authenticator app.</p>
+          <label>Your password, to turn it off</label><input type="password" id="tfa-pass" autocomplete="current-password">
+          <button class="secondary" style="margin-top:10px;" onclick="tfaOff()">Turn Off Two-Step Login</button><div id="tfa-err" class="error"></div>`;
+      } else if (setup) {
+        el.innerHTML = `<p class="small">1. Open Google Authenticator, Microsoft Authenticator or Authy on your phone and scan this code
+            (or type the key).</p><div style="width:200px; height:200px; background:#fff; padding:6px; border-radius:8px;">${setup.qr_svg}</div>
+          <p class="small muted" style="word-break:break-all;">Key: <code>${escapeHtml(setup.secret)}</code></p>
+          <label>2. Type the 6-digit code the app shows</label><input type="text" id="tfa-code" inputmode="numeric" maxlength="7" style="max-width:160px;">
+          <button style="margin-top:10px;" onclick="tfaOn()">Turn On</button><div id="tfa-err" class="error"></div>`;
+      } else {
+        el.innerHTML = `<p class="muted small" style="margin-top:0;">Off. Turn it on and logging in also needs a 6-digit code from an app on your phone,
+            so a stolen password alone can't get in. Recommended once AT-HUB is on the internet.</p>
+          <button onclick="tfaSetup()">Set Up Two-Step Login</button><div id="tfa-err" class="error"></div>`;
+      }
+    }
+    async function tfaSetup() {
+      try { showTfa(await apiFetch("/api/auth/2fa/setup", { method: "POST" })); } catch (e) { document.getElementById("tfa-err").textContent = e.message; }
+    }
+    async function tfaOn() {
+      try {
+        const u = await apiFetch("/api/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code: document.getElementById("tfa-code").value }) });
+        AuthGuard.setSession(AuthGuard.getToken(), u); showTfa(); toast("Two-step login is on");
+      } catch (e) { document.getElementById("tfa-err").textContent = e.message; }
+    }
+    async function tfaOff() {
+      try {
+        const u = await apiFetch("/api/auth/2fa/disable", { method: "POST", body: JSON.stringify({ password: document.getElementById("tfa-pass").value }) });
+        AuthGuard.setSession(AuthGuard.getToken(), u); showTfa(); toast("Two-step login is off");
+      } catch (e) { document.getElementById("tfa-err").textContent = e.message; }
+    }
+    showTfa();
 
     async function changePassword() {
       const errorEl = document.getElementById("error");

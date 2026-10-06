@@ -19,6 +19,8 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     must_change_password = Column(Boolean, default=False)  # set on creation / reset; user picks their own at next login
     timezone = Column(String, nullable=True)  # IANA zone, e.g. America/New_York; None = the company's (app/services/clock.py)
+    totp_secret = Column(String, nullable=True)  # authenticator-app key (app/services/totp.py); set up on My Account
+    totp_enabled = Column(Boolean, nullable=False, default=False)
 
     @property
     def effective_timezone(self) -> str:

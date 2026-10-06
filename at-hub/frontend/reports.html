@@ -10,6 +10,9 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
+    <div class="card page-toolbar"><h1 class="page-title">Reports</h1><div class="tabs" id="rp-tabs" style="margin:0;"></div></div>
+    <div id="rp-view" style="display:none;"></div>
+    <div id="rp-overview">
     <div class="card" id="money-card"><h3 style="margin-top:0;">Money</h3><div class="muted">Loading…</div></div>
     <div class="card" id="action-card"><h3 style="margin-top:0;">Action Items</h3><div id="action-items" class="muted">Loading…</div></div>
 
@@ -86,7 +89,9 @@
         <tbody id="expiring-body"></tbody>
       </table>
     </div>
+    </div>
   </main>
+  <script src="reports-tabs.js"></script>
 
   <script>
     AuthGuard.requirePerm("reports");

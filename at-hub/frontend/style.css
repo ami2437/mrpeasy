@@ -1815,3 +1815,33 @@ html[data-theme="dark"] .glass-panel.ship-inproc, html[data-theme="dark"] .glass
 .list-note { display: inline-flex; margin-left: 4px; color: #ca8a04; vertical-align: middle; }
 .list-note .ico { width: 13px; height: 13px; }
 @media print { .sticky-strip, .sticky-add { display: none !important; } }
+
+
+/* ---- Reports: sales chart (reports-tabs.js) ---- */
+.rp-chart-wrap { position: relative; margin-top: 14px; }
+.rp-chart { width: 100%; max-width: 900px; height: auto; display: block; }
+.rp-grid { stroke: var(--border); stroke-width: 1; }
+.rp-axis { fill: var(--muted); font-size: 11px; }
+.rp-bar { cursor: default; }
+.rp-bar.hot rect:not([fill="transparent"]), .rp-bar.hot path { opacity: .85; }
+.rp-tip { position: absolute; z-index: 5; min-width: 170px; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg); font-size: 12.5px; color: var(--text); pointer-events: none; }
+.rp-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--text-2); margin-top: 6px; }
+.rp-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.rp-legend b { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.rp-lot { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+
+
+/* ---- dashboard Today panel ---- */
+.today-group + .today-group { margin-top: 14px; }
+.today-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; }
+.today-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.today-tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); text-decoration: none; transition: border-color .15s, background .15s; }
+.today-tile:hover { border-color: var(--accent); background: var(--accent-soft); }
+.today-tile span { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.today-tile strong { font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.today-tile small { font-size: 11.5px; color: var(--muted); }
+.today-tile.warn strong { color: #b45309; }
+.today-tile.neg strong { color: var(--neg); }
+.today-tile.pos strong { color: var(--pos); }

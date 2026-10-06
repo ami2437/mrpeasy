@@ -238,7 +238,8 @@ def file_link(fid: str, name: str):
 
 
 # ---- activity history: every successful change to an order or PO, with who and what ----
-ACTIVITY_PATH = re.compile(r"^/api/(customer-orders|purchase-orders)/(\d+)(?:/(.*))?$")
+ACTIVITY_PATH = re.compile(r"^/api/(customer-orders|purchase-orders|shipments|invoices)/(\d+)(?:/(.*))?$")
+ACTIVITY_TYPES = {"customer-orders": "customer_order", "purchase-orders": "purchase_order", "shipments": "shipment", "invoices": "invoice"}
 
 
 @app.middleware("http")
@@ -259,7 +260,7 @@ async def record_activity(request, call_next):
         def write():  # in a worker thread: waiting for the write lock must never block the event loop
             db = SessionLocal()
             try:
-                db.add(ActivityLog(entity_type="customer_order" if kind == "customer-orders" else "purchase_order", entity_id=rec_id,
+                db.add(ActivityLog(entity_type=ACTIVITY_TYPES[kind], entity_id=rec_id,
                                    method=request.method, action=rest, detail=body.decode("utf-8", "replace")[:2000] or None, by=who))
                 db.commit()
             except Exception:
@@ -293,6 +294,49 @@ def activity(entity_type: str, entity_id: int, authorization: str = Header(None)
             except ValueError:
                 return None
         return [{"method": r.method, "action": r.action, "detail": detail(r.detail), "by": r.by, "at": r.at.isoformat() + "Z"} for r in rows]
+    finally:
+        db.close()
+
+
+@app.get("/api/activity-log")
+def activity_log(user: str = "", entity_type: str = "", days: int = 7, limit: int = 300, authorization: str = Header(None)):
+    """Everything changed on orders, POs, shipments and invoices across AT-HUB, newest first (Admin > Activity Log)."""
+    from datetime import datetime as _dt, timedelta as _td
+    from app.models import ActivityLog, CustomerOrder, Invoice, PurchaseOrder, Shipment
+    from app.services.permissions import perms_for
+    payload = AuthService.decode_token((authorization or "").split(" ")[-1]) or {}
+    db = SessionLocal()
+    try:
+        me = AuthService.get_user_by_username(db, payload.get("sub")) if payload.get("sub") else None
+        if not me:
+            raise HTTPException(status_code=401, detail="Not signed in")
+        perms = perms_for(db, me.role)
+        if "recycle_bin" not in perms:
+            raise HTTPException(status_code=403, detail="Your role doesn't include the activity log")
+        q = db.query(ActivityLog).filter(ActivityLog.at >= _dt.utcnow() - _td(days=max(1, min(days, 365))))
+        if user:
+            q = q.filter(ActivityLog.by == user)
+        if entity_type:
+            q = q.filter(ActivityLog.entity_type == entity_type)
+        rows = q.order_by(ActivityLog.at.desc()).limit(max(1, min(limit, 1000))).all()
+        models = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment, "invoice": Invoice}
+        codes = {}
+        for t, model in models.items():
+            ids = {r.entity_id for r in rows if r.entity_type == t}
+            if ids:
+                codes.update({(t, i): c for i, c in db.query(model.id, model.code).filter(model.id.in_(ids)).all()})
+        sees_money = "money.view" in perms
+
+        def detail(text):
+            if sees_money or not text:
+                return text
+            try:
+                return json.dumps(_scrub(json.loads(text)))
+            except ValueError:
+                return None
+        return {"users": sorted({u for (u,) in db.query(ActivityLog.by).distinct() if u}),
+                "rows": [{"entity_type": r.entity_type, "entity_id": r.entity_id, "code": codes.get((r.entity_type, r.entity_id)),
+                          "method": r.method, "action": r.action, "detail": detail(r.detail), "by": r.by, "at": r.at.isoformat() + "Z"} for r in rows]}
     finally:
         db.close()
 
@@ -345,6 +389,8 @@ from app.routes import planner as planner_routes  # noqa: E402
 app.include_router(planner_routes.router)
 from app.routes import pod as pod_routes  # noqa: E402
 app.include_router(pod_routes.router)
+from app.routes import analytics as analytics_routes  # noqa: E402
+app.include_router(analytics_routes.router)
 from app.services.backups import start_scheduler  # noqa: E402
 start_scheduler()
 

@@ -151,3 +151,59 @@ def all_sections(db: Session, user: User) -> list:
                          "rows": [{"id": a.entity_id, "code": po_codes.get(a.entity_id, ("", None))[0], "filename": a.filename,
                                    "days": _days(a.created_at), "_rid": a.id, "_date": a.created_at, "_label": a.filename} for a in mtrs if a.id not in linked]})
     return sections
+
+
+@router.get("/today")
+def today_board(db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """The dashboard's Today panel: what the floor, purchasing and money people act on today (company calendar), only
+    the parts this role may see."""
+    from datetime import timedelta as td
+    from app.models import InvoicePayment, PurchaseOrderPayment, ShipmentBox
+    from app.services import clock
+    today = clock.today()
+    week_end = today + td(days=7)
+    out = {"date": today.strftime("%Y-%m-%d")}
+    if has(user, "shipments.view") or has(user, "shipments.work"):
+        open_ships = db.query(Shipment).filter(Shipment.status.in_(("new", "ready"))).all()
+        picked = lambda s: s.lines and all((l.picked_quantity or 0) >= l.quantity - 1e-9 for l in s.lines)
+        day_start = clock.to_utc(today)
+        out["floor"] = {
+            "to_pick": sum(1 for s in open_ships if not picked(s)),
+            "to_pack": sum(1 for s in open_ships if picked(s) and not s.packed_at),
+            "ready_to_ship": sum(1 for s in open_ships if picked(s) and s.packed_at),
+            "shipped_today": db.query(Shipment).filter(Shipment.ship_date >= day_start, Shipment.status.in_(SHIPPED)).count(),
+        }
+    if has(user, "orders.view"):
+        due = db.query(CustomerOrder).filter(CustomerOrder.status.in_(("draft", "confirmed")), CustomerOrder.delivery_date.isnot(None)).all()
+        out["orders"] = {"due_this_week": sum(1 for o in due if today <= o.delivery_date < week_end),
+                         "overdue": sum(1 for o in due if o.delivery_date < today)}
+    if has(user, "purchasing"):
+        pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("ordered", "partially_received")), PurchaseOrder.expected_date.isnot(None)).all()
+        out["purchasing"] = {"arriving_this_week": sum(1 for p in pos if today <= p.expected_date < week_end),
+                             "late": sum(1 for p in pos if p.expected_date < today)}
+    if has(user, "invoices"):
+        sent = [i for i in db.query(Invoice).filter(Invoice.status == "sent").all() if i.balance > 0.005]
+        week_start = today - td(days=today.weekday())
+        out["money"] = {
+            "due_this_week": round(sum(i.balance for i in sent if i.due_date and today <= i.due_date < week_end), 2),
+            "overdue": round(sum(i.balance for i in sent if i.due_date and i.due_date < today), 2),
+            "overdue_count": sum(1 for i in sent if i.due_date and i.due_date < today),
+            "collected_this_week": round(sum(p.amount for p in db.query(InvoicePayment).filter(InvoicePayment.paid_date >= week_start).all()), 2),
+        }
+        if has(user, "purchasing"):
+            out["money"]["paid_out_this_week"] = round(sum(p.amount for p in db.query(PurchaseOrderPayment)
+                                                           .filter(PurchaseOrderPayment.paid_date >= week_start).all()), 2)
+    if has(user, "backups"):
+        from app.config.settings import settings
+        from app.services.backups import list_backups
+        try:
+            b = list_backups()
+            last = max(b, key=lambda x: x["created"], default=None)
+            when = datetime.fromisoformat(last["created"]) if last else None
+            age_h = (datetime.now(when.tzinfo) - when).total_seconds() / 3600 if when else None
+            out["backups"] = {"newest": last["created"] if last else None, "hours": round(age_h, 1) if age_h is not None else None, "count": len(b),
+                              "every_hours": settings.backup_every_hours,
+                              "copies_missing": sum(1 for ok in (last or {}).get("copies", []) if not ok)}
+        except Exception as e:
+            out["backups"] = {"error": str(e)}
+    return out

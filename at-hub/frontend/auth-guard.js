@@ -139,7 +139,12 @@ function activitySummary(r) {
   const verb = { POST: "added", PUT: "changed", DELETE: "removed" }[r.method] || r.method.toLowerCase();
   const noun = { lines: "a line", "line-order": "the line order", charges: "a charge", bills: "a vendor invoice", payments: "a payment" }[what] || what.replace(/-/g, " ");
   const done = { "line-order": "re-ordered the lines", confirm: "confirmed it", cancel: "cancelled it", receive: "received items",
-    "duplicate-po-ok": "OK'd the duplicate PO #", shipments: "created a shipment" }[what];
+    "duplicate-po-ok": "OK'd the duplicate PO #", shipments: "created a shipment", "confirm-booking": "confirmed the bookings",
+    "unconfirm-booking": "unconfirmed the bookings", pick: "picked", unpick: "undid the picking", "accept-packing": "accepted the packing",
+    unpack: "undid the packing", ship: "shipped it", unship: "undid the shipment", unbook: "unbooked stock", "unbook-all": "unbooked everything",
+    boxes: "re-boxed it", "pallet-weights": "set pallet weights", delivered: "marked it delivered", undeliver: "cleared the delivery",
+    code: "renamed it", funding: "changed the funding", split: "split the invoice", merge: "combined invoices", "print-options": "changed print options",
+    status: (() => { try { return `marked it ${JSON.parse(r.detail || "{}").status || "changed"}`; } catch (e) { return "changed the status"; } })() }[what];
   return done || `${verb} ${noun}${fields.length && r.method === "PUT" ? ` (${fields.join(", ")})` : ""}`;
 }
 
@@ -1119,7 +1124,7 @@ const NAV_GROUPS = [
   { label: "Warehouse", links: [["stock-items.html", "Stock Items", "stock.view"], ["lots.html", "Lots", "stock.view"], ["mtrs.html", "MTR Library", "stock.view"]] },
   { label: null, links: [["reports.html", "Reports", "reports"], ["simulate.html", "Simulate", "simulate"], ["company.html", "Company Settings", "company"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
   { label: "MRP Migrate", links: [["golive.html", "Go-Live Cleanup", "golive"], ["mrp-payments.html", "PO Payments Import", "payments.import"], ["file-matcher.html", "File Matcher", "file_matcher"]] },
-  { label: "Admin", links: [["users.html", "Users & Roles", "users"], ["backups.html", "Backups", "backups"]] },
+  { label: "Admin", links: [["activity.html", "Activity Log", "recycle_bin"], ["users.html", "Users & Roles", "users"], ["backups.html", "Backups", "backups"]] },
 ];
 
 // Where "Home" goes for this user: the dashboard, or for a POD-only role (drivers) the POD page.
@@ -1978,7 +1983,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "simulate.html": "flask", "backups.html": "save", "designer.html": "palette",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [
@@ -2895,7 +2900,7 @@ const PEEK_RENDER = {
     return { title: `${escapeHtml(s.code)} ${pk.tag(s.status)}`,
       sub: `${o ? `Order ${pk.link("customer-orders.html", o.id, o.code)} · ${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}` : ""}`,
       body: pk.facts([["Created", pkDate(s.created_at)], ["Shipped", pkDate(s.ship_date)], ["Delivered", pkDate(s.delivered_at)], ["Carrier", escapeHtml(s.carrier || "")],
-          ["Tracking", escapeHtml(s.tracking_number || "")], ["Invoice", s.invoice_id ? invoiceChipFromShipment(s) : ""], ["POD", s.pods && s.pods.length ? `${s.pods.length} file${s.pods.length === 1 ? "" : "s"}` : ""]])
+          ["Tracking", trackingLink(s.carrier, s.tracking_number)], ["Invoice", s.invoice_id ? invoiceChipFromShipment(s) : ""], ["POD", s.pods && s.pods.length ? `${s.pods.length} file${s.pods.length === 1 ? "" : "s"}` : ""]])
         + pk.table(["Line", "Item", "Lot", "#Booked", "#Picked"], s.lines.map(l => `<tr><td>#${l.line_no ?? ""}</td><td>${itemCell(items, l.item_id)}</td>
             <td>${escapeHtml(lots[l.lot_id] || "")}</td><td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td></tr>`))
         + (s.notes ? pk.section("Notes", `<p class="peek-notes">${escapeHtml(s.notes)}</p>`) : "") };
@@ -3123,3 +3128,45 @@ function noteMark(id) {
   const n = NOTE_COUNTS[id];
   return n ? `<span class="list-note" title="${n} open sticky note${n === 1 ? "" : "s"}">${icon("sticky")}</span>` : "";
 }
+
+
+// ---- carrier tracking: a tracking # becomes a link to the carrier's tracking page ----
+function trackingUrl(carrier, number) {
+  const n = String(number || "").trim().replace(/\s+/g, "");
+  if (!n) return null;
+  const c = String(carrier || "").toLowerCase(), q = encodeURIComponent(n);
+  if (/ups/.test(c) || /^1Z[0-9A-Z]{16}$/i.test(n)) return `https://www.ups.com/track?tracknum=${q}`;
+  if (/fedex|fed ex/.test(c)) return `https://www.fedex.com/fedextrack/?trknbr=${q}`;
+  if (/usps|postal|post office/.test(c)) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${q}`;
+  if (/dhl/.test(c)) return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${q}`;
+  if (/old dominion|odfl/.test(c)) return `https://www.odfl.com/us/en/tools/trace-track-ltl-freight.html?proNumbers=${q}`;
+  if (/estes/.test(c)) return `https://www.estes-express.com/myestes/shipment-tracking/?type=PRO&query=${q}`;
+  if (/xpo/.test(c)) return `https://track.xpo.com/?pro=${q}`;
+  if (/saia/.test(c)) return `https://www.saia.com/track?pro=${q}`;
+  if (/r\+l|r&l|rl carriers/.test(c)) return `https://www2.rlcarriers.com/freight/shipping/shipment-tracing?pro=${q}`;
+  return `https://www.google.com/search?q=${encodeURIComponent((carrier ? carrier + " " : "") + "tracking " + n)}`;
+}
+function trackingLink(carrier, number) {
+  const url = trackingUrl(carrier, number);
+  return url ? `<a class="link" href="${url}" target="_blank" rel="noopener" title="Track with ${escapeHtml(carrier || "the carrier")}">${escapeHtml(number)} ↗</a>` : "";
+}
+
+// ---- Ctrl+S / Cmd+S: press the Save button of what you're working in (a pop-up first, else the card you're in) ----
+document.addEventListener("keydown", e => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "s" || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const visible = b => b.offsetParent !== null && !b.disabled;
+  const isSave = b => /^\s*(save|save changes|save order details|save cut-off|save time zone)\b/i.test(b.textContent || "") || b.hasAttribute("data-save");
+  const scopes = [];
+  const popup = [...document.querySelectorAll(".qf-backdrop, .modal, dialog[open]")].filter(el => el.offsetParent !== null || el.open).pop();
+  if (popup) scopes.push(popup);
+  const here = document.activeElement && document.activeElement.closest(".card, .td-edit, .sticky-note, .qf-box");
+  if (here) scopes.push(here);
+  for (const scope of scopes) {
+    const btn = [...scope.querySelectorAll("button")].find(b => visible(b) && isSave(b));
+    if (btn) { btn.click(); return; }
+  }
+  const all = [...document.querySelectorAll("main button")].filter(b => visible(b) && isSave(b));
+  if (all.length === 1) { all[0].click(); return; }
+  toast(all.length ? "Click into the part you're editing, then press Ctrl+S" : "Nothing to save here");
+});

@@ -116,3 +116,29 @@ def test_invoice_funding_cant_be_negative(make, api):
     inv = make.invoice(make.ship(make.order(lines=[(a, 5, 2)])))
     api.put(f"/api/invoices/{inv['id']}/funding", json={"funding_amount": -1}, expect=400)
     assert api.put(f"/api/invoices/{inv['id']}/funding", json={"funding_amount": 8, "funding_discount": 0.4})["funding_amount"] == 8
+
+
+def test_two_step_login(client):
+    from app.services import totp
+    from app.services.auth import AuthService
+    client.post("/api/users/", json={"username": "tfa-user", "password": "Str0ng!Passw0rd#", "role": "employee"},
+                headers={"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"})
+    h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'tfa-user'})}"}
+    setup = client.post("/api/auth/2fa/setup", headers=h).json()
+    assert "<svg" in setup["qr_svg"]
+    assert client.post("/api/auth/2fa/enable", json={"code": "000000"}, headers=h).status_code == 400
+    import time
+    good = totp._code(setup["secret"], int(time.time() // 30))
+    assert client.post("/api/auth/2fa/enable", json={"code": good}, headers=h).json()["totp_enabled"] is True
+    login = lambda **kw: client.post("/api/auth/login", json={"username": "tfa-user", "password": "Str0ng!Passw0rd#", **kw})
+    assert login().json()["detail"] == "TOTP_REQUIRED"
+    assert login(code="123456").status_code == 401
+    assert login(code=totp._code(setup["secret"], int(time.time() // 30))).status_code == 200
+
+
+def test_login_rate_limit(client):
+    from app.routes import auth
+    auth._FAILS.clear()
+    for _ in range(10):
+        assert client.post("/api/auth/login", json={"username": "nobody-here", "password": "wrong"}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "nobody-here", "password": "wrong"}).status_code == 429

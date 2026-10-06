@@ -42,14 +42,33 @@
         ]);
         const openCO = customerOrders.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status)).length;
         const openPO = (purchaseOrders || []).filter(o => !["received", "cancelled"].includes(o.status)).length;
-        document.getElementById("summary").innerHTML = `
-          <div class="row">
-            <div><div style="font-size:28px;font-weight:700;">${items.length}</div><div class="muted">Stock items</div></div>
-            <div><div style="font-size:28px;font-weight:700;color:${lowStock.length ? '#dc2626' : '#111'};">${lowStock.length}</div><div class="muted">Low stock</div></div>
-            <div><div style="font-size:28px;font-weight:700;">${openCO}</div><div class="muted">Open customer orders</div></div>
-            ${purchaseOrders ? `<div><div style="font-size:28px;font-weight:700;">${openPO}</div><div class="muted">Open Purchase Orders</div></div>` : ""}
-          </div>
-        `;
+        const t = await apiFetch("/api/reports/today").catch(() => ({}));
+        // tile(label, value, sub, link, tone): tone pos / warn / neg colours the number
+        const tile = (label, value, sub, link, tone = "") => `<a class="today-tile ${tone}" href="${link}"><span>${label}</span><strong>${value}</strong><small>${sub}</small></a>`;
+        const groups = [];
+        if (t.floor) groups.push(["Shipping floor", [
+          tile("To pick", t.floor.to_pick, "booked, not picked", "pack-shipments.html?stage=pick", t.floor.to_pick ? "warn" : ""),
+          tile("To pack", t.floor.to_pack, "picked, packing not accepted", "pack-shipments.html?stage=pack", t.floor.to_pack ? "warn" : ""),
+          tile("Ready to ship", t.floor.ready_to_ship, "picked and packed", "pack-shipments.html?stage=ship", t.floor.ready_to_ship ? "pos" : ""),
+          tile("Shipped today", t.floor.shipped_today, "left the building", "pack-shipments.html?stage=shipped")]]);
+        if (t.orders || t.purchasing) groups.push(["Coming up", [
+          ...(t.orders ? [tile("Deliveries due", t.orders.due_this_week, "next 7 days", "customer-orders.html"),
+                          tile("Orders overdue", t.orders.overdue, "past delivery date", "customer-orders.html", t.orders.overdue ? "neg" : "")] : []),
+          ...(t.purchasing ? [tile("POs arriving", t.purchasing.arriving_this_week, "next 7 days", "purchase-orders.html"),
+                              tile("POs late", t.purchasing.late, "past expected date", "purchase-orders.html", t.purchasing.late ? "neg" : "")] : [])]]);
+        if (t.money) groups.push(["Money", [
+          tile("Due to us this week", fmtMoney(t.money.due_this_week), "sent invoices", "invoices.html"),
+          tile("Overdue", fmtMoney(t.money.overdue), `${t.money.overdue_count} invoice${t.money.overdue_count === 1 ? "" : "s"}`, "reports.html?tab=statements", t.money.overdue ? "neg" : "pos"),
+          tile("Collected this week", fmtMoney(t.money.collected_this_week), "payments recorded", "invoices.html", "pos"),
+          ...(t.money.paid_out_this_week != null ? [tile("Paid to vendors", fmtMoney(t.money.paid_out_this_week), "this week", "purchase-orders.html")] : [])]]);
+        if (!groups.length) groups.push(["Today", [tile("Stock items", items.length, `${lowStock.length} low`, "stock-items.html", lowStock.length ? "warn" : ""),
+          tile("Open orders", openCO, "not fully shipped", "customer-orders.html")]]);
+        const b = t.backups;
+        const backupNote = b && !b.error && (b.hours == null || b.hours > Math.max(24, (b.every_hours || 6) * 2) || b.copies_missing)
+          ? `<div class="notice" style="margin-top:10px;">${b.hours == null ? "No backups yet." : `Last backup ${Math.round(b.hours)} hours ago.`}
+              ${b.copies_missing ? ` ${b.copies_missing} backup cop${b.copies_missing === 1 ? "y is" : "ies are"} missing.` : ""} <a class="link" href="backups.html">Check Backups</a></div>` : "";
+        document.getElementById("summary").innerHTML = groups.map(([title, tiles]) =>
+          `<div class="today-group"><div class="today-head">${title}</div><div class="today-tiles">${tiles.join("")}</div></div>`).join("") + backupNote;
 
         const activity = await apiFetch("/api/stock-items/activity/recent?limit=15");
         const itemsById = Object.fromEntries(items.map(i => [i.id, i]));

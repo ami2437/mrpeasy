@@ -115,7 +115,7 @@
         <tr class="${u.is_active ? "" : "muted"}">
           <td><a class="link" onclick="showDetail(${u.id})">${escapeHtml(u.username)}</a>${u.id === me.id ? ` <span class="muted small">(you)</span>` : ""}</td>
           <td>${escapeHtml(u.full_name || "")}</td>
-          <td>${escapeHtml(u.email || "")}${u.timezone ? `<div class="muted small">${escapeHtml(u.timezone)}</div>` : ""}</td>
+          <td>${escapeHtml(u.email || "")}${u.timezone ? `<div class="muted small">${escapeHtml(u.timezone)}</div>` : ""}${u.totp_enabled ? ` <span class="tag shipped" title="Two-step login on">2-step</span>` : ""}</td>
           <td>${roleTag(u.role)}</td>
           <td>${u.is_active
             ? (u.must_change_password ? `<span class="tag draft">Must Set Password</span>` : `<span class="tag shipped">Active</span>`)
@@ -285,6 +285,11 @@
           <button class="secondary" style="flex:0;white-space:nowrap;" onclick="document.getElementById('e-password').value = randomPassword()">Generate</button>
           <button style="flex:0;white-space:nowrap;" onclick="resetPassword(${u.id})">Reset Password</button>
         </div>
+
+        <h4 style="margin-top:20px;">Two-step login</h4>
+        <p class="muted">${u.totp_enabled ? `<span class="tag shipped">On</span> Logging in needs a code from their phone.
+          <button class="secondary small-btn" onclick="if (confirm('Turn two-step login off for ${escapeHtml(u.username)}? They can set it up again on My Account.')) userAction(${u.id}, '/api/users/${u.id}/reset-2fa', { method: 'POST' }, 'Two-step login turned off.')">Turn Off (Lost Phone)</button>`
+          : "Off. They can turn it on under My Account."}</p>
 
         <h4 style="margin-top:20px;">Access</h4>
         <div class="btn-row">

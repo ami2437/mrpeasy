@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Activity Log</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar"><h1 class="page-title">Activity Log</h1>
+      <select id="al-days" style="width:auto;" onchange="load()"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>
+      <select id="al-type" style="width:auto;" onchange="load()"><option value="">Every record</option><option value="customer_order">Customer orders</option>
+        <option value="purchase_order">Purchase orders</option><option value="shipment">Shipments</option><option value="invoice">Invoices</option></select>
+      <select id="al-user" style="width:auto;" onchange="load()"><option value="">Everyone</option></select>
+      <span class="muted small">Every change to orders, POs, shipments and invoices: who, what and when (your time zone).</span></div>
+    <div class="card">
+      <table><thead><tr><th>When</th><th>Who</th><th>Record</th><th>What</th></tr></thead>
+        <tbody id="al-body"><tr><td colspan="4">Loading...</td></tr></tbody></table>
+    </div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requirePerm("recycle_bin");
+    document.getElementById("sidebar").innerHTML = renderSidebar("activity.html");
+    const PAGES = { customer_order: "customer-orders.html", purchase_order: "purchase-orders.html", shipment: "shipments.html", invoice: "invoices.html" };
+    const KIND = { customer_order: "Order", purchase_order: "PO", shipment: "Shipment", invoice: "Invoice" };
+    let usersLoaded = false;
+    async function load() {
+      const q = new URLSearchParams({ days: document.getElementById("al-days").value, entity_type: document.getElementById("al-type").value,
+                                      user: document.getElementById("al-user").value, limit: 500 });
+      const d = await apiFetch(`/api/activity-log?${q}`);
+      if (!usersLoaded) {
+        document.getElementById("al-user").insertAdjacentHTML("beforeend", d.users.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join(""));
+        usersLoaded = true;
+      }
+      document.getElementById("al-body").innerHTML = d.rows.map(r => `<tr>
+          <td class="nowrap">${fmtWhen(r.at)}</td><td>${escapeHtml(r.by || "someone")}</td>
+          <td class="nowrap"><span class="muted small">${KIND[r.entity_type] || r.entity_type}</span>
+            <a class="link" href="${PAGES[r.entity_type]}?id=${r.entity_id}">${escapeHtml(r.code || "#" + r.entity_id)}</a></td>
+          <td>${escapeHtml(activitySummary(r))}</td></tr>`).join("")
+        || `<tr><td colspan="4" class="muted">Nothing changed in this period.</td></tr>`;
+    }
+    load();
+  </script>
+</body>
+</html>

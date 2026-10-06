@@ -33,6 +33,7 @@ class InputModel(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    code: Optional[str] = None  # authenticator-app code, for people who turned two-step login on
 
 
 ROLES = ("super_admin", "admin", "manager", "employee")
@@ -49,6 +50,7 @@ class UserResponse(BaseModel):
     permissions: List[str] = []  # what the role allows (app/services/permissions.py)
     role_name: Optional[str] = None
     timezone: Optional[str] = None  # their own pick (None = the company's)
+    totp_enabled: bool = False  # two-step login on
     effective_timezone: Optional[str] = None  # what their screens use
     last_login: Optional[datetime] = None
     created_by: Optional[str] = None

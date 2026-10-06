@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -19,11 +19,43 @@ def check_password_strength(password: str) -> None:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
 
+# Failed logins per username and per address (in memory): too many in 15 minutes and that one is locked out a while.
+# An office shares one address, so it gets more room than a single username.
+_FAILS: dict = {}
+_LIMIT, _IP_LIMIT, _WINDOW = 10, 50, 15 * 60
+
+
+def _too_many(*keys) -> bool:
+    import time
+    now = time.time()
+    for k in keys:
+        _FAILS[k] = [t for t in _FAILS.get(k, []) if now - t < _WINDOW]
+    return any(len(_FAILS[k]) >= (_IP_LIMIT if k.startswith("ip:") else _LIMIT) for k in keys)
+
+
+def _failed(*keys) -> None:
+    import time
+    for k in keys:
+        _FAILS.setdefault(k, []).append(time.time())
+
+
 @router.post("/login", response_model=Token)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(request: LoginRequest, http: Request, db: Session = Depends(get_db)):
+    keys = ("u:" + (request.username or "").strip().lower(), "ip:" + (http.client.host if http.client else "?"))
+    if _too_many(*keys):
+        raise HTTPException(status_code=429, detail="Too many failed attempts -- wait 15 minutes and try again")
     user = AuthService.authenticate_user(db, request.username, request.password)
     if not user:
+        _failed(*keys)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+    if user.totp_enabled:
+        from app.services import totp
+        if not (request.code or "").strip():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="TOTP_REQUIRED")
+        if not totp.verify(user.totp_secret, request.code):
+            _failed(*keys)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That code didn't match -- use the newest one in your authenticator app")
+    _FAILS.pop(keys[0], None)
     user.last_login = datetime.utcnow()
     db.commit()
     db.refresh(user)
@@ -75,3 +107,55 @@ def set_my_timezone(data: TimezoneIn, current_user: User = Depends(get_current_a
     user.permissions = sorted(current_user.permissions, key=KEYS.index)
     user.role_name = role_name(db, user.role)
     return user
+
+
+
+# ---- two-step login (authenticator app) ----
+def _me(db: Session, current_user: User) -> User:
+    from app.services.permissions import KEYS, role_name
+    user = db.get(User, current_user.id)
+    user.permissions = sorted(current_user.permissions, key=KEYS.index)
+    user.role_name = role_name(db, user.role)
+    return user
+
+
+@router.post("/2fa/setup")
+def totp_setup(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """A new key for the authenticator app (scan the QR). Not switched on until a code from the app is confirmed."""
+    from app.services import totp
+    user = db.get(User, current_user.id)
+    if user.totp_enabled:
+        raise HTTPException(status_code=400, detail="Two-step login is already on -- turn it off first to set up a new phone")
+    user.totp_secret = totp.new_secret()
+    db.commit()
+    return {"secret": user.totp_secret, "qr_svg": totp.qr_svg(totp.uri(user.totp_secret, user.username))}
+
+
+class TotpCode(BaseModel):
+    code: str
+
+
+@router.post("/2fa/enable", response_model=UserResponse)
+def totp_enable(data: TotpCode, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    from app.services import totp
+    user = _me(db, current_user)
+    if not user.totp_secret or not totp.verify(user.totp_secret, data.code):
+        raise HTTPException(status_code=400, detail="That code didn't match -- type the 6 digits the app shows now")
+    user.totp_enabled = True
+    db.commit()
+    db.refresh(user)
+    return _me(db, current_user)
+
+
+class TotpOff(BaseModel):
+    password: str
+
+
+@router.post("/2fa/disable", response_model=UserResponse)
+def totp_disable(data: TotpOff, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    user = db.get(User, current_user.id)
+    if not AuthService.verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Password is incorrect")
+    user.totp_enabled, user.totp_secret = False, None
+    db.commit()
+    return _me(db, current_user)

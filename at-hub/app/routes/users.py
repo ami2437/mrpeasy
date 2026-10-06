@@ -87,6 +87,16 @@ def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db), c
     return user
 
 
+@router.post("/{user_id}/reset-2fa", response_model=UserResponse)
+def reset_2fa(user_id: int, db: Session = Depends(get_db), _: User = Depends(super_admin)):
+    """Turn two-step login off for someone who lost their phone; they can set it up again on My Account."""
+    user = _get(db, user_id)
+    user.totp_enabled, user.totp_secret = False, None
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @router.post("/{user_id}/reset-password", response_model=UserResponse)
 def reset_password(user_id: int, data: PasswordReset, db: Session = Depends(get_db), _: User = Depends(super_admin)):
     """Set a temporary password; the user has to choose a new one at next login."""

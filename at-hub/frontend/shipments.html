@@ -88,7 +88,7 @@
           <td>${fmtDate(s.delivered_at)}</td>
           <td>${pickedSummary(s)}</td>
           <td>${s.carrier || ""}</td>
-          <td>${s.tracking_number || ""}</td>
+          <td>${trackingLink(s.carrier, s.tracking_number)}</td>
           <td class="nowrap">${podCellHtml(s)}</td>
           <td class="nowrap">${shipmentStatusHtml(s)}</td>
         </tr>
