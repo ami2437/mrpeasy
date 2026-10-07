@@ -6,8 +6,11 @@ from app.services import permissions as P
 def _user(client, admin_headers, role):
     from app.services.auth import AuthService
     name = f"u-{role}"
-    client.post("/api/users/", json={"username": name, "password": "Str0ng!Passw0rd#", "role": role}, headers=admin_headers)
-    return {"Authorization": f"Bearer {AuthService.create_access_token({'sub': name})}"}
+    client.post("/api/users/", json={"username": name, "password": "Temp!Passw0rd#1", "role": role}, headers=admin_headers)
+    h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': name})}"}
+    # like a real first login: the temporary password is swapped for their own (until then only My Account opens)
+    client.post("/api/auth/change-password", json={"current_password": "Temp!Passw0rd#1", "new_password": "Str0ng!Passw0rd#"}, headers=h)
+    return h
 
 
 def test_builtin_roles_keep_the_old_ladder(client, admin_headers):

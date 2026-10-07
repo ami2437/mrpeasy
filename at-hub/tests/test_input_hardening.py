@@ -58,3 +58,44 @@ def test_stored_records_that_break_todays_rules_still_read(api, make):
     got = api.get(f"/api/shipments/{sh['id']}")
     assert any(b["lot_code"] == 'L"1' and b["quantity_in_box"] == 2.5 for b in got["boxes"])
     assert api.get("/api/shipments/")  # the list too
+
+
+def test_temporary_password_only_opens_my_account(api, client):
+    """A user an admin just created (or reset) can only see who they are and change the password -- the server
+    refuses everything else until they do, not just the screens."""
+    from app.services.auth import AuthService
+    name = uid("temp")
+    u = api.post("/api/users/", json={"username": name, "password": "Temp-Pass-1", "role": "manager", "full_name": "Temp"})
+    assert u["must_change_password"]
+    h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': name})}"}
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+    for path in ("/api/customers/", "/api/customer-orders/", "/api/shipments/", "/api/stock-items/", "/api/todo/counts"):
+        r = client.get(path, headers=h)
+        assert r.status_code == 403 and "password" in r.json()["detail"], (path, r.status_code)
+    assert client.post("/api/customers/", headers=h, json={"name": "Sneaky"}).status_code == 403
+    assert client.post("/api/auth/change-password", headers=h, json={"current_password": "Temp-Pass-1", "new_password": "Temp-Pass-1"}).status_code == 400
+    assert client.post("/api/auth/change-password", headers=h, json={"current_password": "Temp-Pass-1", "new_password": "Short1"}).status_code == 400
+    assert client.post("/api/auth/change-password", headers=h, json={"current_password": "Temp-Pass-1", "new_password": "My-Own-Pass-22"}).status_code == 200
+    assert client.get("/api/customers/", headers=h).status_code == 200  # now everything their role allows
+    # a reset puts the lock back on
+    api.post(f"/api/users/{u['id']}/reset-password", json={"password": "Reset-Pass-9"})
+    assert client.get("/api/customers/", headers=h).status_code == 403
+
+
+@pytest.mark.parametrize("pw", ["", "1234", "seven77"])
+def test_admin_set_passwords_need_eight_characters(api, pw):
+    api.post("/api/users/", json={"username": uid("short"), "password": pw, "role": "employee"}, expect=(400, 422))
+    u = api.post("/api/users/", json={"username": uid("ok"), "password": "Long-Enough-1", "role": "employee"})
+    api.post(f"/api/users/{u['id']}/reset-password", json={"password": pw}, expect=(400, 422))
+
+
+def test_my_account_works_on_a_temporary_password(api, client):
+    """Time zone and two-step login are on My Account too: open while the password is temporary; View As isn't blocked."""
+    from app.services.auth import AuthService
+    name = uid("tmpacct")
+    u = api.post("/api/users/", json={"username": name, "password": "Temp-Pass-1", "role": "employee"})
+    h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': name})}"}
+    assert client.put("/api/auth/timezone", json={"timezone": "America/New_York"}, headers=h).status_code == 200
+    assert client.post("/api/auth/2fa/setup", headers=h).status_code == 200
+    view = client.post(f"/api/users/{u['id']}/view-as", headers={"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"}).json()
+    assert client.get("/api/shipments/", headers={"Authorization": f"Bearer {view['access_token']}"}).status_code == 200

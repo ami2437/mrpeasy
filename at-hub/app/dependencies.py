@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -12,7 +12,14 @@ security = HTTPBearer()
 ROLE_RANK = {"employee": 1, "manager": 2, "admin": 3, "super_admin": 4}
 
 
+# While someone still has the temporary password an admin set, these are the only calls they can make: who am I, and
+# change it. The screens send them to My Account anyway; this makes the server refuse everything else too.
+TEMP_PASSWORD_ALLOWED = ("/api/auth/me", "/api/auth/change-password", "/api/auth/timezone",  # (the rest of My Account:
+                         "/api/auth/2fa/setup", "/api/auth/2fa/enable", "/api/auth/2fa/disable")  # their own zone, two-step login)
+
+
 async def get_current_active_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> User:
     """The signed-in user, looked up in a short read-only session of its own -- so it never holds the write
@@ -36,6 +43,10 @@ async def get_current_active_user(
         READ_ONLY.reset(token)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    # (an admin's "View as" is read-only and not that person signing in: their temporary password doesn't block it)
+    if user.must_change_password and not payload.get("view_as_by") and request.url.path.rstrip("/") not in TEMP_PASSWORD_ALLOWED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Set your own password first (My Account) -- the temporary one only opens that page")
     return user
 
 

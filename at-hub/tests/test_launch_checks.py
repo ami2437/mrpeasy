@@ -121,9 +121,10 @@ def test_invoice_funding_cant_be_negative(make, api):
 def test_two_step_login(client):
     from app.services import totp
     from app.services.auth import AuthService
-    client.post("/api/users/", json={"username": "tfa-user", "password": "Str0ng!Passw0rd#", "role": "employee"},
+    client.post("/api/users/", json={"username": "tfa-user", "password": "Temp!Passw0rd#1", "role": "employee"},
                 headers={"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"})
     h = {"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'tfa-user'})}"}
+    client.post("/api/auth/change-password", json={"current_password": "Temp!Passw0rd#1", "new_password": "Str0ng!Passw0rd#"}, headers=h)
     setup = client.post("/api/auth/2fa/setup", headers=h).json()
     assert "<svg" in setup["qr_svg"]
     assert client.post("/api/auth/2fa/enable", json={"code": "000000"}, headers=h).status_code == 400

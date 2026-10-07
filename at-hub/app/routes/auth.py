@@ -79,16 +79,16 @@ def me(current_user: User = Depends(get_current_active_user), db: Session = Depe
 def change_password(data: PasswordChange, db: Session = Depends(get_db),
                     current_user: User = Depends(get_current_active_user)):
     """Any user changing their own password (required after creation or a reset)."""
-    if not AuthService.verify_password(data.current_password, current_user.hashed_password):
+    user = _me(db, current_user)  # this session's copy: the signed-in user object comes detached (read-only lookup)
+    if not AuthService.verify_password(data.current_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     check_password_strength(data.new_password)
     if data.new_password == data.current_password:
         raise HTTPException(status_code=400, detail="Choose a password different from the current one")
-    current_user.hashed_password = AuthService.hash_password(data.new_password)
-    current_user.must_change_password = False
+    user.hashed_password = AuthService.hash_password(data.new_password)
+    user.must_change_password = False
     db.commit()
-    db.refresh(current_user)
-    return current_user
+    return _me(db, current_user)
 
 
 class TimezoneIn(BaseModel):
