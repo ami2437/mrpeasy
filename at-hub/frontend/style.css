@@ -2129,3 +2129,11 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
   .action-chips { gap: 6px; }
 }
 @media (max-width: 760px) { .m-hide { display: none !important; } }  /* office-only blocks left off phones (Recent Activity) */
+
+/* password boxes: an eye button inside the right edge shows / hides what was typed (addPasswordEye in auth-guard.js) */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap > input { width: 100%; padding-right: 42px; }
+.pw-eye { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 34px; height: 34px; min-height: 0 !important; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); box-shadow: none; cursor: pointer; }
+.pw-eye:hover { background: var(--surface-2); color: var(--text); }
+.pw-eye .ico { width: 18px; height: 18px; margin: 0 !important; }

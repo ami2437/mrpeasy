@@ -1158,6 +1158,39 @@ const TypeLists = {
   },
 };
 
+// Every password box gets an eye button: show what you typed / hide it again (now and in boxes added later).
+function addPasswordEye(input) {
+  if (input.dataset.eye) return;
+  input.dataset.eye = "1";
+  const wrap = document.createElement("span");
+  wrap.className = "pw-wrap";
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-eye";
+  btn.tabIndex = -1;  // Tab goes from the box to the next field, not to the eye
+  const show = on => {
+    input.type = on ? "text" : "password";
+    btn.innerHTML = icon(on ? "eyeOff" : "eye");
+    btn.title = on ? "Hide password" : "Show password";
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  };
+  btn.addEventListener("mousedown", e => e.preventDefault());  // keep the cursor in the box
+  btn.addEventListener("click", () => { show(input.type === "password"); input.focus(); });
+  wrap.appendChild(btn);
+  show(false);
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll('input[type="password"]').forEach(addPasswordEye);
+  new MutationObserver(muts => muts.forEach(m => m.addedNodes.forEach(n => {
+    if (n.nodeType !== 1) return;
+    if (n.matches('input[type="password"]')) addPasswordEye(n);
+    n.querySelectorAll && n.querySelectorAll('input[type="password"]').forEach(addPasswordEye);
+  }))).observe(document.body, { childList: true, subtree: true });
+});
+
 // Any <select data-type-list="charge|payment_method|attachment|landed_cost" [data-type-scope]> built with
 // TypeLists.optionsHtml(): its "+ New ..." entry opens the pop-up and then selects what was made (page code sees a
 // normal change to the new value; Cancel puts the old one back).
@@ -2291,6 +2324,7 @@ Thank you.</textarea>
 
 // ---- Icons: a small inline SVG set (Lucide-style strokes), no external library ----
 const ICON_PATHS = {
+  eyeOff: '<path d="M9.9 4.2A10.9 10.9 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-2.6 3.7"/><path d="M6.6 6.6C3.7 8.5 2 12 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m2 2 20 20"/>',
   cornerRight: '<path d="M4 4v7a4 4 0 0 0 4 4h12"/><path d="m15 10 5 5-5 5"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
