@@ -691,6 +691,20 @@
 
     // Which shipments hold this line's quantity, e.g. "SH-0001 shipped · 300 · 3 boxes"
     // One row per shipment holding this line's quantity: "SH-0001 · 100 · shipped"
+    // Bolt + nut sent as assembled units on a shipment: the nut is the bolt's child (↳ #1), the bolt names its nut
+    function lineCombos(line) { return line.shipments.filter(s => s.combined && s.status !== "cancelled"); }
+    function lineComboCls(line) {
+      const c = lineCombos(line);
+      return !c.length ? "" : c.some(s => s.combined.role === "member") ? "co-combo-child" : "co-combo-lead";
+    }
+    function lineComboMark(line) {
+      const c = lineCombos(line);
+      if (!c.length) return "";
+      const member = c.find(s => s.combined.role === "member"), x = (member || c[0]).combined;
+      const title = c.map(s => `${s.code}: ${fmtQty(s.combined.units)} assembled ${s.combined.role === "member" ? `with #${s.combined.with_line_no}` : `with nut #${s.combined.with_line_no}`}`).join("\n");
+      return member ? `<div class="co-combo-mark" title="${escapeHtml(title)}"><span class="combo-arrow">${icon("cornerRight")}</span>#${x.with_line_no ?? ""}</div>`
+        : `<div class="co-combo-mark lead" title="${escapeHtml(title)}">${icon("link")}+#${x.with_line_no ?? ""}</div>`;
+    }
     function lineShipmentsHtml(line) {
       if (!line.shipments.length) return `<span class="muted">—</span>`;
       return line.shipments.map(s => {
@@ -890,8 +904,8 @@
               const openQty = Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity);
               const item = items.find(i => i.id === l.item_id) || {};
               return `
-              <tr data-line="${l.id}" data-code="${escapeHtml(item.code || "")}" data-qty="${l.quantity}" data-price="${l.unit_price}" data-delivery="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}">
-                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderLineBulk(${order.id})">` : ""}#${l.line_no ?? ""}<span class="save-dot" title=""></span>${editable ? `<div class="line-actions no-print">${lineNoteBtn(l.notes)}${l.shipped_quantity === 0 && l.booked_quantity === 0
+              <tr class="${lineComboCls(l)}" data-line="${l.id}" data-code="${escapeHtml(item.code || "")}" data-qty="${l.quantity}" data-price="${l.unit_price}" data-delivery="${l.delivery_date ? l.delivery_date.substring(0,10) : ''}">
+                <td class="line-no nowrap">${editable ? `<input type="checkbox" class="line-pick" value="${l.id}" onchange="renderLineBulk(${order.id})">` : ""}#${l.line_no ?? ""}<span class="save-dot" title=""></span>${lineComboMark(l)}${editable ? `<div class="line-actions no-print">${lineNoteBtn(l.notes)}${l.shipped_quantity === 0 && l.booked_quantity === 0
                   ? trashBtn(`removeLine(${order.id}, ${l.id})`, "Remove this line (Ctrl+Z / Recycle Bin brings it back)")
                   : `<span class="icon-btn" style="opacity:.35; cursor:default;" title="Booked or shipped: unbook it first to remove the line">${icon("trash")}</span>`}</div>` : ""}</td>
                 <td class="grow"><strong>${escapeHtml(item.code || l.item_id)}</strong> ${groupTag(item)}${editable && l.shipped_quantity === 0 && l.booked_quantity === 0

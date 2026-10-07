@@ -54,6 +54,8 @@ def _collect(db: Session, shipment: Shipment, opts: dict) -> dict:
             line["Pallet"] = r["pallet"]
         if opts.get("notes", True):
             line["Line notes"] = note.strip()
+        if any(x.get("combo_note") for x in rows):  # bolts + nuts sent as assembled units
+            line["Packed as"] = r.get("combo_note") or ""
         lines.append(line)
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({b.item_id for b in shipment.boxes} or {0})).all()}
     line_no = {l.order_line_id: (l.order_line.line_no or 0) for l in shipment.lines if l.order_line}

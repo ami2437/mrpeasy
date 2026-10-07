@@ -117,10 +117,13 @@ def p(text, style="body") -> Paragraph:
     return Paragraph(escape(str(text or "")).replace("\n", "<br/>"), S[style])
 
 
-def described(text, line, show_notes: bool = True) -> Paragraph:
+def described(text, line, show_notes: bool = True, combo: str = None) -> Paragraph:
     """A line's description with its note (if any) in small italics underneath. A note marked
-    "don't print" -- or every note when the user unticked notes at print time -- stays off."""
+    "don't print" -- or every note when the user unticked notes at print time -- stays off. combo: how the line went
+    out ("Bolts and nuts combined ...") -- always printed, bold italic, a touch smaller."""
     html = escape(str(text or "")).replace(chr(10), "<br/>")
+    if combo:
+        html += f'<br/><font size="7.5"><b><i>{escape(combo)}</i></b></font>'
     note = (getattr(line, "notes", None) or "").strip() if line is not None else ""
     if note and show_notes and getattr(line, "print_notes", True) is not False:
         html += f'<br/><font size="7.5" color="#4b5563"><i>Note: {escape(note).replace(chr(10), "<br/>")}</i></font>'
@@ -521,9 +524,18 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
     codes = {i: it.code for i, it in items.items()}
     eff_pallets = pallets_by_line(shipment, codes)
     ordered = [ol.id for ol in line_order(list(order_lines.values()), lambda ol: codes.get(ol.item_id, ""))]
+    # bolts + nuts sent as assembled units: the nut part is counted once, on its bolt's row (app/services/nut_combos.py)
+    from app.services.nut_combos import absorbed
+    from app.services.doc_context import combo_text
+    inside, combo_of_lead = absorbed(shipment), {c.lead_line_id: c for c in shipment.combos}
+    for lid, q in inside.items():
+        if lid in shipped_by_line:
+            shipped_by_line[lid] = max(0, shipped_by_line[lid] - q)
     rows, total_units, box_texts = [], 0, []
     for line_id in ordered:
         ol, shipped = order_lines[line_id], shipped_by_line[line_id]
+        if shipped <= 1e-9:
+            continue  # a nut wholly inside its bolt's assembled units
         item = items.get(ol.item_id)
         backordered = max(0, ol.quantity - ol.shipped_quantity - ol.booked_quantity)
         by_qty = {}
@@ -532,7 +544,10 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
                 by_qty[b.quantity_in_box] = by_qty.get(b.quantity_in_box, 0) + 1
         boxes = "\n".join(f"{n} Box × {qty(q)}" for q, n in sorted(by_qty.items(), reverse=True)) or "—"
         line_pallets = ", ".join(eff_pallets.get(line_id, [])) or "—"
-        row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), described(item.title if item else "", ol, show_notes)]
+        c = combo_of_lead.get(line_id)
+        combo = combo_text(c, shipped, order_lines.get(c.member_line_id), codes) if c else \
+            f"Plus {qty(inside[line_id])} sent assembled with its bolts" if line_id in inside else None
+        row = [str(ol.line_no or ""), p(item.code if item else ol.item_id, "td"), described(item.title if item else "", ol, show_notes, combo)]
         if include_lots:
             row.append(p(", ".join(dict.fromkeys(lots_by_line.get(line_id, []))) or "—", "td_muted"))
         if show_previous:

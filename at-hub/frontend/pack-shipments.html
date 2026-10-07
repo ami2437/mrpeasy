@@ -301,14 +301,14 @@
 
     // Cards SHOW the shipment (what's saved); changing one happens in Process Shipment (openProcess) or with the bulk tools.
     function lineRowsHtml(s) {
-      return shippedByLine(s).map(e => {
+      return comboPackRows(s, shippedByLine(s), 7, (e, cls) => {
         const picked = s.lines.filter(l => l.order_line_id === e.order_line_id).reduce((t, l) => t + l.picked_quantity, 0);
         const saved = s.boxes.some(b => b.order_line_id === e.order_line_id), pack = packSizeFor(s, e);
         const sug = (packSuggest[s.id] || {})[e.order_line_id];
         const label = saved ? (s.packed_at ? "Accepted packing" : "Proposed — not accepted") : sug ? sug.label : "";
-        return `<tr>
+        return `<tr class="${cls}">
             <td class="line-no">#${e.line_no ?? ""}</td>
-            <td class="grow">${escapeHtml(itemLabel(e.item_id))}${comboTagHtml(s, e.order_line_id)}</td>
+            <td class="grow">${escapeHtml(itemLabel(e.item_id))}${comboTagHtml(s, e.order_line_id)}${cls === "combo-rest" ? comboRestNote() : ""}</td>
             <td class="num">${fmtQty(e.qty)}</td>
             <td class="num">${fmtQty(picked)}${picked >= e.qty ? " ✓" : ""}</td>
             <td class="num">${saved ? `<b>${pack}</b>` : `<span class="muted" title="Not packed yet -- what it will pre-fill">${pack}</span>`}
@@ -316,7 +316,7 @@
             <td>${saved ? boxBreakdownFor(s, e.order_line_id) : `<span class="muted">${splitText(e.qty, pack)}</span>`}</td>
             <td>${escapeHtml(linePallet(s, e.order_line_id)) || `<span class="muted">—</span>`}</td>
           </tr>`;
-      }).join("");
+      });
     }
 
     function boxBreakdownFor(s, lineId) {
@@ -829,8 +829,8 @@
       const lines = s.lines.slice().sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
       return `<table class="fit-table no-table-tools no-col-bands bp-lines"><thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th>
           <th class="num">Booked</th><th class="num">Picked</th><th class="num">Boxes</th><th>Pallet #</th></tr></thead><tbody>
-        ${lines.map(l => { const bx = s.boxes.filter(b => b.order_line_id === l.order_line_id);
-          return `<tr><td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${comboTagHtml(s, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
+        ${comboLineRows(s, lines, l => l.order_line_id).map(({ row: l, child }) => { const bx = s.boxes.filter(b => b.order_line_id === l.order_line_id);
+          return `<tr class="${comboRowCls(s, l.order_line_id, child)}"><td class="line-no">${child ? comboChildNo(l.line_no) : `#${l.line_no ?? ""}`}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${child ? comboKidNote(s, child) : comboTagHtml(s, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
             <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td>
             <td class="num">${bx.length || "—"}</td><td>${escapeHtml(linePallet(s, l.order_line_id)) || `<span class="muted">—</span>`}</td></tr>`; }).join("")}</tbody></table>`;
     }
@@ -880,7 +880,7 @@
         ${list.map(s => { const o = order(s.order_id) || {}, todo = s.lines.filter(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
             .sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
           return `<tr class="bp-pick-head"><td colspan="6"><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</span></td></tr>
-            ${todo.map(l => `<tr><td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${comboTagHtml(s, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
+            ${comboLineRows(s, todo, l => l.order_line_id).map(({ row: l, child }) => `<tr class="${comboRowCls(s, l.order_line_id, child)}"><td class="line-no">${child ? comboChildNo(l.line_no) : `#${l.line_no ?? ""}`}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${child ? comboKidNote(s, child) : comboTagHtml(s, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
               <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td><td>${pickQtyInput(s, l)}</td></tr>`).join("")}`; }).join("")}</tbody></table>`;
     }
     function bpPickFoot(list) {
@@ -1010,10 +1010,10 @@
                   <span class="bp-pal-status small"></span></div></details>
             </div>
             <table class="fit-table no-table-tools no-col-bands bp-pal-lines"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pallet #</th></tr></thead><tbody>
-              ${shippedByLine(s).map(e => { const cur = linePallet(s, e.order_line_id);
-                return `<tr><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(s, e.order_line_id)}</td><td class="num">${fmtQty(e.qty)}</td>
+              ${comboPackRows(s, shippedByLine(s), 4, (e, cls) => { const cur = linePallet(s, e.order_line_id);
+                return `<tr class="${cls}"><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(s, e.order_line_id)}</td><td class="num">${fmtQty(e.qty)}</td>
                   <td><input type="text" class="bp-line-pallet" data-sid="${s.id}" data-line="${e.order_line_id}" data-orig="${escapeHtml(cur)}" value="${escapeHtml(cur)}"
-                    placeholder="Optional" style="width:100px;" oninput="bpRenderPallets(${s.id})"></td></tr>`; }).join("")}</tbody></table>
+                    placeholder="Optional" style="width:100px;" oninput="bpRenderPallets(${s.id})"></td></tr>`; })}</tbody></table>
             <div class="bp-pal-table"></div>
           </details>`; }).join("")}`;
     }

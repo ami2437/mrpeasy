@@ -54,6 +54,11 @@ def _register_ui():
     for name, f in files.items():
         path = d + f if os.path.exists(d + f) else d + files["UI-Bold"]
         pdfmetrics.registerFont(TTFont(name, path))
+    bold_italic = "UI-Bold"
+    if os.path.exists(d + "segoeuiz.ttf"):
+        pdfmetrics.registerFont(TTFont("UI-BoldItalic", d + "segoeuiz.ttf"))
+        bold_italic = "UI-BoldItalic"
+    pdfmetrics.registerFontFamily("UI", normal="UI", bold="UI-Bold", italic="UI-Italic", boldItalic=bold_italic)  # <b> / <i> in text
     FAMILIES["ui"] = ("UI", "UI-Bold", "UI-Italic", "UI-Semi")
 
 
@@ -71,7 +76,11 @@ def _register_gothic():
         return
     for name, f in files.items():
         pdfmetrics.registerFont(TTFont(name, d + f))
-    pdfmetrics.registerFontFamily("Gothic", normal="Gothic", bold="Gothic-Bold", italic="Gothic-Italic", boldItalic="Gothic-Bold")  # <b> in text
+    bold_italic = "Gothic-Bold"
+    if os.path.exists(d + "GOTHICBI.TTF"):  # <b><i> -- the packing list's "Bolts and nuts combined" note
+        pdfmetrics.registerFont(TTFont("Gothic-BoldItalic", d + "GOTHICBI.TTF"))
+        bold_italic = "Gothic-BoldItalic"
+    pdfmetrics.registerFontFamily("Gothic", normal="Gothic", bold="Gothic-Bold", italic="Gothic-Italic", boldItalic=bold_italic)  # <b> in text
     FAMILIES["gothic"] = ("Gothic", "Gothic-Bold", "Gothic-Italic", "Gothic-Bold")
 
 
@@ -457,15 +466,17 @@ def build_table(tspec, rows, width):
         k, a = c["key"], c.get("align") or ("right" if c["key"] in ("qty", "price", "amount", "ordered", "shipped", "backorder") else "left")
         if k == "check":
             return CheckBox()
+        # packing lists: how the line went out ("Bolts and nuts combined ...") -- bold italic, a touch smaller
+        combo = f'<br/><font size="{max(6, body.fontSize - 1.5):g}"><b><i>{escape(r["combo_note"])}</i></b></font>' if r.get("combo_note") else ""
         if k == "item_code_desc":
             out = [Paragraph(escape(r.get("item_code", "")), bold)]
-            if r.get("description"):
-                out.append(Paragraph(escape(r["description"]).replace("\n", "<br/>"), muted))
+            if r.get("description") or combo:
+                out.append(Paragraph(escape(r.get("description") or "").replace("\n", "<br/>") + combo, muted))
             return out
         v = str(r.get(k, ""))
         if v == "—" and "empty" in c:  # column setting: what an empty value prints as (e.g. "0" for no backorder)
             v = str(c["empty"])
-        txt = escape(v).replace("\n", "<br/>")
+        txt = escape(v).replace("\n", "<br/>") + (combo if k == "description" else "")
         sty = ParagraphStyle("c", parent=bold if c.get("bold") or k == "amount" and st.get("bold_amount", True) else body,
                              alignment=ALIGN.get(a, TA_LEFT))
         return Paragraph(txt, sty)

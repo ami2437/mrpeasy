@@ -89,7 +89,7 @@ def test_combined_ships_as_one_row_but_counts_both_lines(make, api):
     assert on["shipments"][0]["combined"]["with_line_no"] == ob["line_no"]
     rows = _packing_rows(api, sh)
     assert len(rows) == 1 and rows[0]["Part #"] == bolt["code"] and rows[0]["Qty shipped"] == "400"
-    assert "Bolts and nuts combined" in rows[0]["Line notes"] and nut["code"] in rows[0]["Line notes"]
+    assert "Bolts and nuts combined" in rows[0]["Packed as"] and nut["code"] in rows[0]["Packed as"]
 
 
 def test_next_shipment_can_go_separately(make, api):
@@ -118,7 +118,7 @@ def test_partial_combine_leaves_the_rest_as_its_own_row(make, api):
         boxed[x["order_line_id"]] = boxed.get(x["order_line_id"], 0) + x["quantity_in_box"]
     assert boxed == {b["id"]: 400, n["id"]: 100}
     rows = {r["Part #"]: r for r in _packing_rows(api, sh)}
-    assert rows[nut["code"]]["Qty shipped"] == "100" and "Plus 400 sent assembled" in rows[nut["code"]]["Line notes"]
+    assert rows[nut["code"]]["Qty shipped"] == "100" and "Plus 400 sent assembled" in rows[nut["code"]]["Packed as"]
     assert api.get(f"/api/customer-orders/{o['id']}")["lines"][1]["shipped_quantity"] == 500  # the order still counts all 500
 
 
@@ -128,7 +128,7 @@ def test_bolt_part_combined_shows_of(make, api):
     sh = _book(api, o, {b["id"]: 500, n["id"]: 400})
     _combine(api, sh, b, n, 400)
     rows = _packing_rows(api, _finish(api, sh))
-    assert len(rows) == 1 and rows[0]["Qty shipped"] == "500" and "400 of 500" in rows[0]["Line notes"]
+    assert len(rows) == 1 and rows[0]["Qty shipped"] == "500" and "400 of 500" in rows[0]["Packed as"]
 
 
 def test_two_nuts_per_bolt(make, api):
@@ -139,7 +139,7 @@ def test_two_nuts_per_bolt(make, api):
     sh = _finish(api, sh)
     assert {x["order_line_id"] for x in sh["boxes"]} == {b["id"]}
     rows = _packing_rows(api, sh)
-    assert len(rows) == 1 and "2 per bolt" in rows[0]["Line notes"]
+    assert len(rows) == 1 and "2 per bolt" in rows[0]["Packed as"]
     lines = api.get(f"/api/customer-orders/{o['id']}")["lines"]
     assert lines[1]["shipped_quantity"] == 200 and lines[1]["shipments"][0]["combined"]["quantity"] == 200
 
@@ -320,3 +320,28 @@ def test_recycle_bin_brings_the_combo_back(make, api):
     api.post(f"/api/recycle-bin/{entry['id']}/restore")
     back = api.get(f"/api/shipments/{sh['id']}")
     assert back["status"] in ("new", "ready") and [(c["lead_line_id"], c["member_line_id"], c["quantity"]) for c in back["combos"]] == [(b["id"], n["id"], 300)]
+
+
+def test_packing_list_pdfs_print_the_combined_note(make, api):
+    """The built-in PDF and every packing-list starter design: one row for the pair, with the combined note."""
+    import io as _io
+    import json
+    from pypdf import PdfReader
+    from app.config.database import SessionLocal
+    from app.models import DocTemplate, Shipment
+    from app.services.template_starters import starters
+    from app.services.templates import render_record
+    bolt, nut, o = _pair(make)
+    b, n = _lines(o)
+    sh = _finish(api, _combine(api, _book(api, o, {b["id"]: 400, n["id"]: 400}), b, n, 400))
+    text = lambda pdf: " ".join(p.extract_text() for p in PdfReader(_io.BytesIO(pdf)).pages)
+    built_in = text(api.get(f"/api/shipments/{sh['id']}/packing-list.pdf").content)
+    assert "Bolts and nuts combined" in built_in and nut["code"] + " " not in built_in.replace(f"({nut['code']})", "")
+    with SessionLocal() as db:
+        record = db.get(Shipment, sh["id"])
+        for key, spec in starters("packing_list"):
+            if not spec.get("table"):
+                continue
+            for font in ("sans", "ui", "gothic"):  # the note is <b><i>: every font family needs its bold italic
+                tpl = DocTemplate(doc_type="packing_list", name=key, spec=json.dumps({**spec, "font": font}))
+                assert "Bolts and nuts combined" in text(render_record(db, tpl, "packing_list", record)), (key, font)

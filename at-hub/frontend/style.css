@@ -1867,30 +1867,64 @@ th:hover .col-resizer::after { background: var(--border-strong); }
 th .col-resizer:hover::after { background: var(--accent); }
 th .col-resizer:hover { background: transparent; }
 
-/* ---- bolts + nuts sent together (assembled units): violet, like a stapled pair ---- */
+/* ---- bolts + nuts sent together (assembled units): violet, the bolt the parent row, its nut a child row under it ---- */
 .tag.combo { display: inline-flex; align-items: center; gap: 3px; text-transform: none; background: #ede9fe; color: #5b21b6; font-weight: 600; white-space: nowrap; vertical-align: 1px; }
-.tag.combo .ico, .combo-note .ico, .combo-head .ico, .combo-hint .ico { width: 13px; height: 13px; flex: none; }
+.tag.combo .ico, .combo-note .ico, .combo-bar .ico, .combo-hint .ico, .combo-summary .ico, .co-combo-mark .ico { width: 13px; height: 13px; flex: none; }
 html[data-theme="dark"] .tag.combo { background: #2e1f5e; color: #c4b5fd; }
 .combo-note { display: block; white-space: normal; line-height: 1.3; color: #6d28d9; margin-top: 2px; }
 .combo-note .ico { vertical-align: -2px; margin-right: 3px; }
 .fit-table.wrap-cells .cell-entry .combo-note.small, .fit-table .cell-entry .combo-note { white-space: normal; }
 html[data-theme="dark"] .combo-note { color: #c4b5fd; }
-.combo-panel { border: 1px solid color-mix(in srgb, #7c3aed 35%, transparent); background: color-mix(in srgb, #7c3aed 6%, var(--surface));
-  border-radius: 10px; padding: 8px 12px; margin: 0 0 12px; display: grid; gap: 6px; }
-.combo-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: #5b21b6; }
-.combo-head .muted { color: var(--muted); }
-html[data-theme="dark"] .combo-head { color: #c4b5fd; }
-.combo-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.combo-row .qty-input { width: 72px; }
-.combo-row .combo-pair { font-weight: 600; min-width: 200px; }
-.combo-row.on .combo-pair::before { content: "✓ "; color: #7c3aed; }
-.combo-panel > a.link { justify-self: start; }
+/* "Combine lines" right above a lines table: one small line */
+.combo-bar { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; font-size: 12px; margin: 6px 0 6px; color: #6d28d9; }
+.combo-bar > .link { font-weight: 600; }
+.combo-sug { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border-radius: 999px; color: var(--text);
+  background: color-mix(in srgb, #7c3aed 9%, transparent); border: 1px dashed color-mix(in srgb, #7c3aed 45%, transparent); }
+html[data-theme="dark"] .combo-bar { color: #c4b5fd; }
+/* parent (bolt) and child (nut) rows: joined, the child smaller with an arrow and a violet fill */
+tr.combo-lead > td { background: color-mix(in srgb, #7c3aed 5%, var(--surface)); }
+tr.combo-lead > td:first-child { box-shadow: inset 3px 0 0 #7c3aed; }
+tr.combo-child > td { background: color-mix(in srgb, #7c3aed 12%, var(--surface)); font-size: 12px; padding-top: 4px; padding-bottom: 4px; }
+tr.combo-child > td:first-child { box-shadow: inset 3px 0 0 #7c3aed; padding-left: 14px; white-space: nowrap; }
+tr.combo-rest > td { background: color-mix(in srgb, #7c3aed 4%, var(--surface)); }
+tr.combo-rest > td:first-child { box-shadow: inset 3px 0 0 color-mix(in srgb, #7c3aed 40%, transparent); }
+.combo-arrow { color: #7c3aed; display: inline-flex; vertical-align: -2px; margin-right: 3px; }
+.combo-arrow .ico { width: 14px; height: 14px; stroke-width: 2.4; }
+html[data-theme="dark"] .combo-arrow { color: #c4b5fd; }
+.combo-child-text { color: var(--text); }
+.combo-child-acts { margin-left: 10px; white-space: nowrap; font-size: 12px; }
+.combo-kid-note { display: inline-block; margin-left: 4px; font-size: 11.5px; font-weight: 600; color: #6d28d9; white-space: nowrap; }
+html[data-theme="dark"] .combo-kid-note { color: #c4b5fd; }
+/* just came together (combined, or packing accepted): the nut slides in under its bolt and glows once */
+tr.combo-fresh > td, .combo-pair-line.combo-fresh { animation: combo-in .9s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes combo-in {
+  0% { opacity: 0; transform: translateY(-14px); background-color: color-mix(in srgb, #7c3aed 40%, var(--surface)); }
+  55% { opacity: 1; transform: translateY(0); background-color: color-mix(in srgb, #7c3aed 30%, var(--surface)); }
+  100% { background-color: color-mix(in srgb, #7c3aed 12%, var(--surface)); }
+}
+html[data-theme="dark"] tr.combo-child > td { background: color-mix(in srgb, #7c3aed 22%, var(--surface)); }
+html[data-theme="dark"] tr.combo-lead > td, html[data-theme="dark"] tr.combo-rest > td { background: color-mix(in srgb, #7c3aed 9%, var(--surface)); }
+html[data-theme="dark"] tr.co-combo-child > td { background: color-mix(in srgb, #7c3aed 16%, var(--surface)); }
+@media (prefers-reduced-motion: reduce) { tr.combo-fresh > td, .combo-pair-line.combo-fresh { animation: none; } }
+/* Ship step: the pairs going out together */
+.combo-summary { display: grid; gap: 4px; margin: 0 0 10px; }
+.combo-pair-line { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 12.5px; padding: 4px 10px; border-radius: 8px;
+  background: color-mix(in srgb, #7c3aed 12%, var(--surface)); border-left: 3px solid #7c3aed; color: var(--text); }
+.combo-pair-line .ico { color: #7c3aed; }
 .combo-hint { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
   background: color-mix(in srgb, #7c3aed 9%, transparent); border: 1px dashed color-mix(in srgb, #7c3aed 40%, transparent); }
+/* the warning pop-up and the pair picker */
+.combo-warns { margin: 0 0 10px; padding-left: 18px; }
+.combo-warns li { margin: 3px 0; }
 .combo-manual { display: grid; gap: 8px; }
 .combo-manual label { display: grid; gap: 3px; }
 .combo-manual-qty { display: flex; gap: 12px; }
 .combo-manual-qty .qty-input { width: 100px; }
+/* customer order lines: the nut row as its bolt's child, the bolt naming its nut */
+tr.co-combo-child > td { background: color-mix(in srgb, #7c3aed 9%, var(--surface)); }
+tr.co-combo-child > td:first-child, tr.co-combo-lead > td:first-child { box-shadow: inset 3px 0 0 #7c3aed; }
+.co-combo-mark { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px; font-size: 11px; font-weight: 700; color: #6d28d9; white-space: nowrap; }
+html[data-theme="dark"] .co-combo-mark { color: #c4b5fd; }
 
 /* ---- status underlays (setUnderlay / UNDERLAYS in auth-guard.js): the card takes its status colour; drafts and
    finished / void / cancelled records also carry a faint watermark word, like the amber DRAFT order ---- */

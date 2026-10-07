@@ -252,11 +252,10 @@ def _packing_list(db, sh: Shipment, opt):
         back = max(0, ol.quantity - ol.shipped_quantity - ol.booked_quantity)
         desc = _desc(it.title if it else "", ol, show_notes)
         c = combo_of_lead.get(lid)
-        if c:  # always printed: it's how this shipment went out, not a line note
-            desc = f"{desc}\n{combo_text(c, by_line[lid], ols.get(c.member_line_id), codes)}"
-        elif lid in inside:
-            desc = f"{desc}\nPlus {qty(inside[lid])} sent assembled with its bolts"
-        rows.append({"line_no": str(ol.line_no or ""), "item_code": it.code if it else "", "description": desc,
+        # always printed (how this shipment went out, not a line note): its own field, drawn bold italic under the description
+        combo = combo_text(c, by_line[lid], ols.get(c.member_line_id), codes) if c else \
+            f"Plus {qty(inside[lid])} sent assembled with its bolts" if lid in inside else ""
+        rows.append({"line_no": str(ol.line_no or ""), "item_code": it.code if it else "", "description": desc, "combo_note": combo,
                      "lot": ", ".join(dict.fromkeys(lots_by_line.get(lid, []))), "ordered": qty(ol.quantity), "shipped": qty(by_line[lid]),
                      "backorder": qty(back) if back else "—",
                      "previous": "\n".join(f"{e['code']}: {qty(e['qty'])}" + (f" · {moment(e['when'])}" if e["when"] else "") for e in previous.get(lid, {}).values()),

@@ -63,6 +63,7 @@ function linesSectionHtml(shipment) {
   const group = {};
   sorted.forEach(l => { const g = group[l.order_line_id] ??= { first: l.id, n: 0, qty: 0 }; g.n++; g.qty += l.quantity; });
   const olOf = id => (ord && ord.lines.find(x => x.id === id)) || null;
+  const rows = comboLineRows(shipment, sorted, l => l.order_line_id);
   return `
     <h4 class="dsec-title">Items</h4>
     <table class="fit-table ship-lines">
@@ -73,13 +74,13 @@ function linesSectionHtml(shipment) {
         <th class="num" title="The whole order line on this shipment -- every lot added up">Line total</th><th class="num">Picked</th>
         <th class="num" title="Still to ship on the order line once this shipment has gone">Left after this</th></tr></thead>
       <tbody>
-        ${sorted.map(l => {
+        ${rows.map(({ row: l, child }) => {
           const g = group[l.order_line_id], ol = olOf(l.order_line_id), first = g.first === l.id;
           const before = ol ? Math.max(0, ol.shipped_quantity - (isShipped ? g.qty : 0)) : null;
           const after = ol ? Math.max(0, ol.quantity - before - g.qty) : null;
           const span = g.n > 1 ? ` rowspan="${g.n}"` : "";
-          return `<tr>
-            ${first ? `<td class="line-no"${span}>#${l.line_no ?? ""}</td><td class="grow"${span}>${escapeHtml(String(itemLabel(l.item_id)))}${comboTagHtml(shipment, l.order_line_id)}</td>` : ""}
+          return `<tr class="${comboRowCls(shipment, l.order_line_id, child)}">
+            ${first ? `<td class="line-no"${span}>${child ? comboChildNo(l.line_no) : `#${l.line_no ?? ""}`}</td><td class="grow"${span}>${escapeHtml(String(itemLabel(l.item_id)))}${child ? comboKidNote(shipment, child) : comboTagHtml(shipment, l.order_line_id)}</td>` : ""}
             <td>${escapeHtml(lotCode(l.lot_id))}</td>
             ${first ? `<td class="num"${span}>${ol ? fmtQty(ol.quantity) : ""}</td><td class="num muted"${span}>${before != null ? fmtQty(before) : ""}</td>` : ""}
             <td class="num">${g.n > 1 ? fmtQty(l.quantity) : `<strong>${fmtQty(l.quantity)}</strong>`}</td>
@@ -98,14 +99,14 @@ function packingReadOnlyHtml(sh) {
   const tag = sh.packed_at ? `<span class="tag shipped">Packing accepted · ${n} box${n === 1 ? "" : "es"}</span>`
     : n ? `<span class="tag draft">Proposed · ${n} box${n === 1 ? "" : "es"} · not accepted</span>`
     : `<span class="tag draft">Not packed yet</span>`;
-  const rows = shippedByLine(sh).map(e => {
+  const rows = comboPackRows(sh, shippedByLine(sh), 6, (e, cls) => {
     const saved = sh.boxes.filter(b => b.order_line_id === e.order_line_id);
     const byQty = {};
     saved.forEach(b => { byQty[b.quantity_in_box] = (byQty[b.quantity_in_box] || 0) + 1; });
-    return `<tr><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(sh, e.order_line_id)}</td><td class="num">${fmtQty(e.qty)}</td>
+    return `<tr class="${cls}"><td class="line-no">#${e.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(sh, e.order_line_id)}${cls === "combo-rest" ? comboRestNote() : ""}</td><td class="num">${fmtQty(e.qty)}</td>
       <td class="num">${saved.length ? packSizeFor(sh, e) : `<span class="muted" title="Not packed yet -- what Process Shipment will pre-fill">${packSizeFor(sh, e)}</span>`}</td>
       <td>${saved.length ? formatBoxCounts(byQty) : `<span class="muted">—</span>`}</td><td>${escapeHtml(linePallet(sh, e.order_line_id)) || `<span class="muted">—</span>`}</td></tr>`;
-  }).join("");
+  });
   const used = [...new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean))].sort(byPalletNo);
   const po = (order(sh.order_id) || {}).po_number || "";
   const pallets = used.map(pn => {
@@ -323,11 +324,11 @@ function procPickHtml(sh) {
   return `<p class="muted small" style="margin-top:0;">${sh.status === "new" ? "Booked, not confirmed — picking confirms the bookings." : "Bookings confirmed."}
       Pick now starts at everything left; lower it to pick part of a line (0 = none) — whatever isn't picked is unbooked (back to stock, still open on the order).
       Unbook sends unpicked stock back to the shelf.</p>
-    ${comboPanelHtml(sh)}
+    ${comboBarHtml(sh)}
     <table class="fit-table no-table-tools">
       <thead><tr><th>Line</th><th class="grow">Item</th><th>Lot</th><th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th><th>Unbook</th></tr></thead>
-      <tbody>${sorted.map(l => { const left = Math.max(0, l.quantity - (l.picked_quantity || 0)); return `<tr>
-        <td class="line-no">#${l.line_no ?? ""}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${comboTagHtml(sh, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
+      <tbody>${comboLineRows(sh, sorted, l => l.order_line_id).map(({ row: l, child }) => { const left = Math.max(0, l.quantity - (l.picked_quantity || 0)); return `<tr class="${comboRowCls(sh, l.order_line_id, child)}">
+        <td class="line-no">${child ? comboChildNo(l.line_no) : `#${l.line_no ?? ""}`}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${child ? comboKidNote(sh, child) : comboTagHtml(sh, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
         <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}${left <= 0 ? " ✓" : ""}</td>
         <td>${left > 0 ? pickQtyInput(sh, l) : ""}</td>
         <td class="unbook-cell">${left > 0 ? `<input type="number" step="1" min="1" max="${left}" placeholder="${left}" id="unbook-${l.id}" class="qty-input unbook-qty" title="Blank = all ${left}">
@@ -409,7 +410,6 @@ function procPackHtml(sh) {
       (packed before the shipment went back a step, or proposed in bulk). Check them, then <b>Accept Packaging</b>.</div>` : ""}
     <p class="muted small" style="margin-top:0;">Each order line is split into boxes by its pack size — pre-filled from what was packed before
       (see the note under each size). Lines are packed separately even when they're the same item.</p>
-    ${comboPanelHtml(sh)}
     <div class="pack-tools-row">
       <div><label>Pallet # for every line (optional)</label>
         <input type="text" id="default-pallet" placeholder="E.g. PLT-1" oninput="applyPalletToAll(this.value)"></div>
@@ -421,6 +421,7 @@ function procPackHtml(sh) {
           <span id="pack-paste-status" class="muted small"></span></div>
       </details>
     </div>
+    ${comboBarHtml(sh)}
     <table class="fit-table">
       <thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Pack size</th><th>Boxes</th><th>Pallet #</th></tr></thead>
       <tbody>${packSizeRowsHtml(sh)}</tbody>
@@ -459,6 +460,7 @@ async function procAccept() {
     await apiFetch(`/api/shipments/${id}/boxes`, { method: "PUT", body: JSON.stringify({ boxes: collectBoxes() }) });
     await apiFetch(`/api/shipments/${id}/pallet-weights`, { method: "PUT", body: JSON.stringify({ pallets: collectPallets() }) });
     const sh = await apiFetch(`/api/shipments/${id}/accept-packing`, { method: "POST" });
+    (sh.combos || []).forEach(c => comboFresh.add(c.id));  // packed: show the pairs coming together
     proc.dirty = false;
     toast(`${sh.code}: packing accepted · ${sh.boxes.length} boxes`);
     await afterShipmentChange(id, allPicked(sh) ? "ship" : "pick");  // picked: on to Ship; else back to picking
@@ -477,6 +479,7 @@ function carrierInputsHtml(sh) {
 function procShipHtml(sh) {
   const gaps = savedPalletGaps(sh), pallets = new Set(sh.boxes.map(b => b.pallet_number).filter(Boolean)).size;
   return `<div class="proc-summary">${icon("checkCircle")} Picked · packed: <b>${sh.boxes.length} box${sh.boxes.length === 1 ? "" : "es"}</b>${pallets ? ` on <b>${pallets} pallet${pallets === 1 ? "" : "s"}</b>` : ""}</div>
+    ${comboSummaryHtml(sh)}
     ${gaps.length ? `<div class="notice small"><b>Missing pallet data</b> — ${gaps.map(escapeHtml).join(" · ")}. Fix it under <a class="link" onclick="procGo('pack')">Pack</a>, or ship anyway.</div>` : ""}
     ${carrierInputsHtml(sh)}
     <p class="muted small">Ship Now takes the stock off on-hand. Carrier and tracking go on the packing list and the POD email.</p>`;
@@ -724,76 +727,148 @@ function shippedByLineAll(shipment, asMap = false) {
 }
 
 // ---- Bolts + nuts sent together as assembled units: one row on the boxes, labels and packing list, while stock and
-// the order still count each line. Combined in Process Shipment, for this shipment only -- the next one starts apart. ----
+// the order still count each line. Combined in Process Shipment, for this shipment only -- the next one starts apart.
+// On screen the bolt is the parent and its nut a child row right under it (↳, smaller, violet), like shipment -> invoice. ----
 const comboSug = {};  // {shipment id: [suggested pairs]} from /api/shipments/{id}/combo-suggestions
+const comboFresh = new Set();  // combo ids that just came together (combined / packing accepted): animate them once
 async function loadComboSug(id) {
   try { comboSug[id] = await apiFetch(`/api/shipments/${id}/combo-suggestions`); } catch { comboSug[id] = []; }
 }
 function comboOf(sh, lineId) { return (sh.combos || []).find(c => c.lead_line_id === lineId || c.member_line_id === lineId) || null; }
 function shLine(sh, lineId) { return sh.lines.find(x => x.order_line_id === lineId) || {}; }
+function freshCls(c) {
+  if (!c || !comboFresh.has(c.id)) return "";
+  setTimeout(() => comboFresh.delete(c.id), 2500);  // every screen drawn in the next moment animates it, then never again
+  return " combo-fresh";
+}
+// The bolt's tag: how many go out assembled, with which line
 function comboTagHtml(sh, lineId) {
   const c = comboOf(sh, lineId);
-  if (!c) return "";
-  const lead = c.lead_line_id === lineId, other = shLine(sh, lead ? c.member_line_id : c.lead_line_id).line_no ?? "";
-  const text = lead ? `${fmtQty(c.quantity)} assembled with #${other}${c.ratio > 1 ? ` · ${fmtQty(c.ratio)} nuts each` : ""}`
-    : `${fmtQty(c.member_quantity)} inside #${other}'s boxes`;
-  return ` <span class="tag combo" title="${escapeHtml(c.note || "Bolts and nuts combined")}: one row on the boxes, labels and packing list">${icon("link")}${text}</span>`;
+  if (!c || c.lead_line_id !== lineId) return "";
+  const other = shLine(sh, c.member_line_id).line_no ?? "";
+  return ` <span class="tag combo" title="${escapeHtml(c.note || "Bolts and nuts combined")}: one row on the boxes, labels and packing list">${icon("link")}${fmtQty(c.quantity)} assembled with #${other}${c.ratio > 1 ? ` · ${fmtQty(c.ratio)} nuts each` : ""}</span>`;
 }
 function comboPairText(sh, lead, member) {
   const a = shLine(sh, lead), b = shLine(sh, member);
   return `#${a.line_no ?? ""} ${escapeHtml(String(itemCode(a.item_id)))} + #${b.line_no ?? ""} ${escapeHtml(String(itemCode(b.item_id)))}`;
 }
-// The panel on Pick and Pack: pairs combined, suggested pairs ($0 nut = the bolt's code + -NUT), and any two lines by hand.
-function comboPanelHtml(sh) {
-  if (!["new", "ready"].includes(sh.status) || !AuthGuard.can("shipments.work")) return "";
-  const sug = comboSug[sh.id] || [], combos = sh.combos || [], lines = shippedByLineAll(sh);
-  if (!sug.length && !combos.length && lines.length < 2) return "";
-  const qtyIn = (id, v, title) => `<input type="number" step="1" min="1" id="${id}" class="qty-input" value="${v}" title="${escapeHtml(title)}">`;
-  return `<div class="combo-panel">
-    <div class="combo-head">${icon("link")}<b>Bolts &amp; nuts together</b>
-      <span class="muted small">Assembled units go out as one row on the boxes, labels and packing list. Stock and the order still count each line.</span></div>
-    ${combos.map(c => `<div class="combo-row on"><span class="combo-pair">${comboPairText(sh, c.lead_line_id, c.member_line_id)}</span>
-      ${qtyIn(`cq-${c.id}`, c.quantity, "Assembled units (bolts)")}<span class="muted small">sets ×</span>
-      ${qtyIn(`cr-${c.id}`, c.ratio, "Nuts per bolt")}<span class="muted small">per bolt</span>
-      <button type="button" class="small-btn secondary" onclick="comboSave(${sh.id}, ${c.lead_line_id}, ${c.member_line_id}, 'cq-${c.id}', 'cr-${c.id}')">Save</button>
-      <button type="button" class="small-btn danger" onclick="comboSplit(${sh.id}, ${c.id})" title="Send them separately on this shipment">Split</button></div>`).join("")}
-    ${sug.map((g, i) => `<div class="combo-row sug"><span class="combo-pair">${comboPairText(sh, g.lead_line_id, g.member_line_id)}</span>
-      <span class="muted small">$0 nut${g.ratio > 1 ? ` · ${g.ratio} per bolt` : ""}</span>
-      ${qtyIn(`sq-${sh.id}-${i}`, g.quantity, `Up to ${g.quantity} full sets are booked`)}<span class="muted small">sets</span>
-      <button type="button" class="small-btn confirm-btn" onclick="comboSave(${sh.id}, ${g.lead_line_id}, ${g.member_line_id}, 'sq-${sh.id}-${i}', null, ${g.ratio})">${icon("link")} Combine</button></div>`).join("")}
-    ${lines.length >= 2 ? `<a class="link small" onclick="comboManual(${sh.id})">Combine other lines…</a>` : ""}
-  </div>`;
+// Rows of a table reordered so each combined nut's rows sit straight under its bolt's. -> [{ row, child: combo|null }]
+function comboLineRows(sh, rows, lineOf) {
+  const leadOf = {};
+  (sh.combos || []).forEach(c => { if (rows.some(r => lineOf(r) === c.lead_line_id)) leadOf[c.member_line_id] = c; });
+  const kids = {}, out = [];
+  rows.forEach(r => { const c = leadOf[lineOf(r)]; if (c) (kids[c.lead_line_id] ??= []).push(r); });
+  rows.forEach((r, i) => {
+    if (leadOf[lineOf(r)]) return;
+    out.push({ row: r, child: null });
+    const next = rows.slice(i + 1).find(x => !leadOf[lineOf(x)]);
+    if (kids[lineOf(r)] && (!next || lineOf(next) !== lineOf(r))) kids[lineOf(r)].forEach(k => out.push({ row: k, child: leadOf[lineOf(k)] }));
+  });
+  return out;
 }
-// Combining changes the packing of both lines: their boxes are redone and the packing is accepted again.
-async function comboConfirmRepack(sh, lineIds) {
-  const boxed = sh.boxes.some(b => lineIds.includes(b.order_line_id)), dirty = !!(proc && proc.dirty);
-  if (!dirty && !sh.packed_at && !boxed) return true;
-  const { value } = await askDialog({ title: "Re-pack these lines?", tone: "warn",
-    body: `<p>Their boxes are redone${sh.packed_at ? " and the packing has to be accepted again" : ""}.${dirty ? " Unsaved packing changes on this screen are dropped." : ""}</p>`,
-    buttons: [{ label: "Continue", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
-  return value === "go";
+// Row classes: the bolt of a pair (parent) and its nut (child, animated in when it just came together)
+function comboRowCls(sh, lineId, child) {
+  if (child) return `combo-child${freshCls(child)}`;
+  const c = comboOf(sh, lineId);
+  return c && c.lead_line_id === lineId ? "combo-lead" : "";
+}
+// On a child row: how much of the nut rides in the bolt's boxes
+function comboKidNote(sh, c) {
+  const booked = shippedByLineAll(sh, true)[c.member_line_id], part = booked && c.member_quantity < booked.booked - 1e-9;
+  return ` <span class="combo-kid-note">${fmtQty(c.member_quantity)}${part ? ` of ${fmtQty(booked.booked)}` : ""} in #${shLine(sh, c.lead_line_id).line_no ?? ""}'s boxes</span>`;
+}
+function comboRestNote() { return ` <span class="combo-kid-note muted">the rest, boxed on its own</span>`; }
+// The line-# cell of a child row: ↳ #2
+function comboChildNo(lineNo) { return `<span class="combo-arrow" aria-hidden="true">${icon("cornerRight")}</span>#${lineNo ?? ""}`; }
+// The nut riding in its bolt's boxes, as a child row under the bolt (packing tables: the nut has no row of its own there).
+function comboChildRowHtml(sh, c, cols, editable = false) {
+  const m = shLine(sh, c.member_line_id), i = itemObj(m.item_id) || {};
+  return `<tr class="combo-child${freshCls(c)}"><td class="line-no">${comboChildNo(m.line_no)}</td>
+    <td colspan="${cols - 1}"><span class="combo-child-text"><b>${escapeHtml(String(i.code || m.item_id || ""))}</b> ${escapeHtml(i.title || "")}
+      · <b>${fmtQty(c.member_quantity)}</b> inside these boxes${c.ratio > 1 ? ` (${fmtQty(c.ratio)} per bolt)` : ""}</span>
+      ${editable ? `<span class="combo-child-acts"><a class="link" onclick="comboEdit(${sh.id}, ${c.id})">Edit</a> · <a class="link" onclick="comboSplit(${sh.id}, ${c.id})" title="Send them separately on this shipment">Split</a></span>` : ""}</td></tr>`;
+}
+// One packing table's rows with each bolt's nut as a child row under it. rowHtml(entry) draws an ordinary row.
+function comboPackRows(sh, entries, cols, rowHtml, editable = false) {
+  const out = [];
+  const leadOf = {};
+  (sh.combos || []).forEach(c => { leadOf[c.member_line_id] = c; });
+  const separate = entries.filter(e => leadOf[e.order_line_id]);  // a nut's part that goes in its own boxes
+  entries.filter(e => !leadOf[e.order_line_id]).forEach(e => {
+    out.push(rowHtml(e, comboOf(sh, e.order_line_id) && comboOf(sh, e.order_line_id).lead_line_id === e.order_line_id ? "combo-lead" : ""));
+    (sh.combos || []).filter(c => c.lead_line_id === e.order_line_id).forEach(c => {
+      out.push(comboChildRowHtml(sh, c, cols, editable));
+      separate.filter(s => s.order_line_id === c.member_line_id).forEach(s => out.push(rowHtml(s, "combo-rest")));
+    });
+  });
+  separate.filter(s => !(sh.combos || []).some(c => c.member_line_id === s.order_line_id && entries.some(e => e.order_line_id === c.lead_line_id)))
+    .forEach(s => out.push(rowHtml(s, "")));
+  return out.join("");
+}
+// Right above the lines table on Pick and Pack: "Combine lines" + the pairs worth combining
+function comboBarHtml(sh) {
+  if (!["new", "ready"].includes(sh.status) || !AuthGuard.can("shipments.work") || shippedByLineAll(sh).length < 2) return "";
+  const sug = comboSug[sh.id] || [];
+  return `<div class="combo-bar">${icon("link")}<a class="link" onclick="comboManual(${sh.id})" title="Send a bolt and its nut as assembled units: one row on the boxes, labels and packing list">Combine lines</a>
+    ${sug.map(g => `<span class="combo-sug">Suggested: ${comboPairText(sh, g.lead_line_id, g.member_line_id)} · ${fmtQty(g.quantity)} set${g.quantity === 1 ? "" : "s"}${g.ratio > 1 ? ` (${g.ratio} nuts each)` : ""}
+      <a class="link" onclick="comboSave(${sh.id}, ${g.lead_line_id}, ${g.member_line_id}, ${g.quantity}, ${g.ratio})">Combine</a></span>`).join("")}</div>`;
+}
+// What's odd about combining these two: the nut isn't the bolt's (-NUT), the booked quantities don't match the ratio,
+// or only part of them go together. Each comes back as a sentence for the pop-up.
+function comboWarnings(sh, lead, member, quantity, ratio) {
+  const all = shippedByLineAll(sh, true), a = all[lead] || { booked: 0 }, b = all[member] || { booked: 0 };
+  const code = x => String(itemCode(x.item_id) || "").replace(/\s+/g, "").toUpperCase();
+  const out = [];
+  if (![`${code(a)}-NUT`, `${code(a)}-NUTS`].includes(code(b)))
+    out.push(`<b>${escapeHtml(itemCode(b.item_id))}</b> isn't the nut of <b>${escapeHtml(itemCode(a.item_id))}</b> — that would be <b>${escapeHtml(itemCode(a.item_id))}-NUT</b>.`);
+  if (Math.abs(a.booked * ratio - b.booked) > 1e-9)
+    out.push(`Quantities don't match 1:${ratio} (bolt:nut): <b>${fmtQty(a.booked)}</b> bolts need <b>${fmtQty(a.booked * ratio)}</b> nuts, but <b>${fmtQty(b.booked)}</b> are booked.`);
+  const boltsLeft = a.booked - quantity, nutsLeft = b.booked - quantity * ratio;
+  if (boltsLeft > 1e-9 || nutsLeft > 1e-9)
+    out.push(`<b>${fmtQty(quantity)}</b> set${quantity === 1 ? "" : "s"} go out combined; ${[boltsLeft > 1e-9 ? `${fmtQty(boltsLeft)} bolt${boltsLeft === 1 ? "" : "s"}` : "", nutsLeft > 1e-9 ? `${fmtQty(nutsLeft)} nut${nutsLeft === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")} go separately.`);
+  return out;
+}
+// One pop-up before combining: the warnings to acknowledge, and the re-pack note when it was packed already.
+async function comboConfirm(sh, lead, member, quantity, ratio) {
+  const warns = comboWarnings(sh, lead, member, quantity, ratio);
+  const boxed = sh.boxes.some(b => [lead, member].includes(b.order_line_id)), dirty = !!(proc && proc.dirty);
+  const repack = dirty || sh.packed_at || boxed;
+  if (!warns.length && !repack) return true;
+  const { value, el } = await askDialog({ title: warns.length ? "Combine these lines anyway?" : "Re-pack these lines?", tone: "warn",
+    body: `${warns.length ? `<p style="margin:0 0 6px;">${comboPairText(sh, lead, member)} · ${fmtQty(quantity)} sets, ${ratio} nut${ratio === 1 ? "" : "s"} per bolt</p>
+        <ul class="combo-warns">${warns.map(w => `<li>${w}</li>`).join("")}</ul>
+        <label class="inline-check"><input type="checkbox" id="combo-ack"> I've checked — combine them as they are</label>` : ""}
+      ${repack ? `<p class="muted small">Their boxes are redone${sh.packed_at ? " and the packing is accepted again" : ""}.${dirty ? " Unsaved packing changes on this screen are dropped." : ""}</p>` : ""}`,
+    buttons: [{ label: warns.length ? "Combine Anyway" : "Continue", value: "go", cls: "confirm-btn" }, { label: "Go Back", value: null, cls: "secondary" }] });
+  if (value !== "go") return false;
+  if (warns.length && !el.querySelector("#combo-ack").checked) { toast("Tick that you've checked the lines, then Combine Anyway"); return comboConfirm(sh, lead, member, quantity, ratio); }
+  return true;
 }
 async function comboPost(shId, body, done) {
   const err = document.getElementById("proc-error");
   if (err) err.textContent = "";
   try {
-    await apiFetch(`/api/shipments/${shId}/combos`, { method: "POST", body: JSON.stringify(body) });
+    const after = await apiFetch(`/api/shipments/${shId}/combos`, { method: "POST", body: JSON.stringify(body) });
+    (after.combos || []).filter(c => c.lead_line_id === body.lead_line_id).forEach(c => comboFresh.add(c.id));
     await loadComboSug(shId);
     if (proc) proc.dirty = false;
     toast(done);
     await afterShipmentChange(shId, proc ? proc.step : null);
   } catch (e) { if (err) err.textContent = e.message; else toast(e.message); }
 }
-async function comboSave(shId, lead, member, qtyId, ratioId, ratio = 1) {
-  const sh = shipmentsById[shId], err = document.getElementById("proc-error");
-  const quantity = Number(document.getElementById(qtyId).value), r = ratioId ? Number(document.getElementById(ratioId).value) : ratio;
-  if (!Number.isInteger(quantity) || quantity < 1 || !Number.isInteger(r) || r < 1) { if (err) err.textContent = "Use whole numbers of 1 or more."; return; }
-  if (!(await comboConfirmRepack(sh, [lead, member]))) return;
-  await comboPost(shId, { lead_line_id: lead, member_line_id: member, quantity, ratio: r }, `Combined: ${quantity.toLocaleString()} assembled units`);
+async function comboSave(shId, lead, member, quantity, ratio = 1) {
+  const sh = shipmentsById[shId];
+  if (!(await comboConfirm(sh, lead, member, quantity, ratio))) return;
+  await comboPost(shId, { lead_line_id: lead, member_line_id: member, quantity, ratio }, `Combined: ${quantity.toLocaleString()} assembled units`);
 }
 async function comboSplit(shId, comboId) {
   const sh = shipmentsById[shId], c = (sh.combos || []).find(x => x.id === comboId), err = document.getElementById("proc-error");
-  if (!c || !(await comboConfirmRepack(sh, [c.lead_line_id, c.member_line_id]))) return;
+  if (!c) return;
+  if (sh.packed_at || sh.boxes.some(b => [c.lead_line_id, c.member_line_id].includes(b.order_line_id)) || (proc && proc.dirty)) {
+    const { value } = await askDialog({ title: "Split these lines?", tone: "warn", body: `<p>${comboPairText(sh, c.lead_line_id, c.member_line_id)} go out separately again on ${escapeHtml(sh.code)}; their boxes are redone${sh.packed_at ? " and the packing is accepted again" : ""}.</p>`,
+      buttons: [{ label: "Split", value: "go", cls: "danger" }, { label: "Go Back", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
+  }
   try {
     await apiFetch(`/api/shipments/${shId}/combos/${comboId}`, { method: "DELETE" });
     await loadComboSug(shId);
@@ -802,25 +877,41 @@ async function comboSplit(shId, comboId) {
     await afterShipmentChange(shId, proc ? proc.step : null);
   } catch (e) { if (err) err.textContent = e.message; else toast(e.message); }
 }
-// Any two lines by hand: a nut we charge for, or one whose code doesn't follow the -NUT rule.
-async function comboManual(shId) {
+// The pair picker: any two lines (a nut we charge for, one whose code doesn't follow -NUT), or a pair already combined (Edit)
+async function comboDialog(shId, title, lead, member, quantity, ratio, locked = false) {
   const sh = shipmentsById[shId], lines = shippedByLineAll(sh);
   const opts = sel => lines.map(e => `<option value="${e.order_line_id}" ${e.order_line_id === sel ? "selected" : ""}>#${e.line_no ?? ""} ${escapeHtml(String(itemCode(e.item_id)))} · ${fmtQty(e.qty)} booked</option>`).join("");
-  const { value, el } = await askDialog({ title: "Combine two lines", body: `<div class="combo-manual">
-      <label>Bolt <span class="muted small">(its boxes and labels carry both)</span><select id="cm-lead">${opts(lines[0].order_line_id)}</select></label>
-      <label>Nut <span class="muted small">(rides in the bolt's boxes)</span><select id="cm-member">${opts(lines[1].order_line_id)}</select></label>
-      <div class="combo-manual-qty"><label>Assembled units<input type="number" step="1" min="1" id="cm-qty" class="qty-input" value="${Math.min(lines[0].qty, lines[1].qty)}"></label>
-      <label>Nuts per bolt<input type="number" step="1" min="1" id="cm-ratio" class="qty-input" value="1"></label></div></div>
+  const { value, el } = await askDialog({ title, body: `<div class="combo-manual">
+      <label>Bolt <span class="muted small">(the parent: its boxes and labels carry both)</span><select id="cm-lead" ${locked ? "disabled" : ""}>${opts(lead)}</select></label>
+      <label>Nut <span class="muted small">(the child: rides in the bolt's boxes)</span><select id="cm-member" ${locked ? "disabled" : ""}>${opts(member)}</select></label>
+      <div class="combo-manual-qty"><label>Assembled sets<input type="number" step="1" min="1" id="cm-qty" class="qty-input" value="${quantity}"></label>
+      <label>Nuts per bolt<input type="number" step="1" min="1" id="cm-ratio" class="qty-input" value="${ratio}"></label></div></div>
       <p class="muted small">A nut we charge for still bills as its own line. Combining only changes how it's packed.</p>`,
-    buttons: [{ label: "Combine", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    buttons: [{ label: locked ? "Save" : "Combine", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
   if (value !== "go") return;
-  const lead = +el.querySelector("#cm-lead").value, member = +el.querySelector("#cm-member").value;
-  const quantity = Number(el.querySelector("#cm-qty").value), ratio = Number(el.querySelector("#cm-ratio").value);
+  const l = +el.querySelector("#cm-lead").value, m = +el.querySelector("#cm-member").value;
+  const q = Number(el.querySelector("#cm-qty").value), r = Number(el.querySelector("#cm-ratio").value);
   const err = document.getElementById("proc-error");
-  if (lead === member) { if (err) err.textContent = "Pick two different lines."; return; }
-  if (!Number.isInteger(quantity) || quantity < 1 || !Number.isInteger(ratio) || ratio < 1) { if (err) err.textContent = "Use whole numbers of 1 or more."; return; }
-  if (!(await comboConfirmRepack(sh, [lead, member]))) return;
-  await comboPost(shId, { lead_line_id: lead, member_line_id: member, quantity, ratio }, `Combined: ${quantity.toLocaleString()} assembled units`);
+  if (l === m) { if (err) err.textContent = "Pick two different lines."; return; }
+  if (!Number.isInteger(q) || q < 1 || !Number.isInteger(r) || r < 1) { if (err) err.textContent = "Use whole numbers of 1 or more."; return; }
+  await comboSave(shId, l, m, q, r);
+}
+function comboManual(shId) {
+  const sh = shipmentsById[shId], lines = shippedByLineAll(sh), g = (comboSug[shId] || [])[0];
+  const lead = g ? g.lead_line_id : lines[0].order_line_id, member = g ? g.member_line_id : lines[1].order_line_id, ratio = g ? g.ratio : 1;
+  const all = shippedByLineAll(sh, true);
+  return comboDialog(shId, "Combine lines", lead, member, Math.max(1, Math.min(all[lead].booked, Math.floor(all[member].booked / ratio))), ratio);
+}
+function comboEdit(shId, comboId) {
+  const c = (shipmentsById[shId].combos || []).find(x => x.id === comboId);
+  if (c) return comboDialog(shId, "Change combined lines", c.lead_line_id, c.member_line_id, c.quantity, c.ratio, true);
+}
+// After Accept Packaging / on Ship: the pairs going out together, as parent -> child
+function comboSummaryHtml(sh) {
+  if (!(sh.combos || []).length) return "";
+  return `<div class="combo-summary">${sh.combos.map(c => { const a = shLine(sh, c.lead_line_id), b = shLine(sh, c.member_line_id);
+    return `<div class="combo-pair-line${freshCls(c)}">${icon("link")}<b>#${a.line_no ?? ""} ${escapeHtml(String(itemCode(a.item_id)))}</b>
+      <span class="combo-arrow">${icon("cornerRight")}</span>#${b.line_no ?? ""} ${escapeHtml(String(itemCode(b.item_id)))} <span class="muted">· ${fmtQty(c.quantity)} assembled${c.ratio > 1 ? ` (${fmtQty(c.ratio)} nuts each)` : ""}</span></div>`; }).join("")}</div>`;
 }
 
 function lineLabel(entry) {
@@ -1148,10 +1239,10 @@ function calculateBoxes(quantity, packSize) {
 }
 
 function packSizeRowsHtml(shipment) {
-  return shippedByLine(shipment).map(e => `
-    <tr>
+  return comboPackRows(shipment, shippedByLine(shipment), 6, (e, cls) => `
+    <tr class="${cls}">
       <td class="line-no">#${e.line_no ?? ""}</td>
-      <td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(shipment, e.order_line_id)}</td>
+      <td class="grow">${escapeHtml(String(itemLabel(e.item_id)))}${comboTagHtml(shipment, e.order_line_id)}${cls === "combo-rest" ? comboRestNote() : ""}</td>
       <td class="num">${fmtQty(e.qty)}</td>
       <td><input type="number" step="1" min="1" class="pack-size-input qty-input" data-line="${e.order_line_id}" data-qty="${e.qty}" value="${packSizeFor(shipment, e)}" oninput="splitByPackSize(${e.order_line_id})">
         ${packSourceHtml(shipment, e)}</td>
@@ -1159,7 +1250,7 @@ function packSizeRowsHtml(shipment) {
       <td><input type="text" class="line-pallet" data-line="${e.order_line_id}" style="width:100px;" placeholder="Optional"
             value="${escapeHtml(linePallet(shipment, e.order_line_id))}" oninput="setLinePallet(${e.order_line_id}, this.value)"></td>
     </tr>
-  `).join("");
+  `, AuthGuard.can("shipments.work"));
 }
 
 // Under a pack size: where it came from (saved / customer's last / last packed / item default) + the item's recent packings.
