@@ -282,7 +282,7 @@
         <h4 style="margin-top:20px;">Reset password</h4>
         <p class="muted">Sets a temporary password; they must choose a new one at next login.</p>
         <div class="row" style="max-width:520px;">
-          <input type="text" id="e-password" value="${randomPassword()}" autocomplete="off">
+          <input type="text" id="e-password" value="" placeholder="Type one, or press Generate" autocomplete="off">
           <button class="secondary" style="flex:0;white-space:nowrap;" onclick="document.getElementById('e-password').value = randomPassword()">Generate</button>
           <button style="flex:0;white-space:nowrap;" onclick="resetPassword(${u.id})">Reset Password</button>
         </div>
@@ -335,7 +335,9 @@
     }
 
     function resetPassword(id) {
-      const password = document.getElementById("e-password").value;
+      // the box starts empty on purpose: a password only counts once Reset Password has saved it
+      const box = document.getElementById("e-password"), password = box.value.trim();
+      if (!password) { box.focus(); box.placeholder = "Type a password or press Generate first"; box.classList.add("pick-short"); return; }
       userAction(id, `/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ password }) },
         `Password reset. Give them this temporary password: <code>${escapeHtml(password)}</code>`);
     }

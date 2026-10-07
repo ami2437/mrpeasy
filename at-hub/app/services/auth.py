@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.config.settings import settings
 from app.models import User
@@ -65,7 +66,10 @@ class AuthService:
 
     @staticmethod
     def get_user_by_username(db: Session, username: str) -> Optional[User]:
-        return db.query(User).filter(User.username == username).first()
+        """Usernames ignore case: "jasonb" signs in as "Jasonb" (no two accounts differ only by case)."""
+        name = (username or "").strip()
+        return (db.query(User).filter(User.username == name).first()
+                or db.query(User).filter(func.lower(User.username) == name.lower()).first())
 
     @staticmethod
     def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:

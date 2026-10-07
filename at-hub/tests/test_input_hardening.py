@@ -99,3 +99,11 @@ def test_my_account_works_on_a_temporary_password(api, client):
     assert client.post("/api/auth/2fa/setup", headers=h).status_code == 200
     view = client.post(f"/api/users/{u['id']}/view-as", headers={"Authorization": f"Bearer {AuthService.create_access_token({'sub': 'admin'})}"}).json()
     assert client.get("/api/shipments/", headers={"Authorization": f"Bearer {view['access_token']}"}).status_code == 200
+
+
+def test_usernames_ignore_case(api, client):
+    name = uid("CaseUser")
+    api.post("/api/users/", json={"username": name, "password": "Temp-Pass-1", "role": "employee"})
+    r = client.post("/api/auth/login", json={"username": name.lower(), "password": "Temp-Pass-1"})
+    assert r.status_code == 200 and r.json()["user"]["username"] == name
+    api.post("/api/users/", json={"username": name.upper(), "password": "Temp-Pass-1", "role": "employee"}, expect=400)

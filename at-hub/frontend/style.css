@@ -2142,3 +2142,5 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
 .pl-opts .inline-check { text-transform: none; }
 .pl-opts .inline-check.is-off { opacity: .45; cursor: not-allowed; }
 button.lit-btn { font-weight: 600; box-shadow: 0 0 0 3px var(--accent-ring), 0 6px 14px -6px color-mix(in srgb, var(--accent) 70%, transparent); }  /* what you can do next on a shipped shipment: Modify / Mark Delivered */
+/* Edge's own reveal / clear buttons sit where our eye is and only work once: hide them -- ours does the job */
+input::-ms-reveal, input::-ms-clear { display: none; }

@@ -3,6 +3,7 @@ reset passwords and deactivate users. Same rules as the main portal: there must 
 be at least one active super admin."""
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.services.auth import AuthService
@@ -43,8 +44,9 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), current: User =
         raise HTTPException(status_code=400, detail="Username is required")
     if not db.get(Role, data.role):
         raise HTTPException(status_code=400, detail="Invalid role")
-    if db.query(User).filter(User.username == username).first():
-        raise HTTPException(status_code=400, detail=f"Username {username} is already taken")
+    taken = db.query(User).filter(func.lower(User.username) == username.lower()).first()  # sign-in ignores case
+    if taken:
+        raise HTTPException(status_code=400, detail=f"Username {taken.username} is already taken")
     check_password_strength(data.password)
     user = User(
         username=username,
