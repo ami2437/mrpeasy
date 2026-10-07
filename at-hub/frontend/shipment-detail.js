@@ -129,7 +129,7 @@ function packingReadOnlyHtml(sh) {
       <button class="secondary" onclick="printLabels(${sh.id})">Print Labels</button>
       ${used.length ? `<button class="secondary" onclick="printPalletLabels(${sh.id})" title="4x6 shipment pallet labels: PO #, job # and every pallet with its customer item #s" data-icon="layers">Pallet Labels</button>` : ""}
       <button class="secondary" onclick="location.href='labels.html?shipment_id=${sh.id}'" title="Edit a label before printing, print-only">Custom Label</button>
-      <button class="secondary" onclick="printPackingList(${sh.id})">Packing List PDF</button>
+      <button class="secondary" onclick="printPackingList(${sh.id})" title="${SHIPPED.includes(sh.status) ? "The packing list" : "Prints with a DRAFT watermark until the shipment has shipped"}">Packing List PDF${SHIPPED.includes(sh.status) ? "" : " (Draft)"}</button>
       <button class="secondary" onclick="exportPackingList(${sh.id}, 'xlsx')" title="The packing list as an Excel workbook: header, lines, boxes and pallets">Excel</button>
       <button class="secondary" onclick="exportPackingList(${sh.id}, 'csv')" title="The packing list lines as a CSV file (opens in Excel, imports anywhere)">CSV</button>
       <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
@@ -448,7 +448,7 @@ function procPackHtml(sh) {
 function procPackFoot(sh) {
   return `${sh.packed_at || sh.boxes.length ? `<button type="button" class="danger" onclick="unpackShipment(${sh.id})" title="Clear the boxes, pallets and accepted packing (picking stays)">Unpack</button>` : ""}
     ${sh.boxes.length ? `<button type="button" class="secondary" onclick="printLabels(${sh.id})" title="Labels for the saved boxes">Labels</button>
-      <button type="button" class="secondary" onclick="printPackingList(${sh.id})" title="Packing list of the saved packing">Packing List</button>` : ""}
+      <button type="button" class="secondary" onclick="printPackingList(${sh.id})" title="Prints with a DRAFT watermark until the shipment has shipped">Packing List (Draft)</button>` : ""}
     <span class="spacer"></span>
     <button type="button" class="next-step" onclick="procAccept()">${sh.packed_at ? "Accept Changes" : "Accept Packaging"}</button>`;
 }

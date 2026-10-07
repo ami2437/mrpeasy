@@ -282,8 +282,15 @@ def _packing_list(db, sh: Shipment, opt):
                         "notes": sh.notes or "", "lines": str(len(rows)), "units": qty(sum(by_line.values())), "boxes": str(len(sh.boxes) or ""),
                         "pallets": str(len(pallets)) if pallets else "", "weight": f"{weight:,.0f} lbs" if weight else "",
                         "pod_url": f"{base}/pod.html?id={sh.id}" if base else f"/pod.html?id={sh.id}"},
-           "_pallet_rows": pallet_rows}
+           "_pallet_rows": pallet_rows, "_watermark": packing_watermark(sh)}
     return ctx, rows
+
+
+def packing_watermark(sh):
+    """A packing list is final only once the shipment has shipped: before that every page says DRAFT (CANCELLED if it was)."""
+    if sh.status in ("shipped", "delivered", "invoiced"):
+        return None
+    return "CANCELLED" if sh.status == "cancelled" else "DRAFT"
 
 
 def combo_text(c, lead_qty, member_line, codes) -> str:

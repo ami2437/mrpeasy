@@ -626,8 +626,10 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
         f"Order {order.code}" if order else None,
         f"Job {order.job_number}" if order and order.job_number else None,
     ] if x)
-    return _build(story, _footer_text(company), f"Packing list {shipment.code}", trace_text=trace,
-                  signature="Received by / date")
+    from app.services.doc_context import packing_watermark
+    wm = packing_watermark(shipment)  # DRAFT until it ships
+    return _build(story, _footer_text(company), f"Packing list {shipment.code}", wm, RED if wm == "CANCELLED" else None,
+                  trace_text=trace, signature="Received by / date")
 
 
 # ---- purchase order ----

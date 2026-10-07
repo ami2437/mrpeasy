@@ -41,6 +41,9 @@ def _collect(db: Session, shipment: Shipment, opts: dict) -> dict:
              ("Lines", _whole(_num(ctx["shipment"]["lines"]))), ("Units", _whole(_num(ctx["shipment"]["units"]))),
              ("Boxes", _whole(_num(ctx["shipment"]["boxes"]))), ("Pallets", _whole(_num(ctx["shipment"]["pallets"]))),
              ("Weight (lbs)", _whole(_num(ctx["shipment"]["weight"]))), ("Notes", ctx["shipment"]["notes"])]
+    if ctx.get("_watermark"):  # not shipped yet: say so, as the PDF's DRAFT watermark does
+        facts.insert(0, ("Status", "DRAFT — not shipped yet" if ctx["_watermark"] == "DRAFT" else ctx["_watermark"]))
+    head["Status"] = ctx.get("_watermark") or "SHIPPED"  # every row has it, so a bulk export mixing both lines up
     lines = []
     for r in rows:
         desc, _, note = str(r["description"] or "").partition("\n")  # the PDF prints the line note under the description

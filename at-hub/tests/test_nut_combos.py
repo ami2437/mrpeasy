@@ -345,3 +345,38 @@ def test_packing_list_pdfs_print_the_combined_note(make, api):
             for font in ("sans", "ui", "gothic"):  # the note is <b><i>: every font family needs its bold italic
                 tpl = DocTemplate(doc_type="packing_list", name=key, spec=json.dumps({**spec, "font": font}))
                 assert "Bolts and nuts combined" in text(render_record(db, tpl, "packing_list", record)), (key, font)
+
+
+def test_packing_list_is_draft_until_shipped(make, api):
+    """DRAFT on every page while the shipment hasn't shipped (CANCELLED once cancelled); clean once it has --
+    the built-in PDF, every designer layout, and the Excel / CSV status."""
+    import io as _io
+    import json
+    from pypdf import PdfReader
+    from app.config.database import SessionLocal
+    from app.models import DocTemplate, Shipment
+    from app.services.template_starters import starters
+    from app.services.templates import render_record
+    a = make.item(price=2)
+    make.stock(a, 100)
+    o = make.order(lines=[(a, 50, 2)])
+    pages = lambda pdf: [p.extract_text() for p in PdfReader(_io.BytesIO(pdf)).pages]
+
+    def check(sh_id, word):
+        built = pages(api.get(f"/api/shipments/{sh_id}/packing-list.pdf").content)
+        assert all((word in t) if word else ("DRAFT" not in t and "CANCELLED" not in t) for t in built), (word, built)
+        with SessionLocal() as db:
+            rec = db.get(Shipment, sh_id)
+            for key, spec in starters("packing_list"):
+                if spec.get("table"):
+                    got = pages(render_record(db, DocTemplate(doc_type="packing_list", name=key, spec=json.dumps(spec)), "packing_list", rec))
+                    assert all((word in t) if word else "DRAFT" not in t for t in got), (key, word)
+        rows = list(csv.DictReader(io.StringIO(api.get(f"/api/shipments/{sh_id}/packing-list.csv?part=lines").content.decode("utf-8-sig"))))
+        assert rows[0]["Status"] == (word or "SHIPPED")
+
+    sh = _book(api, o, {o["lines"][0]["id"]: 20})
+    check(sh["id"], "DRAFT")
+    check(_finish(api, sh)["id"], None)
+    sh2 = _book(api, o, {o["lines"][0]["id"]: 10})
+    api.post(f"/api/shipments/{sh2['id']}/cancel")
+    check(sh2["id"], "CANCELLED")
