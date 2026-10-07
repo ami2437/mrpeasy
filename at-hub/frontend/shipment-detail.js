@@ -1342,10 +1342,10 @@ async function showDetail(id) {
     <div id="shipment-sticky" class="sticky-strip"></div>
 
     <div class="ship-actions-bar">
-      ${shipment.status !== "cancelled" ? `<button class="next-step" onclick="openProcess(${shipment.id})" ${open ? "" : "disabled"}
+      ${shipment.status !== "cancelled" ? `<button class="${open ? "next-step" : "secondary"}" onclick="openProcess(${shipment.id})" ${open ? "" : "disabled"}
           title="${open ? "Pick, pack and ship -- every change to the shipment happens here" : "Already shipped -- use Modify Shipment"}">${icon("package")} Process Shipment</button>` : ""}
-      ${shipped ? `<button class="secondary" onclick="openProcess(${shipment.id})" title="Carrier / tracking, or Undo Ship">${icon("pencil")} Modify Shipment</button>` : ""}
-      ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="secondary" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Delivery)">Mark Delivered (no POD)</button>` : ""}
+      ${shipped ? `<button class="lit-btn" onclick="openProcess(${shipment.id})" title="Carrier / tracking, or Undo Ship">${icon("pencil")} Modify Shipment</button>` : ""}
+      ${shipment.status === "shipped" && AuthGuard.can("shipments.deliver") ? `<button class="lit-btn" onclick="deliverNow(${shipment.id})" title="Managers can mark delivered without a POD (today's date; change it under Delivery)">Mark Delivered (no POD)</button>` : ""}
       <span class="spacer"></span>
       ${open ? `<button class="danger" onclick="cancelShipment(${shipment.id})">Cancel Shipment</button>` : ""}
       ${["new", "ready", "cancelled"].includes(shipment.status) ? `<button class="danger" onclick="deleteShipment(${shipment.id})">Delete Shipment</button>` : ""}
