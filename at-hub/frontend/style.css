@@ -1936,7 +1936,7 @@ html[data-theme="dark"] .co-combo-mark { color: #c4b5fd; }
 .card.uw-grey, #detail-card.uw-grey { background: color-mix(in srgb, var(--uw) 8%, var(--surface)); }
 /* the watermark: a picture on a layer exactly the card's size -- nothing to clip, nothing to overflow */
 .card.uw[data-wm]::after, #detail-card.uw[data-wm]::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
-  background: var(--wm-img) no-repeat center 70px / min(760px, 80%) auto; border-radius: inherit; }
+  background: var(--wm-img) no-repeat center 150px / min(820px, 86%) auto; border-radius: inherit; }  /* starts below the sticky record header */
 html[data-theme="dark"] .card.uw[data-wm]::after, html[data-theme="dark"] #detail-card.uw[data-wm]::after { background-image: var(--wm-img-dark); }
 @media print { .card.uw[data-wm]::after, #detail-card.uw[data-wm]::after { filter: grayscale(1); } }
 /* list rows: a soft wash in the same colours (lots on hold / rejected, overdue invoices, ...) */

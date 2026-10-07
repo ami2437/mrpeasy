@@ -495,10 +495,14 @@ const UNDERLAY_TONES = { orange: "#ea580c", amber: "#d97706", blue: "#2563eb", p
 // The watermark is an SVG picture on a card-sized layer, so it never pushes or clips the card's content (a long
 // table still scrolls); the word scales with the card. Light and dark versions: the dark one a touch stronger.
 function watermarkSvg(word, color, opacity) {
-  const size = Math.min(190, Math.round(1500 / Math.max(word.length, 1)));  // longer words, smaller type
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420"><text x="500" y="250" text-anchor="middle"
-    font-family="Segoe UI, system-ui, Arial, sans-serif" font-weight="800" font-size="${size}" letter-spacing="${Math.round(size * .12)}"
-    fill="${color}" fill-opacity="${opacity}" transform="rotate(-16 500 210)">${escapeHtml(word)}</text></svg>`;
+  // The word is fitted to 720 of the picture's 1000 units (textLength makes that exact whatever the font), so once
+  // tilted it still sits wholly inside: no letters cut off at either end, top or bottom.
+  const n = Math.max(word.length, 1), size = Math.min(160, Math.round(720 / (n * 0.8)));
+  const spacing = Math.round(size * .1), natural = n * size * 0.7 + (n - 1) * spacing, width = Math.min(720, Math.round(natural));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 460"><text x="500" y="${230 + Math.round(size * .36)}" text-anchor="middle"
+    font-family="Segoe UI, system-ui, Arial, sans-serif" font-weight="800" font-size="${size}" letter-spacing="${spacing}"
+    textLength="${width}" lengthAdjust="spacingAndGlyphs"
+    fill="${color}" fill-opacity="${opacity}" transform="rotate(-16 500 230)">${escapeHtml(word)}</text></svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 function setUnderlay(el, tone, word = "") {
