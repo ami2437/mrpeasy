@@ -1492,6 +1492,17 @@ async function printLabels(shipmentId) {
 // What goes on the label: ticked in the pop-up each time, remembered on this computer for next time.
 const PALLET_LABEL_OPTS = [["show_of", "Pallet count — \"3 of 5\" (off: just \"3\")"], ["boxes_col", "Boxes on each pallet"], ["total_pallets", "Total pallets"],
                            ["total_boxes", "Total boxes"], ["total_weight", "Total weight"], ["show_company", "Our company name"], ["show_ship_date", "Ship date"]];
+// Options that only mean something on one label per pallet: greyed out for the summary label
+const PER_PALLET_ONLY = ["show_of"];
+function palletModeSync(el) {
+  const box = el.closest(".pl-opts"), summary = box.querySelector("input[name=pl-mode]:checked").value === "one";
+  PER_PALLET_ONLY.forEach(k => {
+    const cb = box.querySelector(`[data-opt="${k}"]`), row = cb.closest("label");
+    cb.disabled = summary;
+    row.classList.toggle("is-off", summary);
+    row.title = summary ? "Only on one label per pallet -- a summary label has no single pallet to count" : "";
+  });
+}
 async function printPalletLabels(shipmentId, ids = null) {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("at_hub_pallet_label_opts") || "{}"); } catch (e) {}
@@ -1499,11 +1510,12 @@ async function printPalletLabels(shipmentId, ids = null) {
   const { value, el } = await askDialog({ title: "Shipment pallet labels",
     body: `<p class="muted small" style="margin-top:0;">Every label shows the PO #, job # and each pallet with its customer item #s.</p>
       <div class="pl-opts">
-        <label class="inline-check"><input type="radio" name="pl-mode" value="each" ${!["one", "own"].includes(saved.mode) ? "checked" : ""}> <b>One label per pallet</b> <span class="muted small">(its own pallet highlighted)</span></label>
-        <label class="inline-check"><input type="radio" name="pl-mode" value="own" ${saved.mode === "own" ? "checked" : ""}> <b>One label per pallet, only that pallet's items</b> <span class="muted small">(best on thermal printers)</span></label>
-        <label class="inline-check"><input type="radio" name="pl-mode" value="one" ${saved.mode === "one" ? "checked" : ""}> <b>One summary label</b></label>
+        <label class="inline-check"><input type="radio" name="pl-mode" value="each" onchange="palletModeSync(this)" ${!["one", "own"].includes(saved.mode) ? "checked" : ""}> <b>One label per pallet</b> <span class="muted small">(its own pallet highlighted)</span></label>
+        <label class="inline-check"><input type="radio" name="pl-mode" value="own" onchange="palletModeSync(this)" ${saved.mode === "own" ? "checked" : ""}> <b>One label per pallet, only that pallet's items</b> <span class="muted small">(best on thermal printers)</span></label>
+        <label class="inline-check"><input type="radio" name="pl-mode" value="one" onchange="palletModeSync(this)" ${saved.mode === "one" ? "checked" : ""}> <b>One summary label</b></label>
         <div class="pl-opts-head">Include on the label</div>
-        ${PALLET_LABEL_OPTS.map(([k, l]) => `<label class="inline-check"><input type="checkbox" data-opt="${k}" ${on(k) ? "checked" : ""}> ${l}</label>`).join("")}
+        ${PALLET_LABEL_OPTS.map(([k, l]) => { const off = saved.mode === "one" && PER_PALLET_ONLY.includes(k);
+          return `<label class="inline-check ${off ? "is-off" : ""}" ${off ? `title="Only on one label per pallet -- a summary label has no single pallet to count"` : ""}><input type="checkbox" data-opt="${k}" ${on(k) ? "checked" : ""} ${off ? "disabled" : ""}> ${l}</label>`; }).join("")}
       </div>`,
     buttons: [{ label: "Print", value: "print", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
   if (!value) return;

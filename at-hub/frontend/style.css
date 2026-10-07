@@ -2140,3 +2140,4 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
 .pl-opts-head { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .04em;
   text-transform: uppercase; color: var(--muted); }
 .pl-opts .inline-check { text-transform: none; }
+.pl-opts .inline-check.is-off { opacity: .45; cursor: not-allowed; }
