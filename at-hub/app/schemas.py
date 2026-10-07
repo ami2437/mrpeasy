@@ -409,7 +409,9 @@ class CustomerOrderResponse(BaseModel):
     created_at: Optional[datetime] = None  # when the order was entered (MRPeasy's "created" for imported ones)
     created_by: Optional[str] = None
     delivery_date: Optional[datetime] = None
-    status: str
+    status: str  # validation (quick-captured) | draft | confirmed | ...
+    validated_by: Optional[str] = None
+    validated_at: Optional[datetime] = None
     po_number: Optional[str] = None
     customer_po_date: Optional[datetime] = None
     job_number: Optional[str] = None
@@ -984,7 +986,9 @@ class PurchaseOrderResponse(BaseModel):
     created_by: Optional[str] = None
     vendor_so_number: Optional[str] = None
     expected_date: Optional[datetime] = None
-    status: str
+    status: str  # validation (quick-captured) | draft | ordered | ...
+    validated_by: Optional[str] = None
+    validated_at: Optional[datetime] = None
     freight_cost: Optional[float] = None
     tariff_cost: Optional[float] = None
     landed_cost_total: float = 0

@@ -263,7 +263,9 @@ class CustomerOrder(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     order_date = Column(DateTime, default=datetime.utcnow)
     delivery_date = Column(DateTime, nullable=True)
-    status = Column(String, nullable=False, default="draft")  # draft | confirmed | shipped | invoiced | cancelled
+    status = Column(String, nullable=False, default="draft")  # validation (captured, not checked yet) | draft | confirmed | shipped | invoiced | cancelled
+    validated_by = Column(String, nullable=True)  # who checked a quick-captured order (and when)
+    validated_at = Column(DateTime, nullable=True)
     po_number = Column(String, nullable=True)  # customer's PO reference -- printed on shipment labels
     customer_po_date = Column(DateTime, nullable=True)  # when the customer issued their PO (MRPeasy custom_218)
     job_number = Column(String, nullable=True)  # optional job reference -- printed on shipment labels
@@ -382,7 +384,9 @@ class PurchaseOrder(Base):
     vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False)
     order_date = Column(DateTime, default=clock.today)  # a calendar date
     expected_date = Column(DateTime, nullable=True)
-    status = Column(String, nullable=False, default="draft")  # draft | ordered | partially_received | received | cancelled
+    status = Column(String, nullable=False, default="draft")  # validation (captured, not checked yet) | draft | ordered | partially_received | received | cancelled
+    validated_by = Column(String, nullable=True)  # who checked a quick-captured PO (and when)
+    validated_at = Column(DateTime, nullable=True)
     freight_cost = Column(Float, nullable=True, default=0)
     tariff_cost = Column(Float, nullable=True, default=0)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
@@ -537,6 +541,24 @@ class ShipmentEmail(Base):
     files = Column(Text, nullable=True)  # file names that were attached
     sent_by = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TypeOption(Base):
+    """One entry of a list people can add to (app/services/type_lists.py): document types, S&H / charge types, landed
+    cost types, payment methods. Records store the key; the label is what's shown and can be renamed."""
+    __tablename__ = "type_options"
+
+    id = Column(Integer, primary_key=True, index=True)
+    list = Column(String, nullable=False, index=True)  # attachment | charge | landed_cost | payment_method
+    key = Column(String, nullable=False)  # what records store: packing_list, vendor_packing_list...
+    label = Column(String, nullable=False)  # "Vendor Packing List"
+    scopes = Column(String, nullable=True)  # document types: customer_order,purchase_order,shipment
+    money = Column(Boolean, nullable=False, default=False)  # document types with prices: managers only
+    builtin = Column(Boolean, nullable=False, default=False)
+    active = Column(Boolean, nullable=False, default=True)  # hidden ones stay on old records, just not offered
+    position = Column(Integer, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Attachment(Base):

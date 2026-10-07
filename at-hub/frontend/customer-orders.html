@@ -17,6 +17,7 @@
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search order code, customer, PO#, job#, or item code...">
         <button class="secondary toolbar-end" data-perm="quotes" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
+        <button class="capture-btn" data-perm="orders.edit" data-icon="upload" onclick="captureOrder()" title="Keep a customer's PO now, fill it in later: just the customer and the file">Quick Capture</button>
         <button data-perm="orders.edit" onclick="toggleForm()">+ New Order</button>
         <button class="ai-btn" data-perm="orders.edit" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
       </div>
@@ -505,7 +506,7 @@
       const payDates = realInv.flatMap(i => i.payments.map(p => p.paid_date || p.created_at)).filter(Boolean).sort();
       const steps = [
         ["Created", true, order.created_at || order.order_date],
-        ["Confirmed", order.status !== "draft" && order.status !== "cancelled", null],
+        ["Confirmed", !["validation", "draft", "cancelled"].includes(order.status), null],
         ["Booked", anyBooked, live.map(s => s.created_at).filter(Boolean).sort()[0]],
         ["Shipped", allShipped, shipDates[shipDates.length - 1], !allShipped && shipDates.length ? "partly" : ""],
         ["Delivered", allDelivered, delivDates[delivDates.length - 1], !allDelivered && delivDates.length ? "partly" : ""],
@@ -646,10 +647,10 @@
         const orderInvoices = invoices.filter(i => i.order_id === o.id);
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
-        <tr class="${done ? "order-done" : ""}">
+        <tr class="${done ? "order-done" : ""} ${rowUnderlay("order", o, ["orange"])}">
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
-          <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
+          <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled dup-tag" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td>
@@ -839,7 +840,7 @@
       currentOrder = order;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
-      const canBook = !["shipped", "invoiced", "cancelled"].includes(order.status)
+      const canBook = !["validation", "shipped", "invoiced", "cancelled"].includes(order.status)
         && order.lines.some(l => l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9);
       const isManager = AuthGuard.can("orders.edit");  // without it: view orders and ship them, nothing else
       const editable = isManager && order.status !== "cancelled";
@@ -854,7 +855,7 @@
       const fromQuote = (typeof quotes !== "undefined" ? quotes : []).find(q => q.order_id === order.id);
       const fromQuoteCode = fromQuote ? fromQuote.code : ((order.notes || "").match(/From quote (Q-?\d+)/) || [])[1];
       card.innerHTML = `
-        <h3 class="detail-head" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status}</span>
+        <h3 class="detail-head" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status === "validation" ? "Validation Needed" : order.status}</span>
           <span class="muted small" style="font-weight:400;">Created ${fmtDate(order.created_at || order.order_date)}${order.created_by ? ` by ${escapeHtml(order.created_by === "mrpeasy-import" ? "MRPeasy import" : order.created_by)}` : ""}</span>
           ${fromQuoteCode ? `<span class="from-quote-badge" ${fromQuote ? `onclick="openQuote(${fromQuote.id})" title="Open the quote this order came from"` : ""}>${icon("file")}from ${escapeHtml(fromQuoteCode)}</span>` : ""}
           ${isDraft && isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)" title="Confirm this order with the customer -- needed before creating shipments">Confirm Order</button>` : ""}
@@ -864,6 +865,7 @@
           ${isManager ? `<button class="secondary small-btn" onclick="copyOrder(${order.id})" data-icon="layers">Copy Order</button>` : ""}</h3>
         ${isDraft ? `<div class="draft-banner">${icon("pencil")}<div><strong>Draft — not confirmed.</strong> Confirm the order before creating shipments.</div>
           ${isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)">Confirm Order</button>` : ""}</div>` : ""}
+        ${validationBannerHtml("order", order, isManager)}
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
         <div id="co-sticky" class="sticky-strip"></div>
@@ -1504,6 +1506,13 @@
         errorEl.textContent = err.message;
       }
     }
+
+    // Quick capture: the customer + their PO file now; the order waits as "Validation needed"
+    async function captureOrder() {
+      const made = await quickCapture("order");
+      if (made) { await loadOrders(); showDetail(made.id); }
+    }
+    async function onValidated(o) { await loadOrders(); showDetail(o.id); }
 
     async function loadOrders() {
       Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);

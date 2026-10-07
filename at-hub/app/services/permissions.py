@@ -49,6 +49,7 @@ CATALOG = [
     ("simulate", "Tools", "Simulate", False, "admin"),
     # Admin
     ("company", "Admin", "Company settings and logo", False, "admin"),
+    ("types.manage", "Admin", "Add and rename document types, S&H types, landed cost types and payment methods", False, "manager"),
     ("templates", "Admin", "Template Designer", False, "admin"),
     ("tasks", "Admin", "Task list", False, "admin"),
     ("users", "Admin", "Users and roles", False, "super_admin"),

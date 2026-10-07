@@ -91,7 +91,12 @@ def all_sections(db: Session, user: User) -> list:
                                            "days": _days(min(b.bill_date or b.created_at for b in po.bills))})
                                for po in pos if po.bills]
         overdue_pos = [po_row(po, {"days": _days(po.expected_date)}) for po in pos if po.status != "draft" and po.expected_date and po.expected_date < now]
+        captured = db.query(PurchaseOrder).filter(PurchaseOrder.status == "validation").all()
         sections += [
+            {"key": "captured_pos", "title": "Captured POs To Validate", "page": "purchase-orders.html",
+             "help": "Quick-captured vendor documents: check them, fill in the lines and validate.",
+             "rows": [{"id": po.id, "code": po.code, "vendor": vendors.get(po.vendor_id), "ref": po.vendor_so_number, "by": po.created_by,
+                       "days": _days(po.created_at), "_date": po.created_at, "_label": po.code} for po in captured]},
             {"key": "vendor_shipped", "title": "Shipped By Vendor (Invoiced) But Not Received", "page": "purchase-orders.html",
              "help": "The vendor has invoiced (so it has normally shipped) but we haven't received everything.",
              "rows": sorted(billed_not_received, key=lambda r: -(r["days"] or 0))},
@@ -143,6 +148,10 @@ def all_sections(db: Session, user: User) -> list:
                               "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
                              for o in orders.values() if o.status == "confirmed"
                              and any(l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9 for l in o.lines)], key=lambda r: -r["amount"])},
+            {"key": "captured_orders", "title": "Captured Orders To Validate", "page": "customer-orders.html",
+             "help": "Quick-captured customer POs: check them, fill in the lines and validate.",
+             "rows": [{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number, "by": o.created_by,
+                       "days": _days(o.created_at), "_date": o.created_at, "_label": o.code} for o in orders.values() if o.status == "validation"]},
             {"key": "draft_orders", "title": "Draft Orders Not Confirmed", "page": "customer-orders.html",
              "help": "Entered but never confirmed.",
              "rows": [{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,

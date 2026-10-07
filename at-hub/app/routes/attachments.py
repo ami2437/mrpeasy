@@ -18,22 +18,21 @@ from app.dependencies import get_current_active_user
 from app.services.permissions import has
 from app.models import Attachment, CustomerOrder, MtrLink, PurchaseOrder, Shipment, User
 from app.schemas import AttachmentResponse
+from app.services import type_lists
 from app.services.crud import ShipmentService
 
 router = APIRouter(prefix="/api/attachments", tags=["attachments"])
 
 ENTITIES = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
-# Which kinds of document belong on which record.
-CATEGORIES = {
-    "customer_order": {"customer_po", "invoice", "packing_list", "bol", "mtr", "other"},
-    "purchase_order": {"purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"},
-    "shipment": {"pod", "bol", "packing_list", "other"},
-}
+# Which kinds of document belong on which record: Company Settings -> Types & Tags (app/services/type_lists.py).
+def _categories(db: Session, entity_type: str) -> set:
+    return type_lists.keys(db, "attachment", entity_type)
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif",
                       ".xlsx", ".xls", ".csv", ".doc", ".docx", ".txt", ".eml", ".msg"}
 MAX_BYTES = 25 * 1024 * 1024
-# Documents that carry prices; employees never list, open or upload them.
-MONEY_CATEGORIES = {"customer_po", "vendor_invoice", "vendor_quote", "purchase_order", "invoice"}
+# Documents that carry prices (types marked "has prices"); employees never list, open or upload them.
+def _money(db: Session) -> set:
+    return type_lists.money_keys(db)
 THUMB_WIDTH = 160
 
 
@@ -62,6 +61,25 @@ def store_file(db: Session, entity_type: str, entity_id: int, category: str, nam
     return att
 
 
+def read_uploads(files) -> list:
+    """[(name, content type, bytes)] -- refuses file types we don't keep, empty files and anything over 25 MB."""
+    if not files:
+        raise HTTPException(status_code=400, detail="Choose at least one file")
+    blobs = []
+    for f in files:
+        name = os.path.basename(f.filename or "file")
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"{name}: file type {ext or '(none)'} isn't allowed")
+        data = f.file.read()
+        if len(data) > MAX_BYTES:
+            raise HTTPException(status_code=400, detail=f"{name} is larger than 25 MB")
+        if not data:
+            raise HTTPException(status_code=400, detail=f"{name} is empty")
+        blobs.append((name, f.content_type or mimetypes.guess_type(name)[0], data))
+    return blobs
+
+
 def _check_entity(db: Session, entity_type: str, entity_id: int) -> None:
     model = ENTITIES.get(entity_type)
     if not model:
@@ -82,7 +100,7 @@ def list_attachments(entity_type: str = Query(...), entity_id: int = Query(...),
                      user: User = Depends(get_current_active_user)):
     q = db.query(Attachment).filter(Attachment.entity_type == entity_type, Attachment.entity_id == entity_id)
     if _hides_money(user):
-        q = q.filter(Attachment.category.notin_(MONEY_CATEGORIES))
+        q = q.filter(Attachment.category.notin_(_money(db)))
     return q.order_by(Attachment.created_at.desc()).all()
 
 
@@ -92,7 +110,7 @@ def attachment_counts(entity_type: str = Query(...), db: Session = Depends(get_d
     from sqlalchemy import func
     q = db.query(Attachment.entity_id, func.count(Attachment.id)).filter(Attachment.entity_type == entity_type)
     if _hides_money(user):
-        q = q.filter(Attachment.category.notin_(MONEY_CATEGORIES))
+        q = q.filter(Attachment.category.notin_(_money(db)))
     return {str(eid): n for eid, n in q.group_by(Attachment.entity_id).all()}
 
 
@@ -108,9 +126,9 @@ def upload(entity_type: str = Form(...), entity_id: int = Form(...), category: s
     entity_ids = list(dict.fromkeys(entity_ids))
     for eid in entity_ids:
         _check_entity(db, entity_type, eid)
-    if category not in CATEGORIES[entity_type]:
+    if category not in _categories(db, entity_type):
         raise HTTPException(status_code=400, detail=f"'{category}' isn't a valid document type here")
-    if category in MONEY_CATEGORIES and _hides_money(user):
+    if category in _money(db) and _hides_money(user):
         raise HTTPException(status_code=403, detail="This document type needs the manager role")
     if not files:
         raise HTTPException(status_code=400, detail="Choose at least one file")
@@ -150,7 +168,7 @@ def upload(entity_type: str = Form(...), entity_id: int = Form(...), category: s
 def download(attachment_id: int, download: bool = False, db: Session = Depends(get_db),
              user: User = Depends(get_current_active_user)):
     att = _get(db, attachment_id)
-    if att.category in MONEY_CATEGORIES and _hides_money(user):
+    if att.category in _money(db) and _hides_money(user):
         raise HTTPException(status_code=403, detail="This document needs the manager role")
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() not in path.parents or not path.exists():
@@ -167,9 +185,9 @@ def retag(attachment_id: int, category: Optional[str] = Form(None), note: Option
     if att.uploaded_by != user.username and not has(user, "money.view"):
         raise HTTPException(status_code=403, detail="Only the uploader or a manager can change this file")
     if category is not None:
-        if category not in CATEGORIES.get(att.entity_type, set()):
+        if category not in _categories(db, att.entity_type):
             raise HTTPException(status_code=400, detail=f"'{category}' isn't a kind of file for this record")
-        if category in MONEY_CATEGORIES and _hides_money(user):
+        if category in _money(db) and _hides_money(user):
             raise HTTPException(status_code=403, detail="That kind of document needs the manager role")
         att.category = category
     if note is not None:
@@ -183,7 +201,7 @@ def retag(attachment_id: int, category: Optional[str] = Form(None), note: Option
 def thumbnail(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """A small PNG of the file's first page (PDF) or the picture itself, made once and kept beside the uploads."""
     att = _get(db, attachment_id)
-    if att.category in MONEY_CATEGORIES and _hides_money(user):
+    if att.category in _money(db) and _hides_money(user):
         raise HTTPException(status_code=403, detail="This document needs the manager role")
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() not in path.parents or not path.exists():

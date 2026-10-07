@@ -1942,3 +1942,52 @@ html[data-theme="dark"] .card.uw[data-wm]::after, html[data-theme="dark"] #detai
 /* list rows: a soft wash in the same colours (lots on hold / rejected, overdue invoices, ...) */
 tr.row-uw > td { background: color-mix(in srgb, var(--uw) 7%, transparent); }
 tr.row-uw > td:first-child { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--uw) 70%, transparent); }
+
+/* ---- quick capture: "Validation needed" -- orange with hazard stripes, never confused with a Draft's amber ---- */
+.uw-orange { --uw: #ea580c; }
+.card.uw-orange, #detail-card.uw-orange {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--uw) 9%, var(--surface)) 0 14px, color-mix(in srgb, var(--uw) 4%, var(--surface)) 14px 28px);
+  border: 2px dashed color-mix(in srgb, var(--uw) 60%, transparent); }
+.tag.validation { background: repeating-linear-gradient(135deg, #fed7aa 0 6px, #ffedd5 6px 12px); color: #9a3412; border: 1px solid #fb923c; text-transform: none; }
+html[data-theme="dark"] .tag.validation { background: repeating-linear-gradient(135deg, #7c2d12 0 6px, #5a210d 6px 12px); color: #fdba74; border-color: #c2410c; }
+.st-ico.st-validation { border-color: #ea580c; background: #ffedd5; color: #c2410c; }
+html[data-theme="dark"] .st-ico.st-validation { background: #5a210d; color: #fdba74; }
+.validation-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin: 4px 0 10px; border-radius: 8px;
+  background: color-mix(in srgb, #ea580c 14%, var(--surface)); border: 1px solid color-mix(in srgb, #ea580c 55%, transparent); color: var(--text); }
+.validation-banner > .ico { color: #c2410c; width: 20px; height: 20px; flex: none; }
+.validation-banner > div:first-of-type { flex: 1; min-width: 260px; }
+.validation-banner .vb-actions { display: flex; gap: 6px; }
+html[data-theme="dark"] .validation-banner > .ico { color: #fdba74; }
+button.capture-btn { background: #ea580c; border-color: #ea580c; color: #fff; }
+button.capture-btn:hover:not(:disabled) { background: #c2410c; border-color: #c2410c; }
+.capture-modal { max-width: 560px; }
+.capture-modal > label:not(.qc-drop), .capture-modal .qc-row > label { display: grid; gap: 3px; margin-top: 8px; }
+.capture-modal .lbl .muted { font-weight: 400; }
+#qc-file-name { text-transform: none; }
+.capture-modal h3 .ico { color: #ea580c; vertical-align: -3px; }
+.qc-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.qc-row > label { flex: 1 1 200px; }
+.qc-drop { position: relative; display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 96px;
+  margin-top: 12px; border: 2px dashed color-mix(in srgb, #ea580c 50%, var(--border)); border-radius: 10px; cursor: pointer; text-align: center;
+  color: var(--muted); padding: 12px; background: color-mix(in srgb, #ea580c 4%, transparent); }
+.qc-drop .ico { width: 24px; height: 24px; color: #ea580c; }
+.qc-drop.over, .qc-drop.has { background: color-mix(in srgb, #ea580c 12%, transparent); color: var(--text); border-style: solid; }
+.qc-drop input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* types & tags: the "+ New ..." pop-up and Company Settings' manager */
+.type-add { max-width: 480px; }
+.type-add > label:not(.inline-check) { display: grid; gap: 3px; }
+.type-add > label.inline-check { margin-top: 6px; }
+.ta-preview { margin: 4px 0 0; min-height: 16px; }
+.ta-similar { display: flex; gap: 8px; margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, #d97706 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #d97706 50%, transparent); }
+.ta-similar > .ico { color: #b45309; flex: none; margin-top: 2px; }
+.ta-sim-list { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.ta-scopes { display: flex; gap: 4px 12px; flex-wrap: wrap; align-items: center; margin: 10px 0 4px; }
+.types-card { max-width: 980px; }
+.types-list { margin-top: 14px; }
+.types-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.types-head h4 { margin: 0; }
+.types-head button { margin-left: auto; }
+.types-table .type-rename { width: 100%; max-width: 280px; padding: 3px 6px; }
+.types-table tr.muted .type-rename { opacity: .6; }
+table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-width: 90px; line-height: 1.2; }  /* "possible duplicate" wraps under the PO # instead of widening the list */

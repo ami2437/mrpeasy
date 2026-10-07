@@ -812,10 +812,47 @@ class CustomerOrderService:
         return order
 
     @staticmethod
+    def capture(db: Session, customer_id: int, po_number: Optional[str], created_by: str) -> CustomerOrder:
+        """Quick capture: a customer's PO kept as an order with no lines yet, status "validation". Nothing can be confirmed,
+        booked or shipped until someone checks it, fills the lines in and validates it (validate())."""
+        customer = db.query(Customer).filter(Customer.id == customer_id).first()
+        if not customer:
+            raise HTTPException(status_code=400, detail="Customer not found")
+        order = CustomerOrder(code=generate_code(db, CustomerOrder, "CO"), customer_id=customer.id,
+                              po_number=(po_number or "").strip() or None,
+                              ship_to_address=customer.shipping_address or customer.address, status="validation", created_by=created_by)
+        db.add(order)
+        db.flush()
+        return order
+
+    @staticmethod
+    def validate(db: Session, order_id: int, by: str, confirm: bool = False) -> CustomerOrder:
+        """A captured order checked: on to Draft (or straight to Confirmed). Needs its lines."""
+        order = CustomerOrderService.get(db, order_id)
+        if order.status != "validation":
+            raise HTTPException(status_code=400, detail=f"{order.code} is {order.status} -- only a captured order needs validating")
+        if not order.lines:
+            raise HTTPException(status_code=400, detail="Add the order's lines from the customer's PO first")
+        po = (order.po_number or "").strip().lower()
+        if po:
+            dup = next((o for o in db.query(CustomerOrder).filter(CustomerOrder.customer_id == order.customer_id, CustomerOrder.id != order.id,
+                                                                    CustomerOrder.status != "cancelled").all()
+                        if (o.po_number or "").strip().lower() == po), None)
+            if dup and not order.duplicate_po_ok:
+                raise HTTPException(status_code=409, detail=f"DUPLICATE_PO|{dup.id}|{dup.code}|Customer PO {order.po_number} is already on order {dup.code}")
+        order.status = "confirmed" if confirm else "draft"
+        order.validated_by, order.validated_at = by, datetime.utcnow()
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
     def confirm(db: Session, order_id: int) -> CustomerOrder:
         """Confirming is a commitment to the customer, not a stock reservation --
         stock is only checked and booked when a shipment is created."""
         order = CustomerOrderService.get(db, order_id)
+        if order.status == "validation":
+            raise HTTPException(status_code=400, detail=f"{order.code} was quick-captured -- check it and Validate it first")
         if order.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
         order.status = "confirmed"
@@ -852,7 +889,7 @@ class CustomerOrderService:
     @staticmethod
     def _recompute_status(order: CustomerOrder) -> None:
         """Re-derive shipped/confirmed from line data. Draft and cancelled orders are left alone."""
-        if order.status in ("draft", "cancelled"):
+        if order.status in ("validation", "draft", "cancelled"):
             return
         fully_shipped = all(l.shipped_quantity >= l.quantity - 1e-9 for l in order.lines)
         order.status = "shipped" if fully_shipped else "confirmed"
@@ -1049,6 +1086,8 @@ class CustomerOrderService:
         order = CustomerOrderService.get(db, order_id)
         if order.status in ("shipped", "invoiced", "cancelled"):
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
+        if order.status == "validation":
+            raise HTTPException(status_code=400, detail=f"Order {order.code} was quick-captured -- validate and confirm it before creating a shipment")
         if order.status == "draft":
             raise HTTPException(status_code=400, detail=f"Order {order.code} isn't confirmed yet -- confirm it before creating a shipment")
         requested = [l for l in data.lines if l.quantity > 0]
@@ -2061,7 +2100,7 @@ class InvoicePaymentService:
             invoice_id=invoice.id,
             amount=data.amount,
             paid_date=clock.calendar_from_input(data.paid_date) or clock.today(),
-            method=data.method,
+            method=payment_method(db, data.method),
             reference=data.reference,
             note=data.note,
             created_by=created_by,
@@ -2235,8 +2274,36 @@ class PurchaseOrderService:
         return po
 
     @staticmethod
+    def capture(db: Session, vendor_id: int, vendor_so_number: Optional[str], created_by: str) -> PurchaseOrder:
+        """Quick capture: a vendor's document kept as a PO with no lines yet, status "validation". It can't be marked
+        ordered, emailed or received until someone checks it, fills the lines in and validates it."""
+        if not db.query(Vendor).filter(Vendor.id == vendor_id).first():
+            raise HTTPException(status_code=400, detail="Vendor not found")
+        po = PurchaseOrder(code=generate_code(db, PurchaseOrder, "PO"), vendor_id=vendor_id,
+                           vendor_so_number=(vendor_so_number or "").strip() or None, status="validation", created_by=created_by)
+        db.add(po)
+        db.flush()
+        return po
+
+    @staticmethod
+    def validate(db: Session, po_id: int, by: str, ordered: bool = False) -> PurchaseOrder:
+        """A captured PO checked: on to Draft (or straight to Ordered). Needs its lines."""
+        po = PurchaseOrderService.get(db, po_id)
+        if po.status != "validation":
+            raise HTTPException(status_code=400, detail=f"{po.code} is {po.status} -- only a captured PO needs validating")
+        if not po.lines:
+            raise HTTPException(status_code=400, detail="Add the PO's lines from the vendor's document first")
+        po.status = "ordered" if ordered else "draft"
+        po.validated_by, po.validated_at = by, datetime.utcnow()
+        db.commit()
+        db.refresh(po)
+        return po
+
+    @staticmethod
     def mark_ordered(db: Session, po_id: int) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
+        if po.status == "validation":
+            raise HTTPException(status_code=400, detail=f"{po.code} was quick-captured -- check it and Validate it first")
         if po.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
         po.status = "ordered"
@@ -2327,7 +2394,7 @@ class PurchaseOrderService:
     @staticmethod
     def refresh_status(po) -> None:
         """Lines can be added or changed after receipt, so re-derive received/partial/ordered."""
-        if po.status in ("draft", "cancelled"):
+        if po.status in ("validation", "draft", "cancelled"):
             return
         goods = [l for l in po.lines if not getattr(l, "is_charge", False)]
         if goods and all(l.received_quantity >= l.quantity - 1e-9 for l in goods):
@@ -2399,6 +2466,8 @@ class PurchaseOrderService:
         po = PurchaseOrderService.get(db, po_id)
         if po.status in ("received", "cancelled"):
             raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if po.status == "validation":
+            raise HTTPException(status_code=400, detail=f"{po.code} was quick-captured -- validate it before receiving stock on it")
 
         # Validate every line up front so a bad line doesn't leave a half-received PO.
         resolved = []
@@ -2495,7 +2564,7 @@ class PurchaseOrderPaymentService:
             amount=data.amount,
             currency=data.currency,
             paid_date=data.paid_date,
-            method=data.method,
+            method=payment_method(db, data.method),
             reference=data.reference,
             note=data.note,
             created_by=created_by,
@@ -2526,7 +2595,7 @@ class VendorBillService:
         db.flush()
         if shipping > 0:
             # The shipping billed on this invoice becomes a PO charge, so the PO total grows to match what's billed.
-            db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(data.shipping_type), amount=shipping,
+            db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.shipping_type), amount=shipping,
                                        description=f"Billed on invoice {number}", vendor_bill_id=bill.id, created_by=created_by))
         db.commit()
         db.refresh(po)
@@ -2548,14 +2617,30 @@ class VendorBillService:
         return po
 
 
-CHARGE_TYPES = ("shipping", "freight", "handling", "other")
 
 
-def _charge_type(value: Optional[str]) -> str:
+def _charge_type(db: Session, value: Optional[str]) -> str:
+    """An S&H type from Company Settings -> Types & Tags (shipping, freight, handling, other + any added there)."""
+    from app.services import type_lists
     value = (value or "shipping").strip().lower()
-    if value not in CHARGE_TYPES:
-        raise HTTPException(status_code=400, detail=f"Charge type must be one of: {', '.join(CHARGE_TYPES)}")
+    allowed = type_lists.keys(db, "charge")
+    if value not in allowed:
+        raise HTTPException(status_code=400, detail=f"Charge type must be one of: {', '.join(sorted(allowed))}")
     return value
+
+
+def payment_method(db: Session, value: Optional[str]) -> Optional[str]:
+    """A payment method from Types & Tags, by key or name ('ach', 'ACH', 'Credit card'); blank -> none. Anything else is
+    refused, so the list doesn't sprawl -- add a new method in Company Settings first."""
+    from app.services import type_lists
+    v = (value or "").strip()
+    if not v:
+        return None
+    norm = type_lists.normalize_label(v).lower()
+    for r in type_lists.options(db, "payment_method", include_inactive=True):
+        if v.lower() in (r.key, r.label.lower()) or norm == r.label.lower():
+            return r.key
+    raise HTTPException(status_code=400, detail=f"'{v}' isn't a payment method yet -- pick one from the list, or add it under Company Settings -> Types & Tags")
 
 
 class PurchaseOrderChargeService:
@@ -2570,7 +2655,7 @@ class PurchaseOrderChargeService:
             raise HTTPException(status_code=400, detail="Charge amount must be greater than 0")
         if data.vendor_bill_id and not any(b.id == data.vendor_bill_id for b in po.bills):
             raise HTTPException(status_code=400, detail="That vendor invoice isn't on this purchase order")
-        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(data.charge_type), amount=round(data.amount, 2),
+        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.charge_type), amount=round(data.amount, 2),
                                    description=(data.description or "").strip() or None, vendor_bill_id=data.vendor_bill_id,
                                    created_by=created_by))
         db.commit()
@@ -2618,7 +2703,7 @@ class VendorPaymentService:
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
         vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=round(data.amount, 2),
-                           paid_date=clock.calendar_from_input(data.paid_date) or clock.today(), method=data.method, reference=data.reference,
+                           paid_date=clock.calendar_from_input(data.paid_date) or clock.today(), method=payment_method(db, data.method), reference=data.reference,
                            note=data.note, created_by=created_by)
         db.add(vp)
         db.commit()
@@ -2685,7 +2770,6 @@ def backfill_vendor_codes(db: Session) -> None:
 
 
 # ---- Landed costs ----
-LANDED_COST_TYPES = ("freight", "tariff", "customs", "brokerage", "insurance", "other")
 
 
 class LandedCostService:
@@ -2726,11 +2810,12 @@ class LandedCostService:
         } for l in lines]
 
     @staticmethod
-    def _validate(data) -> None:
+    def _validate(db: Session, data) -> None:
         if not (data.description or "").strip():
             raise HTTPException(status_code=400, detail="Description is required")
-        if data.cost_type not in LANDED_COST_TYPES:
-            raise HTTPException(status_code=400, detail=f"Type must be one of: {', '.join(LANDED_COST_TYPES)}")
+        from app.services import type_lists
+        if data.cost_type not in type_lists.keys(db, "landed_cost"):
+            raise HTTPException(status_code=400, detail=f"Type must be one of: {', '.join(sorted(type_lists.keys(db, 'landed_cost')))}")
 
     @staticmethod
     def _allocate(db: Session, lc: LandedCost, po_ids: List[int]) -> List[int]:
@@ -2758,7 +2843,7 @@ class LandedCostService:
 
     @staticmethod
     def create(db: Session, data, created_by: str) -> LandedCost:
-        LandedCostService._validate(data)
+        LandedCostService._validate(db, data)
         lc = LandedCostService.create_internal(
             db, description=data.description, cost_type=data.cost_type, amount=data.amount,
             po_ids=data.po_ids, created_by=created_by, paid_to=data.paid_to, reference=data.reference,
@@ -2772,7 +2857,7 @@ class LandedCostService:
     def update(db: Session, lc_id: int, data) -> LandedCost:
         """Edit and re-spread: old allocations are dropped and lots on both the old and new
         PO lines are re-costed."""
-        LandedCostService._validate(data)
+        LandedCostService._validate(db, data)
         lc = LandedCostService.get(db, lc_id)
         old_line_ids = [a.po_line_id for a in lc.allocations]
         for field in ("description", "cost_type", "amount", "paid_to", "reference", "cost_date", "notes"):

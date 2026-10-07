@@ -48,7 +48,7 @@ const AuthGuard = {
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 2, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 2, invoices: 2,
     "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, imports: 2, ai: 2,
-    recycle_bin: 2, golive: 3, simulate: 3, company: 3, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
+    recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
     if (!user) return false;
@@ -122,7 +122,11 @@ async function apiFetch(path, options = {}) {
       // Pydantic validation errors: show just the messages, e.g. "Quantity must be a whole number".
       throw new Error([...new Set(detail.map(d => String(d.msg || d).replace(/^Value error, /, "")))].join("; "));
     }
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    // an object detail ({code, message, ...}): its message shows; callers can read err.status / err.detail
+    const err = new Error(typeof detail === "string" ? detail : detail.message || JSON.stringify(detail));
+    err.status = response.status;
+    err.detail = detail;
+    throw err;
   }
   return data;
 }
@@ -487,7 +491,7 @@ function splitPasteRow(row, allowSpaces = true) {
 // ---- Status underlays: a record's card takes its status colour, and drafts plus finished / void / cancelled records
 // also carry a faint watermark word -- the amber DRAFT order, applied everywhere. setUnderlay(el, null) clears it.
 // Tones: amber (draft) · blue (open, waiting) · pink (in progress) · green (done) · red (needs attention) · grey (closed) · teal
-const UNDERLAY_TONES = { amber: "#d97706", blue: "#2563eb", pink: "#db2777", green: "#16a34a", red: "#dc2626", grey: "#64748b", teal: "#0d9488" };
+const UNDERLAY_TONES = { orange: "#ea580c", amber: "#d97706", blue: "#2563eb", pink: "#db2777", green: "#16a34a", red: "#dc2626", grey: "#64748b", teal: "#0d9488" };
 // The watermark is an SVG picture on a card-sized layer, so it never pushes or clips the card's content (a long
 // table still scrolls); the word scales with the card. Light and dark versions: the dark one a touch stronger.
 function watermarkSvg(word, color, opacity) {
@@ -515,6 +519,7 @@ function setUnderlay(el, tone, word = "") {
 // Status -> [tone, watermark] for each kind of record (one place, so every screen reads the same)
 const UNDERLAYS = {
   order(o) {
+    if (o.status === "validation") return ["orange", "VALIDATE"];  // quick-captured: hazard stripes, not the draft's amber
     if (o.status === "draft") return ["amber", "DRAFT"];
     if (o.status === "cancelled") return ["grey", "CANCELLED"];
     if (o.status === "invoiced") return ["green", "COMPLETE"];
@@ -531,7 +536,7 @@ const UNDERLAYS = {
     return ["blue"];
   },
   po(p) {
-    return { draft: ["amber", "DRAFT"], ordered: ["blue"], partially_received: ["pink"], received: ["green", "RECEIVED"],
+    return { validation: ["orange", "VALIDATE"], draft: ["amber", "DRAFT"], ordered: ["blue"], partially_received: ["pink"], received: ["green", "RECEIVED"],
              cancelled: ["grey", "CANCELLED"] }[p.status] || [null];
   },
   invoice(inv) {
@@ -741,7 +746,8 @@ const ATTACHMENT_TAGS = {
   bol: "BOL", other: "Other", purchase_order: "Purchase Order", invoice: "Our Invoice", packing_list: "Packing List",
 };
 const MONEY_ATTACHMENTS = ["customer_po", "vendor_invoice", "vendor_quote", "purchase_order", "invoice"];
-function attachmentTag(cat) { return `<span class="file-tag ft-${escapeHtml(cat)}">${escapeHtml(ATTACHMENT_TAGS[cat] || cat)}</span>`; }
+function attachmentTag(cat) { return `<span class="file-tag ft-${escapeHtml(cat)}">${escapeHtml(ATTACHMENT_TAGS[cat] || TypeLists.label("attachment", cat))}</span>`; }
+function attachmentLabel(cat) { return (TypeLists.cache.attachment && TypeLists.label("attachment", cat)) || ATTACHMENT_LABELS[cat] || cat; }
 
 // Thumbnail strip for the top right of an order / PO: every file on it, newest first, with its tag.
 const attachmentThumbUrls = {};
@@ -749,9 +755,9 @@ async function renderFileStrip(container, entityType, entityId) {
   const el = typeof container === "string" ? document.getElementById(container) : container;
   if (!el) return;
   let files = [];
-  try { files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${entityId}`); } catch (e) { return; }
+  try { files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${entityId}`); await TypeLists.load("attachment"); } catch (e) { if (!files.length) return; }
   files.sort((a, b) => b.id - a.id);
-  el.innerHTML = files.map(f => `<a class="file-thumb" title="${escapeHtml(`${ATTACHMENT_LABELS[f.category] || f.category}: ${f.filename}`)}" onclick="openAttachment(${f.id})">
+  el.innerHTML = files.map(f => `<a class="file-thumb" title="${escapeHtml(`${attachmentLabel(f.category)}: ${f.filename}`)}" onclick="openAttachment(${f.id})">
       <span class="file-thumb-img" data-thumb="${f.id}">${escapeHtml((f.filename.split(".").pop() || "file").slice(0, 4).toUpperCase())}</span>
       ${attachmentTag(f.category)}</a>`).join("")
     + (files.length ? "" : "");
@@ -895,7 +901,13 @@ const fileViewer = {
 async function renderAttachments(container, entityType, entityId, categories, opts = {}) {
   const el = typeof container === "string" ? document.getElementById(container) : container;
   if (!el) return;
-  if (hidesMoney()) categories = categories.filter(c => !MONEY_ATTACHMENTS.includes(c));
+  try { await TypeLists.load("attachment"); } catch {}
+  if (TypeLists.cache.attachment) {  // the record kind's types (Company Settings -> Types & Tags), the caller's order first
+    const mine = TypeLists.active("attachment", entityType).map(o => o.key);
+    categories = [...categories.filter(c => mine.includes(c)), ...mine.filter(c => !categories.includes(c))];
+  }
+  const moneyKeys = TypeLists.cache.attachment ? TypeLists.cache.attachment.filter(o => o.money).map(o => o.key) : MONEY_ATTACHMENTS;
+  if (hidesMoney()) categories = categories.filter(c => !moneyKeys.includes(c));
   const key = `${entityType}-${entityId}`;
   el.innerHTML = `<p class="muted small">Loading Files…</p>`;
   let files = [];
@@ -908,10 +920,12 @@ async function renderAttachments(container, entityType, entityId, categories, op
   const me = AuthGuard.getUser() || {};
   const canDelete = f => f.uploaded_by === me.username || AuthGuard.can("money.view");
   const isImage = f => (f.content_type || "").startsWith("image/");
-  const groups = categories.map(c => [c, files.filter(f => f.category === c)]).filter(([, list]) => list.length);
+  const shown = [...categories, ...[...new Set(files.map(f => f.category))].filter(c => !categories.includes(c))];  // a hidden type's old files still show
+  const groups = shown.map(c => [c, files.filter(f => f.category === c)]).filter(([, list]) => list.length);
+  const newOpt = AuthGuard.can("types.manage") ? `<option value="__new__">+ New document type…</option>` : "";
   el.innerHTML = `
     <div class="attach-upload">
-      <select id="att-cat-${key}">${categories.map(c => `<option value="${c}">${ATTACHMENT_LABELS[c] || c}</option>`).join("")}</select>
+      <select id="att-cat-${key}">${categories.map(c => `<option value="${escapeHtml(c)}" ${c === opts.selected ? "selected" : ""}>${escapeHtml(attachmentLabel(c))}</option>`).join("")}${newOpt}</select>
       <input type="file" id="att-files-${key}" multiple ${opts.camera ? `accept="image/*,application/pdf" capture="environment"` : ""}>
       <input type="text" id="att-note-${key}" placeholder="${escapeHtml(opts.notePlaceholder || "Note (Optional)")}">
       <button class="secondary" id="att-btn-${key}">Upload</button>
@@ -919,13 +933,13 @@ async function renderAttachments(container, entityType, entityId, categories, op
     <div id="att-error-${key}" class="error"></div>
     ${groups.length ? groups.map(([cat, list]) => `
       <div class="attach-group">
-        <div class="attach-group-label">${ATTACHMENT_LABELS[cat] || cat} <span class="muted">(${list.length})</span></div>
+        <div class="attach-group-label">${escapeHtml(attachmentLabel(cat))} <span class="muted">(${list.length})</span></div>
         ${list.map(f => `
           <div class="attach-row">
             ${isImage(f) ? `<img class="attach-thumb" data-att="${f.id}" alt="" onclick="openAttachment(${f.id})">` : `<span class="attach-icon">${(f.filename.split(".").pop() || "file").slice(0, 4).toUpperCase()}</span>`}
             <div class="attach-info">
               ${attachmentTag(f.category)} <a class="link" onclick="openAttachment(${f.id})">${escapeHtml(f.filename)}</a>
-              ${canDelete(f) ? `<select class="att-retag" data-retag="${f.id}" title="What kind of document this is">${categories.map(c => `<option value="${c}" ${c === f.category ? "selected" : ""}>${ATTACHMENT_LABELS[c] || c}</option>`).join("")}</select>` : ""}
+              ${canDelete(f) ? `<select class="att-retag" data-retag="${f.id}" title="What kind of document this is">${(categories.includes(f.category) ? categories : [f.category, ...categories]).map(c => `<option value="${escapeHtml(c)}" ${c === f.category ? "selected" : ""}>${escapeHtml(attachmentLabel(c))}</option>`).join("")}${newOpt}</select>` : ""}
               <div class="muted small">${fmtFileSize(f.size)} · ${escapeHtml(f.uploaded_by || "")} · ${fmtWhen(f.created_at)}${f.note ? ` · <span style="color:#1a1a1a;">${escapeHtml(f.note)}</span>` : ""}</div>
             </div>
             ${canDelete(f) ? `<a class="link small" data-del="${f.id}">Delete</a>` : ""}
@@ -936,6 +950,14 @@ async function renderAttachments(container, entityType, entityId, categories, op
     try { img.src = await attachmentUrl(img.dataset.att); } catch (e) { img.remove(); }
   });
   const errorEl = document.getElementById(`att-error-${key}`);
+  const catSel = document.getElementById(`att-cat-${key}`);
+  let catPrev = catSel.value;
+  catSel.onchange = async () => {
+    if (catSel.value !== "__new__") { catPrev = catSel.value; return; }
+    catSel.value = catPrev;
+    const made = await TypeLists.openAdd("attachment", { scope: entityType });
+    if (made) renderAttachments(el, entityType, entityId, categories, { ...opts, selected: made.key });
+  };
   document.getElementById(`att-btn-${key}`).onclick = async () => {
     errorEl.textContent = "";
     const input = document.getElementById(`att-files-${key}`);
@@ -962,6 +984,12 @@ async function renderAttachments(container, entityType, entityId, categories, op
     }
   };
   el.querySelectorAll("[data-retag]").forEach(sel => sel.onchange = async () => {
+    if (sel.value === "__new__") {
+      const made = await TypeLists.openAdd("attachment", { scope: entityType });
+      if (!made) { renderAttachments(el, entityType, entityId, categories, opts); return; }
+      sel.innerHTML += `<option value="${escapeHtml(made.key)}">${escapeHtml(made.label)}</option>`;
+      sel.value = made.key;
+    }
     const form = new FormData();
     form.append("category", sel.value);
     try {
@@ -982,6 +1010,258 @@ async function renderAttachments(container, entityType, entityId, categories, op
       errorEl.textContent = err.message;
     }
   });
+}
+
+// ---- Types & tags people can add to (app/services/type_lists.py): document types, S&H types, landed cost types,
+// payment methods. TypeLists.load(list) caches a list; TypeLists.openAdd(list) is the "+ New type" pop-up (also the
+// shortcut from an attachment / S&H / payment dropdown); TypeLists.renderManager(el) is Company Settings -> Types & Tags.
+const TypeLists = {
+  cache: {},  // list -> [{id, key, label, scopes, money, builtin, active}]
+  async load(list, force = false) {
+    if (force || !this.cache[list]) this.cache[list] = (await apiFetch(`/api/types/?list=${list}&all=true`)).options;
+    return this.cache[list];
+  },
+  // active entries for a record kind (document types), in list order
+  active(list, scope = null) {
+    return (this.cache[list] || []).filter(o => o.active && (!scope || !o.scopes || o.scopes.includes(scope)));
+  },
+  label(list, key) {
+    const o = (this.cache[list] || []).find(x => x.key === key);
+    return o ? o.label : key ? String(key).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "";
+  },
+  // <option>s for a dropdown: the active entries (+ the record's current one even if hidden since), "+ New ..." last
+  optionsHtml(list, scope, selected, { blank = null, addNew = true } = {}) {
+    const opts = this.active(list, scope);
+    if (selected && !opts.some(o => o.key === selected)) opts.push({ key: selected, label: this.label(list, selected) });
+    return (blank != null ? `<option value="">${escapeHtml(blank)}</option>` : "")
+      + opts.map(o => `<option value="${escapeHtml(o.key)}" ${o.key === selected ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")
+      + (addNew && AuthGuard.can("types.manage") ? `<option value="__new__">+ New ${escapeHtml(this.noun(list))}…</option>` : "");
+  },
+  noun(list) { return { attachment: "document type", charge: "S&H type", landed_cost: "landed cost type", payment_method: "payment method" }[list] || "type"; },
+  // The add pop-up: the name as it will be saved, what's already there that looks like it ("use that"), and for
+  // document types which records it's for and whether it shows prices. Resolves to the type to use (new or existing).
+  openAdd(list, { scope = null, label = "" } = {}) {
+    return new Promise(async resolve => {
+      await this.load(list);
+      const scopes = { customer_order: "Customer orders", purchase_order: "Purchase orders", shipment: "Shipments" };
+      const back = document.createElement("div");
+      back.className = "modal-backdrop" + (document.body.classList.contains("glass-open") ? " over-glass" : "");
+      back.innerHTML = `<div class="modal type-add" role="dialog" aria-modal="true">
+        <h3 style="margin:0 0 4px;">New ${escapeHtml(this.noun(list))}</h3>
+        <p class="muted small" style="margin:0 0 10px;">Letters and spaces only; saved in Title Case so the list stays tidy.</p>
+        <label>Name<input type="text" id="ta-label" maxlength="60" value="${escapeHtml(label)}" placeholder="${list === "attachment" ? "E.g. Vendor Packing List" : list === "charge" ? "E.g. Fuel Surcharge" : list === "payment_method" ? "E.g. Zelle" : "E.g. Drayage"}" autocomplete="off"></label>
+        <div class="ta-preview muted small" id="ta-preview"></div>
+        <div id="ta-similar"></div>
+        ${list === "attachment" ? `<div class="ta-scopes"><span class="small muted">Used on</span>${Object.entries(scopes).map(([k, v]) =>
+          `<label class="inline-check"><input type="checkbox" class="ta-scope" value="${k}" ${!scope || scope === k ? "checked" : ""}> ${v}</label>`).join("")}</div>
+          <label class="inline-check" title="Like customer POs and vendor invoices: people without 'See prices' can't see or upload these"><input type="checkbox" id="ta-money"> Shows prices (managers only)</label>` : ""}
+        <div class="error" id="ta-error"></div>
+        <div class="btn-row" style="margin-top:12px;"><button type="button" class="confirm-btn" id="ta-save">Create</button>
+          <button type="button" class="secondary" data-close="1">Cancel</button>
+          ${AuthGuard.can("company") ? `<a class="link small" href="company.html#types" style="margin-left:auto;">All types &amp; tags →</a>` : ""}</div></div>`;
+      const $ = s => back.querySelector(s);
+      const done = v => { document.removeEventListener("keydown", onKey, true); back.remove(); resolve(v); };
+      const onKey = e => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
+      let force = false, timer = null;
+      const check = async () => {
+        const text = $("#ta-label").value;
+        force = false;
+        $("#ta-save").textContent = "Create";
+        if (text.trim().length < 2) { $("#ta-preview").textContent = ""; $("#ta-similar").innerHTML = ""; return; }
+        try {
+          const r = await apiFetch(`/api/types/check?list=${list}&label=${encodeURIComponent(text)}`);
+          $("#ta-preview").innerHTML = `Saved as <b>${escapeHtml(r.label)}</b>`;
+          $("#ta-similar").innerHTML = r.similar.length ? `<div class="ta-similar">${icon("info")}<div><b>Similar ${r.similar.length === 1 ? "type" : "types"} already there</b>
+            <div class="ta-sim-list">${r.similar.map(s => `<button type="button" class="small-btn secondary" data-use="${s.id}">Use ${escapeHtml(s.label)}${s.active ? "" : " (hidden)"}</button>`).join("")}</div>
+            <div class="muted small">Or create <b>${escapeHtml(r.label)}</b> anyway if it really is different.</div></div></div>` : "";
+          if (r.similar.length) $("#ta-save").textContent = "Create Anyway";
+          force = r.similar.length > 0;
+          decorateIcons(back);
+        } catch {}
+      };
+      $("#ta-label").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(check, 250); });
+      back.addEventListener("click", async e => {
+        if (e.target === back || e.target.closest("[data-close]")) return done(null);
+        const use = e.target.closest("[data-use]");
+        if (use) {
+          const o = this.cache[list].find(x => x.id === +use.dataset.use) || (await this.load(list, true)).find(x => x.id === +use.dataset.use);
+          if (o && !o.active) await apiFetch(`/api/types/${o.id}`, { method: "PUT", body: JSON.stringify({ active: true }) });
+          if (o && list === "attachment" && scope && o.scopes && !o.scopes.includes(scope))
+            await apiFetch(`/api/types/${o.id}`, { method: "PUT", body: JSON.stringify({ scopes: [...o.scopes, scope] }) });
+          await this.load(list, true);
+          toast(`Using ${o.label}`);
+          return done(this.cache[list].find(x => x.id === o.id));
+        }
+      });
+      $("#ta-save").onclick = async () => {
+        $("#ta-error").textContent = "";
+        const body = { list, label: $("#ta-label").value, force };
+        if (list === "attachment") {
+          body.scopes = [...back.querySelectorAll(".ta-scope:checked")].map(x => x.value);
+          body.money = $("#ta-money").checked;
+        }
+        try {
+          const made = await apiFetch("/api/types/", { method: "POST", body: JSON.stringify(body) });
+          await this.load(list, true);
+          toast(`Added ${made.label}`);
+          done(made);
+        } catch (err) {
+          if (err.status === 409 || /similar|already/i.test(err.message)) { await check(); }
+          $("#ta-error").textContent = err.detail && err.detail.message ? err.detail.message : err.message;
+        }
+      };
+      document.addEventListener("keydown", onKey, true);
+      document.body.appendChild(back);
+      decorateIcons(back);
+      $("#ta-label").focus();
+      if (label) check();
+    });
+  },
+  // Company Settings -> Types & Tags: every list, rename / show-hide / scopes inline
+  async renderManager(el) {
+    const all = await apiFetch("/api/types/?all=true&usage=true");
+    Object.entries(all).forEach(([k, v]) => { this.cache[k] = v.options; });
+    const can = AuthGuard.can("types.manage");
+    const scopes = { customer_order: "Orders", purchase_order: "POs", shipment: "Shipments" };
+    el.innerHTML = Object.entries(all).map(([list, v]) => `<div class="types-list" data-list="${list}">
+      <div class="types-head"><h4>${escapeHtml(v.title)}</h4><span class="muted small">${escapeHtml(v.help)}</span>
+        ${can ? `<button type="button" class="small-btn secondary" data-add="${list}">+ New ${escapeHtml(this.noun(list))}</button>` : ""}</div>
+      <table class="fit-table no-table-tools types-table"><thead><tr><th class="grow">Name</th>${list === "attachment" ? "<th>Used on</th><th>Prices</th>" : ""}<th class="num">Used</th><th>Shown</th></tr></thead><tbody>
+      ${v.options.map(o => `<tr class="${o.active ? "" : "muted"}">
+        <td class="grow">${can ? `<input type="text" class="type-rename" data-id="${o.id}" value="${escapeHtml(o.label)}" data-orig="${escapeHtml(o.label)}">` : escapeHtml(o.label)}
+          ${o.builtin ? `<span class="tag draft" title="Comes with AT-HUB -- it can be renamed or hidden, not deleted">built-in</span>` : `<span class="muted small">added by ${escapeHtml(o.created_by || "")}</span>`}</td>
+        ${list === "attachment" ? `<td class="nowrap">${Object.entries(scopes).map(([k, n]) => `<label class="inline-check small"><input type="checkbox" class="type-scope" data-id="${o.id}" value="${k}" ${(o.scopes || []).includes(k) ? "checked" : ""} ${can ? "" : "disabled"}> ${n}</label>`).join("")}</td>
+          <td>${o.money ? `<span class="tag overdue" title="People without 'See prices' can't see these files">prices</span>` : `<span class="muted small">—</span>`}</td>` : ""}
+        <td class="num">${o.used || 0}</td>
+        <td>${o.key === "other" ? `<span class="muted small">always</span>` : `<label class="inline-check"><input type="checkbox" class="type-active" data-id="${o.id}" ${o.active ? "checked" : ""} ${can ? "" : "disabled"}> ${o.active ? "Offered" : "Hidden"}</label>`}</td></tr>`).join("")}
+      </tbody></table></div>`).join("");
+    const save = async (id, body) => {
+      try { await apiFetch(`/api/types/${id}`, { method: "PUT", body: JSON.stringify(body) }); toast("Saved"); }
+      catch (err) {
+        if (err.detail && err.detail.code === "similar") {
+          const { value } = await askDialog({ title: "Similar type already there", tone: "warn", body: `<p>${escapeHtml(err.detail.message)}. Rename it to <b>${escapeHtml(err.detail.label)}</b> anyway?</p>`,
+            buttons: [{ label: "Rename Anyway", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+          if (value === "go") { await apiFetch(`/api/types/${id}`, { method: "PUT", body: JSON.stringify({ ...body, force: true }) }); toast("Saved"); }
+        } else toast(err.detail && err.detail.message ? err.detail.message : err.message);
+      }
+      this.renderManager(el);
+    };
+    el.querySelectorAll(".type-rename").forEach(inp => inp.addEventListener("change", () => { if (inp.value.trim() && inp.value !== inp.dataset.orig) save(+inp.dataset.id, { label: inp.value }); }));
+    el.querySelectorAll(".type-active").forEach(cb => cb.addEventListener("change", () => save(+cb.dataset.id, { active: cb.checked })));
+    el.querySelectorAll(".type-scope").forEach(cb => cb.addEventListener("change", () =>
+      save(+cb.dataset.id, { scopes: [...el.querySelectorAll(`.type-scope[data-id="${cb.dataset.id}"]:checked`)].map(x => x.value) })));
+    el.querySelectorAll("[data-add]").forEach(b => b.onclick = async () => { if (await this.openAdd(b.dataset.add)) this.renderManager(el); });
+  },
+};
+
+// Any <select data-type-list="charge|payment_method|attachment|landed_cost" [data-type-scope]> built with
+// TypeLists.optionsHtml(): its "+ New ..." entry opens the pop-up and then selects what was made (page code sees a
+// normal change to the new value; Cancel puts the old one back).
+document.addEventListener("focusin", e => {
+  const s = e.target;
+  if (s.matches && s.matches("select[data-type-list]") && s.value !== "__new__") s.dataset.prev = s.value;
+});
+document.addEventListener("change", async e => {
+  const s = e.target;
+  if (!s.matches || !s.matches("select[data-type-list]") || s.value !== "__new__") return;
+  e.stopImmediatePropagation();
+  s.value = s.dataset.prev || "";
+  const list = s.dataset.typeList, scope = s.dataset.typeScope || null;
+  const made = await TypeLists.openAdd(list, { scope });
+  if (!made) return;
+  const blank = s.querySelector('option[value=""]');
+  s.innerHTML = TypeLists.optionsHtml(list, scope, made.key, { blank: blank ? blank.textContent : null });
+  s.value = s.dataset.prev = made.key;
+  s.dispatchEvent(new Event("change", { bubbles: true }));
+}, true);
+
+// ---- Quick capture: a PO document now, the details later. kind "order" (a customer's PO -> customer order) or "po"
+// (a vendor's quote / confirmation -> our purchase order). Who it's from + the file; it waits as "Validation needed". ----
+async function quickCapture(kind) {
+  const isOrder = kind === "order";
+  const parties = await apiFetch(isOrder ? "/api/customers/" : "/api/vendors/");
+  if (!isOrder) await TypeLists.load("attachment");
+  const active = parties.filter(p => p.is_active !== false).sort((a, b) => a.name.localeCompare(b.name));
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+    back.innerHTML = `<div class="modal capture-modal" role="dialog" aria-modal="true">
+      <h3 style="margin:0 0 2px;">${icon("upload")} Quick Capture ${isOrder ? "Customer PO" : "Vendor Document"}</h3>
+      <p class="muted small" style="margin:0 0 12px;">Keep the document now, fill it in later. It's saved as <span class="tag validation">Validation Needed</span> —
+        ${isOrder ? "it can't be confirmed, booked or shipped" : "it can't be ordered, emailed or received"} until someone checks it and presses <b>Validate</b>.</p>
+      <label>${isOrder ? "Customer" : "Vendor"}<select id="qc-party" data-searchable><option value="">— pick ${isOrder ? "the customer" : "the vendor"} —</option>
+        ${active.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")}</select></label>
+      <div class="qc-row"><label><span class="lbl">${isOrder ? "Customer PO #" : "Vendor ref / SO #"} <span class="muted small">(optional)</span></span><input type="text" id="qc-ref" autocomplete="off"></label>
+        ${isOrder ? "" : `<label>Document type<select id="qc-cat" data-type-list="attachment" data-type-scope="purchase_order">${TypeLists.optionsHtml("attachment", "purchase_order", "vendor_quote")}</select></label>`}</div>
+      <label class="qc-drop" id="qc-drop">${icon("upload")}<span id="qc-file-name">Drop the PDF / photo here, or click to choose</span>
+        <input type="file" id="qc-files" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.heic,.heif,.xlsx,.xls,.csv,.doc,.docx,.txt,.eml,.msg"></label>
+      <label><span class="lbl">Note <span class="muted small">(optional)</span></span><input type="text" id="qc-note" placeholder="E.g. Rush — call Mike about pricing"></label>
+      <div class="error" id="qc-error"></div>
+      <div class="btn-row" style="margin-top:12px;"><button type="button" class="capture-btn" id="qc-save">${icon("upload")} Capture</button>
+        <button type="button" class="secondary" data-close="1">Cancel</button></div></div>`;
+    const $ = s => back.querySelector(s);
+    const done = v => { document.removeEventListener("keydown", onKey, true); back.remove(); resolve(v); };
+    const onKey = e => { if (e.key === "Escape" && !document.querySelector(".type-add")) { e.stopPropagation(); done(null); } };
+    back.addEventListener("click", e => { if (e.target === back || e.target.closest("[data-close]")) done(null); });
+    const showFiles = () => { const f = $("#qc-files").files; $("#qc-file-name").textContent = f.length ? [...f].map(x => x.name).join(", ") : "Drop the PDF / photo here, or click to choose"; $("#qc-drop").classList.toggle("has", f.length > 0); };
+    $("#qc-files").addEventListener("change", showFiles);
+    ["dragover", "dragenter"].forEach(ev => $("#qc-drop").addEventListener(ev, e => { e.preventDefault(); $("#qc-drop").classList.add("over"); }));
+    ["dragleave", "drop"].forEach(ev => $("#qc-drop").addEventListener(ev, () => $("#qc-drop").classList.remove("over")));
+    $("#qc-drop").addEventListener("drop", e => { e.preventDefault(); $("#qc-files").files = e.dataTransfer.files; showFiles(); });
+    $("#qc-save").onclick = async () => {
+      const err = $("#qc-error"), btn = $("#qc-save");
+      err.textContent = "";
+      if (!$("#qc-party").value) { err.textContent = `Pick the ${isOrder ? "customer" : "vendor"}.`; return; }
+      if (!$("#qc-files").files.length) { err.textContent = "Add the document."; return; }
+      const form = new FormData();
+      form.append(isOrder ? "customer_id" : "vendor_id", $("#qc-party").value);
+      if ($("#qc-ref").value.trim()) form.append(isOrder ? "po_number" : "vendor_so_number", $("#qc-ref").value.trim());
+      if (!isOrder) form.append("category", $("#qc-cat").value);
+      if ($("#qc-note").value.trim()) form.append("note", $("#qc-note").value.trim());
+      [...$("#qc-files").files].forEach(f => form.append("files", f));
+      btn.disabled = true;
+      try {
+        const r = await fetch(isOrder ? "/api/customer-orders/capture" : "/api/purchase-orders/capture",
+                              { method: "POST", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form });
+        const data = await r.json();
+        if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Capture failed");
+        toast(`${data.code} captured — validate it when you have a minute`);
+        done(data);
+      } catch (e) { err.textContent = e.message; btn.disabled = false; }
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(back);
+    decorateIcons(back);
+    $("#qc-party").focus();
+  });
+}
+// The banner on a captured record: what it is, open the document, Validate (and the one-step Validate & ...)
+function validationBannerHtml(kind, rec, canEdit) {
+  if (rec.status !== "validation") return "";
+  const isOrder = kind === "order", noLines = !(rec.lines || []).length;
+  return `<div class="validation-banner">${icon("fileCheck")}<div><strong>Validation needed — quick-captured${rec.created_by ? ` by ${escapeHtml(rec.created_by)}` : ""} ${fmtDate(rec.created_at)}.</strong>
+      Check it against the ${isOrder ? "customer's PO" : "vendor's document"}${noLines ? ", add the lines" : ""}, then Validate.
+      ${isOrder ? "It can't be confirmed, booked or shipped before that." : "It can't be ordered, emailed or received before that."}
+      <a class="link" onclick="openCapturedDoc('${isOrder ? "customer_order" : "purchase_order"}', ${rec.id})">Open the document</a></div>
+    ${canEdit ? `<div class="vb-actions"><button class="small-btn secondary" onclick="validateCaptured('${kind}', ${rec.id}, false)" ${noLines ? "disabled title='Add the lines first'" : ""}>Validate</button>
+      <button class="small-btn capture-btn" onclick="validateCaptured('${kind}', ${rec.id}, true)" ${noLines ? "disabled title='Add the lines first'" : ""}>Validate &amp; ${isOrder ? "Confirm" : "Mark Ordered"}</button></div>` : ""}</div>`;
+}
+async function openCapturedDoc(entityType, id) {
+  const files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${id}`);
+  const f = files.slice().reverse()[0];
+  if (f) openAttachment(f.id); else toast("No document on it");
+}
+async function validateCaptured(kind, id, andGo) {
+  const isOrder = kind === "order";
+  try {
+    const r = await apiFetch(`/api/${isOrder ? "customer-orders" : "purchase-orders"}/${id}/validate`, { method: "POST",
+      body: JSON.stringify(isOrder ? { confirm: andGo } : { ordered: andGo }) });
+    toast(`${r.code} validated — ${r.status}`);
+    if (typeof onValidated === "function") onValidated(r);
+  } catch (e) {
+    const dup = /^DUPLICATE_PO\|/.test(e.message) ? e.message.split("|") : null;
+    toast(dup ? dup[3] + " — fix the PO # (or OK the duplicate on the order) first" : e.message);
+  }
 }
 
 // Small grey product-group chip shown next to item codes.
@@ -1995,7 +2275,7 @@ const ICON_PATHS = {
 // ---- Status as a small icon (same look as the order timeline); the word stays in the tooltip and as
 // hidden text, so search, header filters and exports still see it. statusIcon("partially_shipped")
 const STATUS_ICONS = {
-  draft: ["pencil", "Draft"], confirmed: ["thumbsUp", "Confirmed — in progress"], not_booked: ["clock", "Not booked yet"],
+  validation: ["fileCheck", "Validation needed — quick-captured"], draft: ["pencil", "Draft"], confirmed: ["thumbsUp", "Confirmed — in progress"], not_booked: ["clock", "Not booked yet"],
   partially_booked: ["half", "Partly booked"], booked: ["package", "Booked into a shipment"],
   partially_shipped: ["half", "Partly shipped"], shipped: ["check", "Shipped"], delivered: ["checkCircle", "Delivered"],
   invoiced: ["receipt", "Invoiced"], paid: ["dollar", "Paid"], cancelled: ["x", "Cancelled"],
@@ -2137,6 +2417,8 @@ const ACTION_COLUMNS = {
   draft_invoices: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
   invoices_overdue: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => escapeHtml(r.days ?? "")]],
   not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  captured_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Captured By", r => escapeHtml(r.by ?? "")], ["Days", r => r.days]],
+  captured_pos: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Vendor Ref", r => escapeHtml(r.ref ?? "")], ["Captured By", r => escapeHtml(r.by ?? "")], ["Days", r => r.days]],
   draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
 };
 function actLink(page, id, text) { return id ? `<a class="link" href="${page}?id=${id}">${escapeHtml(text || "")}</a>` : escapeHtml(text || ""); }

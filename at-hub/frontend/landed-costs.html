@@ -26,10 +26,7 @@
       <input type="hidden" id="edit-id">
       <div class="row">
         <div style="flex:2;"><label>Description</label><input type="text" id="f-description" placeholder="e.g. Ocean freight — container MSKU1234567"></div>
-        <div><label>Type</label><select id="f-type">
-          <option value="freight">Freight</option><option value="tariff">Tariff / duty</option><option value="customs">Customs</option>
-          <option value="brokerage">Brokerage</option><option value="insurance">Insurance</option><option value="other">Other</option>
-        </select></div>
+        <div><label>Type</label><select id="f-type" data-type-list="landed_cost"></select></div>
         <div><label>Amount ($)</label><input type="number" step="0.01" min="0" id="f-amount" oninput="schedulePreview()"></div>
       </div>
       <div class="row">
@@ -76,7 +73,6 @@
     let selected = new Set();
     let previewTimer = null;
 
-    const TYPE_LABEL = { freight: "Freight", tariff: "Tariff / duty", customs: "Customs", brokerage: "Brokerage", insurance: "Insurance", other: "Other" };
 
     function vendorName(id) { const v = vendors.find(v => v.id === id); return v ? v.name : id; }
     function itemCode(id) { const i = items.find(i => i.id === id); return i ? i.code : id; }
@@ -96,7 +92,7 @@
           <tr>
             <td><a class="link" onclick="openForm(${lc.id})">${escapeHtml(lc.code)}</a></td>
             <td>${escapeHtml(lc.description)}${lc.paid_to ? `<div class="muted small">${escapeHtml(lc.paid_to)}${lc.reference ? ` · ${escapeHtml(lc.reference)}` : ""}</div>` : ""}</td>
-            <td>${TYPE_LABEL[lc.cost_type] || lc.cost_type}</td>
+            <td>${escapeHtml(TypeLists.label("landed_cost", lc.cost_type))}</td>
             <td class="num">${fmtMoney(lc.amount)}</td>
             <td>${poIds.map(id => `<a class="link" href="purchase-orders.html?id=${id}">${escapeHtml(poCode(id))}</a>`).join(", ")}</td>
             <td class="num">${fmtPrice(perUnit)}</td>
@@ -175,7 +171,7 @@
       document.getElementById("save-btn").textContent = lc ? "Save & Re-apply" : "Apply Landed Cost";
       document.getElementById("edit-id").value = lc ? lc.id : "";
       document.getElementById("f-description").value = lc ? lc.description : "";
-      document.getElementById("f-type").value = lc ? lc.cost_type : "freight";
+      document.getElementById("f-type").innerHTML = TypeLists.optionsHtml("landed_cost", null, lc ? lc.cost_type : "freight");  // Types & Tags
       document.getElementById("f-amount").value = lc ? lc.amount : "";
       document.getElementById("f-paid-to").value = lc ? lc.paid_to || "" : "";
       document.getElementById("f-reference").value = lc ? lc.reference || "" : "";
@@ -232,6 +228,7 @@
     }
 
     async function load() {
+      try { await TypeLists.load("landed_cost"); } catch {}
       landedCosts = await apiFetch("/api/landed-costs/");
       renderList();
     }

@@ -14,7 +14,7 @@ from app.services.crud import ShipmentService, ProductGroupService, backfill_lot
 from app.services.test_data import ensure_test_data
 from app.routes import (
     auth, stock_items, customers, vendors, customer_orders, purchase_orders, lots, shipments, invoicing, company,
-    landed_costs, test_data, users, attachments, invoice_funding, ai_orders, ai_docs, mtrs, vendor_payments, reports,
+    landed_costs, test_data, users, attachments, invoice_funding, ai_orders, ai_docs, mtrs, vendor_payments, reports, type_lists,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -28,6 +28,8 @@ try:
     seed_roles(db)
     ProductGroupService.ensure_defaults(db)
     ProductGroupService.seed_non_stock(db)
+    from app.services.type_lists import seed as seed_types
+    seed_types(db)  # built-in document / charge / landed cost types and payment methods (people add their own)
     ShipmentService.reconcile_bookings(db)
     backfill_lot_costing(db)
     backfill_line_identity(db)
@@ -348,6 +350,7 @@ def health_check():
 
 
 app.include_router(auth.router)
+app.include_router(type_lists.router)
 app.include_router(stock_items.router)
 app.include_router(customers.router)
 app.include_router(vendors.router)

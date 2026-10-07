@@ -311,6 +311,7 @@
       if (await renameRecord("invoice", code, `/api/invoices/${id}/code`)) { await loadInvoices(); showDetail(id); }
     }
     async function showDetail(id) {
+      try { await TypeLists.load("payment_method"); } catch {}
       const [invoice, check] = await Promise.all([apiFetch(`/api/invoices/${id}`), apiFetch(`/api/invoices/${id}/billing-check`).catch(() => ({ delivered: {}, differences: [] }))]);
       billingCheck = check;
       const card = document.getElementById("detail-card");
@@ -456,7 +457,7 @@
           <table>
             <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Note</th></tr></thead>
             <tbody>${invoice.payments.map(p => `
-              <tr><td>${fmtDate(p.paid_date)}</td><td>${fmtMoney(p.amount)}</td><td>${p.method || ""}</td><td>${p.reference || ""}</td><td>${p.note || ""}</td></tr>
+              <tr><td>${fmtDate(p.paid_date)}</td><td>${fmtMoney(p.amount)}</td><td>${escapeHtml(TypeLists.label("payment_method", p.method))}</td><td>${escapeHtml(p.reference || "")}</td><td>${escapeHtml(p.note || "")}</td></tr>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">No payments recorded yet.</p>`}
@@ -464,7 +465,7 @@
           <div class="row" style="max-width:600px; margin-top:8px;">
             <div><label>Amount</label><input type="number" step="0.01" id="pay-amount" value="${invoice.balance.toFixed(2)}"></div>
             <div><label>Paid date</label><input type="date" id="pay-date"></div>
-            <div><label>Method</label><input type="text" id="pay-method" placeholder="Wire, Check, ..."></div>
+            <div><label>Method</label><select id="pay-method" data-type-list="payment_method">${TypeLists.optionsHtml("payment_method", null, "", { blank: "—" })}</select></div>
             <div><label>Reference</label><input type="text" id="pay-reference"></div>
           </div>
           <button class="secondary" onclick="recordPayment(${invoice.id})" style="margin-top:8px;">Record Payment</button>

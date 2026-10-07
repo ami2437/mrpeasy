@@ -141,6 +141,8 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
     A draft PO becomes "ordered" once it has gone out."""
     if po.status == "cancelled":
         raise HTTPException(status_code=400, detail="This purchase order is cancelled -- it can't be emailed")
+    if po.status == "validation":
+        raise HTTPException(status_code=400, detail=f"{po.code} was quick-captured -- validate it before sending it to the vendor")
     rows = [("Purchase order", po.code), ("Order date", po.order_date.strftime("%b %d, %Y") if po.order_date else "")]
     if po.expected_date:
         rows.append(("Required by", po.expected_date.strftime("%b %d, %Y")))

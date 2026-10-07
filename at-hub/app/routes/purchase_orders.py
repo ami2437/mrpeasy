@@ -18,7 +18,8 @@ router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], depe
 
 
 # ---- PO payments from MRPeasy's Purchase Orders export (CSV) ----
-from fastapi import File, HTTPException, UploadFile  # noqa: E402
+from fastapi import File, Form, HTTPException, UploadFile  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 
 def _payments_csv(file: UploadFile):
@@ -79,6 +80,35 @@ def po_receipts(po_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=PurchaseOrderResponse)
 def create_order(data: PurchaseOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return PurchaseOrderService.create(db, data, created_by=current_user.username)
+
+
+@router.post("/capture", response_model=PurchaseOrderResponse)
+def capture_order(vendor_id: int = Form(...), vendor_so_number: str | None = Form(None), category: str = Form("vendor_quote"),
+                  note: str | None = Form(None), files: list[UploadFile] = File(...), db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_active_user)):
+    """Quick capture: the vendor's document + who it's from. The PO waits as "Validation needed" (no lines; it can't be
+    ordered, emailed or received) until someone fills it in and validates it."""
+    from app.routes.attachments import read_uploads, store_file
+    from app.services import type_lists
+    if category not in type_lists.keys(db, "attachment", "purchase_order"):
+        raise HTTPException(status_code=400, detail=f"'{category}' isn't a document type for purchase orders")
+    blobs = read_uploads(files)
+    po = PurchaseOrderService.capture(db, vendor_id, vendor_so_number, current_user.username)
+    for name, ctype, data in blobs:
+        store_file(db, "purchase_order", po.id, category, name, ctype, data, note or "Quick capture", current_user.username)
+    db.commit()
+    db.refresh(po)
+    return po
+
+
+class ValidatePoIn(BaseModel):
+    ordered: bool = False  # validate and mark ordered in one go
+
+
+@router.post("/{po_id}/validate", response_model=PurchaseOrderResponse)
+def validate_order(po_id: int, data: ValidatePoIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """A quick-captured PO checked against the vendor's document: on to Draft (or Ordered)."""
+    return PurchaseOrderService.validate(db, po_id, current_user.username, ordered=data.ordered)
 
 
 @router.get("/{po_id}", response_model=PurchaseOrderResponse)

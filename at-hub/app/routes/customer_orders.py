@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
@@ -22,6 +23,31 @@ def list_orders(status: str | None = Query(None), db: Session = Depends(get_db))
 @router.post("/", response_model=CustomerOrderResponse, dependencies=manager)
 def create_order(data: CustomerOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return CustomerOrderService.create(db, data, created_by=current_user.username)
+
+
+@router.post("/capture", response_model=CustomerOrderResponse, dependencies=manager)
+def capture_order(customer_id: int = Form(...), po_number: str | None = Form(None), note: str | None = Form(None),
+                  files: list[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Quick capture: the customer's PO file + who it's from. The order waits as "Validation needed" (no lines, nothing
+    confirmed or booked) until someone fills it in and validates it."""
+    from app.routes.attachments import read_uploads, store_file
+    blobs = read_uploads(files)
+    order = CustomerOrderService.capture(db, customer_id, po_number, current_user.username)
+    for name, ctype, data in blobs:
+        store_file(db, "customer_order", order.id, "customer_po", name, ctype, data, note or "Quick capture", current_user.username)
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+class ValidateIn(BaseModel):
+    confirm: bool = False  # validate and confirm in one go
+
+
+@router.post("/{order_id}/validate", response_model=CustomerOrderResponse, dependencies=manager)
+def validate_order(order_id: int, data: ValidateIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """A quick-captured order checked against its PO: on to Draft (or Confirmed)."""
+    return CustomerOrderService.validate(db, order_id, current_user.username, confirm=data.confirm)
 
 
 @router.get("/{order_id}", response_model=CustomerOrderResponse)

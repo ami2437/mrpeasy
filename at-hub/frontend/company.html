@@ -38,6 +38,15 @@
       <div id="error" class="error"></div>
     </div>
 
+    <div class="card types-card" id="types">
+      <h3 style="margin-top:0;">Types &amp; Tags</h3>
+      <p class="muted small" style="margin-top:0;">The lists people pick from: document types for attached files, S&amp;H types on POs, landed cost types and
+        payment methods. Add your own here or straight from a dropdown (<b>+ New …</b>). New names are saved in Title Case with letters
+        and spaces only, and a name close to one already there (Packing List / Vendor Packing List) asks before adding it.
+        Hiding a type stops it being offered; files and records that already use it keep it.</p>
+      <div id="types-manager"><p class="muted small">Loading…</p></div>
+    </div>
+
     <div class="card" style="max-width:720px;">
       <h3 style="margin-top:0;">Generic stock</h3>
       <label class="inline-check" style="margin:0;"><input type="checkbox" id="c-generic" onchange="saveGeneric(this.checked)">
@@ -74,7 +83,7 @@
       showLogo(company.has_logo);
       document.getElementById("c-generic").checked = company.generic_stock_enabled !== false;
       if (!AuthGuard.can("company")) {
-        document.querySelectorAll("main input, main textarea, main button").forEach(el => { el.disabled = true; });
+        document.querySelectorAll("main .card:not(#types) input, main .card:not(#types) textarea, main .card:not(#types) button").forEach(el => { el.disabled = true; });  // Types & Tags: its own permission
         document.getElementById("saved").textContent = "Your role can't change company settings.";
       }
     }
@@ -188,6 +197,9 @@ SMTP_SECURITY=starttls</pre>
 
     load();
     loadEmailStatus();
+    TypeLists.renderManager(document.getElementById("types-manager"))
+      .then(() => { if (location.hash === "#types") document.getElementById("types").scrollIntoView({ behavior: "smooth" }); })
+      .catch(err => { document.getElementById("types-manager").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; });
   </script>
   </div>
 </body>
