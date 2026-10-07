@@ -1524,7 +1524,7 @@ function renderSidebar(activePage) {
   const user = AuthGuard.getUser();
   const groups = NAV_GROUPS.map(group => {
     const links = group.links.filter(([, , perm]) => !perm || AuthGuard.canAny(...perm.split(" "))).map(([href, label]) =>
-      `<a href="${href}" class="${href === activePage ? 'active' : ''}">${icon(NAV_ICONS[href])}${label}</a>`
+      `<a href="${href}" class="${href === activePage ? 'active' : ''} ${PHONE_PAGES.some(([h]) => h === href) ? "m-dup" : ""}">${icon(NAV_ICONS[href])}${label}</a>`
     ).join("");
     if (!links) return "";
     return `
@@ -1539,6 +1539,7 @@ function renderSidebar(activePage) {
     <nav class="sidebar">
       <div class="brand"><img src="/api/company/logo" alt="" class="brand-logo" onerror="this.remove()"><span>AT-HUB</span></div>
       <a class="sidebar-find" onclick="QuickFind.open()" title="Find anything (Ctrl+K)">${icon("search") || "⌕"}<span>Search</span><kbd>Ctrl K</kbd></a>
+      ${PhoneNav.groupHtml(activePage)}
       ${groups}
       <div class="sidebar-footer">
         ${user ? `<div class="user-line">${escapeHtml(user.full_name || user.username)}<div class="small">${escapeHtml(user.role_name || ROLE_LABELS[user.role] || user.role)}</div></div>` : ""}
@@ -1549,6 +1550,81 @@ function renderSidebar(activePage) {
     </nav>
   `;
 }
+
+// ---- Phones (the shipping floor): pages that carry the viewport tag get a phone layout under 760px -- the sidebar is a
+// drawer behind the top bar's menu button, "On the go" pages first, and tables read as cards ("Label: value" lines,
+// like the POD page). Office pages without the tag stay desktop (a phone shows them zoomed out). ----
+const PHONE_PAGES = [["shipments.html", "Shipments", "shipments.view"], ["pack-shipments.html", "Bulk Operations", "shipments.work invoices"],
+  ["pod.html", "Proof Of Delivery", "pod.upload"], ["labels.html", "On-Demand Labels", "shipments.work"], ["todo.html", "To-Do", ""],
+  ["tasks.html", "Tasks", "tasks"], ["dashboard.html", "Dashboard", "orders.view stock.view invoices purchasing"]];
+const PhoneNav = {
+  media: window.matchMedia("(max-width: 760px)"),
+  isPhone() { return this.media.matches && !!document.querySelector('meta[name="viewport"]'); },
+  toggle(open = !document.body.classList.contains("nav-open")) {
+    document.body.classList.toggle("nav-open", open);
+    let scrim = document.getElementById("nav-scrim");
+    if (!scrim) {
+      scrim = document.createElement("div");
+      scrim.id = "nav-scrim";
+      scrim.className = "nav-scrim";
+      scrim.onclick = () => PhoneNav.toggle(false);
+      document.body.appendChild(scrim);
+    }
+  },
+  // the drawer's first group: the pages made for phones that this person may open
+  groupHtml(activePage) {
+    const links = PHONE_PAGES.filter(([, , perm]) => !perm || AuthGuard.canAny(...perm.split(" ")))
+      .map(([href, label]) => `<a href="${href}" class="${href === activePage ? "active" : ""}">${icon(NAV_ICONS[href])}${label}</a>`).join("");
+    return links ? `<div class="nav-group m-only"><div class="nav-group-label">On the go</div>${links}</div>
+      <div class="nav-group-label m-only m-desk-note">Office screens <span>(best on a computer)</span></div>` : "";
+  },
+};
+document.addEventListener("keydown", e => { if (e.key === "Escape" && document.body.classList.contains("nav-open")) PhoneNav.toggle(false); });
+
+// Tables as cards on phones: each cell gets its column's header as data-label (CSS shows it only under 760px).
+// Follows rowspans and colspans, so a merged cell labels the right column. Tables marked .m-keep stay tables.
+const PhoneTables = {
+  label(table) {
+    const head = table.tHead && table.tHead.rows[table.tHead.rows.length - 1];
+    if (!head) return;
+    const names = [];
+    [...head.cells].forEach(th => {
+      const clone = th.cloneNode(true);
+      clone.querySelectorAll(".th-filter, .col-resizer, .sort-ind, button, input, .sr-only").forEach(x => x.remove());
+      const text = clone.textContent.replace(/[▾▴⇅]/g, "").replace(/\s+/g, " ").trim();
+      for (let k = 0; k < (th.colSpan || 1); k++) names.push(text);
+    });
+    const sig = names.join("|") + "#" + [...table.tBodies].reduce((n, b) => n + b.rows.length, 0);
+    if (table.dataset.mSig === sig) return;  // nothing changed since the last pass
+    table.dataset.mSig = sig;
+    table.classList.add("m-cards");
+    [...table.tBodies].forEach(body => {
+      const carry = [];  // rowspans still covering a column: [rows left]
+      [...body.rows].forEach(tr => {
+        let col = 0;
+        [...tr.cells].forEach(td => {
+          while (carry[col] > 0) { carry[col]--; col++; }
+          if (td.colSpan > 1 || !names[col]) td.removeAttribute("data-label"); else td.dataset.label = names[col];
+          if (td.rowSpan > 1) for (let k = 0; k < (td.colSpan || 1); k++) carry[col + k] = td.rowSpan - 1;
+          col += td.colSpan || 1;
+        });
+        while (col < carry.length) { if (carry[col] > 0) carry[col]--; col++; }
+      });
+    });
+  },
+  run(root = document) {
+    if (!PhoneNav.isPhone()) return;
+    root.querySelectorAll("main table:not(.m-keep), .glass-panel table:not(.m-keep), .modal table:not(.m-keep)").forEach(t => this.label(t));
+  },
+};
+(() => {
+  let queued = false;
+  const later = () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; PhoneTables.run(); }); };
+  new MutationObserver(muts => { if (PhoneNav.isPhone() && muts.some(m => m.addedNodes.length)) later(); })
+    .observe(document.documentElement, { childList: true, subtree: true });
+  PhoneNav.media.addEventListener("change", later);
+  document.addEventListener("DOMContentLoaded", later);
+})();
 
 // Kept as an alias so older pages referencing renderHeader() keep working.
 function renderHeader(activePage) {
@@ -2443,7 +2519,7 @@ async function renderActionItems(container, onlyKeys = null) {
     ${open.length ? "" : `<p class="pos" style="margin:10px 0 0;">${icon("checkCircle")} All Clear — Nothing Needs Follow-Up.</p>`}
     ${open.map(s => {
       const cols = ACTION_COLUMNS[s.key] || [];
-      return `<details class="action-section" id="act-${s.key}" ${open.length <= 3 ? "open" : ""}>
+      return `<details class="action-section" id="act-${s.key}" ${open.length <= 3 && !PhoneNav.isPhone() ? "open" : ""}>
         <summary><span class="tag overdue">${s.rows.length}</span> ${escapeHtml(s.title)} <span class="muted small">— ${escapeHtml(s.help)}</span></summary>
         <table class="compact-table"><thead><tr>${cols.map(([h]) => `<th${/days|balance|amount|unapplied/i.test(h) ? ' class="num"' : ""}>${h}</th>`).join("")}</tr></thead>
           <tbody>${s.rows.map(r => `<tr>${cols.map(([h, f]) => `<td${/days|balance|amount|unapplied/i.test(h) ? ' class="num"' : ""}>${f(r) ?? ""}</td>`).join("")}</tr>`).join("")}</tbody></table>
@@ -3342,7 +3418,10 @@ const TopBar = {
     const bar = document.createElement("div");
     bar.id = "topbar";
     bar.className = "topbar";
-    bar.innerHTML = `<div class="tb-right">
+    const page = (document.title.split("—").pop() || "AT-HUB").trim();
+    bar.innerHTML = `<button type="button" class="tb-btn tb-menu m-only" onclick="PhoneNav.toggle()" aria-label="Menu">${icon("list")}</button>
+      <span class="tb-page m-only">${escapeHtml(page)}</span>
+      <div class="tb-right">
         <a class="tb-btn" href="todo.html" title="To-Do and reminders">${icon("listTodo")}<span class="tb-badge" id="tb-todo" hidden></span></a>
         <button type="button" class="tb-btn" onclick="toggleTheme(); TopBar.themeIcon();" title="Light / dark" id="tb-theme"></button>
         <button type="button" class="tb-clock" onclick="TopBar.toggle(event)" title="Calendar">

@@ -2,6 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AT-HUB — Bulk Operations</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
@@ -25,6 +26,7 @@
       <div class="stage-hint muted small" id="stage-hint"></div>
       <div class="filters">
         <input type="text" id="search" placeholder="Search shipment, order, customer, PO #, job # or item #...">
+        <button type="button" class="secondary m-only m-tools-btn" onclick="this.closest('.batch-toolbar').classList.toggle('m-tools-open')">Filters &amp; tools</button>
         <div class="sort-filters">
           <label class="check-label">Sort <select id="sort-by" onchange="prefChanged()">
             <option value="recent">Most recent</option><option value="oldest">Oldest first</option><option value="customer">Customer A–Z</option>

@@ -1991,3 +1991,141 @@ button.capture-btn:hover:not(:disabled) { background: #c2410c; border-color: #c2
 .types-table .type-rename { width: 100%; max-width: 280px; padding: 3px 6px; }
 .types-table tr.muted .type-rename { opacity: .6; }
 table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-width: 90px; line-height: 1.2; }  /* "possible duplicate" wraps under the PO # instead of widening the list */
+
+/* ======================================================================================================================
+   PHONES (pages with the viewport tag, under 760px): the shipping floor -- sidebar as a drawer, tables as cards,
+   pop-ups full screen, thumb-sized controls. Desktop is untouched: everything is inside this one media query.
+   ====================================================================================================================== */
+.m-only { display: none !important; }
+@media (max-width: 760px) {
+  .m-only { display: revert !important; }
+  body { font-size: 15px; overflow-x: hidden; }
+  .app-shell { display: block; }
+  /* the sidebar becomes a drawer behind the top bar's menu button */
+  #sidebar .sidebar { position: fixed; z-index: 210; top: 0; left: 0; width: min(84vw, 320px); height: 100dvh; transform: translateX(-104%);
+    transition: transform .22s ease; box-shadow: 8px 0 30px rgba(0, 0, 0, .35); }
+  body.nav-open #sidebar .sidebar { transform: none; }
+  .nav-scrim { position: fixed; inset: 0; z-index: 205; background: rgba(15, 23, 42, .45); display: none; }
+  body.nav-open .nav-scrim { display: block; }
+  body.nav-open { overflow: hidden; }
+  .sidebar a { padding: 11px 16px; font-size: 15.5px; }
+  .sidebar .sidebar-find kbd { display: none; }
+  .sidebar .m-desk-note { margin-top: 10px; }
+  .sidebar .nav-group:not(.m-only) a.m-dup { display: none; }  /* already under On the go */
+  .sidebar .nav-group:not(.m-only):not(:has(a:not(.m-dup))) .nav-group-label { display: none; }
+  .sidebar .m-desk-note span { text-transform: none; font-weight: 400; letter-spacing: 0; opacity: .7; }
+  /* the top bar is the phone header: menu, page name, To-Do, theme, calendar */
+  main { padding: 0 10px 28px; }
+  .topbar { position: sticky; top: 0; z-index: 150; margin: 0 -10px 10px; padding: 8px 10px; min-height: 52px; justify-content: space-between; gap: 8px;
+    background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: 0 2px 10px rgba(15, 23, 42, .06); }
+  .tb-menu { width: 40px; height: 40px; justify-content: center; padding: 0; }
+  .tb-menu .ico { width: 20px; height: 20px; }
+  .tb-page { flex: 1; min-width: 0; font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tb-btn, .tb-clock { height: 40px; }
+  .tb-date, .tb-time { display: none; }
+  .tb-cal { position: fixed; top: 56px; left: 8px; right: 8px; width: auto; }
+  /* cards, rows, controls */
+  .card { padding: 12px; border-radius: 12px; margin: 0 0 10px; max-width: none !important; width: auto !important; }
+  .page-toolbar { padding: 10px 12px; gap: 10px; }
+  .page-toolbar .page-title { font-size: 20px; margin: 0; }
+  .toolbar-row { flex-wrap: wrap; width: 100%; }
+  .toolbar-row > * { flex: 1 1 auto; }
+  .toolbar-row > #search { flex: 1 1 100%; min-width: 0; max-width: none; }
+  .toolbar-row > select { max-width: none; }
+  .toolbar-row > button:first-of-type { margin-left: 0; }
+  .row { flex-direction: column; align-items: stretch; }
+  .row > * { width: 100%; }
+  .field-grid { grid-template-columns: 1fr 1fr; }
+  .field-grid > .wide { grid-column: 1 / -1; }
+  input, select, textarea { font-size: 16px; }  /* 16px: iPhones don't zoom in on focus */
+  button, .small-btn { min-height: 40px; }
+  .qty-input, input[type=number] { min-height: 40px; }
+  .tabs { width: 100%; max-width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .tabs .tab { flex: 0 0 auto; white-space: nowrap; }
+  .table-tools, th .th-filter, th .col-resizer { display: none !important; }
+  .table-scroll { overflow: visible; }
+  h3.detail-head { position: static; margin: 0 0 6px; padding: 0; box-shadow: none; background: none; }
+  /* tables as cards: one card per row, "Label  value" lines; the first cell heads the card */
+  table.m-cards, table.m-cards tbody { display: block; width: 100%; border: 0; background: none; }
+  table.m-cards { table-layout: auto; min-width: 0 !important; }
+  table.m-cards thead { display: none; }
+  table.m-cards tfoot { display: block; }
+  table.m-cards tr { display: block; margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface) !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .05); }
+  table.m-cards tr:hover td { background: none; }
+  table.m-cards td { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: auto !important; min-width: 0 !important; max-width: none !important;
+    padding: 4px 0; border: 0; text-align: right; white-space: normal !important; background: none !important; box-shadow: none !important; }
+  table.m-cards td[data-label]::before { content: attr(data-label); flex: 0 0 auto; max-width: 45%; text-align: left; color: var(--muted); font-size: 13px; font-weight: 600; }
+  table.m-cards td:not([data-label]) { display: block; text-align: left; }
+  table.m-cards td:first-child { display: block; text-align: left; font-weight: 700; font-size: 16px; padding-top: 2px; }
+  table.m-cards td:first-child::before { display: none; }
+  table.m-cards td:empty { display: none; }
+  table.m-cards td.grow, table.m-cards td.grow:first-child { text-align: left; }
+  table.m-cards td input, table.m-cards td select { max-width: 60%; }
+  table.m-cards td.num { font-variant-numeric: tabular-nums; }
+  table.m-cards tr.row-uw { border-left: 4px solid var(--uw); }
+  table.m-cards tr.combo-child, table.m-cards tr.combo-rest { margin-left: 18px; }
+  table.m-cards tr.combo-lead, table.m-cards tr.combo-child { border-color: color-mix(in srgb, #7c3aed 45%, transparent); }
+  table.m-cards tr.combo-child { background: color-mix(in srgb, #7c3aed 10%, var(--surface)) !important; }
+  /* pop-ups: full screen, the action buttons always within thumb reach */
+  .glass-back { padding: 0; align-items: stretch; }
+  .glass-panel, .proc-panel { width: 100%; min-height: 100dvh; border-radius: 0; padding: 12px 12px 0; overflow: visible; }
+  .sm-head h3 { font-size: 18px; }
+  .proc-tabs { width: 100%; }
+  .proc-tabs .proc-tab { flex: 1; justify-content: center; }
+  .sm-foot, .proc-foot { position: sticky; bottom: 0; z-index: 3; margin: 12px -12px 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -4px 14px rgba(15, 23, 42, .08); }
+  .sm-foot .spacer { display: none; }
+  .sm-foot > button { flex: 1 1 0; min-width: 0; padding: 6px 8px; font-size: 14px; white-space: normal; line-height: 1.15; }  /* secondary actions share one row */
+  .sm-foot > button.next-step, .sm-foot > button.ship-now { flex-basis: 100%; order: 10; min-height: 48px; font-size: 16px; }
+  .modal-backdrop > .modal { width: calc(100vw - 16px) !important; max-width: none !important; max-height: 92dvh; overflow-y: auto; margin: 4dvh auto; }
+  .ship-timeline:not(.compact) { gap: 6px 0; }
+  .ship-timeline .tl-step + .tl-step::before { width: 10px; margin: 0 4px 0 2px; }
+  .ship-timeline .tl-note { display: none; }
+  .ship-actions-bar > button { flex: 1 1 auto; }
+  .ship-actions-bar .spacer { display: none; }
+  .combo-bar { font-size: 13px; }
+  .carrier-grid { grid-template-columns: 1fr !important; }
+  .pack-tools-row { flex-direction: column; align-items: stretch; }
+  .pack-tools-row > * { flex: 0 0 auto; }  /* stacked: a width basis must not turn into height */
+  /* tags wrap instead of pushing the page wide ("420 assembled with #2", "Not packed") */
+  .tag, .tag.combo { white-space: normal; max-width: 100%; }
+  table.m-cards td .tag { text-align: left; }
+  /* item / description cells: the label on top, the text full width under it */
+  table.m-cards td.grow[data-label] { display: block; text-align: left; }
+  table.m-cards td.grow[data-label]::before { display: block; max-width: none; margin-bottom: 2px; }
+  /* On-Demand Labels: editor then preview, one column; its tabs scroll in their own strip */
+  .label-workspace { grid-template-columns: minmax(0, 1fr); }
+  .label-editor, .label-preview-wrap { min-width: 0; }
+  .label-editor .tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .lbl-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .seg-tabs { grid-template-columns: 1fr 1fr; }
+  .seg-tab { white-space: normal; border-bottom: 1px solid var(--border); }
+  .label-preview-wrap { position: static; overflow: hidden; }
+  .label-preview-wrap iframe { zoom: .6; }  /* the 6x4 label drawn at 60% so it fits a phone */
+  /* Bulk Operations cards: the head wraps (tick, caret, code, status... then who / meta on their own line) */
+  .ship-head { display: flex !important; flex-wrap: wrap; gap: 4px 10px; padding: 10px 12px; }
+  .ship-head > * { min-width: 0; }
+  .ship-head .who { flex: 1 1 100%; order: 5; white-space: normal; }
+  .ship-head .meta { white-space: normal; }
+  .ship-head .meta.hide-sm { display: inline !important; }
+  .ship-body { padding: 0 10px 10px !important; }
+  /* Bulk Operations on a phone: stages, search, the actions; sort / filters / pack tools behind "Filters & tools" */
+  .bulk-head-hint { display: none; }
+  .batch-toolbar .filters { display: flex; flex-wrap: wrap; gap: 8px; }
+  .batch-toolbar .filters > #search { flex: 1 1 100%; }
+  .batch-toolbar:not(.m-tools-open) :is(.sort-filters, .pack-tools, #period-wrap, .filters > a.link) { display: none !important; }
+  .batch-toolbar.m-tools-open .m-tools-btn { background: var(--accent-soft); }
+  .batch-toolbar .sort-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; width: 100%; }
+  .batch-toolbar .sort-filters .check-label { display: grid; gap: 2px; }
+  .stage-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+  .batch-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .stage-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+  .stage-actions > button { flex: 1 1 45%; }
+  .seg-tabs { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }  /* a tab someone can't use leaves no empty box */
+  /* dashboard: tiles two across */
+  .today-tiles { grid-template-columns: 1fr 1fr; }
+  .today-tile strong { font-size: 22px; }
+  .action-chips { gap: 6px; }
+}
+@media (max-width: 760px) { .m-hide { display: none !important; } }  /* office-only blocks left off phones (Recent Activity) */
