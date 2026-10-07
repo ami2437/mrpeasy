@@ -1490,19 +1490,19 @@ async function printLabels(shipmentId) {
 
 // Shipment pallet labels (4x6): one per pallet (its row highlighted) or one summary label.
 // What goes on the label: ticked in the pop-up each time, remembered on this computer for next time.
-const PALLET_LABEL_OPTS = [["show_of", "\"Of N\" on each pallet (PALLET 3 OF 5; untick for plain PALLET 3)"], ["boxes_col", "Boxes column (boxes on each pallet)"], ["total_pallets", "Total pallets"],
+const PALLET_LABEL_OPTS = [["show_of", "Pallet count — \"3 of 5\" (off: just \"3\")"], ["boxes_col", "Boxes on each pallet"], ["total_pallets", "Total pallets"],
                            ["total_boxes", "Total boxes"], ["total_weight", "Total weight"], ["show_company", "Our company name"], ["show_ship_date", "Ship date"]];
 async function printPalletLabels(shipmentId, ids = null) {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("at_hub_pallet_label_opts") || "{}"); } catch (e) {}
   const on = k => saved[k] !== false;
   const { value, el } = await askDialog({ title: "Shipment pallet labels",
-    body: `<p class="muted small" style="margin-top:0;">Every label shows the PO #, job # and each pallet with its customer item #s. Tick what else to print.</p>
+    body: `<p class="muted small" style="margin-top:0;">Every label shows the PO #, job # and each pallet with its customer item #s.</p>
       <div class="pl-opts">
         <label class="inline-check"><input type="radio" name="pl-mode" value="each" ${!["one", "own"].includes(saved.mode) ? "checked" : ""}> <b>One label per pallet</b> <span class="muted small">(its own pallet highlighted)</span></label>
         <label class="inline-check"><input type="radio" name="pl-mode" value="own" ${saved.mode === "own" ? "checked" : ""}> <b>One label per pallet, only that pallet's items</b> <span class="muted small">(best on thermal printers)</span></label>
         <label class="inline-check"><input type="radio" name="pl-mode" value="one" ${saved.mode === "one" ? "checked" : ""}> <b>One summary label</b></label>
-        <hr style="margin:8px 0;">
+        <div class="pl-opts-head">Include on the label</div>
         ${PALLET_LABEL_OPTS.map(([k, l]) => `<label class="inline-check"><input type="checkbox" data-opt="${k}" ${on(k) ? "checked" : ""}> ${l}</label>`).join("")}
       </div>`,
     buttons: [{ label: "Print", value: "print", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });

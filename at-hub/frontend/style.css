@@ -2137,3 +2137,6 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
   display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); box-shadow: none; cursor: pointer; }
 .pw-eye:hover { background: var(--surface-2); color: var(--text); }
 .pw-eye .ico { width: 18px; height: 18px; margin: 0 !important; }
+.pl-opts-head { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); }
+.pl-opts .inline-check { text-transform: none; }
