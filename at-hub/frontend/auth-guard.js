@@ -3458,6 +3458,8 @@ const TopBar = {
     bar.innerHTML = `<button type="button" class="tb-btn tb-menu m-only" onclick="PhoneNav.toggle()" aria-label="Menu">${icon("list")}</button>
       <span class="tb-page m-only">${escapeHtml(page)}</span>
       <div class="tb-right">
+        ${AuthGuard.can("money.view") ? `<button type="button" class="tb-btn tb-insights" onclick="openQuickInsights(TopBar.insightsFocus())"
+          title="Money at a glance: orders shipped / pending, shipments in process / not invoiced, invoices paid / owed, POs received / owed">${icon("chart")}<span>Quick Insights</span></button>` : ""}
         <a class="tb-btn" href="todo.html" title="To-Do and reminders">${icon("listTodo")}<span class="tb-badge" id="tb-todo" hidden></span></a>
         <button type="button" class="tb-btn" onclick="toggleTheme(); TopBar.themeIcon();" title="Light / dark" id="tb-theme"></button>
         <button type="button" class="tb-clock" onclick="TopBar.toggle(event)" title="Calendar">
@@ -3475,6 +3477,11 @@ const TopBar = {
       if (cal && !cal.hidden && !e.target.closest("#tb-cal") && !e.target.closest(".tb-clock")) cal.hidden = true;
     });
     document.addEventListener("keydown", e => { if (e.key === "Escape") { const c = document.getElementById("tb-cal"); if (c) c.hidden = true; } });
+  },
+  insightsFocus() {  // the Quick Insights card for this screen comes first
+    const page = location.pathname.split("/").pop();
+    return { "customer-orders.html": "orders", "shipments.html": "shipments", "pack-shipments.html": "shipments",
+             "invoices.html": "invoices", "purchase-orders.html": "purchasing", "vendors.html": "purchasing" }[page] || "orders";
   },
   themeIcon() { const b = document.getElementById("tb-theme"); if (b) b.innerHTML = icon(currentTheme() === "dark" ? "sun" : "moon"); },
   tick() {
@@ -3672,3 +3679,43 @@ document.addEventListener("keydown", e => {
   if (all.length === 1) { all[0].click(); return; }
   toast(all.length ? "Click into the part you're editing, then press Ctrl+S" : "Nothing to save here");
 });
+
+// ---- Quick Insights: one pop-up on Customer Orders, Shipments, Invoices and Purchase Orders ----
+// The money state of sales, shipping, billing and purchasing (GET /api/insights/). The screen it's opened from
+// comes first and is highlighted; each card's bar shows how its headline splits up.
+async function openQuickInsights(focus) {
+  const back = document.createElement("div");
+  back.className = "modal-backdrop";
+  back.innerHTML = `<div class="modal qi-modal" role="dialog" aria-modal="true" aria-labelledby="qi-title">
+    <div class="qi-head"><h3 id="qi-title">${icon("chart")} Quick Insights</h3><span class="muted small" id="qi-asof"></span>
+      <span style="flex:1;"></span><button type="button" class="icon-btn" aria-label="Close" data-close>${icon("x")}</button></div>
+    <div class="qi-grid"><div class="muted">Loading…</div></div></div>`;
+  const close = () => { document.removeEventListener("keydown", onKey); back.remove(); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  back.addEventListener("click", e => { if (e.target === back || e.target.closest("[data-close]")) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(back);
+  let data;
+  try { data = await apiFetch("/api/insights/"); }
+  catch (e) { back.querySelector(".qi-grid").innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; return; }
+  back.querySelector("#qi-asof").textContent = `as of ${fmtDate(data.as_of)} · open work right now`;
+  const secs = [...data.sections].sort((a, b) => (b.key === focus) - (a.key === focus));
+  const row = f => {
+    const inner = `<span class="qi-label">${escapeHtml(f.label)}${f.hint ? `<span class="muted small">${escapeHtml(f.hint)}</span>` : ""}</span>
+      <span class="qi-count muted small">${f.count != null ? f.count : ""}</span><span class="qi-amt ${f.tone ? "qi-" + f.tone : ""}">${fmtMoney(f.amount)}</span>`;
+    return f.link ? `<a class="qi-row qi-link" href="${f.link}" title="Open">${inner}</a>` : `<div class="qi-row">${inner}</div>`;
+  };
+  back.querySelector(".qi-grid").innerHTML = secs.map(s => {
+    const parts = s.bar.map(k => s.figures.find(f => f.key === k)).filter(f => f && f.amount > 0.005);
+    const whole = parts.reduce((t, f) => t + f.amount, 0);
+    const bar = whole > 0.005 ? `<div class="qi-bar">${parts.map(f => `<i class="qi-${f.tone || "muted"}" style="flex:${f.amount}" title="${escapeHtml(f.label)}: ${fmtMoney(f.amount)} (${Math.round(f.amount / whole * 100)}%)"></i>`).join("")}</div>` : "";
+    return `<section class="qi-card ${s.key === focus ? "qi-focus" : ""}">
+      <div class="qi-card-head"><a class="link" href="${s.page}">${escapeHtml(s.title)}</a></div>
+      <div class="qi-headline"><span class="qi-big">${fmtMoney(s.headline.amount)}</span>
+        <span class="muted small">${escapeHtml(s.headline.label)}${s.headline.count != null ? ` · ${s.headline.count}` : ""}${s.headline.hint ? ` — ${escapeHtml(s.headline.hint)}` : ""}</span></div>
+      ${bar}
+      <div class="qi-rows">${s.figures.map(row).join("")}</div>
+      ${s.after && s.after.length ? `<div class="qi-rows qi-after">${s.after.map(row).join("")}</div>` : ""}
+    </section>`;
+  }).join("") || `<div class="muted">Nothing to show for your role.</div>`;
+}

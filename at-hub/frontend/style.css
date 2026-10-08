@@ -2144,3 +2144,31 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
 button.lit-btn { font-weight: 600; box-shadow: 0 0 0 3px var(--accent-ring), 0 6px 14px -6px color-mix(in srgb, var(--accent) 70%, transparent); }  /* what you can do next on a shipped shipment: Modify / Mark Delivered */
 /* Edge's own reveal / clear buttons sit where our eye is and only work once: hide them -- ours does the job */
 input::-ms-reveal, input::-ms-clear { display: none; }
+
+/* ---- Quick Insights pop-up (openQuickInsights in auth-guard.js) ---- */
+.modal-backdrop > .modal.qi-modal { max-width: 1080px; }
+.qi-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.qi-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
+.qi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.qi-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface); min-width: 0; }
+.qi-card.qi-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring, rgba(37, 99, 235, .18)); }
+.qi-card-head { font-weight: 700; font-size: 1rem; margin-bottom: 4px; }
+.qi-headline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.qi-big { font-size: 1.55rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.qi-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--surface-3); margin-bottom: 8px; gap: 2px; }
+.qi-bar i { display: block; min-width: 3px; }
+.qi-rows { display: flex; flex-direction: column; }
+.qi-after { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 6px; }
+.qi-row { display: grid; grid-template-columns: minmax(0, 1fr) 44px 110px; align-items: baseline; gap: 8px; padding: 4px 4px;
+  border-radius: 6px; color: var(--text); text-decoration: none; }
+.qi-link:hover { background: var(--row-hover); }
+.qi-label { display: flex; flex-direction: column; min-width: 0; }
+.qi-label .small { line-height: 1.2; }
+.qi-count { text-align: right; font-variant-numeric: tabular-nums; }
+.qi-amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qi-amt.qi-pos { color: var(--pos); } .qi-amt.qi-neg { color: var(--neg); } .qi-amt.qi-warn { color: #b45309; }
+.qi-amt.qi-info { color: var(--accent); } .qi-amt.qi-muted { color: var(--text-2); }
+html[data-theme="dark"] .qi-amt.qi-warn { color: #fbbf24; }
+.qi-bar i.qi-pos { background: #16a34a; } .qi-bar i.qi-info { background: #3b82f6; } .qi-bar i.qi-warn { background: #f59e0b; }
+.qi-bar i.qi-neg { background: #dc2626; } .qi-bar i.qi-muted { background: #94a3b8; }
+@media (max-width: 760px) { .tb-insights span { display: none; } .qi-grid { grid-template-columns: 1fr; } .qi-row { grid-template-columns: minmax(0, 1fr) 34px 96px; } }
