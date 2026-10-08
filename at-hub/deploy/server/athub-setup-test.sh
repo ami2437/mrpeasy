@@ -15,9 +15,8 @@ BACKUP_DIR=$DIR/data/backups
 BACKUP_EVERY_HOURS=0
 BUSINESS_TIMEZONE=America/Chicago
 TEST_DATA_ENABLED=true
-SITE_LABEL=TEST SITE
+SITE_LABEL="TEST SITE"
 PUBLIC_URL=https://$DOMAIN
-CORS_ORIGINS=["https://$DOMAIN"]
 # no email from the test site, so customers never get a test invoice
 SMTP_HOST=
 ANTHROPIC_API_KEY=
