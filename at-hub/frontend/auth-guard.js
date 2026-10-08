@@ -3467,6 +3467,7 @@ const TopBar = {
       </div>
       <div class="tb-cal" id="tb-cal" hidden></div>`;
     main.prepend(bar);
+    this.siteLabel();
     this.tick();
     this.themeIcon();
     setInterval(() => this.tick(), 20000);
@@ -3482,6 +3483,17 @@ const TopBar = {
     const page = location.pathname.split("/").pop();
     return { "customer-orders.html": "orders", "shipments.html": "shipments", "pack-shipments.html": "shipments",
              "invoices.html": "invoices", "purchase-orders.html": "purchasing", "vendors.html": "purchasing" }[page] || "orders";
+  },
+  siteLabel() {  // a test copy says so on every page (SITE_LABEL on the server)
+    fetch("/api/health").then(r => r.json()).then(h => {
+      if (!h.site_label) return;
+      const tag = document.createElement("span");
+      tag.className = "tb-site-label";
+      tag.textContent = h.site_label;
+      tag.title = "This is not the real AT-HUB -- changes here don't count";
+      document.querySelector("#topbar .tb-right")?.prepend(tag);
+      document.title = `[${h.site_label}] ${document.title}`;
+    }).catch(() => {});
   },
   themeIcon() { const b = document.getElementById("tb-theme"); if (b) b.innerHTML = icon(currentTheme() === "dark" ? "sun" : "moon"); },
   tick() {

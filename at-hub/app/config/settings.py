@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Where uploaded attachments (PDFs, photos) are stored.
     upload_dir: str = "./uploads"
+    site_label: str = ""  # e.g. "TEST SITE": a red badge in every page's top bar, so a test copy is never mistaken for the real one
     public_url: str = ""  # how people reach AT-HUB (e.g. https://hub.example.com) -- printed QR codes link here
     backup_dir: str = "./backups"
     backup_every_hours: float = 6  # automatic database backups; 0 turns them off

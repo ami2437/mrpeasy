@@ -348,7 +348,7 @@ def activity_log(user: str = "", entity_type: str = "", days: int = 7, limit: in
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "OK", "app": "AT-HUB"}
+    return {"status": "OK", "app": "AT-HUB", "site_label": settings.site_label or None}
 
 
 app.include_router(auth.router)

@@ -2172,3 +2172,6 @@ html[data-theme="dark"] .qi-amt.qi-warn { color: #fbbf24; }
 .qi-bar i.qi-pos { background: #16a34a; } .qi-bar i.qi-info { background: #3b82f6; } .qi-bar i.qi-warn { background: #f59e0b; }
 .qi-bar i.qi-neg { background: #dc2626; } .qi-bar i.qi-muted { background: #94a3b8; }
 @media (max-width: 760px) { .tb-insights span { display: none; } .qi-grid { grid-template-columns: 1fr; } .qi-row { grid-template-columns: minmax(0, 1fr) 34px 96px; } }
+/* A test copy of AT-HUB (SITE_LABEL): a red badge in the top bar */
+.tb-site-label { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 8px; background: #dc2626; color: #fff;
+  font-weight: 800; letter-spacing: .06em; font-size: 12.5px; text-transform: uppercase; }

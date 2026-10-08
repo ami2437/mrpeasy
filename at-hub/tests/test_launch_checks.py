@@ -268,3 +268,10 @@ def test_service_pos_not_chased_for_receiving(make, api):
     late = [r["id"] for s in api.get("/api/reports/action-items") if s["key"] == "po_overdue" for r in s["rows"]]
     assert po["id"] not in late
     assert next(g for g in api.get("/api/stock-items/groups/list") if g["name"] == "Freight Svc")["non_stock"] is True
+
+
+def test_health_says_which_site_this_is(client, monkeypatch):
+    from app.config.settings import settings
+    assert client.get("/api/health").json()["site_label"] is None          # the real site: no badge
+    monkeypatch.setattr(settings, "site_label", "TEST SITE")
+    assert client.get("/api/health").json()["site_label"] == "TEST SITE"   # a test copy says so on every page
