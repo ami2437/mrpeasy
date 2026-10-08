@@ -3701,7 +3701,7 @@ async function openQuickInsights(focus) {
   back.querySelector("#qi-asof").textContent = `as of ${fmtDate(data.as_of)} · open work right now`;
   const secs = [...data.sections].sort((a, b) => (b.key === focus) - (a.key === focus));
   const row = f => {
-    const inner = `<span class="qi-label">${escapeHtml(f.label)}${f.hint ? `<span class="muted small">${escapeHtml(f.hint)}</span>` : ""}</span>
+    const inner = `<span class="qi-label"><span class="qi-name">${escapeHtml(f.label)}</span>${f.hint ? `<span class="muted small">${escapeHtml(f.hint)}</span>` : ""}</span>
       <span class="qi-count muted small">${f.count != null ? f.count : ""}</span><span class="qi-amt ${f.tone ? "qi-" + f.tone : ""}">${fmtMoney(f.amount)}</span>`;
     return f.link ? `<a class="qi-row qi-link" href="${f.link}" title="Open">${inner}</a>` : `<div class="qi-row">${inner}</div>`;
   };
@@ -3712,7 +3712,7 @@ async function openQuickInsights(focus) {
     return `<section class="qi-card ${s.key === focus ? "qi-focus" : ""}">
       <div class="qi-card-head"><a class="link" href="${s.page}">${escapeHtml(s.title)}</a></div>
       <div class="qi-headline"><span class="qi-big">${fmtMoney(s.headline.amount)}</span>
-        <span class="muted small">${escapeHtml(s.headline.label)}${s.headline.count != null ? ` · ${s.headline.count}` : ""}${s.headline.hint ? ` — ${escapeHtml(s.headline.hint)}` : ""}</span></div>
+        <span class="muted small"><span class="qi-name">${escapeHtml(s.headline.label)}</span>${s.headline.count != null ? ` · ${s.headline.count}` : ""}${s.headline.hint ? ` — ${escapeHtml(s.headline.hint)}` : ""}</span></div>
       ${bar}
       <div class="qi-rows">${s.figures.map(row).join("")}</div>
       ${s.after && s.after.length ? `<div class="qi-rows qi-after">${s.after.map(row).join("")}</div>` : ""}

@@ -375,7 +375,7 @@ input, select, textarea { background: #fff; border-color: #8f99a8; }
 /* Consistent Title Case for labels, headings, buttons, tags and menus. Data (names,
    codes, notes, addresses) is never transformed. */
 .tag, button, th, h1, h2, h3, h4, label, summary, .dsec-title, .nav-group-label, .sidebar a,
-.tabs .tab, .pack-chip, .table-tools-btn, .check-label, .inline-check, .stat-label, .progress-label { text-transform: capitalize; }
+.tabs .tab, .pack-chip, .table-tools-btn, .check-label, .inline-check, .stat-label, .progress-label, .qi-name { text-transform: capitalize; }
 
 /* Combined invoices stand out: purple badge (hover for shipments) and an outlined note. */
 .tag.combined { background: #fae8ff; color: #86198f; border: 1px solid #e879f9; cursor: help; }
