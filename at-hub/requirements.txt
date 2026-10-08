@@ -10,6 +10,8 @@ bcrypt==4.0.1
 python-multipart==0.0.6
 reportlab==5.0.1
 pypdf>=4
+pillow>=10  # images: thumbnails, photo shrinking (app/services/shrink.py)
+pillow-heif>=0.16  # iPhone .heic photos
 pypdfium2>=4  # PDF thumbnails for attached files
 openpyxl>=3.1
 httpx>=0.25

@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 2, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 2, invoices: 2,
-    "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, imports: 2, ai: 2,
+    "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, insights: 2, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -3458,7 +3458,7 @@ const TopBar = {
     bar.innerHTML = `<button type="button" class="tb-btn tb-menu m-only" onclick="PhoneNav.toggle()" aria-label="Menu">${icon("list")}</button>
       <span class="tb-page m-only">${escapeHtml(page)}</span>
       <div class="tb-right">
-        ${AuthGuard.can("money.view") ? `<button type="button" class="tb-btn tb-insights" onclick="openQuickInsights(TopBar.insightsFocus())"
+        ${AuthGuard.can("insights") && AuthGuard.can("money.view") ? `<button type="button" class="tb-btn tb-insights" onclick="openQuickInsights(TopBar.insightsFocus())"
           title="Money at a glance: orders shipped / pending, shipments in process / not invoiced, invoices paid / owed, POs received / owed">${icon("chart")}<span>Quick Insights</span></button>` : ""}
         <a class="tb-btn" href="todo.html" title="To-Do and reminders">${icon("listTodo")}<span class="tb-badge" id="tb-todo" hidden></span></a>
         <button type="button" class="tb-btn" onclick="toggleTheme(); TopBar.themeIcon();" title="Light / dark" id="tb-theme"></button>

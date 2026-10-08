@@ -48,7 +48,10 @@ def upload_root() -> Path:
 
 def store_file(db: Session, entity_type: str, entity_id: int, category: str, name: str, content_type: Optional[str],
                data: bytes, note: Optional[str], username: str) -> Attachment:
-    """Write one file under uploads/<type>/<id>/ and add its Attachment row (caller commits)."""
+    """Write one file under uploads/<type>/<id>/ and add its Attachment row (caller commits). Big photos and
+    scanned PDFs are shrunk first (app/services/shrink.py) -- a .heic photo is stored as .jpg."""
+    from app.services.shrink import shrink
+    name, content_type, data = shrink(name, content_type, data)
     folder = upload_root() / entity_type / str(entity_id)
     folder.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[-80:]

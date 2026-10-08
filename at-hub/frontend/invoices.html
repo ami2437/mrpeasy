@@ -260,6 +260,7 @@
     }
     function renderReady(list) {
       const tbody = document.getElementById("ready-body");
+      const canDeliver = AuthGuard.can("shipments.deliver");
       document.getElementById("ready-all").checked = false;
       if (!list.length) { tbody.innerHTML = `<tr><td colspan="8" class="muted">Nothing waiting — every shipped shipment is on an invoice.</td></tr>`; readyTicked(); return; }
       tbody.innerHTML = list.map(s => {
@@ -273,8 +274,9 @@
           <td>${fmtDate(s.ship_date)}</td>
           <td>${delivered ? fmtDate(s.delivered_at) : `<span class="tag draft" title="Creating the invoice asks for the delivery date first">not delivered</span>`}</td>
           <td class="num">${fmtMoney(shipmentValue(s))}</td>
-          <td class="nowrap"><button class="small ${delivered ? "" : "secondary"}" onclick="invoiceShipments([${s.id}])"
-            title="${delivered ? "Create a draft invoice for this shipment" : "Mark it delivered, then create the invoice"}">${delivered ? "Create Invoice" : "Deliver &amp; Invoice"}</button></td>
+          <td class="nowrap">${delivered || canDeliver ? `<button class="small ${delivered ? "" : "secondary"}" onclick="invoiceShipments([${s.id}])"
+            title="${delivered ? "Create a draft invoice for this shipment" : "Mark it delivered, then create the invoice"}">${delivered ? "Create Invoice" : "Deliver &amp; Invoice"}</button>`
+            : `<button class="small secondary" disabled title="It has to be marked delivered first, and your role can't mark deliveries (Mark delivered permission) -- ask a manager, or upload the proof of delivery">Needs Delivery</button>`}</td>
         </tr>`;
       }).join("");
       limitRows(tbody, "ready", renderInvoices);
@@ -296,6 +298,12 @@
       msg.innerHTML = "";
       const list = ids.map(id => shipments.find(s => s.id === id)).filter(Boolean);
       if (!list.length) return;
+      const undelivered = list.filter(s => s.status === "shipped" && !s.delivered_at);
+      if (undelivered.length && !AuthGuard.can("shipments.deliver")) {
+        msg.innerHTML = `<span class="neg">${undelivered.map(s => escapeHtml(s.code)).join(", ")} ${undelivered.length === 1 ? "isn't" : "aren't"} marked delivered,
+          and your role can't mark deliveries -- untick ${undelivered.length === 1 ? "it" : "them"}, or ask a manager / upload the proof of delivery.</span>`;
+        return;
+      }
       if (!await deliveredCheckBeforeInvoice(list, { required: true })) return;
       const perOrder = ids.length > 1 && document.getElementById("ready-per-order").checked;
       const groups = [];

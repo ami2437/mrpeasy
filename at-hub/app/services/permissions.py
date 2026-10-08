@@ -42,6 +42,8 @@ CATALOG = [
     ("landed_costs", "Purchasing", "Landed costs", True, "manager"),
     # Reports & tools
     ("reports", "Reports", "Reports and the dashboard's money sections", True, "manager"),
+    ("insights", "Reports", "Quick Insights pop-up (top bar): orders shipped / pending, shipments in process / not invoiced, "
+                            "invoices paid / owed, POs received / owed -- also needs \"See prices\"", True, "manager"),
     ("imports", "Tools", "Import data from files (CSV)", False, "manager"),
     ("ai", "Tools", "AI Desk, AI order drafting and document scanning", False, "manager"),
     ("recycle_bin", "Tools", "Recycle bin (restore deleted records)", False, "manager"),

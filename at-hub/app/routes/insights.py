@@ -13,7 +13,8 @@ from app.services.crud import po_left_to_pay
 from app.services.money import cents, line_amount
 from app.services.permissions import has
 
-router = APIRouter(prefix="/api/insights", tags=["insights"], dependencies=[Depends(require_perm("money.view"))])
+router = APIRouter(prefix="/api/insights", tags=["insights"],
+                   dependencies=[Depends(require_perm("insights")), Depends(require_perm("money.view"))])
 
 
 def _fig(key, label, amount, count=None, hint=None, tone=None, link=None):
