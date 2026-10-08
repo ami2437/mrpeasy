@@ -3,42 +3,134 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AT-HUB — Login</title>
+  <title>AT-HUB — Sign In</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <style>
+    /* Sign-in page: soft navy backdrop, the company logo as a giant watermark, a frosted card in front. */
+    :root { --brand: #262f6b; }
+    html, body { height: 100%; }
+    body.login-page { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; box-sizing: border-box; overflow: hidden;
+      background: radial-gradient(1200px 700px at 12% 8%, #ffffff 0%, rgba(255,255,255,0) 60%),
+                  radial-gradient(900px 600px at 95% 100%, #d9e0f2 0%, rgba(217,224,242,0) 65%),
+                  linear-gradient(160deg, #eef2fa 0%, #e2e8f5 55%, #d6deef 100%); }
+    /* the logo (its white background made transparent by the script below) as a giant, faint, tilted watermark */
+    .login-watermark { position: fixed; z-index: 0; pointer-events: none; user-select: none;
+      width: min(78vh, 92vw); aspect-ratio: 438 / 562; right: max(-6vw, -60px); bottom: -10vh;
+      background: center / contain no-repeat; opacity: .085; transform: rotate(-8deg); }
+    .login-card { position: relative; z-index: 1; width: 100%; max-width: 380px; box-sizing: border-box; padding: 30px 30px 24px;
+      border-radius: 20px; background: rgba(255,255,255,.78); border: 1px solid rgba(255,255,255,.9);
+      -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%);
+      box-shadow: 0 30px 60px -24px rgba(38,47,107,.35), 0 2px 6px rgba(38,47,107,.08); }
+    .login-brand { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 22px; }
+    .login-logo { width: 74px; height: 95px; background: center / contain no-repeat; margin-bottom: 10px; }
+    .login-brand h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: .02em; color: var(--brand); text-transform: none; }
+    .login-brand .login-sub { margin-top: 2px; font-size: 13px; color: #5b6478; }
+    .login-card label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #3b4458; }
+    .login-field { position: relative; }
+    .login-field > .ico.lead { position: absolute; left: 11px; top: 0; bottom: 0; margin: auto 0; width: 17px; height: 17px; color: #8a93a8; pointer-events: none; z-index: 1; }
+    .login-card input { width: 100%; box-sizing: border-box; height: 44px; padding-left: 38px; border-radius: 10px; font-size: 15px; background: #fff; }
+    .login-card .pw-wrap > input { padding-left: 38px; }
+    .login-card input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(38,47,107,.15); outline: none; }
+    .login-caps { display: none; margin-top: 6px; font-size: 12.5px; color: #b45309; font-weight: 600; }
+    .login-caps.on { display: block; }
+    .login-card button[type="submit"] { width: 100%; height: 46px; margin-top: 20px; border-radius: 10px; font-size: 15px; font-weight: 700;
+      background: var(--brand); letter-spacing: .02em; }
+    .login-card button[type="submit"]:hover { background: #1c2455; }
+    .login-card button[type="submit"]:disabled { opacity: .7; cursor: wait; }
+    .login-card .error { margin-top: 12px; min-height: 18px; font-size: 13.5px; text-align: center; }
+    .login-foot { position: relative; z-index: 1; margin-top: 18px; text-align: center; font-size: 12px; color: #6b7487; }
+
+    html[data-theme="dark"] body.login-page { background: radial-gradient(1100px 700px at 10% 5%, #1f2a4d 0%, rgba(31,42,77,0) 60%),
+                                                          linear-gradient(160deg, #0f1526 0%, #141c33 60%, #18223f 100%); }
+    /* dark: the watermark becomes a faint light silhouette; the small logo sits on a white tile so its navy reads */
+    html[data-theme="dark"] .login-watermark { filter: brightness(0) invert(1); opacity: .06; }
+    html[data-theme="dark"] .login-card { background: rgba(28,36,58,.78); border-color: rgba(255,255,255,.1); }
+    html[data-theme="dark"] .login-logo { background-color: #fff; background-origin: content-box; padding: 8px; border-radius: 16px; width: 64px; height: 84px; }
+    html[data-theme="dark"] .login-brand h1 { color: #dfe5ff; }
+    html[data-theme="dark"] .login-card label, html[data-theme="dark"] .login-brand .login-sub, html[data-theme="dark"] .login-foot { color: #aab3c8; }
+    html[data-theme="dark"] .login-card input { background: rgba(10,15,30,.6); }
+    html[data-theme="dark"] .login-card button[type="submit"] { background: #4f63d8; }
+    @media (max-width: 520px) { .login-watermark { width: 120vw; right: -30vw; bottom: -6vh; } .login-card { padding: 24px 20px 20px; } }
+  </style>
 </head>
-<body>
-  <main style="max-width: 360px; margin-top: 80px;">
-    <div class="card">
-      <h2 style="margin-top:0;">AT-HUB</h2>
+<body class="login-page">
+  <div class="login-watermark" aria-hidden="true"></div>
+  <div style="width:100%; max-width:380px;">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="login-logo" role="img" aria-label="ATind Supplies"></div>
+        <h1>AT-HUB</h1>
+        <div class="login-sub" id="login-company">American Traders LLC</div>
+      </div>
       <form id="login-form">
-        <label>Username</label>
-        <input type="text" id="username" required autofocus>
-        <label>Password</label>
-        <input type="password" id="password" required>
+        <label for="username">Username</label>
+        <div class="login-field"><span class="lead-icon"></span><input type="text" id="username" required autofocus autocomplete="username"></div>
+        <label for="password">Password</label>
+        <div class="login-field"><span class="lead-icon"></span><input type="password" id="password" required autocomplete="current-password"></div>
+        <div class="login-caps" id="caps">Caps Lock is on</div>
         <div id="code-box" style="display:none;">
-          <label>Code from your authenticator app</label>
-          <input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="6 digits">
+          <label for="code">Code from your authenticator app</label>
+          <div class="login-field"><span class="lead-icon"></span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="6 digits"></div>
         </div>
-        <div style="margin-top:16px;">
-          <button type="submit">Log in</button>
-        </div>
+        <button type="submit" id="login-btn">Sign In</button>
         <div id="error" class="error"></div>
       </form>
     </div>
-  </main>
+    <div class="login-foot">© <span id="year"></span> American Traders LLC · ATind Supplies</div>
+  </div>
 
   <script>
     if (AuthGuard.getToken()) {
       window.location.href = homePage();
     }
+    document.getElementById("year").textContent = new Date().getFullYear();
+    // leading icons inside the boxes (user / lock / authenticator)
+    document.querySelectorAll(".login-field .lead-icon").forEach((el, i) => {
+      el.outerHTML = icon(["user", "lock", "shield"][i] || "user", "lead");
+    });
+    // no logo uploaded yet: leave the page plain rather than show a broken picture
+    // The company logo (Company Settings), with its white background turned transparent so it sits cleanly on the
+    // frosted card and the backdrop; no logo uploaded -> the page stays plain.
+    (function loadLogo() {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const x = c.getContext("2d");
+        x.drawImage(img, 0, 0);
+        const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+        for (let i = 0; i < p.length; i += 4) {
+          const m = Math.min(p[i], p[i + 1], p[i + 2]);   // how close to white
+          if (m > 235) p[i + 3] = 0;
+          else if (m > 200) p[i + 3] = Math.round(p[i + 3] * (235 - m) / 35);  // soft edge, no white fringe
+        }
+        x.putImageData(d, 0, 0);
+        const url = `url("${c.toDataURL("image/png")}")`;
+        document.querySelectorAll(".login-watermark, .login-logo").forEach(e => { e.style.backgroundImage = url; });
+      };
+      img.onerror = () => document.querySelectorAll(".login-watermark, .login-logo").forEach(e => e.style.display = "none");
+      img.src = "/api/company/logo";
+    })();
+    fetch("/api/company/").then(r => r.ok ? r.json() : null).then(c => {
+      if (c && c.name) document.getElementById("login-company").textContent = c.name;
+    }).catch(() => {});
+    // Caps Lock warning on the password box
+    const caps = document.getElementById("caps");
+    ["keydown", "keyup"].forEach(t => document.getElementById("password").addEventListener(t, e => {
+      if (e.getModifierState) caps.classList.toggle("on", e.getModifierState("CapsLock"));
+    }));
+    document.getElementById("password").addEventListener("blur", () => caps.classList.remove("on"));
 
     document.getElementById("login-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const username = document.getElementById("username").value;
       const password = document.getElementById("password").value;
       const errorEl = document.getElementById("error");
+      const btn = document.getElementById("login-btn");
       errorEl.textContent = "";
+      btn.disabled = true;
+      btn.textContent = "Signing In…";
       try {
         const response = await fetch("/api/auth/login", {
           method: "POST",
@@ -57,6 +149,9 @@
         window.location.href = data.user.must_change_password ? "account.html" : homePage();
       } catch (err) {
         errorEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Sign In";
       }
     });
   </script>

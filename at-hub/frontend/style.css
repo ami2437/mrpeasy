@@ -2133,9 +2133,13 @@ table.list-fit .tag.dup-tag { white-space: normal; display: inline-block; max-wi
 /* password boxes: an eye button inside the right edge shows / hides what was typed (addPasswordEye in auth-guard.js) */
 .pw-wrap { position: relative; display: block; }
 .pw-wrap > input { width: 100%; padding-right: 42px; }
-.pw-eye { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 34px; height: 34px; min-height: 0 !important; padding: 0;
-  display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); box-shadow: none; cursor: pointer; }
-.pw-eye:hover { background: var(--surface-2); color: var(--text); }
+/* centred with top/bottom + margin, not transform: the general button:active nudge replaces transform and made the eye
+   jump 18px down mid-click (so the click often missed); no borrowed press / shadow / transition effects either */
+.pw-eye { position: absolute; top: 0; bottom: 0; right: 3px; margin: auto 0; width: 30px; height: 28px; min-height: 0 !important; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
+  transform: none !important; box-shadow: none !important; transition: background .12s, color .12s !important; }
+.pw-eye:hover, .pw-eye:focus-visible { background: var(--surface-2); color: var(--text); }
+.pw-eye:active { transform: none !important; background: var(--surface-3); }
 .pw-eye .ico { width: 18px; height: 18px; margin: 0 !important; }
 .pl-opts-head { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .04em;
   text-transform: uppercase; color: var(--muted); }
