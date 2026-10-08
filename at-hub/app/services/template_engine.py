@@ -21,6 +21,7 @@ column["hidden"] -- visible_spec() applies them before anything is drawn.
 import base64
 import copy
 import io
+import json
 import re
 from xml.sax.saxutils import escape
 
@@ -445,6 +446,24 @@ class CheckBox(Flowable):
         self.canv.rect((self.aw - self.size) / 2, 1, self.size, self.size)
 
 
+def _payments_box(ctx):
+    """Invoices: the customer's payments so far and the balance due, right-aligned under the totals."""
+    k = ParagraphStyle("pk", fontName=FONT, fontSize=8.6, leading=11, textColor=colors.HexColor("#334155"))
+    v = ParagraphStyle("pv", parent=k, alignment=TA_RIGHT)
+    gk = ParagraphStyle("gk", parent=k, fontName=FONT_BOLD, fontSize=10, leading=13, textColor=colors.HexColor("#0f172a"))
+    gv = ParagraphStyle("gv", parent=gk, alignment=TA_RIGHT)
+    rows = [[Paragraph("Invoice total", k), Paragraph(escape((ctx.get("totals") or {}).get("total", "")), v)]]
+    rows += [[Paragraph(escape(label), k), Paragraph(escape(amount), v)] for label, amount in ctx["_payments"]]
+    rows.append([Paragraph("Balance due", gk), Paragraph(escape(ctx.get("_balance_due", "")), gv)])
+    t = Table(rows, colWidths=[2.6 * inch, 1.2 * inch])
+    t.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                           ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                           ("LINEABOVE", (0, -1), (-1, -1), 1, colors.HexColor("#1e293b")),
+                           ("TOPPADDING", (0, -1), (-1, -1), 6)]))
+    t.hAlign = "RIGHT"
+    return t
+
+
 # ---------- the line-items table ----------
 def build_table(tspec, rows, width):
     cols = [c for c in tspec.get("columns", []) if c.get("key")]
@@ -581,6 +600,8 @@ def render(spec, ctx, rows, title="Document") -> bytes:
             story.append(ptable)
     if summary.get("blocks"):
         story += [Spacer(1, 6), BandFlowable(summary, ctx, width)]
+    if ctx.get("_payments") and "totals.paid" not in json.dumps(spec):
+        story += [Spacer(1, 8), _payments_box(ctx)]  # a design without its own Paid field still shows what's left to pay
     if not story:
         story.append(Spacer(1, 1))
     doc.build(story, canvasmaker=_canvas_class(spec, ctx, pw, ph, m))

@@ -45,16 +45,16 @@ def LABEL(x, y, w, text, **kw):
 DOCS = {
     "invoice": {
         "facts": [("Invoice date", "{{invoice.date}}"), ("Due date", "{{invoice.due_date}}"), ("Terms", "{{invoice.terms}}"),
-                  ("Customer PO", "{{order.po_number}}"), ("Amount due", "{{totals.total}}")],
+                  ("Customer PO", "{{order.po_number}}"), ("Amount due", "{{totals.amount_due}}")],
         "parties": [("Bill to", "<b>{{customer.name}}</b>\nAttn: {{customer.contact}}\n{{customer.bill_to}}"),
                     ("Ship to", "<b>{{customer.name}}</b>\n{{customer.ship_to}}"),
                     ("Order details", "Order # <b>{{order.code}}</b>\nCustomer PO <b>{{order.po_number}}</b>\nJob # <b>{{order.job_number}}</b>\n"
                                       "Shipment <b>{{invoice.shipments}}</b>\nShipped <b>{{invoice.shipped}}</b>")],
-        "hero": ("Amount due", "{{totals.total}}", "Due {{invoice.due_date}}"),
+        "hero": ("Amount due", "{{totals.amount_due}}", "Due {{invoice.due_date}}"),
         "chips": [("Invoice date", "{{invoice.date}}"), ("Order #", "{{order.code}}"), ("Customer PO", "{{order.po_number}}"),
                   ("Job #", "{{order.job_number}}"), ("Shipment", "{{invoice.shipments}}"), ("Shipped", "{{invoice.shipped}}")],
         "columns": [("line_no", "#", 0.32), ("item_code_desc", "Item / description", 0), ("qty", "Qty", 0.9), ("price", "Unit price", 1.0), ("amount", "Amount", 1.15)],
-        "totals": [("Subtotal", "{{totals.subtotal}}"), ("Tax", "{{totals.tax}}")], "due": ("Amount due", "{{totals.total}}"),
+        "totals": [("Subtotal", "{{totals.subtotal}}"), ("Tax", "{{totals.tax}}")], "due": ("Total", "{{totals.total}}"),  # payments + balance due print under it
         "notes": [("Payment instructions & terms", "{{company.invoice_notes}}"), ("Notes", "{{invoice.notes}}\nThank you for your business!")],
     },
     "quote": {
@@ -439,7 +439,7 @@ def _sample(doc_type, b):
         bill = ("Bill to" if inv else "Prepared for", "{{customer.name}}", "Attn: {{customer.contact}}\n{{customer.bill_to}}")
         if b:
             head += _party(0, y0, 3.6, *bill)
-            head += _hero(y0, "Amount due" if inv else "Quote total", "{{totals.total}}",
+            head += _hero(y0, "Amount due" if inv else "Quote total", "{{totals.amount_due}}" if inv else "{{totals.total}}",
                           "Due {{invoice.due_date}}" if inv else "Valid until {{quote.valid_until}}")
             chips = ([("Invoice date", "{{invoice.date}}"), ("Order #", "{{order.code}}"), ("Customer PO", "{{order.po_number}}"),
                       ("Job #", "{{order.job_number}}"), ("Shipment", "{{invoice.shipments}}"), ("Shipped", "{{invoice.shipped}}")] if inv else
@@ -448,7 +448,7 @@ def _sample(doc_type, b):
             h = y0 + 1.048 + 0.535 + 0.25
         else:
             facts = ([("Invoice date", "{{invoice.date}}"), ("Due date", "{{invoice.due_date}}"), ("Terms", "{{invoice.terms}}"),
-                      ("Customer PO", "{{order.po_number}}"), ("Amount due", "{{totals.total}}")] if inv else
+                      ("Customer PO", "{{order.po_number}}"), ("Amount due", "{{totals.amount_due}}")] if inv else
                      [("Quote date", "{{quote.date}}"), ("Valid until", "{{quote.valid_until}}"), ("Your reference", "{{quote.ref|—}}"),
                       ("Lines", "{{totals.lines}}"), ("Quote total", "{{totals.total}}")])
             head += _strip(y0, facts, highlight=True)
@@ -461,7 +461,7 @@ def _sample(doc_type, b):
                                                      ("Your reference", "{{quote.ref}}")]))
             h = py + 1.22 + 0.25
         tot, yy = _totals_x([("Subtotal", "{{totals.subtotal}}"), ("Tax", "{{totals.tax}}")] if inv else [],
-                            "Amount due" if inv else "Quote total", "{{totals.total}}", 0.167, due_bg)
+                            "Total" if inv else "Quote total", "{{totals.total}}", 0.167, due_bg)
         notes = ([("Payment instructions & terms", "{{company.invoice_notes}}"), ("Notes", "{{invoice.notes}}\nThank you for your business!")] if inv else
                  [("Notes", "{{quote.notes|—}}"), ("Terms", "Prices are valid until {{quote.valid_until}}. To order, reply with your PO.")])
         summary = {"h": round(yy + 0.222 + 0.8, 2), "blocks": tot + _panels(yy + 0.222, notes)}

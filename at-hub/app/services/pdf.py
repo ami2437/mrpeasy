@@ -371,6 +371,16 @@ def _designed(db, doc_type, record, customer_id=None, **options):
     return render_record(db, tpl, doc_type, record, options) if tpl else None
 
 
+def payment_lines(db: Session, invoice: Invoice) -> list:
+    """(label, amount) for each payment the customer's copy lists: "Payment Oct 01, 2026 · Check 1234"."""
+    from app.services import type_lists
+    out = []
+    for pay in invoice.printed_payments:
+        how = " ".join(x for x in (type_lists.label_of(db, "payment_method", pay.method) if pay.method else "", pay.reference or "") if x)
+        out.append((f"Payment {date(pay.paid_date or pay.created_at)}" + (f" · {how}" if how else ""), pay.amount))
+    return out
+
+
 def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes:
     designed = _designed(db, "invoice", invoice, invoice.customer_id, show_notes=show_notes)
     if designed:
@@ -429,10 +439,12 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         right_cols=(4, 5, 6) if combined else (3, 4, 5),
     ))
 
-    # Customer copy: what was billed, never what has been paid or how.
-    total_rows = [[p("Subtotal", "total_k"), p(money(invoice.total), "total_v")],
-                  [p("Total due", "grand_k"), p(money(invoice.total), "grand_v")]]
-    totals = Table(total_rows, colWidths=[1.5 * inch, 1.4 * inch])
+    # Customer copy: what was billed, and -- unless "Print Previous Payments" is unticked -- the customer's
+    # payments so far and the balance left (a resent invoice shows only what's still owed).
+    paid_rows = [[p(label, "total_k"), p(money(-amount), "total_v")] for label, amount in payment_lines(db, invoice)]
+    total_rows = ([[p("Invoice total" if paid_rows else "Subtotal", "total_k"), p(money(invoice.total), "total_v")]] + paid_rows
+                  + [[p("Balance due" if paid_rows else "Total due", "grand_k"), p(money(invoice.amount_due_printed), "grand_v")]])
+    totals = Table(total_rows, colWidths=[(2.9 if paid_rows else 1.5) * inch, 1.4 * inch])
     totals.setStyle(TableStyle([
         ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),

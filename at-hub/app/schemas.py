@@ -736,7 +736,8 @@ class MergeInvoicesRequest(BaseModel):
 
 
 class InvoicePrintOptions(BaseModel):
-    print_zero_lines: bool
+    print_zero_lines: Optional[bool] = None  # only the options sent are changed
+    print_payments: Optional[bool] = None
 
 
 class InvoiceStatusUpdate(BaseModel):
@@ -788,6 +789,8 @@ class InvoiceResponse(BaseModel):
     is_combined: bool = False
     combined_from: List[str] = []  # codes of the invoices folded into this one
     print_zero_lines: bool = False
+    print_payments: Optional[bool] = True  # None (older invoices) = yes
+    amount_due_printed: float = 0  # the balance the customer's copy shows (total less the payments it lists)
     lines: List[InvoiceLineResponse] = []
     payments: List[InvoicePaymentResponse] = []
     emails: List["InvoiceEmailResponse"] = []

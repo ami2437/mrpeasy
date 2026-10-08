@@ -77,7 +77,8 @@ FIELDS = {
         ("invoice.shipments", "Shipment #(s)"), ("invoice.shipped", "Ship date"), ("invoice.delivered", "Delivered date"),
         ("invoice.notes", "Invoice notes (free text)"), ("totals.subtotal", "Subtotal"), ("totals.items_subtotal", "Subtotal before shipping"),
         ("totals.shipping", "Shipping"), ("totals.tax", "Tax"),
-        ("totals.total", "Total / amount due"), ("totals.lines", "Number of lines")],
+        ("totals.total", "Invoice total"), ("totals.paid", "Paid so far (blank when nothing is paid / not printed)"),
+        ("totals.amount_due", "Amount due (total less payments printed)"), ("totals.lines", "Number of lines")],
     "packing_list": _COMPANY + _DOC + _CUST + _ORDER + [
         ("shipment.code", "Shipment #"), ("shipment.ship_date", "Ship date"), ("shipment.carrier", "Carrier"),
         ("shipment.tracking", "Tracking #"), ("shipment.notes", "Shipment notes"), ("shipment.lines", "Number of lines"),
@@ -195,6 +196,8 @@ def _invoice(db, inv: Invoice, opt):
                      "amount": money(line_amount(l.quantity, l.unit_price)), "_shipping": _is_shipping(l, it)})
     total = sum(line_amount(l.quantity, l.unit_price) for l in printed)
     shipping = sum(line_amount(l.quantity, l.unit_price) for l in printed if _is_shipping(l, items.get(l.item_id)))
+    from app.services.pdf import payment_lines
+    paid = payment_lines(db, inv)  # "Print Previous Payments": the customer's payments and the balance left
     due = inv.due_date or (inv.invoice_date + timedelta(days=30) if inv.invoice_date else None)
     order_ship_to = order.ship_to_address if order else None
     ctx = {"doc": {"title": "INVOICE", "number": inv.code, "date": date(inv.invoice_date), "status": inv.status},
@@ -204,7 +207,9 @@ def _invoice(db, inv: Invoice, opt):
                        "delivered": moment(ships[0].delivered_at) if ships else "",
                        "notes": inv.free_text if inv.free_text and inv.free_text != "Generated via AT-HUB" else ""},
            "totals": {"subtotal": money(total), "items_subtotal": money(total - shipping), "shipping": money(shipping),
-                      "tax": money(0), "total": money(total), "lines": str(len(rows))},
+                      "tax": money(0), "total": money(total), "lines": str(len(rows)),
+                      "paid": f"-{money(sum(a for _, a in paid))}" if paid else "", "amount_due": money(inv.amount_due_printed)},
+           "_payments": [(label, f"-{money(a)}") for label, a in paid], "_balance_due": money(inv.amount_due_printed),
            "_watermark": "VOID" if inv.status == "void" else None}
     return ctx, rows
 

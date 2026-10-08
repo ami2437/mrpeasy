@@ -765,6 +765,7 @@ class Invoice(Base):
     funding_discount = Column(Float, nullable=True)
     funding_import_id = Column(Integer, ForeignKey("funding_imports.id"), nullable=True, index=True)
     print_zero_lines = Column(Boolean, default=False)  # $0 lines are left off the PDF unless this is ticked
+    print_payments = Column(Boolean, nullable=True, default=True)  # PDF lists the customer's payments and the balance due (None = yes)
     # JSON record of how this invoice was combined, so it can be shown and undone:
     # {"merged": [{"code", "shipment_ids", "line_ids", "due_date", "free_text"}], "by", "at"}
     combined_info = Column(Text, nullable=True)
@@ -812,6 +813,26 @@ class Invoice(Base):
     def balance(self) -> float:
         from app.services.money import cents
         return cents(self.total - self.amount_paid)
+
+    @property
+    def customer_payments(self) -> list:
+        """Payments the customer made. Factoring payments (a funding upload, or method factoring / factoring
+        discount) are left out: the factor paid those, and the customer still owes the invoice in full."""
+        return [p for p in self.payments
+                if not p.funding_import_id and (p.method or "").lower() not in ("factoring", "factoring discount")]
+
+    @property
+    def printed_payments(self) -> list:
+        """The payments the customer's copy lists ("Print Previous Payments", on unless unticked)."""
+        if self.print_payments is False or self.status == "void":
+            return []
+        return sorted(self.customer_payments, key=lambda p: (p.paid_date or p.created_at or datetime.min, p.id))
+
+    @property
+    def amount_due_printed(self) -> float:
+        """What the customer's copy (PDF and email) says is due: the total less the payments it lists."""
+        from app.services.money import cents
+        return cents(self.total - sum(p.amount for p in self.printed_payments))
 
 
 class InvoiceLine(Base):

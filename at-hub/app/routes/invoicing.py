@@ -102,7 +102,10 @@ def split_invoice(invoice_id: int, db: Session = Depends(get_db)):
 @router.put("/{invoice_id}/print-options", response_model=InvoiceResponse)
 def set_print_options(invoice_id: int, data: InvoicePrintOptions, db: Session = Depends(get_db)):
     invoice = InvoiceService.get(db, invoice_id)
-    invoice.print_zero_lines = data.print_zero_lines
+    if data.print_zero_lines is not None:
+        invoice.print_zero_lines = data.print_zero_lines
+    if data.print_payments is not None:
+        invoice.print_payments = data.print_payments
     db.commit()
     db.refresh(invoice)
     return invoice

@@ -38,7 +38,9 @@ def _invoice_rows(invoice: Invoice) -> list:
     rows = [("Invoice", invoice.code), ("Invoice date", invoice.invoice_date.strftime("%b %d, %Y") if invoice.invoice_date else "")]
     if invoice.due_date:
         rows.append(("Due date", invoice.due_date.strftime("%b %d, %Y")))
-    rows.append(("Amount due", money(invoice.balance)))
+    if invoice.printed_payments:  # same as the attached PDF: total, what's been paid, what's left
+        rows += [("Invoice total", money(invoice.total)), ("Paid", money(invoice.total - invoice.amount_due_printed))]
+    rows.append(("Amount due", money(invoice.amount_due_printed)))
     return rows
 
 

@@ -1879,7 +1879,7 @@ class InvoiceService:
                           due_date=datetime.fromisoformat(g["due_date"]) if g["due_date"] else invoice.due_date,
                           free_text=g["free_text"] if g["code"] else invoice.free_text,
                           status="draft" if invoice.status == "draft" else "sent",
-                          print_zero_lines=invoice.print_zero_lines, created_by=invoice.created_by)
+                          print_zero_lines=invoice.print_zero_lines, print_payments=invoice.print_payments, created_by=invoice.created_by)
             db.add(new)
             db.flush()
             for line in list(invoice.lines):
