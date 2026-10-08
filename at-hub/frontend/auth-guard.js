@@ -45,9 +45,9 @@ const AuthGuard = {
   // A session saved before roles were editable has no list yet: it falls back to the old built-in defaults
   // until the background refresh (refreshSessionUser) brings the real one.
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
-  PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 2, "shipments.view": 1, "shipments.work": 1,
-    "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 2, invoices: 2,
-    "invoices.funding": 2, "payments.import": 3, purchasing: 2, vendors: 2, vendor_payments: 2, landed_costs: 2, reports: 2, insights: 2, imports: 2, ai: 2,
+  PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
+    "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
+    "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();

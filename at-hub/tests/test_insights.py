@@ -73,8 +73,8 @@ def test_needs_money_view_and_shows_only_screens_you_can_open(client, admin_head
 
 def test_insights_is_its_own_permission(client, admin_headers):
     from app.services import permissions as P
-    assert "insights" in P.KEYS and "insights" in P.MONEY and "insights" in P.defaults_for("manager")
-    perms = [p for p in P.defaults_for("manager") if p != "insights"]
+    assert "insights" in P.KEYS and "insights" in P.MONEY and "insights" in P.defaults_for("admin") and "insights" not in P.defaults_for("manager")
+    perms = [p for p in P.defaults_for("admin") if p != "insights"]
     assert client.post("/api/roles/", json={"name": "No Insights", "permissions": perms}, headers=admin_headers).status_code == 200
     h = _user(client, admin_headers, "no_insights")
     assert client.get("/api/insights/", headers=h).status_code == 403

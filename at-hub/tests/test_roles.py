@@ -17,7 +17,9 @@ def test_builtin_roles_keep_the_old_ladder(client, admin_headers):
     roles = {r["key"]: r for r in client.get("/api/roles/", headers=admin_headers).json()}
     assert {"employee", "manager", "admin", "super_admin", "driver"} <= set(roles)
     assert "money.view" not in roles["employee"]["permissions"] and "shipments.work" in roles["employee"]["permissions"]
-    assert {"money.view", "invoices", "purchasing"} <= set(roles["manager"]["permissions"]) and "templates" not in roles["manager"]["permissions"]
+    # money ($) permissions start with Admin and Super admin only; Manager gets them only when ticked on the Roles screen
+    assert not set(roles["manager"]["permissions"]) & P.MONEY and "orders.edit" in roles["manager"]["permissions"]
+    assert P.MONEY <= set(roles["admin"]["permissions"]) and "templates" not in roles["manager"]["permissions"]
     assert set(roles["super_admin"]["permissions"]) == set(P.KEYS)
     me = client.get("/api/auth/me", headers=admin_headers).json()
     assert "users" in me["permissions"]

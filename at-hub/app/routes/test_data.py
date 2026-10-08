@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import TestDataResult
 from app.services.test_data import ensure_generic_test_data, ensure_test_data
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, require_perm
 
-router = APIRouter(prefix="/api/test-data", tags=["test-data"], dependencies=[Depends(get_current_active_user)])
+router = APIRouter(prefix="/api/test-data", tags=["test-data"], dependencies=[Depends(require_perm("company"))])
 
 
 @router.post("/ensure", response_model=TestDataResult)

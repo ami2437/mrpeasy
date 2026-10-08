@@ -13,13 +13,16 @@ from typing import Iterable, Set
 from sqlalchemy.orm import Session
 
 # (key, module, label, money?, lowest built-in role that has it by default)
+# RULE: a money permission (money? = True) always defaults to "admin" -- only Admin and Super admin get it until someone
+# ticks it on the Roles screen. tests/test_permission_audit.py enforces this, and fails for any new /api route that
+# isn't behind a permission (or knowingly listed as open to every signed-in user).
 CATALOG = [
     # Sales
     ("customers.view", "Sales", "Customers screen (contacts, addresses, history)", False, "manager"),
     ("customers.edit", "Sales", "Add and edit customers", False, "manager"),
     ("orders.view", "Sales", "See customer orders", False, "employee"),
     ("orders.edit", "Sales", "Create, edit and confirm customer orders (prices show only with \"See prices\")", False, "manager"),
-    ("quotes", "Sales", "Quotes", True, "manager"),
+    ("quotes", "Sales", "Quotes", True, "admin"),
     # Shipping
     ("shipments.view", "Shipping", "See shipments", False, "employee"),
     ("shipments.work", "Shipping", "Create, pick, pack and ship shipments; print labels and packing lists", False, "employee"),
@@ -31,19 +34,19 @@ CATALOG = [
     ("stock.edit", "Warehouse", "Add, edit, delete and verify items; product groups; generic stock transfers", False, "manager"),
     ("mtrs.manage", "Warehouse", "Link MTRs to purchase orders", False, "manager"),
     # Money
-    ("money.view", "Money", "See prices, costs, totals and money documents anywhere", True, "manager"),
-    ("invoices", "Money", "Invoices: create, edit, send, record payments", True, "manager"),
-    ("invoices.funding", "Money", "Invoice funding (factoring)", True, "manager"),
+    ("money.view", "Money", "See prices, costs, totals and money documents anywhere", True, "admin"),
+    ("invoices", "Money", "Invoices: create, edit, send, record payments", True, "admin"),
+    ("invoices.funding", "Money", "Invoice funding (factoring)", True, "admin"),
     ("payments.import", "Money", "Import PO payment files", True, "admin"),
     # Purchasing
-    ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "manager"),
+    ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "admin"),
     ("vendors", "Purchasing", "Vendors", False, "manager"),
-    ("vendor_payments", "Purchasing", "Vendor payments", True, "manager"),
-    ("landed_costs", "Purchasing", "Landed costs", True, "manager"),
+    ("vendor_payments", "Purchasing", "Vendor payments", True, "admin"),
+    ("landed_costs", "Purchasing", "Landed costs", True, "admin"),
     # Reports & tools
-    ("reports", "Reports", "Reports and the dashboard's money sections", True, "manager"),
+    ("reports", "Reports", "Reports and the dashboard's money sections", True, "admin"),
     ("insights", "Reports", "Quick Insights pop-up (top bar): orders shipped / pending, shipments in process / not invoiced, "
-                            "invoices paid / owed, POs received / owed -- also needs \"See prices\"", True, "manager"),
+                            "invoices paid / owed, POs received / owed -- also needs \"See prices\"", True, "admin"),
     ("imports", "Tools", "Import data from files (CSV)", False, "manager"),
     ("ai", "Tools", "AI Desk, AI order drafting and document scanning", False, "manager"),
     ("recycle_bin", "Tools", "Recycle bin (restore deleted records)", False, "manager"),
@@ -92,6 +95,7 @@ def seed(db: Session) -> None:
             db.add(Role(key=key, name=name, description=desc, permissions=json.dumps(perms), builtin=False))
     _grant_new(db, have)
     _driver_v2(db, have)
+    _money_admin_only(db, have)
     db.commit()
 
 
@@ -106,6 +110,20 @@ def _driver_v2(db: Session, have: dict) -> None:
         role.permissions = json.dumps(["pod.upload"])
         role.description = PRESETS["driver"][1]
     db.add(AppSetting(key="driver_v2", value="true"))
+
+
+def _money_admin_only(db: Session, have: dict) -> None:
+    """2026-10-08: money permissions default to Admin only. "insights" reached the Manager role by default the day it
+    was added -- take that back once (if someone ticks it again on the Roles screen, it stays)."""
+    from app.models import AppSetting
+    if db.get(AppSetting, "money_admin_only"):
+        return
+    role = have.get("manager")
+    if role:
+        perms = json.loads(role.permissions or "[]")
+        if "insights" in perms:
+            role.permissions = json.dumps([p for p in perms if p != "insights"])
+    db.add(AppSetting(key="money_admin_only", value="true"))
 
 
 # Permissions added after roles were first made (tracked from 2026-10-06; earlier ones were all in place already).

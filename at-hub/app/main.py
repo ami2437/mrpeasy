@@ -286,7 +286,8 @@ def activity(entity_type: str, entity_id: int, authorization: str = Header(None)
     try:
         payload = AuthService.decode_token(authorization.split(" ")[-1]) or {}
         user = AuthService.get_user_by_username(db, payload.get("sub"))
-        employee = not user or user.role == "employee"
+        from app.services.permissions import perms_for
+        employee = not user or "money.view" not in perms_for(db, user.role)  # no "See prices" -> no prices in the history
         rows = (db.query(ActivityLog).filter(ActivityLog.entity_type == entity_type, ActivityLog.entity_id == entity_id)
                 .order_by(ActivityLog.at.desc()).limit(300).all())
 
