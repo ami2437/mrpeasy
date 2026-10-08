@@ -114,7 +114,7 @@
       const paidIn = m => sum(live.flatMap(i => i.payments), p => monthKey(p.paid_date || p.created_at) === m ? p.amount : 0);
       // shipments: which have an invoice (any, even a draft), and their value
       const lineById = new Map(orders.flatMap(o => o.lines.map(l => [l.id, l])));
-      const shipValue = s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? l.quantity * ol.unit_price : 0; });
+      const shipValue = s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? lineAmount(l.quantity, ol.unit_price) : 0; });
       const invoicedAny = new Set(live.flatMap(i => i.shipment_ids));
       const invoicedReal = new Set(live.filter(i => i.status !== "draft").flatMap(i => i.shipment_ids));
       const gone = shipments.filter(s => ["shipped", "delivered", "invoiced"].includes(s.status));
@@ -123,8 +123,8 @@
       const delivered = gone.filter(s => s.status === "delivered" && !invoicedAny.has(s.id));
       // orders: value not shipped yet (open quantity x price), ordered but not booked
       const openOrders = orders.filter(o => !["cancelled", "draft"].includes(o.status));
-      const notShipped = openOrders.map(o => ({ o, v: sum(o.lines, l => Math.max(0, l.quantity - l.shipped_quantity) * l.unit_price) })).filter(x => x.v > 0.005);
-      const notBooked = openOrders.map(o => ({ o, v: sum(o.lines, l => Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity) * l.unit_price) })).filter(x => x.v > 0.005);
+      const notShipped = openOrders.map(o => ({ o, v: sum(o.lines, l => lineAmount(Math.max(0, l.quantity - l.shipped_quantity), l.unit_price)) })).filter(x => x.v > 0.005);
+      const notBooked = openOrders.map(o => ({ o, v: sum(o.lines, l => lineAmount(Math.max(0, l.quantity - l.shipped_quantity - l.booked_quantity), l.unit_price)) })).filter(x => x.v > 0.005);
       const draftOrders = orders.filter(o => o.status === "draft");
       // purchasing
       const livePOs = pos.filter(p => p.status !== "cancelled");
@@ -132,9 +132,9 @@
       const billed = sum(bills, b => b.amount);
       const owed = bills.filter(b => b.balance > 0.005);
       const billsOverdue = owed.filter(b => b.due_date && new Date(b.due_date).getTime() < now);
-      const notReceived = livePOs.map(p => ({ p, v: sum(p.lines, l => Math.max(0, l.quantity - l.received_quantity) * l.unit_cost) })).filter(x => x.v > 0.005);
+      const notReceived = livePOs.map(p => ({ p, v: sum(p.lines, l => lineAmount(Math.max(0, l.quantity - l.received_quantity), l.unit_cost)) })).filter(x => x.v > 0.005);
       const receivedNotBilled = livePOs.map(p => {
-        const recv = sum(p.lines, l => Math.min(l.received_quantity, l.quantity) * l.unit_cost);
+        const recv = sum(p.lines, l => lineAmount(Math.min(l.received_quantity, l.quantity), l.unit_cost));
         return { p, v: recv - sum(p.bills, b => b.amount - 0) };
       }).filter(x => x.v > 0.5);
       const poTotal = sum(livePOs, p => p.order_total);
@@ -211,7 +211,7 @@
       // ---- Open customer orders ----
       document.getElementById("open-co-body").innerHTML = openCO.length
         ? openCO.map(o => {
-            const openValue = o.lines.reduce((s, l) => s + (l.quantity - l.shipped_quantity) * l.unit_price, 0);
+            const openValue = o.lines.reduce((s, l) => s + lineAmount(Math.max(0, l.quantity - l.shipped_quantity), l.unit_price), 0);
             return `
               <tr>
                 <td><a class="link" href="customer-orders.html?id=${o.id}">${o.code}</a></td>
@@ -227,7 +227,7 @@
       // ---- Open purchase orders ----
       document.getElementById("open-po-body").innerHTML = openPO.length
         ? openPO.map(o => {
-            const openValue = o.lines.reduce((s, l) => s + (l.quantity - l.received_quantity) * l.unit_cost, 0);
+            const openValue = o.lines.reduce((s, l) => s + lineAmount(Math.max(0, l.quantity - l.received_quantity), l.unit_cost), 0);
             return `
               <tr>
                 <td><a class="link" href="purchase-orders.html?id=${o.id}">${o.code}</a></td>

@@ -523,7 +523,7 @@
     function orderMoneyTiles(order, invs) {
       if (hidesMoney()) return "";
       const total = order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
-      const shipped = order.lines.reduce((s, l) => s + Math.min(l.shipped_quantity, l.quantity) * l.unit_price, 0);
+      const shipped = order.lines.reduce((s, l) => s + lineAmount(Math.min(l.shipped_quantity, l.quantity), l.unit_price), 0);
       const realInv = invs.filter(i => !["draft", "void"].includes(i.status));
       const invoiced = realInv.reduce((s, i) => s + i.total, 0), paid = realInv.reduce((s, i) => s + i.amount_paid, 0);
       const drafts = invs.filter(i => i.status === "draft").reduce((s, i) => s + i.total, 0);

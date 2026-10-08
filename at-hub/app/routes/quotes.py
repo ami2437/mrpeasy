@@ -11,13 +11,14 @@ from app.dependencies import get_current_active_user, require_perm, require_any
 from app.models import Customer, Quote, QuoteLine, StockItem, User
 from app.services import item_alias, quotes as quote_svc
 from app.services.crud import generate_code
+from app.schemas import InputModel
 from app.services.money import line_amount
 
 router = APIRouter(prefix="/api/quotes", tags=["quotes"], dependencies=[Depends(require_perm("quotes"))])
 STATUSES = ("draft", "sent", "accepted", "declined", "converted")
 
 
-class LineIn(BaseModel):
+class LineIn(InputModel):
     item_id: Optional[int] = None
     description: Optional[str] = None
     quantity: float = 1
@@ -62,6 +63,8 @@ def _set_lines(db: Session, q: Quote, lines: List[LineIn]) -> None:
     for pos, l in enumerate(lines):
         if l.quantity <= 0:
             raise HTTPException(status_code=400, detail=f"Line {pos + 1}: quantity must be more than 0")
+        if (l.unit_price or 0) < 0:
+            raise HTTPException(status_code=400, detail=f"Line {pos + 1}: price can't be negative")
         if not l.item_id and not (l.description or "").strip():
             raise HTTPException(status_code=400, detail=f"Line {pos + 1}: pick an item or type a description")
         if l.item_id:

@@ -317,8 +317,8 @@ def _purchase_order(db, po: PurchaseOrder, opt):
         rows.append({"line_no": str(i), "item_code": code, "our_code": it.code if it else "",
                      "description": _desc(desc, l, show_notes), "qty": qty(l.quantity), "price": price(l.unit_cost),
                      "amount": money(line_amount(l.quantity, l.unit_cost))})
-    sub = sum(line_amount(l.quantity, l.unit_cost) for l in po.lines)
-    charges = sum(c.amount or 0 for c in (po.charges or []))
+    sub = po.lines_total
+    charges = po.order_total - sub  # S&H charges (+ any pre-landed-cost freight / tariff fees), so the PDF total is the PO total
     company = get_company_profile(db)
     ctx = {"doc": {"title": "PURCHASE ORDER", "number": po.code, "date": date(po.order_date or po.created_at)},
            "vendor": {"name": vend.name if vend else "", "contact": vend.contact_name if vend else "", "address": addr(vend.address) if vend else "",
@@ -326,7 +326,7 @@ def _purchase_order(db, po: PurchaseOrder, opt):
            "po": {"date": date(po.order_date or po.created_at), "expected": date(po.expected_date), "vendor_so": po.vendor_so_number or "",
                   "buyer": po.created_by if po.created_by not in (None, "mrpeasy-import") else "", "notes": po.notes or "",
                   "ship_to": lines(company.name, addr(company.address), company.phone)},
-           "totals": {"subtotal": money(sub), "charges": money(charges), "total": money(sub + charges), "lines": str(len(rows))},
+           "totals": {"subtotal": money(sub), "charges": money(charges), "total": money(po.order_total), "lines": str(len(rows))},
            "_watermark": "CANCELLED" if po.status == "cancelled" else None}
     return ctx, rows
 

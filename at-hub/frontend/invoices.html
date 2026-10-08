@@ -130,7 +130,7 @@
       const invoicedShip = new Set(billed.flatMap(i => i.shipment_ids));
       const lineById = new Map(orders.flatMap(o => o.lines.map(l => [l.id, l])));
       const unbilledShip = searching ? [] : shipments.filter(s => ["shipped", "delivered"].includes(s.status) && !invoicedShip.has(s.id));
-      const unbilledAmt = sum(unbilledShip, s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? l.quantity * ol.unit_price : 0; }));
+      const unbilledAmt = sum(unbilledShip, s => sum(s.lines, l => { const ol = lineById.get(l.order_line_id); return ol ? lineAmount(l.quantity, ol.unit_price) : 0; }));
       const tile = (label, value, sub = "", cls = "", onclick = "") =>
         `<div class="stat ${onclick ? "stat-click" : ""}" ${onclick ? `onclick="${onclick}" title="Show these"` : ""}><div class="stat-label">${label}</div>
           <div class="stat-value ${cls}">${value}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ""}</div>`;

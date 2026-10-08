@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from app.services import filenames
 from app.services import clock
+from app.services.money import cents
 
 from app.models import (
     StockItem, Lot, InventoryTransaction, Customer, Vendor,
@@ -793,6 +794,8 @@ class CustomerOrderService:
             not_for_sale(db.query(StockItem).filter(StockItem.id == line.item_id).first())
             if line.quantity <= 0:
                 raise HTTPException(status_code=400, detail=f"Line #{line_no}: quantity must be greater than 0")
+            if (line.unit_price or 0) < 0:
+                raise HTTPException(status_code=400, detail=f"Line #{line_no}: price can't be negative")
             db.add(CustomerOrderLine(
                 order_id=order.id,
                 line_no=line_no,
@@ -904,6 +907,8 @@ class CustomerOrderService:
         not_for_sale(db.query(StockItem).filter(StockItem.id == data.item_id).first())
         if data.quantity <= 0:
             raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+        if (data.unit_price or 0) < 0:
+            raise HTTPException(status_code=400, detail="Price can't be negative")
         db.add(CustomerOrderLine(
             order_id=order.id,
             line_no=max((l.line_no or 0 for l in order.lines), default=0) + 1,
@@ -973,6 +978,8 @@ class CustomerOrderService:
                     detail=f"Cannot reduce quantity below {line.allocated_quantity}: {line.shipped_quantity} "
                            f"already shipped and {line.booked_quantity} booked into open shipments"
                 )
+        if (updates.get("unit_price") or 0) < 0:
+            raise HTTPException(status_code=400, detail="Price can't be negative")
         if "notes" in updates:
             updates["notes"] = (updates["notes"] or "").strip() or None
         if updates.get("print_notes", False) is None:
@@ -1997,6 +2004,10 @@ class InvoiceService:
         # A sent/paid invoice can be corrected; its paid status follows the new total.
         db.flush()
         db.refresh(invoice)
+        if invoice.balance < -0.005:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"That makes the invoice {invoice.total:,.2f}, less than the {invoice.amount_paid:,.2f} "
+                                                        "already paid -- remove a payment first")
         if invoice.status == "paid" and invoice.balance > 0.005:
             invoice.status = "sent"
         elif invoice.status == "sent" and invoice.payments and invoice.balance <= 0.005:
@@ -2015,6 +2026,8 @@ class InvoiceService:
             raise HTTPException(status_code=400, detail=f"{invoice.code} is void -- make a new invoice for its shipments instead")
         if status == "void" and invoice.payments:
             raise HTTPException(status_code=400, detail="Invoice has payments recorded against it, cannot void")
+        if status == "sent" and invoice.payments and invoice.balance <= 0.005:
+            raise HTTPException(status_code=400, detail=f"{invoice.code} is paid in full -- remove a payment to reopen it")
         if status == "paid" and invoice.balance > 0.005:  # paid means the payments cover it -- record them first
             raise HTTPException(status_code=400, detail=f"{invoice.balance:,.2f} is still open -- record the payment and it's marked paid automatically")
         if status == "void":
@@ -2091,7 +2104,7 @@ class InvoicePaymentService:
         invoice = InvoiceService.get(db, invoice_id)
         if invoice.status != "sent":
             raise HTTPException(status_code=400, detail=f"Invoice is {invoice.status} -- payments can only be recorded against a sent invoice")
-        data.amount = round(data.amount or 0, 2)
+        data.amount = cents(data.amount)
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be at least $0.01")
         if data.amount > invoice.balance + 0.005:
@@ -2546,12 +2559,21 @@ class PurchaseOrderService:
         return po
 
 
+def po_left_to_pay(po: PurchaseOrder) -> float:
+    """What's still owed on a PO: its total, or what its vendor invoices add up to if they billed more."""
+    return cents(max(po.order_total, sum(b.amount for b in po.bills)) - po.amount_paid)
+
+
 class PurchaseOrderPaymentService:
     @staticmethod
     def record(db: Session, po_id: int, data, created_by: str) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
+        data.amount = cents(data.amount)
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+        left = po_left_to_pay(po)
+        if data.amount > left + 0.005:
+            raise HTTPException(status_code=400, detail=f"{po.code} only has {left:,.2f} left to pay")
         if data.vendor_bill_id:
             bill = db.query(VendorBill).filter(VendorBill.id == data.vendor_bill_id, VendorBill.po_id == po.id).first()
             if not bill:
@@ -2581,15 +2603,16 @@ class VendorBillService:
         number = (data.bill_number or "").strip()
         if not number:
             raise HTTPException(status_code=400, detail="Enter the vendor's invoice #")
+        data.amount = cents(data.amount)
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Invoice amount must be greater than 0")
         if any(b.bill_number.lower() == number.lower() for b in po.bills):
             raise HTTPException(status_code=400, detail=f"Vendor invoice {number} is already recorded on {po.code}")
-        shipping = round(data.shipping_amount or 0, 2)
+        shipping = cents(data.shipping_amount)
         if shipping < 0 or shipping > data.amount + 0.005:
             raise HTTPException(status_code=400, detail="S&H on the invoice must be between 0 and the invoice amount")
         bill = VendorBill(po_id=po.id, bill_number=number, bill_date=clock.calendar_from_input(data.bill_date) or clock.today(),
-                          due_date=data.due_date, amount=round(data.amount, 2), note=data.note,
+                          due_date=data.due_date, amount=cents(data.amount), note=data.note,
                           attachment_id=data.attachment_id, created_by=created_by)
         db.add(bill)
         db.flush()
@@ -2651,11 +2674,12 @@ class PurchaseOrderChargeService:
         po = PurchaseOrderService.get(db, po_id)
         if po.status == "cancelled":
             raise HTTPException(status_code=400, detail="This purchase order is cancelled")
+        data.amount = cents(data.amount)
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Charge amount must be greater than 0")
         if data.vendor_bill_id and not any(b.id == data.vendor_bill_id for b in po.bills):
             raise HTTPException(status_code=400, detail="That vendor invoice isn't on this purchase order")
-        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.charge_type), amount=round(data.amount, 2),
+        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.charge_type), amount=cents(data.amount),
                                    description=(data.description or "").strip() or None, vendor_bill_id=data.vendor_bill_id,
                                    created_by=created_by))
         db.commit()
@@ -2700,9 +2724,10 @@ class VendorPaymentService:
     def create(db: Session, data, created_by: str) -> VendorPayment:
         if not db.query(Vendor).filter(Vendor.id == data.vendor_id).first():
             raise HTTPException(status_code=400, detail="Vendor not found")
+        data.amount = cents(data.amount)
         if data.amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
-        vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=round(data.amount, 2),
+        vp = VendorPayment(code=generate_code(db, VendorPayment, "VP"), vendor_id=data.vendor_id, amount=cents(data.amount),
                            paid_date=clock.calendar_from_input(data.paid_date) or clock.today(), method=payment_method(db, data.method), reference=data.reference,
                            note=data.note, created_by=created_by)
         db.add(vp)
@@ -2718,12 +2743,12 @@ class VendorPaymentService:
             raise HTTPException(status_code=400, detail=f"{vp.code} was paid to a different vendor than {po.code}")
         if po.status == "cancelled":
             raise HTTPException(status_code=400, detail=f"{po.code} is cancelled")
-        amount = round(data.amount or 0, 2)
+        amount = cents(data.amount)
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Amount to apply must be greater than 0")
         if amount > vp.unapplied + 0.005:
             raise HTTPException(status_code=400, detail=f"Only {vp.unapplied:,.2f} of {vp.code} is left to apply")
-        po_balance = round(po.order_total - po.amount_paid, 2)
+        po_balance = po_left_to_pay(po)
         if amount > po_balance + 0.005:
             raise HTTPException(status_code=400, detail=f"{po.code} only has {po_balance:,.2f} left to pay")
         if data.vendor_bill_id:
@@ -2788,6 +2813,7 @@ class LandedCostService:
     def plan(db: Session, amount: float, po_ids: List[int]) -> List[dict]:
         """Split amount over every line of the selected POs in proportion to line quantity,
         so each unit across the selection carries the same landed cost per unit."""
+        amount = cents(amount) if amount is not None else None
         if amount is None or amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
         po_ids = list(dict.fromkeys(po_ids or []))
@@ -2834,7 +2860,7 @@ class LandedCostService:
         """Create and allocate without committing -- callers own the transaction."""
         lc = LandedCost(
             code=generate_code(db, LandedCost, "LC"), description=description.strip(), cost_type=cost_type,
-            amount=amount, created_by=created_by, **fields,
+            amount=cents(amount), created_by=created_by, **fields,
         )
         db.add(lc)
         db.flush()
@@ -2863,6 +2889,7 @@ class LandedCostService:
         for field in ("description", "cost_type", "amount", "paid_to", "reference", "cost_date", "notes"):
             setattr(lc, field, getattr(data, field))
         lc.description = lc.description.strip()
+        lc.amount = cents(lc.amount)
         lc.allocations.clear()
         db.flush()
         new_line_ids = LandedCostService._allocate(db, lc, data.po_ids)
@@ -2958,28 +2985,32 @@ class OrderProfitService:
                 b["revenue"] += c["revenue"]
                 b["cost"] += c["cost"]
                 b["profit"] += c["revenue"] - c["cost"]
+            for c in comps:
+                c["revenue"], c["cost"] = cents(c["revenue"]), cents(c["cost"])
             lines_out.append({
                 "line_id": line.id, "line_no": line.line_no, "item_id": item.id, "item_code": item.code, "item_title": item.title,
                 "quantity": line.quantity, "unit_price": line.unit_price,
-                "revenue": revenue, "cost": cost, "profit": revenue - cost,
+                "revenue": cents(revenue), "cost": cents(cost), "profit": cents(revenue - cost),
                 "margin_pct": (revenue - cost) / revenue * 100 if revenue > 1e-9 else None,
                 "components": comps,
             })
 
-        shipping_cost = sum(s.shipping_cost or 0 for s in db.query(Shipment).filter(
-            Shipment.order_id == order.id, Shipment.status != "cancelled").all())
-        other_charges = sum(l.quantity * l.unit_price
-                            for inv in db.query(Invoice).filter(Invoice.order_id == order.id, Invoice.status != "void").all()
-                            for l in inv.lines if l.item_id is None)
-        revenue = sum(b["revenue"] for b in buckets.values())
-        cogs = sum(b["cost"] for b in buckets.values())
-        net = revenue - cogs + other_charges - shipping_cost
+        shipping_cost = cents(sum(s.shipping_cost or 0 for s in db.query(Shipment).filter(
+            Shipment.order_id == order.id, Shipment.status != "cancelled").all()))
+        other_charges = cents(sum(l.amount
+                                  for inv in db.query(Invoice).filter(Invoice.order_id == order.id, Invoice.status != "void").all()
+                                  for l in inv.lines if l.item_id is None))
+        for b in buckets.values():
+            b["revenue"], b["cost"], b["profit"] = cents(b["revenue"]), cents(b["cost"]), cents(b["profit"])
+        revenue = cents(sum(b["revenue"] for b in buckets.values()))
+        cogs = cents(sum(b["cost"] for b in buckets.values()))
+        net = cents(revenue - cogs + other_charges - shipping_cost)
         if missing:
             warnings.insert(0, f"{len(missing)} lot(s) have no cost recorded -- enter what they were acquired at for an accurate profit")
         return {
             "order_id": order.id, "order_code": order.code, "lines": lines_out,
             **buckets,
-            "revenue": revenue, "cogs": cogs, "gross_profit": revenue - cogs,
+            "revenue": revenue, "cogs": cogs, "gross_profit": cents(revenue - cogs),
             "other_charges": other_charges, "shipping_cost": shipping_cost, "net_profit": net,
             "margin_pct": net / (revenue + other_charges) * 100 if revenue + other_charges > 1e-9 else None,
             "missing_costs": list(missing.values()), "warnings": warnings,

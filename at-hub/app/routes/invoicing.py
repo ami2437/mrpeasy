@@ -9,6 +9,7 @@ from app.schemas import (
     CreateCombinedInvoiceRequest, MergeInvoicesRequest, InvoicePrintOptions, InvoiceLineInput,
 )
 from app.services.crud import InvoiceService, InvoicePaymentService
+from app.services.money import cents
 from app.services import email as email_service
 from app.services import filenames
 from app.services.pdf import invoice_pdf
@@ -165,7 +166,7 @@ def set_invoice_funding(invoice_id: int, data: InvoiceFundingUpdate, db: Session
         raise HTTPException(status_code=400, detail="Funding amount and discount can't be negative")
     invoice = InvoiceService.get(db, invoice_id)
     for key, value in data.model_dump().items():
-        setattr(invoice, key, value)
+        setattr(invoice, key, cents(value) if key in ("funding_amount", "funding_discount") and value is not None else value)
     db.commit()
     db.refresh(invoice)
     return invoice

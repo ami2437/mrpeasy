@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.dependencies import get_current_active_user
 from app.services.permissions import has
+from app.services.money import cents, line_amount
 from app.models import (Attachment, Customer, CustomerOrder, Invoice, InvoiceShipment, MtrLink, PurchaseOrder, Shipment,
                         StockItem, User, Vendor, VendorBill, VendorPayment)
 
@@ -121,7 +122,7 @@ def all_sections(db: Session, user: User) -> list:
         invoices = db.query(Invoice).filter(Invoice.status != "void").all()
         on_invoice = {sid for (sid,) in db.query(InvoiceShipment.shipment_id).join(Invoice).filter(Invoice.status != "void").all()}
         line_price = {l.id: l.unit_price for o in orders.values() for l in o.lines}
-        value = lambda s: round(sum(l.quantity * line_price.get(l.order_line_id, 0) for l in s.lines), 2)
+        value = lambda s: cents(sum(line_amount(l.quantity, line_price.get(l.order_line_id, 0)) for l in s.lines))
         sections += [
             {"key": "items_verify", "title": "AI-Created Items To Verify", "page": "stock-items.html",
              "help": "Made from a scanned PO; they can't be picked on orders until someone checks and verifies them.",
@@ -144,7 +145,7 @@ def all_sections(db: Session, user: User) -> list:
             {"key": "not_booked", "title": "Confirmed Orders Not Fully Booked", "page": "customer-orders.html",
              "help": "Quantity still to book into a shipment.",
              "rows": sorted([{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
-                              "amount": round(sum(max(0, l.quantity - l.shipped_quantity - l.booked_quantity) * l.unit_price for l in o.lines), 2),
+                              "amount": cents(sum(line_amount(max(0, l.quantity - l.shipped_quantity - l.booked_quantity), l.unit_price) for l in o.lines)),
                               "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
                              for o in orders.values() if o.status == "confirmed"
                              and any(l.quantity - l.shipped_quantity - l.booked_quantity > 1e-9 for l in o.lines)], key=lambda r: -r["amount"])},
@@ -155,7 +156,7 @@ def all_sections(db: Session, user: User) -> list:
             {"key": "draft_orders", "title": "Draft Orders Not Confirmed", "page": "customer-orders.html",
              "help": "Entered but never confirmed.",
              "rows": [{"id": o.id, "order_code": o.code, "customer": customers.get(o.customer_id), "po_number": o.po_number,
-                       "amount": round(sum(l.quantity * l.unit_price for l in o.lines), 2), "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
+                       "amount": cents(sum(line_amount(l.quantity, l.unit_price) for l in o.lines)), "days": _days(o.created_at), "_date": o.created_at, "_label": o.code}
                       for o in orders.values() if o.status == "draft"]},
         ]
         linked = {a for (a,) in db.query(MtrLink.attachment_id).distinct()}
