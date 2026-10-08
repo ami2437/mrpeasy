@@ -36,8 +36,24 @@
       <div id="funding-history" class="muted">—</div>
     </div>
     <div id="inv-metrics"></div>
-    <div class="card">
-      <table class="list-fit">
+    <div class="card" id="list-card">
+      <div class="tabs" id="list-tabs"></div>
+      <div id="ready-view" style="display:none;">
+        <p class="muted small" style="margin-top:0;">Shipped or delivered and not on an invoice yet. One click makes a draft invoice; a shipment
+          that isn't marked delivered asks for its delivery date first.</p>
+        <div class="row ready-bar" style="align-items:center; gap:10px; margin-bottom:8px;">
+          <button id="ready-bulk" style="flex:0 0 auto;" onclick="invoiceSelected()" disabled>Invoice Selected</button>
+          <label class="check-label" style="flex:0 0 auto;" title="Ticked: shipments of the same order go on one combined invoice. Unticked: one invoice per shipment.">
+            <input type="checkbox" id="ready-per-order" checked> One invoice per order</label>
+          <span id="ready-msg" class="small" style="flex:1 1 200px;"></span>
+        </div>
+        <table class="list-fit">
+          <thead><tr><th style="width:28px;"><input type="checkbox" id="ready-all" title="Tick all" onclick="toggleAllReady(this.checked)"></th><th>Shipment</th><th>Customer</th>
+            <th title="Order, the customer's PO # and job #">Order / PO / Job</th><th>Shipped</th><th>Delivered</th><th class="num sum">Value</th><th></th></tr></thead>
+          <tbody id="ready-body"></tbody>
+        </table>
+      </div>
+      <table class="list-fit" id="invoices-table">
         <thead><tr><th>Code</th><th>Customer</th><th title="Order, the customer's PO # and job #">Order / PO / Job</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Balance</th><th>Payment</th><th class="num" title="Factor funding: amount, discount and disbursement date">Funding</th><th>Status</th></tr></thead>
         <tbody id="invoices-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
@@ -144,7 +160,7 @@
           ${tile("Draft / Dummy", fmtMoney(sum(drafts, i => i.total)), `${n(drafts)} not sent yet`, "", "filterStatus('draft')")}
           ${tile("This month", fmtMoney(thisMonth), `last month ${fmtMoney(lastMonth)}`)}
           ${tile("Avg. days to paid", avgDays == null ? "—" : `${Math.round(avgDays)} days`, paidDays.length ? `over ${paidDays.length} paid invoices` : "")}
-          ${searching ? "" : tile("Shipped, not invoiced", fmtMoney(unbilledAmt), `${unbilledShip.length} shipment${unbilledShip.length === 1 ? "" : "s"}`, unbilledShip.length ? "neg" : "pos")}
+          ${searching ? "" : tile("Shipped, not invoiced", fmtMoney(unbilledAmt), `${unbilledShip.length} shipment${unbilledShip.length === 1 ? "" : "s"}`, unbilledShip.length ? "neg" : "pos", "showView('ready')")}
         </div>
         <div class="metric-strips">
           <div><span class="metric-strip-title">Unpaid by age</span>${buckets.map(b => `<span class="metric-chip ${b.label === "90+" && b.n ? "neg" : ""}"><b>${b.label}</b> ${fmtMoney(b.amt)} <span class="muted">· ${b.n}</span></span>`).join("")}</div>
@@ -156,14 +172,32 @@
     }
     // Clicking a tile filters the list by status (through the header filter's tick boxes is the general way)
     let statusOnly = null;
-    function filterStatus(st) { statusOnly = statusOnly === st ? null : st; renderInvoices(); }
+    function filterStatus(st) { const was = statusOnly === st && listView === "active"; listView = "active"; statusOnly = was ? null : st; renderInvoices(); }
+
+    // Tabs: the working list | shipments waiting for an invoice | void (cancelled) invoices, out of the way.
+    let listView = new URLSearchParams(location.search).get("view") === "ready" ? "ready" : "active";
+    function showView(v) { listView = v; statusOnly = null; renderInvoices(); }
+    function listTabs(active, ready, cancelled) {
+      document.getElementById("list-tabs").innerHTML = `
+        <div class="tab ${listView === "active" ? "active" : ""}" onclick="showView('active')">Invoices <span class="muted">(${active})</span></div>
+        <div class="tab ${listView === "ready" ? "active" : ""}" onclick="showView('ready')" title="Shipped / delivered shipments not invoiced yet">Ready To Invoice <span class="muted">(${ready})</span></div>
+        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="showView('cancelled')" title="Voided invoices">Cancelled <span class="muted">(${cancelled})</span></div>`;
+    }
 
     function renderInvoices() {
       const tbody = document.getElementById("invoices-body");
       const q = document.getElementById("search").value.trim();
-      const searched = invoices.filter(inv => matchesSearch(inv, q));
-      renderMetrics(searched, !!q);
-      const filtered = statusOnly ? searched.filter(i => statusOnly === "sent" ? i.status !== "draft" && i.status !== "void" && i.balance > 0.005 : i.status === statusOnly) : searched;
+      const searchedAll = invoices.filter(inv => matchesSearch(inv, q));
+      const voided = searchedAll.filter(i => i.status === "void");
+      const searched = searchedAll.filter(i => i.status !== "void");
+      const ready = readyShipments().filter(s => readyMatches(s, q));
+      listTabs(searched.length, ready.length, voided.length);
+      renderMetrics(searchedAll, !!q);
+      document.getElementById("ready-view").style.display = listView === "ready" ? "" : "none";
+      document.getElementById("invoices-table").style.display = listView === "ready" ? "none" : "";
+      if (listView === "ready") { renderReady(ready); return; }
+      if (listView === "cancelled") { renderCancelled(voided); return; }
+      const filtered = statusOnly ? searched.filter(i => statusOnly === "sent" ? i.status !== "draft" && i.balance > 0.005 : i.status === statusOnly) : searched;
       document.querySelectorAll("#inv-metrics .stat-click").forEach(t => t.classList.toggle("on",
         (statusOnly === "sent" && t.textContent.includes("Unpaid")) || (statusOnly === "draft" && t.textContent.includes("Draft"))));
       if (!filtered.length) {
@@ -186,6 +220,101 @@
         </tr>
       `).join("");
       limitRows(tbody, "invoices", renderInvoices);
+    }
+
+    function renderCancelled(list) {
+      const tbody = document.getElementById("invoices-body");
+      if (!list.length) { tbody.innerHTML = `<tr><td colspan="11" class="muted">No cancelled invoices.</td></tr>`; return; }
+      tbody.innerHTML = list.map(inv => `
+        <tr class="order-done">
+          <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
+          <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
+          <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
+          <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
+          <td>${fmtDate(inv.invoice_date)}</td>
+          <td>${fmtDate(inv.due_date)}</td>
+          <td class="num" data-value="0" data-money title="Voided -- bills nothing"><s class="muted">${fmtMoney(inv.total)}</s></td>
+          <td class="num" data-value="0" data-money></td>
+          <td class="muted small">${inv.voided_at ? `Voided ${fmtDate(inv.voided_at)}${inv.voided_by ? ` by ${escapeHtml(inv.voided_by)}` : ""}` : "Voided"}${inv.void_reason ? `<div>${escapeHtml(inv.void_reason)}</div>` : ""}</td>
+          <td></td>
+          <td class="nowrap"><span class="tag cancelled">void</span> <a class="link neg small" onclick="deleteInvoice(${inv.id})">Delete</a></td>
+        </tr>`).join("");
+      limitRows(tbody, "invoices", renderInvoices);
+    }
+
+    // ---- Ready To Invoice: shipped / delivered shipments on no live invoice ----
+    function readyShipments() {
+      const onLive = new Set(invoices.filter(i => i.status !== "void").flatMap(i => i.shipment_ids || []));
+      return shipments.filter(s => ["shipped", "delivered"].includes(s.status) && !onLive.has(s.id))
+        .sort((a, b) => new Date(a.ship_date || 0) - new Date(b.ship_date || 0) || a.id - b.id);   // oldest first: bill those first
+    }
+    function shipOrder(s) { return orders.find(o => o.id === s.order_id); }
+    function readyMatches(s, q) {
+      const o = shipOrder(s) || {};
+      return searchMatch(q, s.code, o.code || "", customerName(o.customer_id), o.po_number || "", o.job_number || "");
+    }
+    function shipmentValue(s) {
+      const o = shipOrder(s);
+      const price = new Map((o ? o.lines : []).map(l => [l.id, l.unit_price]));
+      return s.lines.reduce((t, l) => t + lineAmount(l.quantity, price.get(l.order_line_id) || 0), 0);
+    }
+    function renderReady(list) {
+      const tbody = document.getElementById("ready-body");
+      document.getElementById("ready-all").checked = false;
+      if (!list.length) { tbody.innerHTML = `<tr><td colspan="8" class="muted">Nothing waiting — every shipped shipment is on an invoice.</td></tr>`; readyTicked(); return; }
+      tbody.innerHTML = list.map(s => {
+        const o = shipOrder(s) || {};
+        const delivered = s.status === "delivered" || s.delivered_at;
+        return `<tr data-id="${s.id}">
+          <td><input type="checkbox" class="ready-tick" value="${s.id}" onchange="readyTicked()"></td>
+          <td class="nowrap">${refLink("shipment", s.id)}</td>
+          <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
+          <td>${refLink("order", s.order_id)}<div class="muted small">${escapeHtml([o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`].filter(Boolean).join(" · "))}</div></td>
+          <td>${fmtDate(s.ship_date)}</td>
+          <td>${delivered ? fmtDate(s.delivered_at) : `<span class="tag draft" title="Creating the invoice asks for the delivery date first">not delivered</span>`}</td>
+          <td class="num">${fmtMoney(shipmentValue(s))}</td>
+          <td class="nowrap"><button class="small ${delivered ? "" : "secondary"}" onclick="invoiceShipments([${s.id}])"
+            title="${delivered ? "Create a draft invoice for this shipment" : "Mark it delivered, then create the invoice"}">${delivered ? "Create Invoice" : "Deliver &amp; Invoice"}</button></td>
+        </tr>`;
+      }).join("");
+      limitRows(tbody, "ready", renderInvoices);
+      readyTicked();
+    }
+    function readyTicked() {
+      const n = document.querySelectorAll(".ready-tick:checked").length;
+      const b = document.getElementById("ready-bulk");
+      b.disabled = !n;
+      b.textContent = n ? `Invoice Selected (${n})` : "Invoice Selected";
+    }
+    function toggleAllReady(on) { document.querySelectorAll(".ready-tick").forEach(c => { c.checked = on; }); readyTicked(); }
+    function invoiceSelected() { invoiceShipments([...document.querySelectorAll(".ready-tick:checked")].map(c => parseInt(c.value))); }
+
+    // Not-delivered ones are marked delivered first (asks the date), then one draft invoice per shipment --
+    // or per order when "One invoice per order" is ticked (bulk only).
+    async function invoiceShipments(ids) {
+      const msg = document.getElementById("ready-msg");
+      msg.innerHTML = "";
+      const list = ids.map(id => shipments.find(s => s.id === id)).filter(Boolean);
+      if (!list.length) return;
+      if (!await deliveredCheckBeforeInvoice(list, { required: true })) return;
+      const perOrder = ids.length > 1 && document.getElementById("ready-per-order").checked;
+      const groups = [];
+      list.forEach(s => {
+        const g = perOrder && groups.find(g => g[0].order_id === s.order_id);
+        g ? g.push(s) : groups.push([s]);
+      });
+      const made = [], failed = [];
+      for (const g of groups) {
+        try {
+          made.push(await apiFetch("/api/invoices/from-shipments", { method: "POST", body: JSON.stringify({ shipment_ids: g.map(s => s.id), shipping_charge: 0 }) }));
+        } catch (e) { failed.push(`${g.map(s => s.code).join(" + ")}: ${e.message}`); }
+      }
+      shipments = await apiFetch("/api/shipments/");
+      await loadInvoices();
+      document.getElementById("ready-msg").innerHTML =
+        (made.length ? `<span class="pos">Created ${made.map(i => `<a class="link" onclick="showDetail(${i.id})">${escapeHtml(i.code)}</a>`).join(", ")} (draft${made.length === 1 ? "" : "s"}).</span> ` : "")
+        + (failed.length ? `<span class="neg">${failed.map(escapeHtml).join("; ")}</span>` : "");
+      if (made.length) toast(`Created ${made.map(i => i.code).join(", ")}`);
     }
 
     // Item # has its own column; older lines stored "CODE — title" as the description.

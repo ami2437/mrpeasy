@@ -365,17 +365,19 @@ async function refreshPriceDeltas(root = document) {
 }
 
 // Before invoicing: shipments that went out but aren't marked delivered get a reminder with a date
-// to mark them delivered. Never a blocker -- "Invoice Anyway" carries on. Resolves true to go ahead.
-async function deliveredCheckBeforeInvoice(shipments) {
+// to mark them delivered. Never a blocker -- "Invoice Anyway" carries on -- unless required (Ready To Invoice:
+// delivered first, then the invoice). Resolves true to go ahead.
+async function deliveredCheckBeforeInvoice(shipments, { required = false } = {}) {
   const pending = (shipments || []).filter(s => s && s.status === "shipped" && !s.delivered_at);
   if (!pending.length) return true;
   const today = todayISO();
   const { value, el } = await askDialog({ title: pending.length === 1 ? "Not delivered yet" : `${pending.length} shipments not delivered yet`, tone: "warn",
     body: `<p>${pending.map(s => `<strong>${escapeHtml(s.code)}</strong>${s.ship_date ? ` shipped ${fmtDate(s.ship_date)}` : ""}`).join(", ")}
-        ${pending.length === 1 ? "isn't" : "aren't"} marked delivered. Mark ${pending.length === 1 ? "it" : "them"} delivered to complete the order's flow, or invoice anyway.</p>
+        ${pending.length === 1 ? "isn't" : "aren't"} marked delivered. Mark ${pending.length === 1 ? "it" : "them"} delivered ${required ? "first, then the invoice is created" : "to complete the order's flow, or invoice anyway"}.</p>
       <label>Delivered on</label><input type="date" class="ask-delivered" value="${today}" max="${today}" style="max-width:180px;">
       <p class="muted small" style="margin-top:6px;">Uploading a proof of delivery later also marks it delivered.</p>`,
-    buttons: [{ label: "Mark Delivered & Invoice", value: "mark", cls: "confirm-btn" }, { label: "Invoice Anyway", value: "skip", cls: "secondary" },
+    buttons: [{ label: "Mark Delivered & Invoice", value: "mark", cls: "confirm-btn" },
+              ...(required ? [] : [{ label: "Invoice Anyway", value: "skip", cls: "secondary" }]),
               { label: "Cancel", value: null, cls: "secondary" }] });
   if (value === "skip") return true;
   if (value !== "mark") return false;
