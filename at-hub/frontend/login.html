@@ -14,10 +14,11 @@
       background: radial-gradient(1200px 700px at 12% 8%, #ffffff 0%, rgba(255,255,255,0) 60%),
                   radial-gradient(900px 600px at 95% 100%, #d9e0f2 0%, rgba(217,224,242,0) 65%),
                   linear-gradient(160deg, #eef2fa 0%, #e2e8f5 55%, #d6deef 100%); }
-    /* the logo (its white background made transparent by the script below) as a giant, faint, tilted watermark */
+    /* the logo (its white background made transparent by the script below) as a giant, faint watermark, straight and
+       centred behind the card */
     .login-watermark { position: fixed; z-index: 0; pointer-events: none; user-select: none;
-      width: min(78vh, 92vw); aspect-ratio: 438 / 562; right: max(-6vw, -60px); bottom: -10vh;
-      background: center / contain no-repeat; opacity: .085; transform: rotate(-8deg); }
+      left: 50%; top: 50%; transform: translate(-50%, -50%); height: 92vh; aspect-ratio: 438 / 562; max-width: 96vw;
+      background: center / contain no-repeat; opacity: .08; }
     .login-card { position: relative; z-index: 1; width: 100%; max-width: 380px; box-sizing: border-box; padding: 30px 30px 24px;
       border-radius: 20px; background: rgba(255,255,255,.78); border: 1px solid rgba(255,255,255,.9);
       -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%);
@@ -51,7 +52,7 @@
     html[data-theme="dark"] .login-card label, html[data-theme="dark"] .login-brand .login-sub, html[data-theme="dark"] .login-foot { color: #aab3c8; }
     html[data-theme="dark"] .login-card input { background: rgba(10,15,30,.6); }
     html[data-theme="dark"] .login-card button[type="submit"] { background: #4f63d8; }
-    @media (max-width: 520px) { .login-watermark { width: 120vw; right: -30vw; bottom: -6vh; } .login-card { padding: 24px 20px 20px; } }
+    @media (max-width: 520px) { .login-watermark { height: auto; width: 96vw; } .login-card { padding: 24px 20px 20px; } }
   </style>
 </head>
 <body class="login-page">

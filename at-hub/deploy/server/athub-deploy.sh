@@ -20,6 +20,12 @@ echo "== [$INST] 2/5 unpack"
 rm -rf "$DIR/app.new" && mkdir -p "$DIR/app.new"
 tar -xzf "$TAR" -C "$DIR/app.new"
 
+# cache-busting: every page links style.css / *.js with ?v=<release>, so a deploy is seen at once even where a cache
+# (Cloudflare's 4-hour browser TTL on static files) would otherwise keep serving the old ones
+V=$(cut -d' ' -f1 "$DIR/app.new/VERSION" 2>/dev/null || echo "$TS")
+find "$DIR/app.new/frontend" -name '*.html' -exec sed -i -E "s#(src|href)=\"([A-Za-z0-9._-]+\.(js|css))\"#\1=\"\2?v=$V\"#g" {} +
+echo "   pages link scripts / styles as ?v=$V"
+
 echo "== [$INST] 3/5 packages"
 if ! cmp -s "$DIR/app.new/requirements.txt" "$DIR/app/requirements.txt" 2>/dev/null; then
   "$DIR/venv/bin/pip" install -q -r "$DIR/app.new/requirements.txt" && echo "   requirements changed -- installed"
