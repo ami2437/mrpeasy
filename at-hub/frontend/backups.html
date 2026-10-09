@@ -14,7 +14,9 @@
       <h1 class="page-title">Database Backups</h1>
       <div class="row toolbar-row">
         <span id="b-info" class="muted small" style="flex:1; align-self:center;"></span>
-        <button style="flex:0 0 auto;" onclick="backupNow()" data-icon="save">Back Up Now</button>
+        <button style="flex:0 0 auto;" class="secondary" onclick="backupNow()" data-icon="save" title="A copy kept on the server">Back Up Now</button>
+        <button style="flex:0 0 auto;" data-perm="backups.download" onclick="openLocalBackup()" data-icon="download"
+          title="Save a copy (database + attached files) on this computer, wherever you choose">Download A Backup To This Computer</button>
       </div>
     </div>
     <div class="card">

@@ -95,9 +95,10 @@ def test_open_list_has_no_stale_entries():
 
 def test_money_permissions_default_to_admin_only():
     wrong = [k for k, _m, _l, money, lowest in P.CATALOG if money and lowest not in ("admin", "super_admin")]
-    assert not wrong, f"money permissions must default to admin: {wrong}"
+    assert not wrong, f"money permissions must default to admin (or super admin only): {wrong}"
     assert not set(P.defaults_for("employee")) & P.MONEY and not set(P.defaults_for("manager")) & P.MONEY
-    assert P.MONEY <= set(P.defaults_for("admin"))
+    super_only = {k for k, _m, _l, money, lowest in P.CATALOG if money and lowest == "super_admin"}
+    assert P.MONEY - super_only <= set(P.defaults_for("admin"))
 
 
 def test_screens_fallback_matches_the_catalog():

@@ -15,7 +15,7 @@ from app.services.test_data import ensure_test_data
 from app.routes import (
     auth, stock_items, customers, vendors, customer_orders, purchase_orders, lots, shipments, invoicing, company,
     landed_costs, test_data, users, attachments, invoice_funding, ai_orders, ai_docs, mtrs, vendor_payments, reports, type_lists,
-    insights,
+    insights, local_backup,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -376,6 +376,7 @@ app.include_router(mtrs.router)
 app.include_router(vendor_payments.router)
 app.include_router(reports.router)
 app.include_router(insights.router)
+app.include_router(local_backup.router)
 from app.routes import imports  # noqa: E402
 app.include_router(imports.router)
 from app.routes import file_matcher  # noqa: E402

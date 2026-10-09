@@ -59,6 +59,8 @@ CATALOG = [
     ("tasks", "Admin", "Task list", False, "admin"),
     ("users", "Admin", "Users and roles", False, "super_admin"),
     ("backups", "Admin", "Backups", False, "super_admin"),
+    ("backups.download", "Admin", "Download a backup to your own computer (database + attached files) -- and be made to, "
+                                  "every 3 days", True, "super_admin"),
     ("file_matcher", "Admin", "File Matcher", False, "super_admin"),
 ]
 KEYS = [c[0] for c in CATALOG]

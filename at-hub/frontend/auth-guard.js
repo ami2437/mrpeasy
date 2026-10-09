@@ -48,7 +48,7 @@ const AuthGuard = {
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
     "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
-    recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, file_matcher: 4 },
+    recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
     if (!user) return false;
@@ -3468,6 +3468,7 @@ const TopBar = {
       <div class="tb-cal" id="tb-cal" hidden></div>`;
     main.prepend(bar);
     this.siteLabel();
+    LocalBackup.check();  // a backup to this computer is due every 3 days (backups.download)
     this.tick();
     this.themeIcon();
     setInterval(() => this.tick(), 20000);
@@ -3730,4 +3731,105 @@ async function openQuickInsights(focus) {
       ${s.after && s.after.length ? `<div class="qi-rows qi-after">${s.after.map(row).join("")}</div>` : ""}
     </section>`;
   }).join("") || `<div class="muted">Nothing to show for your role.</div>`;
+}
+
+// ---- Download a backup to this computer (permission "backups.download"; every 3 days it's required) ----
+// openLocalBackup() from Backups, or forced on login by LocalBackup.check() when one is due. The browser's Save As
+// picker (Edge / Chrome) lets the person choose where it goes; elsewhere it lands in Downloads.
+const LocalBackup = {
+  async check() {
+    if (!AuthGuard.can("backups.download") || localStorage.getItem("at_hub_view_as_back")) return;
+    const u = AuthGuard.getUser();
+    if (!u || u.must_change_password) return;
+    try {
+      const s = await apiFetch("/api/local-backup/status");
+      if (s.due) openLocalBackup({ forced: true, status: s });
+    } catch {}
+  },
+};
+
+async function openLocalBackup({ forced = false, status = null } = {}) {
+  if (document.getElementById("lb-back")) return;
+  const s = status || await apiFetch("/api/local-backup/status");
+  const mb = n => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
+  const last = s.last ? `Last downloaded ${fmtWhen(s.last.at)} by ${escapeHtml(s.last.by)}${s.last.files ? "" : " (database only)"} — ${s.days_since} day${s.days_since === 1 ? "" : "s"} ago.`
+    : "No backup has been downloaded to a computer yet.";
+  const back = document.createElement("div");
+  back.className = "modal-backdrop";
+  back.id = "lb-back";
+  back.innerHTML = `<div class="modal lb-modal" role="dialog" aria-modal="true" aria-labelledby="lb-title">
+    <div class="lb-head"><h3 id="lb-title">${icon("download")} ${forced ? "Time To Download A Backup" : "Download A Backup"}</h3>
+      ${forced ? "" : `<button type="button" class="icon-btn" aria-label="Close" data-close>${icon("x")}</button>`}</div>
+    ${forced ? `<p class="lb-due"><strong>It's been ${s.last ? `${Math.floor(s.days_since)} days` : "a while"}</strong> since a copy of AT-HUB was saved to a computer.
+      Take one now — it only takes a moment — then carry on.</p>` : ""}
+    <p class="muted small" style="margin:0 0 12px;">${last} A copy is due every ${s.due_days} days.</p>
+    <label class="lb-choice"><input type="radio" name="lb-kind" value="1" checked>
+      <span><strong>Everything</strong> <span class="muted small">— database + every attached file (POs, invoices, MTRs, delivery photos) · about ${mb(s.db_bytes / 4 + s.files_bytes)}</span></span></label>
+    <label class="lb-choice"><input type="radio" name="lb-kind" value="0">
+      <span><strong>Database only</strong> <span class="muted small">— all records, no attached files · about ${mb(s.db_bytes / 4)}</span></span></label>
+    <p class="muted small" style="margin:10px 0 0;">Save it somewhere safe and private (an encrypted USB stick, a company drive) — it holds all of the company's records.</p>
+    <div class="lb-progress" hidden><div class="lb-bar"><i></i></div><span class="small muted lb-pct"></span></div>
+    <div class="error lb-err"></div>
+    <div class="lb-foot">
+      <button type="button" class="lb-skip secondary" hidden>Continue Without A Backup (This Time)</button>
+      ${forced ? "" : `<button type="button" class="secondary" data-close>Cancel</button>`}
+      <button type="button" class="lb-go">${icon("download")} Download Backup</button>
+    </div></div>`;
+  document.body.appendChild(back);
+  const close = () => { document.removeEventListener("keydown", onKey); back.remove(); };
+  const onKey = e => { if (e.key === "Escape" && !forced) close(); };
+  document.addEventListener("keydown", onKey);
+  back.addEventListener("click", e => { if (!forced && (e.target === back || e.target.closest("[data-close]"))) close(); });
+  const go = back.querySelector(".lb-go"), err = back.querySelector(".lb-err"), prog = back.querySelector(".lb-progress");
+  back.querySelector(".lb-skip").addEventListener("click", close);
+  go.addEventListener("click", async () => {
+    const files = back.querySelector('input[name="lb-kind"]:checked').value === "1";
+    const name = `AT-HUB-backup-${todayISO()}-${files ? "everything" : "database"}.zip`;
+    err.textContent = "";
+    let handle = null;
+    if (window.showSaveFilePicker) {  // ask where to save, before the download starts
+      try { handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "AT-HUB backup", accept: { "application/zip": [".zip"] } }] }); }
+      catch (e) { if (e.name === "AbortError") return; handle = null; }
+    }
+    go.disabled = true;
+    go.innerHTML = `${icon("download")} Preparing…`;
+    prog.hidden = false;
+    const bar = back.querySelector(".lb-bar i"), pct = back.querySelector(".lb-pct");
+    try {
+      const res = await fetch(`/api/local-backup/download?files=${files}`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `The server said ${res.status}`);
+      const total = parseInt(res.headers.get("X-Backup-Size") || res.headers.get("Content-Length") || "0", 10);
+      const reader = res.body.getReader(), chunks = [];
+      const writable = handle ? await handle.createWritable() : null;
+      let got = 0;
+      go.innerHTML = `${icon("download")} Downloading…`;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.length;
+        if (writable) await writable.write(value); else chunks.push(value);
+        if (total) { bar.style.width = `${Math.min(100, got / total * 100)}%`; pct.textContent = `${mb(got)} of ${mb(total)}`; }
+      }
+      if (writable) await writable.close();
+      else {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob(chunks, { type: "application/zip" }));
+        a.download = name;
+        document.body.appendChild(a);  // a detached link's download can be cancelled by the browser
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 120000);
+      }
+      // only a finished save resets the 3-day clock
+      await apiFetch("/api/local-backup/saved", { method: "POST", body: JSON.stringify({ files, size: got }) });
+      close();
+      toast(`Backup saved${handle ? ` as ${handle.name}` : " to your Downloads folder"} (${mb(got)}). Next one due in ${s.due_days} days.`);
+    } catch (e) {
+      err.textContent = `The download didn't finish: ${e.message}. Try again${forced ? ", or continue for now and try later" : ""}.`;
+      go.disabled = false;
+      go.innerHTML = `${icon("download")} Try Again`;
+      prog.hidden = true;
+      if (forced) back.querySelector(".lb-skip").hidden = false;  // never locked out of AT-HUB by a failed download
+    }
+  });
 }

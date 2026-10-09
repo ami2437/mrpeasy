@@ -2179,3 +2179,19 @@ html[data-theme="dark"] .qi-amt.qi-warn { color: #fbbf24; }
 /* A test copy of AT-HUB (SITE_LABEL): a red badge in the top bar */
 .tb-site-label { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 8px; background: #dc2626; color: #fff;
   font-weight: 800; letter-spacing: .06em; font-size: 12.5px; text-transform: uppercase; }
+
+/* ---- Download a backup pop-up (openLocalBackup in auth-guard.js) ---- */
+.modal-backdrop > .modal.lb-modal { max-width: 560px; }
+.lb-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.lb-head h3 { margin: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+.lb-due { margin: 0 0 8px; padding: 10px 12px; border-radius: 10px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+html[data-theme="dark"] .lb-due { background: rgba(251, 146, 60, .12); border-color: rgba(251, 146, 60, .35); color: #fdba74; }
+.lb-choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; text-transform: none; }
+.lb-choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft, rgba(37, 99, 235, .06)); }
+.lb-choice input { margin-top: 3px; }
+.lb-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.lb-bar { flex: 1; height: 8px; border-radius: 6px; background: var(--surface-3); overflow: hidden; }
+.lb-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.lb-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.lb-foot .lb-skip { margin-right: auto; }

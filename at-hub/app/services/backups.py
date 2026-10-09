@@ -123,3 +123,69 @@ def _loop() -> None:
 def start_scheduler() -> None:
     if settings.backup_every_hours > 0 and engine.url.get_backend_name() == "sqlite":
         threading.Thread(target=_loop, name="db-backups", daemon=True).start()
+
+
+# ---- a copy for the user's own computer (Backups -> Download; required every LOCAL_DUE_DAYS) ----
+LOCAL_DUE_DAYS = 3
+LOCAL_KEY = "last_local_backup"
+
+
+def local_status(db) -> dict:
+    """When someone last downloaded a backup to their own computer, and whether one is due."""
+    import json
+    from app.models import AppSetting
+    row = db.get(AppSetting, LOCAL_KEY)
+    last = json.loads(row.value) if row and row.value else None
+    days = None
+    if last:
+        days = (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() / 86400
+    return {"last": last, "days_since": round(days, 1) if days is not None else None,
+            "due": days is None or days >= LOCAL_DUE_DAYS, "due_days": LOCAL_DUE_DAYS,
+            "db_bytes": db_path().stat().st_size if db_path().exists() else 0,
+            "files_bytes": _folder_bytes(Path(settings.upload_dir))}
+
+
+def _folder_bytes(d: Path) -> int:
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.exists() else 0
+
+
+def build_local_copy(include_files: bool) -> Path:
+    """A .zip in a temp folder: a consistent copy of the database (+ every attached file) and a README on restoring it."""
+    import tempfile
+    import zipfile
+    stamp = f"{datetime.now():%Y-%m-%d-%H%M}"
+    tmp = Path(tempfile.mkdtemp(prefix="athub-dl-"))
+    db_copy = tmp / "at_hub.db"
+    _copy(db_path(), db_copy)
+    out = tmp / f"AT-HUB-backup-{stamp}-{'everything' if include_files else 'database'}.zip"
+    uploads = Path(settings.upload_dir).resolve()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        z.write(db_copy, "at_hub.db")
+        n = 0
+        if include_files and uploads.exists():
+            for f in sorted(uploads.rglob("*")):
+                if f.is_file():  # PDFs / photos are compressed already: store them as they are
+                    z.write(f, "uploads/" + f.relative_to(uploads).as_posix(), compress_type=zipfile.ZIP_STORED)
+                    n += 1
+        z.writestr("README.txt", (
+            f"AT-HUB backup taken {datetime.now():%Y-%m-%d %H:%M} (server time)\n\n"
+            f"at_hub.db   the whole database: orders, POs, shipments, invoices, payments, stock, users, settings\n"
+            + (f"uploads/    every attached file ({n} files): customer POs, vendor invoices, MTRs, proofs of delivery\n" if include_files
+               else "            (attached files are NOT in this copy -- download 'Everything' for those)\n")
+            + "\nTo restore: give this file to whoever runs the AT-HUB server. at_hub.db goes back as the database\n"
+              "(Backups -> Restore does the same from the server's own copies); uploads/ goes back as the uploads folder.\n"
+              "Keep it somewhere safe and private -- it holds all of the company's records.\n"))
+    db_copy.unlink(missing_ok=True)
+    return out
+
+
+def record_local_copy(db, by: str, include_files: bool, size: int) -> None:
+    import json
+    from app.models import AppSetting
+    value = json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": by, "files": include_files, "size": size})
+    row = db.get(AppSetting, LOCAL_KEY)
+    if row:
+        row.value, row.updated_by = value, by
+    else:
+        db.add(AppSetting(key=LOCAL_KEY, value=value, updated_by=by))
+    db.commit()
