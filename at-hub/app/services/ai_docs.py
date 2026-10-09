@@ -284,6 +284,9 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
         raise HTTPException(status_code=400, detail=f"Unknown document kind: {kind}")
     doc = _read(file_bytes, filename)
     out: Dict[str, Any] = {"kind": kind, "scanned_image": bool(doc["images"]), "text_preview": doc["text"][:3000]}
+    from app.services import ai_cloud as _cloud
+    if _cloud.claude_engine():
+        engine = "claude"  # no local model on this server
     if engine == "claude":
         # Cloud, on an explicit click only: our details and bank numbers are redacted locally first,
         # and only that text is sent (never the PDF). A scan is an image we can't redact, so it stays here.
@@ -291,7 +294,8 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
         if kind not in ai_cloud.SCHEMAS:
             raise HTTPException(status_code=400, detail="Ask Claude isn't available for this kind of document")
         if doc["images"]:
-            raise HTTPException(status_code=400, detail="This is a scanned image: it can't be redacted, so it isn't sent to Claude. Use the local AI scan.")
+            raise HTTPException(status_code=400, detail=ai_cloud.SCAN_NOT_SENT if ai_cloud.claude_engine() else
+                                "This is a scanned image: it can't be redacted, so it isn't sent to Claude. Use the local AI scan.")
         safe, removed = ai_cloud.redact(doc["text"], db)
         result = ai_cloud.ask_claude(PROMPTS[kind], safe, ai_cloud.SCHEMAS[kind])
         data = result["data"]

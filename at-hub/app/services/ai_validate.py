@@ -148,8 +148,9 @@ def validate_order(db: Session, order_id: int, use_claude: bool = True) -> Dict[
     else:
         # the local model misreads layouts we have an exact reader for (Chart's run-together columns: it takes the
         # extended $ for the quantity), so it only reads the others
-        readers["Local AI"] = lambda: shape(ai_orders._ask_model(text))
-    if use_claude:
+        if not ai_cloud.claude_engine():  # cloud: no local model -- Claude (below) is the reader
+            readers["Local AI"] = lambda: shape(ai_orders._ask_model(text))
+    if use_claude or ai_cloud.claude_engine():
         def claude():
             safe, _removed, _cust = ai_cloud.redact_customer_po(text, db)
             prompt = ai_orders.EXTRACTION_PROMPT.replace("Purchase order text:", "Names, addresses and contact details were replaced "
@@ -199,8 +200,11 @@ def validate_po(db: Session, po_id: int, use_claude: bool = True) -> Dict[str, A
         goods = sum(l["qty"] * (l["price"] or 0) for l in lines.values()) if lines else None
         return {"ref": ref, "lines": lines, "total": goods}
 
-    readers = {"Local AI": lambda: shape(ai_docs.extract(db, kind, data, att.filename, po_id=po.id, engine="local"))}
-    if use_claude:
+    from app.services import ai_cloud
+    readers = {}
+    if not ai_cloud.claude_engine():  # cloud: no local model -- Claude (below) is the reader
+        readers["Local AI"] = lambda: shape(ai_docs.extract(db, kind, data, att.filename, po_id=po.id, engine="local"))
+    if use_claude or ai_cloud.claude_engine():
         readers["Claude"] = lambda: shape(ai_docs.extract(db, kind, data, att.filename, po_id=po.id, engine="claude"))
     result = _compare(saved, _run(readers), lambda k: saved_lines.get(k, {}).get("label") or (items[k].code if k in items else str(k)))
     for f in result["findings"]:  # vendor docs number differently -- a ref mismatch is only a hint

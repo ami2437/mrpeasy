@@ -172,6 +172,24 @@ def redact_customer_po(text: str, db: Session) -> Tuple[str, List[str], Any]:
     return text, removed, customer
 
 
+def claude_engine() -> bool:
+    """AI_ENGINE=claude: there's no local model here (the cloud server) -- the readers use Claude instead."""
+    return (settings.ai_engine or "").strip().lower() == "claude"
+
+
+SCAN_NOT_SENT = ("This is a scan or photo. Here only text PDFs are read by AI -- scans are never sent out, because their "
+                 "contents can't be cleaned first. Type the details in (or ask the sender for a text PDF).")
+
+
+def claude_engine() -> bool:
+    """AI_ENGINE=claude: there's no local model here (the cloud server) -- the readers use Claude instead."""
+    return (settings.ai_engine or "").strip().lower() == "claude"
+
+
+SCAN_NOT_SENT = ("This is a scan or photo. Here only text PDFs are read by AI -- scans are never sent out, because their "
+                 "contents can't be cleaned first. Type the details in (or ask the sender for a text PDF).")
+
+
 def ask_claude(prompt: str, text: str, schema: Dict[str, Any]) -> Dict[str, Any]:
     """One request, structured JSON back. The caller has already redacted `text`."""
     if not settings.anthropic_api_key:

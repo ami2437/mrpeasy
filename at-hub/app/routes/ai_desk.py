@@ -71,7 +71,15 @@ def _classify(db: Session, data: bytes, name: str, text: str, instruction: str) 
         from app.services.ai_orders import _ask_model
         from app.services.ai_docs import _read
         doc = _read(data, name)
-        kind = (_ask_model(doc["text"] or name, prompt=CLASSIFY, images=doc["images"][:1] or None) or {}).get("kind")
+        from app.services import ai_cloud
+        if ai_cloud.claude_engine():  # cloud: Claude sorts text documents (cleaned first); scans fall to the word rules below
+            if doc["images"] or not doc["text"].strip():
+                raise ValueError("scan")
+            safe, _removed = ai_cloud.redact(doc["text"][:6000], db)
+            kind = ai_cloud.ask_claude(CLASSIFY, safe, {"type": "object", "additionalProperties": False, "required": ["kind"],
+                                                        "properties": {"kind": {"type": "string", "enum": sorted(KINDS) + ["other"]}}})["data"].get("kind")
+        else:
+            kind = (_ask_model(doc["text"] or name, prompt=CLASSIFY, images=doc["images"][:1] or None) or {}).get("kind")
         if kind in KINDS:
             return kind, "AI"
     except Exception:

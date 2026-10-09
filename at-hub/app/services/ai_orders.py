@@ -77,7 +77,12 @@ def model_url() -> str:
 
 
 def status() -> Dict[str, Any]:
-    """Is the local model server up and is the configured model pulled?"""
+    """Is the local model server up and is the configured model pulled? (Cloud: is Claude set up?)"""
+    from app.services import ai_cloud
+    if ai_cloud.claude_engine():
+        ok = bool(settings.anthropic_api_key)
+        return {"url": "Anthropic", "model": "Claude", "private": False, "reachable": ok, "model_installed": ok, "installed_models": [],
+                "engine": "claude", "message": "" if ok else "Claude isn't set up on this server yet (no API key)."}
     out = {"url": settings.ai_ollama_url, "model": settings.ai_model, "private": False, "reachable": False,
            "model_installed": False, "installed_models": [], "message": ""}
     try:
@@ -356,7 +361,17 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
     data = customer_po_templates.parse(text)
     source = data["template"] if data else settings.ai_model
     if not data:
-        data = _ask_model(text)
+        from app.services import ai_cloud
+        if ai_cloud.claude_engine():  # cloud: Claude reads it, with both sides' names and contacts removed first
+            safe, _removed, cust = ai_cloud.redact_customer_po(text, db)
+            prompt = EXTRACTION_PROMPT.replace("Purchase order text:", "Names, addresses and contact details were replaced "
+                                               "with [CUSTOMER], [PERSON], [EMAIL] etc. before you saw this; ignore them.\nPurchase order text:")
+            result = ai_cloud.ask_claude(prompt, safe, ai_cloud.SCHEMAS["customer_po"])
+            data = result["data"]
+            data["customer_name"] = cust.name if cust else None  # identified here, locally -- never sent
+            source = f"Claude ({result['model']})"
+        else:
+            data = _ask_model(text)
     items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
     from app.services import item_alias
     customer = _match_customer(db, data.get("customer_name"))

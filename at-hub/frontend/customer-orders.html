@@ -190,7 +190,8 @@
       try {
         const s = await apiFetch("/api/ai-orders/status");
         el.innerHTML = s.reachable && s.model_installed
-          ? `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`
+          ? (s.engine === "claude" ? `<span class="pos">● Ready</span> — <strong>Claude</strong> reads text PDFs (names and contact details are removed first; scans aren't sent)`
+            : `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`)
           : `<span class="neg">● Not Ready</span> — ${escapeHtml(s.message)}`;
       } catch (e) { el.textContent = e.message; }
     }

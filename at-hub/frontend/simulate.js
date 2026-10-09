@@ -1133,7 +1133,7 @@ function sheetCsv() {
 async function sheetAi(engine) {
   const inp = document.getElementById("sim-ai-q"), q = inp.value.trim(), note = document.getElementById("sim-ai-note");
   if (!q) { inp.focus(); return; }
-  note.textContent = engine === "claude" ? "Asking Claude…" : "The local AI is working on it… (can take a minute)";
+  note.textContent = engine === "claude" ? "Asking Claude…" : "The AI is working on it… (can take a minute)";
   try {
     const r = await apiFetch("/api/simulations/ai-sheet", { method: "POST", body: JSON.stringify({ instruction: q, columns: S.cols, rows: S.rows, engine }) });
     snap();

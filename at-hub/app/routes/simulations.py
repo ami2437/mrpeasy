@@ -373,6 +373,9 @@ def ai_sheet(data: SheetIn, db: Session = Depends(get_db), user: User = Depends(
     if len(data.rows) > 400:
         raise HTTPException(status_code=400, detail="The assistant works on up to 400 rows at a time -- filter the sheet first")
     payload = json.dumps({"instruction": data.instruction.strip(), "columns": data.columns, "rows": data.rows}, default=str)
+    from app.services import ai_cloud as _cloud
+    if _cloud.claude_engine():
+        data.engine = "claude"  # no local model on this server
     if data.engine == "claude":
         if not has(user, "ai"):
             raise HTTPException(status_code=403, detail="Ask Claude (cloud) needs the AI permission")
