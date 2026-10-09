@@ -1902,7 +1902,11 @@ const TableTools = {
         rows.forEach(r => { if (!original.has(r)) original.set(r, seq++); });
         const sortable = rows.filter(r => !r.querySelector("td[colspan]"));
         if (sortable.length < 2) return;
+        // data-sort-group: rows sort only within their group; groups (with their colspan separator rows) keep their order
+        const grouped = rows.some(r => r.dataset.sortGroup !== undefined);
+        const grp = r => parseFloat(r.dataset.sortGroup || 0);
         const sorted = [...sortable].sort((a, b) => {
+          if (grouped && grp(a) !== grp(b)) return grp(a) - grp(b);
           if (dir === 0) return original.get(a) - original.get(b);
           const at = Array.from(ths[col].parentNode.cells).indexOf(ths[col]);  // columns may have been moved
           const x = this.sortKey(a.cells[at]), y = this.sortKey(b.cells[at]);
@@ -1912,7 +1916,12 @@ const TableTools = {
           if (!x.s || !y.s) return (!x.s && !y.s ? 0 : !x.s ? 1 : -1) || original.get(a) - original.get(b);
           return x.s.localeCompare(y.s, undefined, { numeric: true }) * dir || original.get(a) - original.get(b);
         });
-        if (sorted.some((r, i) => r !== sortable[i])) sorted.forEach(r => tb.appendChild(r));
+        if (grouped) {
+          const seps = rows.filter(r => r.querySelector("td[colspan]"));
+          const groups = [...new Set(rows.map(grp))].sort((a, b) => a - b);
+          const order = groups.flatMap(g => [...seps.filter(r => grp(r) === g), ...sorted.filter(r => grp(r) === g)]);
+          if (order.some((r, i) => r !== rows[i])) order.forEach(r => tb.appendChild(r));
+        } else if (sorted.some((r, i) => r !== sortable[i])) sorted.forEach(r => tb.appendChild(r));
       });
       sorting = false;
     };

@@ -638,7 +638,16 @@
       // In-progress orders first (newest first); finished ones fold away below unless expanded or searched for.
       const newest = (a, b) => new Date(b.created_at || b.order_date) - new Date(a.created_at || a.order_date) || b.id - a.id;
       const prog = new Map(filtered.map(o => [o.id, orderProgress(o)]));
-      const open = filtered.filter(o => !prog.get(o.id).done).sort(newest);
+      // Open orders by how far along they are, newest first within each: not shipped -> partly shipped ->
+      // fully shipped, not (fully) invoiced -> invoiced, waiting for payment. Completed ones always come last.
+      const stage = o => {
+        const p = prog.get(o.id);
+        if (p.shippedQty <= 1e-9) return 0;
+        if (p.shippedQty < p.ordered - 1e-9) return 1;
+        if (p.invoicedAmt < p.orderTotal - 0.01) return 2;
+        return 3;
+      };
+      const open = filtered.filter(o => !prog.get(o.id).done).sort((a, b) => stage(a) - stage(b) || newest(a, b));
       const finished = filtered.filter(o => prog.get(o.id).done).sort(newest);
       const expanded = showCompleted || (q && !open.length);
       const row = o => {
@@ -647,7 +656,7 @@
         const orderInvoices = invoices.filter(i => i.order_id === o.id);
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
-        <tr class="${done ? "order-done" : ""} ${rowUnderlay("order", o, ["orange"])}">
+        <tr class="${done ? "order-done" : ""} ${rowUnderlay("order", o, ["orange"])}" data-sort-group="${done ? 1 : 0}">
           <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${escapeHtml(o.po_number || "")}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled dup-tag" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
@@ -670,8 +679,8 @@
         </tr>
       `;
       };
-      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr><td colspan="12" class="muted">No orders in progress${q ? " match your search" : ""}.</td></tr>`)
-        + (finished.length ? `<tr class="completed-toggle" onclick="showCompleted = !showCompleted; renderOrders();">
+      tbody.innerHTML = (open.length ? open.map(row).join("") : `<tr data-sort-group="0"><td colspan="12" class="muted">No orders in progress${q ? " match your search" : ""}.</td></tr>`)
+        + (finished.length ? `<tr class="completed-toggle" data-sort-group="1" onclick="showCompleted = !showCompleted; renderOrders();">
             <td colspan="12"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed orders <span class="muted">(${finished.length}${q ? " matching" : ""}) — shipped, invoiced and paid${expanded ? "" : " · click to show"}</span></td></tr>`
           + (expanded ? finished.map(row).join("") : "") : "");
     }
