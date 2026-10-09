@@ -2224,7 +2224,7 @@ body.notes-hidden .note-btn.has-note { outline: 2px dashed #d97706; outline-offs
 @media print { .tb-menu-pop, .sf-wrap { display: none !important; } }
 
 /* ---- Print Options pop-up ---- */
-.po-list { display: grid; gap: 4px; }
+.po-list { display: grid; gap: 4px; grid-template-columns: 1fr !important; }
 .po-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; margin: 0; }
 .po-opt:hover { background: color-mix(in srgb, var(--accent, #2f6fed) 6%, transparent); }
 .po-opt input { margin-top: 3px; width: auto; }

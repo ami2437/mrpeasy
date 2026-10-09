@@ -1173,7 +1173,7 @@
             ${m ? ` · ${creditStatusTag(m)}` : ""}${m && m.applied > 0.005 ? ` · ${fmtMoney(m.applied)} used, ${fmtMoney(m.remaining)} left` : ""}</p>
           <div class="row"><div><label>Date</label><input type="date" class="cm-date" value="${date}" ${draft ? "" : "disabled"}></div>
             <div style="flex:3;"><label>Reason (prints on the memo)</label><input type="text" class="cm-reason" value="${escapeHtml(reason)}" ${draft ? "" : "disabled"} placeholder="e.g. 20 bolts billed twice on INV-1234"></div></div>
-          <div class="no-table-tools" style="max-height:46vh; overflow-y:auto; margin-top:8px;"><table class="fit-table">
+          <div class="no-table-tools" style="max-height:46vh; overflow-y:auto; margin-top:8px;"><table class="fit-table" oninput="cmRecalc(this)">
             <thead><tr><th class="grow">What's Credited</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Credit</th></tr></thead>
             <tbody>${rows.map((r, i) => `<tr data-i="${i}">
               <td class="grow">${r.order_line_id || r.item_id ? `<strong>${escapeHtml(((items.find(x => x.id === r.item_id) || {}).code) || "")}</strong> <span class="small">${escapeHtml(r.description || "")}</span>${r.order_line_id ? `<div class="muted small">units back off the order line${r.max ? ` (${fmtQty(r.max)} billed)` : ""}</div>` : ""}`
@@ -1181,7 +1181,7 @@
               <td class="num"><input type="number" class="cm-qty qty-input" style="width:80px;" min="0" step="any" value="${r.quantity || 0}" ${draft ? "" : "disabled"}></td>
               <td class="num"><input type="number" class="cm-price" style="width:100px;" min="0" step="0.00001" value="${r.unit_price || 0}" ${draft ? "" : "disabled"}></td>
               <td class="num">${fmtMoney(lineAmount(r.quantity || 0, r.unit_price || 0))}</td></tr>`).join("")}</tbody>
-            <tfoot><tr><td class="grow">Credit Total</td><td></td><td></td><td class="num"><strong>${fmtMoney(total)}</strong></td></tr></tfoot></table></div>
+            <tfoot><tr><td class="grow">Credit Total</td><td></td><td></td><td class="num"><strong class="cm-total">${fmtMoney(total)}</strong></td></tr></tfoot></table></div>
           <p class="muted small">Lines from the invoice credit <b>units</b> (they come off what the order billed). Use the free line for a price adjustment or any other credit.</p>
           ${m && m.status === "issued" && m.remaining > 0.005 ? `<div class="row" style="align-items:flex-end;"><div style="flex:2;"><label>Use It On An Open Invoice</label>
               <select class="cm-apply">${openInvoices().map(i => `<option value="${i.id}">${escapeHtml(i.code)} — owes ${fmtMoney(i.balance)}</option>`).join("") || `<option value="">No open invoices for this customer</option>`}</select></div>
@@ -1235,6 +1235,16 @@
           return openCreditMemo(m.id);
         } catch (e) { error = e.message; }
       }
+    }
+    // the credit memo's amounts while typing
+    function cmRecalc(table) {
+      let total = 0;
+      table.querySelectorAll("tbody tr").forEach(tr => {
+        const amt = lineAmount(parseFloat(tr.querySelector(".cm-qty").value) || 0, parseFloat(tr.querySelector(".cm-price").value) || 0);
+        total += amt;
+        tr.lastElementChild.textContent = fmtMoney(amt);
+      });
+      table.querySelector(".cm-total").textContent = fmtMoney(total);
     }
     // From the customer order's billing check: credit the over-billed units (invoices.html?credit_order=ID)
     async function creditFromOrder(orderId) {
