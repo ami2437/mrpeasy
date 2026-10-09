@@ -36,6 +36,7 @@ CATALOG = [
     # Money
     ("money.view", "Money", "See prices, costs, totals and money documents anywhere", True, "admin"),
     ("invoices", "Money", "Invoices: create, edit, send, record payments", True, "admin"),
+    ("invoices.split", "Money", "Split invoice lines onto a new invoice (same shipment, same order)", True, "admin"),
     ("invoices.funding", "Money", "Invoice funding (factoring)", True, "admin"),
     ("payments.import", "Money", "Import PO payment files", True, "admin"),
     # Purchasing

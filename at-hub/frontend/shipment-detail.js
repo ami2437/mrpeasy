@@ -45,14 +45,14 @@ function shipTimelineHtml(sh, invoice = null, compact = false) {
     ["Picked", total > 0 && picked >= total - 1e-9, picked > 0 && picked < total ? `${fmtQty(picked)} of ${fmtQty(total)}` : ""],
     ["Packed", !!sh.packed_at || shipped, sh.packed_at ? `${fmtDate(sh.packed_at)}${sh.packed_by ? ` · ${sh.packed_by}` : ""}` : ""],
     ["Shipped", shipped, sh.ship_date ? fmtDate(sh.ship_date) : ""],
-    ["Delivered", delivered, sh.delivered_at ? fmtDate(sh.delivered_at) : ""],
+    ["Delivered", delivered, sh.delivered_at ? { html: deliveredDateHtml(sh) } : ""],
     ["Invoiced", sh.status === "invoiced", invoice ? invoice.code : ""],
   ].slice(0, compact ? 4 : 6);
   const current = steps.findIndex(s => !s[1]);
   if (sh.status === "cancelled") return `<div class="ship-timeline"><span class="tl-step cancelled">${icon("x")} Cancelled</span></div>`;
   return `<ol class="ship-timeline ${compact ? "compact" : ""}">${steps.map(([label, done, note], i) =>
     `<li class="tl-step ${done ? "done" : i === current ? "current" : ""}"><span class="tl-dot">${done ? icon("check") : i + 1}</span>
-      <span class="tl-label">${label}${note && !compact ? `<span class="tl-note">${escapeHtml(note)}</span>` : ""}</span></li>`).join("")}</ol>`;
+      <span class="tl-label">${label}${note && !compact ? `<span class="tl-note">${note.html ?? escapeHtml(note)}</span>` : ""}</span></li>`).join("")}</ol>`;
 }
 
 // Items on the main screen: read-only. Per order line: ordered, shipped before, this shipment (by lot), picked, left after.
@@ -514,7 +514,7 @@ async function procShip() {
 // ---- once shipped: Modify (carrier / tracking, Undo Ship) ----
 function procShippedHtml(sh) {
   return `<div class="proc-summary">${icon("truck")} Shipped ${fmtDate(sh.ship_date)} · ${sh.boxes.length} box${sh.boxes.length === 1 ? "" : "es"}
-      ${sh.delivered_at ? ` · delivered ${fmtDate(sh.delivered_at)}` : ""}${sh.status === "invoiced" ? " · invoiced" : ""}</div>
+      ${sh.delivered_at ? ` · delivered ${deliveredDateHtml(sh)}` : ""}${sh.status === "invoiced" ? " · invoiced" : ""}</div>
     ${carrierInputsHtml(sh)}
     <p class="muted small"><b>Undo Ship</b> puts the stock back (still booked) and takes it back to picking${sh.status === "invoiced" ? " — its invoice is voided with it" : ""}.
       Delivery and invoicing are on the shipment screen.</p>`;
@@ -564,16 +564,32 @@ function deliverySectionHtml(shipment) {
   const today = todayISO();
   return `
     ${shipment.delivered_at
-      ? `<p><span class="tag delivered">Delivered</span> <strong>${fmtDate(shipment.delivered_at)}</strong>
-          <span class="muted small">Recorded By ${escapeHtml(shipment.delivered_by || "")}</span></p>`
+      ? `<p><span class="tag delivered">Delivered</span> <strong>${deliveredDateHtml(shipment)}</strong>
+          <span class="muted small">Recorded By ${escapeHtml(shipment.delivered_by || "")}</span></p>${lineDeliveryHtml(shipment)}`
       : `<p class="muted">Not delivered yet — uploading a proof of delivery marks it delivered.</p>`}
     ${canMark ? `
       <div class="row" style="max-width:520px; align-items:flex-end;">
         <div><label>Delivered on</label><input type="date" id="delivered-date" value="${shipment.delivered_at ? dayISO(shipment.delivered_at) : today}" max="${today}"></div>
-        <div style="flex:0;"><button class="secondary" style="white-space:nowrap;" onclick="markDelivered(${shipment.id})">${shipment.delivered_at ? "Change date" : "Mark Delivered"}</button></div>
+        <div style="flex:0;"><button class="secondary" style="white-space:nowrap;" onclick="markDelivered(${shipment.id})">${shipment.delivered_at ? "Change Date" : "Mark Delivered"}</button></div>
+        ${shipment.delivered_at ? `<div style="flex:0;"><button class="secondary" style="white-space:nowrap;" onclick="editDeliveryDate(${shipment.id})" title="Set a different delivery date for a line that arrived on another day">Line Dates</button></div>` : ""}
         ${shipment.delivered_at ? `<div style="flex:0;"><a class="link small" style="white-space:nowrap;" onclick="clearDelivered(${shipment.id})">Clear Delivery</a></div>` : ""}
       </div>` : ""}
     <div id="delivery-error" class="error"></div>`;
+}
+
+// Lines that arrived on a different day from the shipment (set in the Delivery Date pop-up).
+function lineDeliveryHtml(shipment) {
+  const seen = {}, own = shipment.lines.filter(l => l.delivered_at && !seen[l.order_line_id] && (seen[l.order_line_id] = true));
+  if (!own.length) return "";
+  return `<p class="muted small" style="margin-top:-4px;">Arrived on another day: ${own.sort((a, b) => (a.line_no || 0) - (b.line_no || 0))
+    .map(l => `#${l.line_no ?? ""} ${escapeHtml(String(itemLabel(l.item_id)).split(" — ")[0])} <strong>${fmtDate(l.delivered_at)}</strong>`).join(" · ")}</p>`;
+}
+
+// Delivery Date pop-up saved (auth-guard.js): redraw the list and the shipment on screen.
+async function afterDeliveryChange(sh) {
+  await reloadList();
+  const card = detailContainer();
+  if (detailShownId && card && card.style.display !== "none") await showDetail(detailShownId);
 }
 
 async function markDelivered(id) {

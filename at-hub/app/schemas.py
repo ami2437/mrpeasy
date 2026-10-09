@@ -522,6 +522,8 @@ class ShipmentLineResponse(BaseModel):
     lot_id: Optional[int] = None
     quantity: float
     picked_quantity: float = 0
+    delivered_at: Optional[datetime] = None            # this line's own delivery date (only when it differs)
+    effective_delivered_at: Optional[datetime] = None  # its own date, else the shipment's
 
     class Config:
         from_attributes = True
@@ -735,6 +737,15 @@ class MergeInvoicesRequest(BaseModel):
     invoice_ids: List[int]  # draft invoices to fold into this one
 
 
+class SplitLineInput(BaseModel):
+    line_id: int
+    quantity: Optional[float] = None  # how much of the line moves (default: all of it)
+
+
+class SplitLinesRequest(BaseModel):
+    lines: List[SplitLineInput]  # invoice lines to move onto a new draft invoice
+
+
 class InvoicePrintOptions(BaseModel):
     print_zero_lines: Optional[bool] = None  # only the options sent are changed
     print_payments: Optional[bool] = None
@@ -788,6 +799,9 @@ class InvoiceResponse(BaseModel):
     shipment_codes: List[str] = []
     is_combined: bool = False
     combined_from: List[str] = []  # codes of the invoices folded into this one
+    split_from_id: Optional[int] = None  # lines split off this invoice (same shipment, same order)
+    split_from_code: Optional[str] = None
+    split_into: List[str] = []           # invoices split off this one
     print_zero_lines: bool = False
     print_payments: Optional[bool] = True  # None (older invoices) = yes
     amount_due_printed: float = 0  # the balance the customer's copy shows (total less the payments it lists)
@@ -956,6 +970,17 @@ class VendorBillResponse(VendorBillInput):
 
 class MarkDeliveredRequest(BaseModel):
     delivered_at: Optional[datetime] = None  # default: now
+
+
+class LineDeliveryInput(BaseModel):
+    order_line_id: int
+    delivered_at: Optional[datetime] = None  # None (or the shipment's date) = arrived with the shipment
+
+
+class DeliveryDatesRequest(BaseModel):
+    """The Delivery Date pop-up: the shipment's date plus any line that arrived on another day."""
+    delivered_at: datetime
+    lines: List[LineDeliveryInput] = []
 
 
 class UnshipRequest(BaseModel):

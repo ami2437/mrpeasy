@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -389,6 +389,83 @@ async function deliveredCheckBeforeInvoice(shipments, { required = false } = {})
   toast(`Marked ${pending.map(s => s.code).join(", ")} delivered`);
   return true;
 }
+
+// A shipment's delivered date, clickable for anyone who may change it (opens the Delivery Date pop-up).
+// The page reloads itself through afterDeliveryChange(shipment) if it defines one.
+function deliveredDateHtml(s, text = null) {
+  const label = text ?? (s.delivered_at ? fmtDate(s.delivered_at) : "");
+  const split = (s.lines || []).some(l => l.delivered_at);  // a line arrived on another day
+  if (!AuthGuard.can("shipments.deliver") || !["shipped", "delivered", "invoiced"].includes(s.status)) return escapeHtml(label);
+  return `<a class="link date-link" title="${split ? "Some lines arrived on another day -- " : ""}Change the delivery date" onclick="event.stopPropagation(); editDeliveryDate(${s.id})">${escapeHtml(label)}${split ? "*" : ""}</a>`;
+}
+async function editDeliveryDate(id) {
+  const sh = await openDeliveryDates(id);
+  if (!sh) return;
+  if (typeof afterDeliveryChange === "function") await afterDeliveryChange(sh); else location.reload();
+}
+
+// The Delivery Date pop-up: the shipment's date, and (rarely) a line that arrived on another day. Resolves the saved
+// shipment, or null when cancelled. A shipment delivered for the first time then gets "bill it now?".
+async function openDeliveryDates(id) {
+  let sh;
+  try { sh = await apiFetch(`/api/shipments/${id}`); } catch (e) { alert(e.message); return null; }
+  const known = typeof items !== "undefined" && Array.isArray(items) ? items : [];
+  const groups = {};
+  sh.lines.forEach(l => {
+    const g = groups[l.order_line_id] ??= { order_line_id: l.order_line_id, line_no: l.line_no, item_id: l.item_id, qty: 0, own: null };
+    g.qty += l.quantity;
+    if (l.delivered_at) g.own = l.delivered_at;
+  });
+  const rows = Object.values(groups).sort((a, b) => (a.line_no || 0) - (b.line_no || 0));
+  const codes = {};
+  await Promise.all([...new Set(rows.map(r => r.item_id))].map(async iid => {
+    const k = known.find(i => i.id === iid);
+    if (k) { codes[iid] = k.code; return; }
+    try { codes[iid] = (await apiFetch(`/api/stock-items/${iid}`)).code; } catch { codes[iid] = ""; }
+  }));
+  const today = todayISO(), shipped = sh.ship_date ? dayISO(sh.ship_date) : "";
+  const wasDelivered = !!sh.delivered_at;
+  let main = sh.delivered_at ? dayISO(sh.delivered_at) : (shipped > today ? shipped : today);
+  let lineDates = Object.fromEntries(rows.map(r => [r.order_line_id, r.own ? dayISO(r.own) : ""]));  // "" = same as the shipment
+  let showLines = rows.some(r => r.own), error = "";
+  while (true) {
+    const { value, el } = await askDialog({ title: `Delivery Date — ${sh.code}`,
+      body: `<p class="muted" style="margin-top:0;">${shipped ? `Shipped ${fmtDate(sh.ship_date)}` : ""}${sh.delivered_by ? ` · last set by ${escapeHtml(sh.delivered_by)}` : ""}</p>
+        <label>Delivered On</label><input type="date" class="dd-main" value="${main}" ${shipped ? `min="${shipped}"` : ""} max="${today}" style="max-width:180px;">
+        <label class="check-label" style="margin-top:10px;"><input type="checkbox" class="dd-split" ${showLines ? "checked" : ""}> Some lines arrived on a different day</label>
+        <div class="dd-lines no-table-tools" style="${showLines ? "" : "display:none;"}">
+          <table class="fit-table" style="margin-top:6px;"><thead><tr><th>Line</th><th class="grow">Item</th><th class="num">Qty</th><th>Delivered On</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td class="line-no">#${r.line_no ?? ""}</td><td class="grow"><strong>${escapeHtml(codes[r.item_id] || "")}</strong></td>
+            <td class="num">${fmtQty(r.qty)}</td>
+            <td><input type="date" class="dd-line" data-ol="${r.order_line_id}" ${lineDates[r.order_line_id] ? `data-touched="1"` : ""} value="${lineDates[r.order_line_id] || main}" ${shipped ? `min="${shipped}"` : ""} max="${today}"></td></tr>`).join("")}</tbody></table>
+          <p class="muted small">A line left on the shipment's date simply arrived with it.</p></div>
+        ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`,
+      buttons: [{ label: "Save", value: "save", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (value !== "save") return null;
+    main = el.querySelector(".dd-main").value;
+    showLines = el.querySelector(".dd-split").checked;
+    el.querySelectorAll(".dd-line").forEach(i => { lineDates[i.dataset.ol] = i.value === main ? "" : i.value; });
+    if (!main) { error = "Pick the delivery date."; continue; }
+    const lines = rows.map(r => ({ order_line_id: r.order_line_id,
+      delivered_at: showLines && lineDates[r.order_line_id] ? `${lineDates[r.order_line_id]}T12:00:00` : null }));
+    try {
+      const saved = await apiFetch(`/api/shipments/${id}/delivery-dates`, { method: "PUT", body: JSON.stringify({ delivered_at: `${main}T12:00:00`, lines }) });
+      toast(`${sh.code} delivered ${fmtDate(saved.delivered_at)}`);
+      if (!wasDelivered) offerBilling([saved]);
+      return saved;
+    } catch (e) { error = e.message; }
+  }
+}
+// The line dates follow the shipment's date until someone changes one.
+document.addEventListener("change", e => {
+  if (!e.target.classList || !e.target.classList.contains("dd-main")) return;
+  const box = e.target.closest(".ask-dialog");
+  box.querySelectorAll(".dd-line").forEach(i => { if (!i.dataset.touched) i.value = e.target.value; });
+});
+document.addEventListener("change", e => {
+  if (e.target.classList && e.target.classList.contains("dd-line")) e.target.dataset.touched = "1";
+  if (e.target.classList && e.target.classList.contains("dd-split")) e.target.closest(".ask-dialog").querySelector(".dd-lines").style.display = e.target.checked ? "" : "none";
+});
 
 // Right after a delivery is recorded: "bill it now?" (managers and up -- invoices are money work). Shipments
 // of the same order go on one invoice. Create flies the shipments into the invoice, ticks, then opens it.
@@ -2379,6 +2456,7 @@ const ICON_PATHS = {
   undo: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
   dollar: '<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   sparkles: '<path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2Z"/><path d="M19 3v4M17 5h4"/>',
   pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/>',

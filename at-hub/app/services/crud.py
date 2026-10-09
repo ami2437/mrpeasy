@@ -1472,6 +1472,9 @@ class ShipmentService:
             raise HTTPException(status_code=400, detail=f"{shipment.code} shipped on {clock.local(shipment.ship_date, tz_name):%b %d, %Y} -- it can't be delivered before that")
         shipment.delivered_at = when
         shipment.delivered_by = by
+        for line in shipment.lines:  # a line's own date that now matches the shipment's is no longer its own
+            if line.delivered_at and clock.local(line.delivered_at, tz_name).date() == clock.local(when, tz_name).date():
+                line.delivered_at = None
         if shipment.status == "shipped":
             shipment.status = "delivered"
         if commit:
@@ -1480,10 +1483,44 @@ class ShipmentService:
         return shipment
 
     @staticmethod
+    def set_delivery_dates(db: Session, shipment: Shipment, data, by: str, tz_name: Optional[str] = None) -> Shipment:
+        """The Delivery Date pop-up: the shipment's date, and per order line a date only where that line arrived on
+        another day (the same day as the shipment, or none, = it came with the shipment)."""
+        ShipmentService.mark_delivered(db, shipment, data.delivered_at, by, commit=False, tz_name=tz_name)
+        today = clock.local(datetime.utcnow(), tz_name).date()
+        shipped_on = clock.local(shipment.ship_date, tz_name).date() if shipment.ship_date else None
+        if clock.local(shipment.delivered_at, tz_name).date() > today:
+            raise HTTPException(status_code=400, detail="The delivery date can't be in the future")
+        by_line = {}
+        for line in shipment.lines:
+            by_line.setdefault(line.order_line_id, []).append(line)
+        for entry in data.lines:
+            rows = by_line.get(entry.order_line_id)
+            if not rows:
+                raise HTTPException(status_code=400, detail=f"Order line {entry.order_line_id} isn't on {shipment.code}")
+            when = clock.moment_from_input(entry.delivered_at, tz_name)
+            label = f"#{rows[0].line_no}" if rows[0].line_no is not None else "a line"
+            if when:
+                day = clock.local(when, tz_name).date()
+                if day > today:
+                    raise HTTPException(status_code=400, detail=f"Line {label}: the delivery date can't be in the future")
+                if shipped_on and day < shipped_on:
+                    raise HTTPException(status_code=400, detail=f"Line {label}: {shipment.code} shipped on {shipped_on:%b %d, %Y} -- it can't be delivered before that")
+                if day == clock.local(shipment.delivered_at, tz_name).date():
+                    when = None
+            for row in rows:  # every lot row of the order line gets the same date
+                row.delivered_at = when
+        db.commit()
+        db.refresh(shipment)
+        return shipment
+
+    @staticmethod
     def clear_delivered(db: Session, shipment_id: int) -> Shipment:
         shipment = ShipmentService.get(db, shipment_id)
         shipment.delivered_at = None
         shipment.delivered_by = None
+        for line in shipment.lines:
+            line.delivered_at = None
         if shipment.status == "delivered":
             shipment.status = "shipped"
         db.commit()
@@ -1496,6 +1533,7 @@ class ShipmentService:
         invoice needs first -- remove payments, tell the customer, give a reason, accept combined shipments."""
         from app.models import Attachment
         shipment = ShipmentService.get(db, shipment_id)
+        InvoiceService.refuse_if_split(db, shipment)
         inv = InvoiceService.live_invoice_for_shipment(db, shipment.id)
         pods = db.query(Attachment).filter(Attachment.entity_type == "shipment", Attachment.entity_id == shipment.id,
                                            Attachment.category == "pod").count()
@@ -1527,6 +1565,7 @@ class ShipmentService:
         steps are done (payments removed, customer told, reason given). Proof of delivery
         files stay on the shipment."""
         shipment = ShipmentService.get(db, shipment_id)
+        InvoiceService.refuse_if_split(db, shipment)
         live = InvoiceService.live_invoice_for_shipment(db, shipment.id)
         if shipment.status not in ("shipped", "delivered", "invoiced"):
             raise HTTPException(status_code=400, detail=f"Shipment is {shipment.status} -- only shipped shipments can be un-shipped")
@@ -1559,6 +1598,7 @@ class ShipmentService:
             item.booked += line.quantity
             line.order_line.shipped_quantity = max(0, line.order_line.shipped_quantity - line.quantity)
             line.picked_quantity = 0
+            line.delivered_at = None
             db.add(InventoryTransaction(
                 item_id=item.id,
                 lot_id=line.lot_id,
@@ -1795,6 +1835,100 @@ class InvoiceService:
                 .filter(InvoiceShipment.shipment_id == shipment_id, Invoice.status != "void").first())
 
     @staticmethod
+    def live_invoices_for_shipment(db: Session, shipment_id: int, exclude_id: Optional[int] = None) -> List[Invoice]:
+        """Every non-void invoice billing this shipment -- more than one once its lines were split onto other invoices."""
+        q = (db.query(Invoice).join(InvoiceShipment, InvoiceShipment.invoice_id == Invoice.id)
+             .filter(InvoiceShipment.shipment_id == shipment_id, Invoice.status != "void"))
+        if exclude_id:
+            q = q.filter(Invoice.id != exclude_id)
+        return q.order_by(Invoice.id).all()
+
+    @staticmethod
+    def refuse_if_split(db: Session, shipment) -> None:
+        """Undoing a shipment voids its invoice; when its lines are split over several, that's for a person to sort out."""
+        lives = InvoiceService.live_invoices_for_shipment(db, shipment.id)
+        if len(lives) > 1:
+            raise HTTPException(status_code=400, detail=f"{shipment.code} is billed on {' and '.join(i.code for i in lives)} (its lines were split) -- "
+                                                        "combine them back into one invoice, or void the others, before undoing the shipment")
+
+    @staticmethod
+    def release_shipments(db: Session, invoice: Invoice) -> None:
+        """An invoice is going (void / delete): its shipments are billable again -- unless another live invoice
+        still bills them (lines split onto it)."""
+        for shipment in invoice.shipments:
+            if shipment.status == "invoiced" and not InvoiceService.live_invoices_for_shipment(db, shipment.id, exclude_id=invoice.id):
+                shipment.status = "delivered" if shipment.delivered_at else "shipped"
+
+    @staticmethod
+    def split_lines(db: Session, invoice_id: int, picks, created_by: str) -> Invoice:
+        """Move some lines (or part of a line's quantity) off a draft invoice onto a new draft. Both invoices keep the
+        same order and bill the same shipment(s), so billed-vs-delivered still adds up across them."""
+        from app.models import BillingVariance
+        invoice = InvoiceService.get(db, invoice_id)
+        if invoice.status != "draft" or invoice.emails:
+            raise HTTPException(status_code=400, detail=f"{invoice.code} has gone to the customer -- only a draft can be split "
+                                                        "(void it and invoice the shipment again, then split the new draft)")
+        if invoice.payments or invoice.funding_amount is not None:
+            raise HTTPException(status_code=400, detail=f"{invoice.code} has payments or funding recorded -- it can't be split")
+        lines = {l.id: l for l in invoice.lines}
+        moves = []
+        for p in picks:
+            line = lines.get(p.line_id)
+            if not line:
+                raise HTTPException(status_code=400, detail=f"Line {p.line_id} isn't on {invoice.code}")
+            qty = line.quantity if p.quantity is None else p.quantity
+            if qty <= 0 or qty > line.quantity + 1e-9:
+                raise HTTPException(status_code=400, detail=f"{line.description}: move between 1 and {line.quantity:g}")
+            if line.item_id is not None and abs(qty - round(qty)) > 1e-9:
+                raise HTTPException(status_code=400, detail=f"{line.description}: use a whole number")
+            moves.append((line, qty))
+        if not moves:
+            raise HTTPException(status_code=400, detail="Pick at least one line to split off")
+        whole = {line.id for line, qty in moves if abs(qty - line.quantity) < 1e-9}
+        if len(whole) == len(lines):
+            raise HTTPException(status_code=400, detail="That moves every line -- leave at least one on " + invoice.code)
+
+        new = Invoice(code=generate_code(db, Invoice, "INV"), customer_id=invoice.customer_id, order_id=invoice.order_id,
+                      shipment_id=invoice.shipment_id, due_date=invoice.due_date, free_text=invoice.free_text, status="draft",
+                      print_zero_lines=invoice.print_zero_lines, print_payments=invoice.print_payments,
+                      split_from_id=invoice.id, created_by=created_by)
+        db.add(new)
+        db.flush()
+        for line, qty in moves:
+            if line.id in whole:
+                invoice.lines.remove(line)
+                new.lines.append(line)
+            else:  # part of the line: the rest stays here
+                line.quantity = line.quantity - qty
+                new.lines.append(InvoiceLine(item_id=line.item_id, order_line_id=line.order_line_id, shipment_id=line.shipment_id,
+                                             description=line.description, quantity=qty, unit_price=line.unit_price,
+                                             notes=line.notes, print_notes=line.print_notes))
+        # The new invoice bills the shipments its lines went out on (a line with none: all of this invoice's).
+        moved_sids = {l.shipment_id for l in new.lines if l.shipment_id}
+        for sh in invoice.shipments:
+            if not moved_sids or sh.id in moved_sids:
+                new.shipments.append(sh)
+        db.flush()
+        # ...and this one stops billing a shipment none of its remaining lines came from.
+        kept_sids = {l.shipment_id for l in invoice.lines if l.shipment_id}
+        if kept_sids:
+            for sh in [s for s in invoice.shipments if s.id not in kept_sids]:
+                invoice.shipments.remove(sh)
+            invoice.shipment_id = invoice.shipments[0].id if invoice.shipments else invoice.shipment_id
+        new.shipment_id = new.shipments[0].id if new.shipments else invoice.shipment_id
+        # Accepted billed-vs-delivered differences are kept per invoice: re-file them for both halves, same reasons.
+        from app.services import billing
+        reasons = {v.order_line_id: (v.reason, v.accepted_by)
+                   for v in db.query(BillingVariance).filter(BillingVariance.invoice_id == invoice.id).all()}
+        for inv in (invoice, new):
+            db.flush()
+            db.refresh(inv)
+            billing.refile_variances(db, inv, created_by, reasons)
+        db.commit()
+        db.refresh(new)
+        return new
+
+    @staticmethod
     def create_from_shipment(db: Session, shipment_id: int, data, created_by: str) -> Invoice:
         return InvoiceService.create_from_shipments(db, [shipment_id], data, created_by)
 
@@ -1862,11 +1996,11 @@ class InvoiceService:
         invoice = InvoiceService.get(db, invoice_id)
         if invoice.status == "void":
             raise HTTPException(status_code=400, detail="This invoice is void")
-        if len(invoice.shipments) < 2:
+        info = json.loads(invoice.combined_info) if invoice.combined_info else {}
+        if len(invoice.shipments) < 2 and not info.get("merged"):
             raise HTTPException(status_code=400, detail=f"{invoice.code} isn't a combined invoice")
         if invoice.payments or invoice.funding_amount is not None:
             raise HTTPException(status_code=400, detail=f"{invoice.code} has payments or funding recorded -- remove those before splitting it")
-        info = json.loads(invoice.combined_info) if invoice.combined_info else {}
         groups = [dict(g) for g in info.get("merged", [])]
         if not groups:  # made combined in one go: every shipment after the first gets its own invoice
             groups = [{"code": None, "shipment_ids": [sh.id], "line_ids": None, "due_date": None, "free_text": None}
@@ -1888,8 +2022,9 @@ class InvoiceService:
                     invoice.lines.remove(line)
                     new.lines.append(line)
             for sh in [x for x in invoice.shipments if x.id in g["shipment_ids"]]:
-                invoice.shipments.remove(sh)
                 new.shipments.append(sh)
+                if not any(l.shipment_id == sh.id for l in invoice.lines):  # still billed here too when lines were split
+                    invoice.shipments.remove(sh)
             created.append(new)
         db.flush()
         db.refresh(invoice)
@@ -1917,6 +2052,8 @@ class InvoiceService:
                 raise HTTPException(status_code=400, detail=f"{inv.code} already has payments, emails or funding -- it can't be combined")
             if inv.order_id != target.order_id or not inv.order_id:
                 raise HTTPException(status_code=400, detail=f"{inv.code} is for a different order -- only invoices of the same order can be combined")
+            if inv.split_from_id == target.id:
+                inv.split_from_id = None  # combining a split-off draft back into where it came from
         import json
         info = json.loads(target.combined_info) if target.combined_info else {}
         merged = info.setdefault("merged", [])
@@ -1948,7 +2085,10 @@ class InvoiceService:
             inv.shipments = []
             db.flush()
             for shipment in moved:
-                target.shipments.append(shipment)
+                if shipment not in target.shipments:  # a split-off draft bills a shipment the target already has
+                    target.shipments.append(shipment)
+            for part in list(inv.split_parts):  # drafts split off the one going away now hang off the target
+                part.split_from_id = target.id
             db.flush()
             db.info["no_bin"] = True  # merging drafts isn't a delete anyone would want to undo
             db.delete(inv)
@@ -1977,7 +2117,8 @@ class InvoiceService:
         diffs = billing.invoice_differences(db, invoice, [l.model_dump() for l in data.lines]) if data.lines is not None else None
         if diffs and not getattr(data, "accept_qty_differences", False):
             raise HTTPException(status_code=400, detail="Billing differs from what was delivered: " + "; ".join(
-                f"#{d['line_no']} {d['item_code']} delivered {d['delivered']:g}, billing {d['billed']:g}" for d in diffs)
+                f"#{d['line_no']} {d['item_code']} delivered {d['delivered']:g}, billing {d['billed']:g}"
+                + (f" here + {d['elsewhere']:g} on {', '.join(d['elsewhere_codes'])}" if d.get("elsewhere") else "") for d in diffs)
                 + " -- accept the difference to save it")
 
         if data.due_date is not None:
@@ -2037,9 +2178,7 @@ class InvoiceService:
             if reason and reason.strip():
                 invoice.void_reason = reason.strip()
             # Its shipments become billable again (they can go on a new or combined invoice).
-            for shipment in invoice.shipments:
-                if shipment.status == "invoiced":
-                    shipment.status = "delivered" if shipment.delivered_at else "shipped"
+            InvoiceService.release_shipments(db, invoice)
         invoice.status = status
         db.commit()
         db.refresh(invoice)
@@ -2067,9 +2206,9 @@ def delete_invoice(db: Session, invoice_id: int, commit: bool = True) -> None:
     why = _invoice_delete_blocker(invoice)
     if why:
         raise HTTPException(status_code=400, detail=why)
-    for shipment in invoice.shipments:
-        if shipment.status == "invoiced":
-            shipment.status = "delivered" if shipment.delivered_at else "shipped"
+    InvoiceService.release_shipments(db, invoice)
+    for part in list(invoice.split_parts):  # invoices split off this one stay; they just lose the link
+        part.split_from_id = None
     for model in (InvoiceShipment, InvoiceLine, BillingVariance, InvoiceEmail):
         for row in db.query(model).filter(model.invoice_id == invoice.id).all():
             db.delete(row)

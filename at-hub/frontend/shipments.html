@@ -86,7 +86,7 @@
           <td>${(order(s.order_id) || {}).po_number ? `<a class="link" href="customer-orders.html?id=${s.order_id}" title="Open the order">${escapeHtml(order(s.order_id).po_number)}</a>` : ""}</td>
           <td>${fmtDate(s.created_at)}</td>
           <td>${fmtDate(s.ship_date)}</td>
-          <td>${fmtDate(s.delivered_at)}</td>
+          <td>${s.delivered_at ? deliveredDateHtml(s) : ""}</td>
           <td>${pickedSummary(s)}</td>
           <td>${escapeHtml(s.carrier || "")}</td>
           <td>${trackingLink(s.carrier, s.tracking_number)}</td>

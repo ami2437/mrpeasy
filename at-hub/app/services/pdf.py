@@ -428,7 +428,7 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         row = [str(i), p(item.code if item else "", "td"), described(invoice_line_description(l, item), l, show_notes)]
         if combined:
             sh = by_id.get(l.shipment_id)
-            row.append(p(f"{sh.code}\n{moment(sh.delivered_at or sh.ship_date)}" if sh else "", "td_muted"))
+            row.append(p(f"{sh.code}\n{moment(sh.delivered_for_line(l.order_line_id) or sh.ship_date)}" if sh else "", "td_muted"))
         rows.append(row + [qty(l.quantity), price(l.unit_price), money(l.amount)])
     code_w = fit_width([i.code for i in line_items.values()], 0.9 * inch)
     ship_w = 1.0 * inch if combined else 0

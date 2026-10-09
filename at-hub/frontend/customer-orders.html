@@ -805,7 +805,7 @@
 
     // Shipments on an order: delivered date, or (shipped, managers) a date + one click to mark it delivered without a POD.
     function quickDeliverCell(s, isManager) {
-      if (s.delivered_at) return `${icon("checkCircle", "pos")} ${fmtDate(s.delivered_at)}${s.pods && s.pods.length ? ` <span class="muted small">· POD</span>` : ""}`;
+      if (s.delivered_at) return `${icon("checkCircle", "pos")} ${deliveredDateHtml(s)}${s.pods && s.pods.length ? ` <span class="muted small">· POD</span>` : ""}`;
       if (!["shipped", "invoiced"].includes(s.status) || !isManager) return `<span class="muted">—</span>`;
       const today = todayISO(), min = s.ship_date ? dayISO(s.ship_date) : "";
       return `<span class="quick-deliver"><input type="date" class="qd-date" value="${min > today ? min : today}" ${min ? `min="${min}"` : ""}>
@@ -823,6 +823,12 @@
       } catch (e) { btn.disabled = false; document.getElementById("detail-error").textContent = e.message; }
     }
 
+    // Delivery Date pop-up saved (auth-guard.js)
+    async function afterDeliveryChange() {
+      await loadOrders();
+      if (currentOrderId) showDetail(currentOrderId);
+    }
+
     function itemLabel(id) {
       const i = items.find(i => i.id === id);
       return i ? `${i.code} — ${i.title}` : id;
@@ -835,9 +841,19 @@
       let b;
       try { b = await apiFetch(`/api/customer-orders/${order.id}/billing`); } catch (e) { return; }
       const off = b.lines.filter(l => Math.abs(l.billed - l.shipped) > 1e-6 && (l.unit_price || l.billed > 1e-6) && l.billed > 1e-6);
-      if (!off.length && !b.accepted.length) { el.innerHTML = ""; return; }
       const code = id => (items.find(i => i.id === id) || {}).code || "";
-      el.innerHTML = `<div class="notice billing-off" style="margin-top:14px;"><strong>Billing doesn't match what shipped</strong>
+      // The order is the source of truth: shipments and invoices may never add up to more than it.
+      const words = { over_ordered_billed: l => `billed ${fmtQty(l.billed)} of ${fmtQty(l.ordered)} ordered`,
+                      over_ordered_shipped: l => `shipped ${fmtQty(l.shipped)} of ${fmtQty(l.ordered)} ordered`,
+                      shipments_disagree: l => `order says ${fmtQty(l.shipped)} shipped, its shipments add up to ${fmtQty(l.shipped_on_shipments)}` };
+      const hard = b.lines.filter(l => (l.problems || []).some(p => words[p]));
+      const hardHtml = hard.length ? `<div class="notice billing-off" style="margin-top:14px;"><strong>Shipments / invoices don't add up to the order</strong>
+        <ul>${hard.map(l => `<li>#${l.line_no ?? ""} <strong>${escapeHtml(code(l.item_id))}</strong>: <span class="neg">${l.problems.filter(p => words[p]).map(p => words[p](l)).join("; ")}</span></li>`).join("")}</ul></div>` : "";
+      const touched = b.lines.some(l => l.shipped > 1e-6 || l.billed > 1e-6);
+      const okHtml = !hard.length && !off.length && touched
+        ? `<p class="muted small" style="margin-top:10px;" title="Every line checked against the order: shipped and billed never more than ordered, shipments add up to what the order says shipped, billed = shipped">${icon("checkCircle", "pos")} Order Check: shipments and invoices add up to the order (${b.lines.length} line${b.lines.length === 1 ? "" : "s"} checked)</p>` : "";
+      if (!off.length && !b.accepted.length) { el.innerHTML = hardHtml + okHtml; return; }
+      el.innerHTML = hardHtml + `<div class="notice billing-off" style="margin-top:14px;"><strong>Billing doesn't match what shipped</strong>
         <ul>${off.map(l => { const d = l.billed - l.shipped, why = b.accepted.filter(a => a.order_line_id === l.order_line_id);
           return `<li>#${l.line_no ?? ""} <strong>${escapeHtml(code(l.item_id))}</strong>: ordered ${fmtQty(l.ordered)}, shipped ${fmtQty(l.shipped)}, billed ${fmtQty(l.billed)}
             — <span class="${d > 0 ? "neg" : "warn-text"}">${d > 0 ? "over" : "under"}-billed by ${fmtQty(Math.abs(d))}</span>

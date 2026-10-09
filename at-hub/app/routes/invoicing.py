@@ -6,7 +6,7 @@ from app.config.database import get_db
 from app.schemas import (
     InvoiceResponse, CreateInvoiceRequest, InvoiceUpdateRequest, InvoiceStatusUpdate, InvoicePaymentInput,
     InvoiceEmailRequest, EmailConfigResponse, InvoiceFundingUpdate,
-    CreateCombinedInvoiceRequest, MergeInvoicesRequest, InvoicePrintOptions, InvoiceLineInput,
+    CreateCombinedInvoiceRequest, MergeInvoicesRequest, InvoicePrintOptions, InvoiceLineInput, SplitLinesRequest,
 )
 from app.services.crud import InvoiceService, InvoicePaymentService
 from app.services.money import cents
@@ -99,6 +99,13 @@ def split_invoice(invoice_id: int, db: Session = Depends(get_db)):
     return InvoiceService.split(db, invoice_id)
 
 
+@router.post("/{invoice_id}/split-lines", response_model=InvoiceResponse, dependencies=[Depends(require_perm("invoices.split"))])
+def split_invoice_lines(invoice_id: int, data: SplitLinesRequest, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_active_user)):
+    """Move some lines (or part of a line) of a draft onto a new draft invoice -- same order, same shipment(s)."""
+    return InvoiceService.split_lines(db, invoice_id, data.lines, created_by=current_user.username)
+
+
 @router.put("/{invoice_id}/print-options", response_model=InvoiceResponse)
 def set_print_options(invoice_id: int, data: InvoicePrintOptions, db: Session = Depends(get_db)):
     invoice = InvoiceService.get(db, invoice_id)
@@ -134,7 +141,8 @@ def billing_check(invoice_id: int, db: Session = Depends(get_db)):
     invoice's over / under-billed lines with the reason they were accepted."""
     from app.services import billing
     inv = InvoiceService.get(db, invoice_id)
-    return {"delivered": {str(k): v for k, v in billing.delivered_for(inv).items()}, "differences": billing.open_differences(db, inv)}
+    return {"delivered": {str(k): v for k, v in billing.delivered_for(inv).items()}, "differences": billing.open_differences(db, inv),
+            "elsewhere": {str(k): v for k, v in billing.billed_elsewhere(db, inv).items()}}  # billed from the same shipments on other invoices
 
 
 @router.put("/{invoice_id}/status", response_model=InvoiceResponse)

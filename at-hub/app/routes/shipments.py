@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import PodEmailRequest, ShipmentEmailResponse, ShipmentComboInput
-from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest, UnshipRequest
+from app.schemas import ShipmentResponse, SetBoxesRequest, SetPalletWeightsRequest, ShipmentUpdate, PickRequest, UnbookRequest, MarkDeliveredRequest, UnshipRequest, DeliveryDatesRequest
 from app.services.crud import ShipmentService
 from app.dependencies import get_current_active_user, require_any, require_perm
 from app.services.permissions import has
@@ -364,6 +364,14 @@ def mark_delivered(shipment_id: int, data: MarkDeliveredRequest, db: Session = D
     """Mark delivered by hand (managers and up). Uploading a POD does this automatically."""
     shipment = ShipmentService.get(db, shipment_id)
     return ShipmentService.mark_delivered(db, shipment, data.delivered_at, current_user.username, tz_name=current_user.timezone)
+
+
+@router.put("/{shipment_id}/delivery-dates", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.deliver"))])
+def set_delivery_dates(shipment_id: int, data: DeliveryDatesRequest, db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_active_user)):
+    """The Delivery Date pop-up: the shipment's delivery date, and any line that arrived on a different day."""
+    shipment = ShipmentService.get(db, shipment_id)
+    return ShipmentService.set_delivery_dates(db, shipment, data, current_user.username, tz_name=current_user.timezone)
 
 
 @router.post("/{shipment_id}/undeliver", response_model=ShipmentResponse, dependencies=[Depends(require_perm("shipments.undo"))])

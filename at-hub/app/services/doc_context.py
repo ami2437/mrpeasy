@@ -192,7 +192,7 @@ def _invoice(db, inv: Invoice, opt):
         sh = by_id.get(l.shipment_id)
         rows.append({"line_no": str(i), "item_code": it.code if it else "", "description": _desc(desc, l, show_notes),
                      "shipment": sh.code if sh else "", "qty": qty(l.quantity), "price": price(l.unit_price),
-                     "delivery": moment(sh.delivered_at) if sh and sh.delivered_at else date(order.delivery_date if order else None),
+                     "delivery": moment(sh.delivered_for_line(l.order_line_id)) if sh and sh.delivered_for_line(l.order_line_id) else date(order.delivery_date if order else None),
                      "amount": money(line_amount(l.quantity, l.unit_price)), "_shipping": _is_shipping(l, it)})
     total = sum(line_amount(l.quantity, l.unit_price) for l in printed)
     shipping = sum(line_amount(l.quantity, l.unit_price) for l in printed if _is_shipping(l, items.get(l.item_id)))

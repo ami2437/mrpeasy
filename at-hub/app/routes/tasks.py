@@ -53,6 +53,16 @@ def _suggestions(db: Session) -> dict:
                                               f"({'over' if r['billed'] > r['shipped'] else 'under'} by {abs(r['billed'] - r['shipped']):g})" for r in row["lines"])
                                     + (f". Accepted because: {' / '.join(notes)}" if notes else "")
                                     + ". Correct it with a credit or a further invoice.", f"customer-orders.html?id={o.id}")
+    # the customer order is the source of truth: shipments and invoices may never add up to more than it
+    words = {"over_ordered_billed": lambda r: f"billed {r['billed']:g} of {r['ordered']:g} ordered",
+             "over_ordered_shipped": lambda r: f"shipped {r['shipped']:g} of {r['ordered']:g} ordered",
+             "shipments_disagree": lambda r: f"order says {r['shipped']:g} shipped, its shipments add up to {r['shipped_on_shipments']:g}"}
+    for row in billing.order_mismatches(db):
+        o = row["order"]
+        codes = dict(db.query(StockItem.id, StockItem.code).filter(StockItem.id.in_([r["item_id"] for r in row["lines"]])).all())
+        out[f"order-check:{o.code}"] = ("Billing", f"{o.code}: shipments / invoices don't add up to the order",
+                                        "; ".join(f"#{r['line_no']} {codes.get(r['item_id'], '')}: " + ", ".join(words[p](r) for p in r["problems"])
+                                                  for r in row["lines"]) + ".", f"customer-orders.html?id={o.id}")
     return out
 
 

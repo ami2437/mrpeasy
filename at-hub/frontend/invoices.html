@@ -115,7 +115,9 @@
         + (inv.combined_from && inv.combined_from.length ? `; invoices ${[inv.code, ...inv.combined_from].join(" + ")}` : "");
     }
     function combinedBadge(inv) {
-      return inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "";
+      const split = inv.split_from_code || (inv.split_into || []).length
+        ? ` <span class="inv-chip combined" title="${escapeHtml(inv.split_from_code ? `Lines split from ${inv.split_from_code}` : `Lines split onto ${inv.split_into.join(", ")}`)} -- same shipment"><i></i>Split</span>` : "";
+      return (inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "") + split;
     }
 
     // Figures above the list. They follow the search box, so "Hudson" or "C89104" gives that customer's / order's numbers.
@@ -272,7 +274,7 @@
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${refLink("order", s.order_id)}<div class="muted small">${escapeHtml([o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`].filter(Boolean).join(" · "))}</div></td>
           <td>${fmtDate(s.ship_date)}</td>
-          <td>${delivered ? fmtDate(s.delivered_at) : `<span class="tag draft" title="Creating the invoice asks for the delivery date first">not delivered</span>`}</td>
+          <td>${delivered ? deliveredDateHtml(s) : `<span class="tag draft" title="Creating the invoice asks for the delivery date first">not delivered</span>`}</td>
           <td class="num">${fmtMoney(shipmentValue(s))}</td>
           <td class="nowrap">${delivered || canDeliver ? `<button class="small ${delivered ? "" : "secondary"}" onclick="invoiceShipments([${s.id}])"
             title="${delivered ? "Create a draft invoice for this shipment" : "Mark it delivered, then create the invoice"}">${delivered ? "Create Invoice" : "Deliver &amp; Invoice"}</button>`
@@ -384,9 +386,17 @@
 
     // ---- billed vs delivered: warn while typing, confirm on leaving the box, banner on the saved invoice ----
     let billingCheck = { delivered: {}, differences: [] };
+    // Delivered on this invoice's shipments, less what other invoices of the same shipments bill (split lines).
+    function deliveredFor(ol) {
+      const d = billingCheck.delivered[ol];
+      if (d === undefined) return undefined;
+      return d - Object.values((billingCheck.elsewhere || {})[ol] || {}).reduce((t, q) => t + q, 0);
+    }
     function deliveredCell(l) {
-      const d = l.order_line_id != null ? billingCheck.delivered[l.order_line_id] : undefined;
-      return d === undefined ? `<span class="muted">—</span>` : fmtQty(d);
+      const d = l.order_line_id != null ? deliveredFor(l.order_line_id) : undefined;
+      if (d === undefined) return `<span class="muted">—</span>`;
+      const other = (billingCheck.elsewhere || {})[l.order_line_id];
+      return other ? `${fmtQty(d)}<div class="muted small" title="Delivered ${fmtQty(billingCheck.delivered[l.order_line_id])} in all; the rest is billed on the other invoice(s)">${Object.entries(other).map(([c, q]) => `${fmtQty(q)} on ${escapeHtml(c)}`).join(", ")}</div>` : fmtQty(d);
     }
     function billedByLine() {  // order line -> qty on screen (a line may appear more than once)
       const out = {};
@@ -399,7 +409,7 @@
     function flagQtyDifferences() {
       const billed = billedByLine();
       document.querySelectorAll("#line-rows > tr").forEach(tr => {
-        const ol = tr.dataset.orderLineId, flag = tr.querySelector(".qty-flag"), d = billingCheck.delivered[ol];
+        const ol = tr.dataset.orderLineId, flag = tr.querySelector(".qty-flag"), d = deliveredFor(ol);
         if (!flag) return;
         const diff = ol && d !== undefined ? (billed[ol] || 0) - d : 0;
         tr.classList.toggle("qty-off", Math.abs(diff) > 1e-6);
@@ -407,7 +417,7 @@
       });
     }
     async function qtyChanged(input) {
-      const tr = input.closest("tr"), ol = tr.dataset.orderLineId, d = billingCheck.delivered[ol];
+      const tr = input.closest("tr"), ol = tr.dataset.orderLineId, d = deliveredFor(ol);
       if (!ol || d === undefined) return;
       const billed = billedByLine()[ol] || 0;
       if (Math.abs(billed - d) < 1e-6) { delete tr.dataset.acceptedQty; return; }
@@ -430,7 +440,7 @@
       const diffs = billingCheck.differences;
       if (!diffs.length) return "";
       return `<div class="notice billing-off"><strong>Billed ≠ delivered</strong> — kept against the order until it's squared up:
-        <ul>${diffs.map(d => `<li>#${d.line_no ?? ""} <strong>${escapeHtml(d.item_code)}</strong>: delivered ${fmtQty(d.delivered)}, billed ${fmtQty(d.billed)}
+        <ul>${diffs.map(d => `<li>#${d.line_no ?? ""} <strong>${escapeHtml(d.item_code)}</strong>: delivered ${fmtQty(d.delivered)}, billed ${fmtQty(d.billed)}${d.elsewhere ? ` here + ${fmtQty(d.elsewhere)} on ${escapeHtml((d.elsewhere_codes || []).join(", "))}` : ""}
           — <span class="${d.difference > 0 ? "neg" : ""}">${d.difference > 0 ? "over" : "under"} by ${fmtQty(Math.abs(d.difference))}</span>
           ${d.reason ? `<span class="muted">· “${escapeHtml(d.reason)}” (${escapeHtml(d.accepted_by || "")})</span>` : d.accepted_by ? `<span class="muted">· accepted by ${escapeHtml(d.accepted_by)}</span>` : `<span class="muted">· no reason recorded</span>`}</li>`).join("")}</ul></div>`;
     }
@@ -451,6 +461,7 @@
       try { await TypeLists.load("payment_method"); } catch {}
       const [invoice, check] = await Promise.all([apiFetch(`/api/invoices/${id}`), apiFetch(`/api/invoices/${id}/billing-check`).catch(() => ({ delivered: {}, differences: [] }))]);
       billingCheck = check;
+      shownInvoiceId = invoice.id;
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       applyUnderlay(card, "invoice", invoice);  // DRAFT · sent blue · part paid pink · OVERDUE red · PAID · VOID
@@ -466,12 +477,17 @@
           onclick="renameInvoice(${invoice.id}, '${escapeHtml(invoice.code)}')">${icon("pencil")}</button>` : ""}${combinedBadge(invoice)} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
         <p class="muted" style="margin:0 0 4px;">${escapeHtml(customerName(invoice.customer_id))} — dated ${fmtDate(invoice.invoice_date)}</p>
         <div id="invoice-refs" class="muted"></div>
+        ${invoice.split_from_code || (invoice.split_into || []).length ? `<div class="muted small" style="margin-top:2px;">${icon("scissors")}
+          ${invoice.split_from_code ? `Split from <a class="link" onclick="showDetail(${invoice.split_from_id})">${escapeHtml(invoice.split_from_code)}</a>` : ""}
+          ${(invoice.split_into || []).length ? `${invoice.split_from_code ? " · " : ""}Lines split onto ${invoice.split_into.map(c => { const o = invoices.find(i => i.code === c); return o ? `<a class="link" onclick="showDetail(${o.id})">${escapeHtml(c)}</a>` : escapeHtml(c); }).join(", ")}` : ""}
+          — same shipment, billed across both; combine them back below while both are drafts.</div>` : ""}
 
         <div class="action-bar">
           ${editable ? `<button onclick="saveInvoice(${invoice.id})">Save Changes</button>` : ""}
           ${invoice.status !== "void" ? `<button class="${invoice.status === "draft" ? "next-step" : "secondary"}" onclick="openEmailComposer(${invoice.id})">✉ Send Via Email</button>` : ""}
           <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
           ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
+          ${canSplitLines(invoice) ? `<button class="secondary" onclick="splitLines(${invoice.id})" title="Bill some lines (or part of a line) on a separate invoice -- same shipment, same order">Split Lines</button>` : ""}
           ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
           ${(invoice.status === "void" || (invoice.status === "draft" && !(invoice.emails || []).length)) && !invoice.payments.length
             ? `<button class="danger" onclick="deleteInvoice(${invoice.id})" title="${invoice.status === "void" ? "Remove the voided invoice" : "A draft that never went out"} -- it goes to the Recycle Bin">Delete</button>` : ""}
@@ -516,7 +532,7 @@
           <div id="billing-banner">${billingBannerHtml()}</div>
           <div class="table-scroll">
           <table class="fit-table ${editable ? "lines-table" : ""}">
-            <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num" title="What this invoice's shipments delivered on that order line">Delivered</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
+            <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num" title="What this invoice's shipments delivered on that order line (less what a split-off invoice bills)">Delivered</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
             <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
             <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
           </table>
@@ -557,7 +573,7 @@
         order && order.po_number ? `Customer PO ${escapeHtml(order.po_number)}` : "",
         order && order.job_number ? `Job ${escapeHtml(order.job_number)}` : "",
         ...invShipments.map(sh => `Shipment <a class="link" href="shipments.html?id=${sh.id}">${sh.code}</a>`
-          + (sh.delivered_at ? ` <strong>delivered ${fmtDate(sh.delivered_at)}</strong>` : sh.ship_date ? ` shipped ${fmtDate(sh.ship_date)}` : "")),
+          + (sh.delivered_at ? ` <strong>delivered ${deliveredDateHtml(sh)}</strong>` : sh.ship_date ? ` shipped ${fmtDate(sh.ship_date)}` : "")),
       ].filter(Boolean).join(" · ");
     }
 
@@ -569,6 +585,42 @@
         await showDetail(id);
         document.getElementById("detail-error").innerHTML = `<span class="pos">Split off ${made.map(i => `<a class="link" onclick="showDetail(${i.id})">${escapeHtml(i.code)}</a>`).join(", ")}.</span>`;
       } catch (e) { document.getElementById("split-error").textContent = e.message; }
+    }
+
+    // Split Lines: some lines, or part of one, onto a new draft invoice of the same shipment(s) and order.
+    function canSplitLines(inv) {
+      return AuthGuard.can("invoices.split") && inv.status === "draft" && !(inv.emails || []).length && !inv.payments.length
+        && inv.funding_amount == null && inv.lines.length > 0 && (inv.lines.length > 1 || inv.lines[0].quantity > 1);
+    }
+    async function splitLines(id) {
+      const inv = invoices.find(i => i.id === id) || await apiFetch(`/api/invoices/${id}`);
+      let error = "", picked = {}, qtys = {};
+      while (true) {
+        const { value, el } = await askDialog({ title: `Split Lines Off ${inv.code}`,
+          body: `<p class="muted" style="margin-top:0;">Ticked lines move to a new draft invoice. It bills the same shipment and order, so billed-vs-delivered still adds up across both. Lower a quantity to move only part of a line.</p>
+            <div class="no-table-tools" style="max-height:52vh; overflow-y:auto;">
+            <table class="fit-table"><thead><tr><th></th><th class="grow">Item</th><th class="num">On Invoice</th><th class="num">Move</th></tr></thead>
+            <tbody>${inv.lines.map(l => `<tr><td><input type="checkbox" class="sp-tick" data-id="${l.id}" ${picked[l.id] ? "checked" : ""}></td>
+              <td class="grow"><strong>${escapeHtml(itemCodeOf(l) || lineDescription(l))}</strong>${itemCodeOf(l) ? `<div class="muted small" style="max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(lineDescription(l))}">${escapeHtml(lineDescription(l))}</div>` : ""}</td>
+              <td class="num">${fmtQty(l.quantity)}</td>
+              <td class="num"><input type="number" class="sp-qty qty-input" style="width:78px;" data-id="${l.id}" min="1" max="${l.quantity}" step="1" value="${qtys[l.id] ?? l.quantity}"
+                oninput="this.closest('tr').querySelector('.sp-tick').checked = true"></td></tr>`).join("")}</tbody></table></div>
+            ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`,
+          buttons: [{ label: "Split Onto New Invoice", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+        picked = {}; qtys = {};
+        el.querySelectorAll(".sp-tick").forEach(c => { picked[c.dataset.id] = c.checked; });
+        el.querySelectorAll(".sp-qty").forEach(q => { qtys[q.dataset.id] = q.value; });
+        const lines = Object.keys(picked).filter(k => picked[k]).map(k => ({ line_id: parseInt(k), quantity: parseFloat(qtys[k]) }));
+        if (!lines.length) { error = "Tick at least one line."; continue; }
+        try {
+          const made = await apiFetch(`/api/invoices/${id}/split-lines`, { method: "POST", body: JSON.stringify({ lines }) });
+          await loadInvoices();
+          toast(`${made.code} created from ${inv.code}`);
+          showDetail(made.id);
+          return;
+        } catch (e) { error = e.message; }
+      }
     }
 
     async function setPrintPayments(id, on) {
@@ -962,6 +1014,14 @@
     async function loadInvoices() {
       invoices = await apiFetch("/api/invoices/");
       renderInvoices();
+    }
+
+    // Delivery Date pop-up saved (auth-guard.js): fresh shipments, then redraw the list and the open invoice.
+    let shownInvoiceId = null;
+    async function afterDeliveryChange() {
+      shipments = await apiFetch("/api/shipments/");
+      await loadInvoices();
+      if (shownInvoiceId && document.getElementById("detail-card").style.display !== "none") showDetail(shownInvoiceId);
     }
 
     async function init() {

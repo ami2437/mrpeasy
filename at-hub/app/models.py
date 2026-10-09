@@ -652,6 +652,11 @@ class Shipment(Base):
     pallets = relationship("PalletWeight", backref="shipment", cascade="all, delete-orphan")
     combos = relationship("ShipmentCombo", backref="shipment", cascade="all, delete-orphan", order_by="ShipmentCombo.id")
 
+    def delivered_for_line(self, order_line_id):
+        """When this order line arrived: its own date if it came on another day, else the shipment's."""
+        own = next((l.delivered_at for l in self.lines if l.order_line_id == order_line_id and l.delivered_at), None)
+        return own or self.delivered_at
+
 
 class ShipmentLine(Base):
     """Quantity booked into this shipment, tied back to the order line and the lot it's booked from."""
@@ -665,12 +670,19 @@ class ShipmentLine(Base):
     quantity = Column(Float, nullable=False)  # booked quantity
     picked_quantity = Column(Float, nullable=False, default=0)
     unit_price = Column(Float, nullable=False, default=0)
+    # This line's own delivery moment, only when it differs from the shipment's (None = arrived with the shipment).
+    delivered_at = Column(DateTime, nullable=True)
 
     lot = relationship("Lot")
 
     @property
     def line_no(self):
         return self.order_line.line_no if self.order_line else None
+
+    @property
+    def effective_delivered_at(self):
+        """When this line was delivered: its own date if one was set, else the shipment's."""
+        return self.delivered_at or (self.shipment.delivered_at if self.shipment else None)
 
 
 class ShipmentCombo(Base):
@@ -769,6 +781,8 @@ class Invoice(Base):
     # JSON record of how this invoice was combined, so it can be shown and undone:
     # {"merged": [{"code", "shipment_ids", "line_ids", "due_date", "free_text"}], "by", "at"}
     combined_info = Column(Text, nullable=True)
+    # Lines split off another invoice of the same shipment(s) (Split Lines): that invoice. Both keep billing the shipment.
+    split_from_id = Column(Integer, ForeignKey("invoices.id"), nullable=True, index=True)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     created_by = Column(String, nullable=True)
@@ -779,6 +793,16 @@ class Invoice(Base):
     lines = relationship("InvoiceLine", backref="invoice", cascade="all, delete-orphan")
     payments = relationship("InvoicePayment", backref="invoice", cascade="all, delete-orphan")
     emails = relationship("InvoiceEmail", backref="invoice", cascade="all, delete-orphan", order_by="InvoiceEmail.sent_at")
+    split_from = relationship("Invoice", remote_side=[id], backref="split_parts")
+
+    @property
+    def split_from_code(self):
+        return self.split_from.code if self.split_from else None
+
+    @property
+    def split_into(self) -> list:
+        """Invoices whose lines were split off this one (void ones left out)."""
+        return [i.code for i in self.split_parts if i.status != "void"]
 
     @property
     def total(self) -> float:
