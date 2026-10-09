@@ -38,8 +38,7 @@
           <a class="link small" id="f-clear" onclick="clearFilters()" style="display:none;">Clear filters</a>
         </div>
         <label id="period-wrap" class="check-label" style="display:none;">Shipped within
-          <select id="period" onchange="renderAll()" style="width:auto;padding:5px 6px;font-size:13px;">
-            <option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">a year</option><option value="0">any time</option></select></label>
+          <span id="period-slot"></span></label>
         <a class="link small" onclick="expandAll(true)">Expand all</a>
         <a class="link small" onclick="expandAll(false)">Collapse all</a>
         <span class="pack-tools">
@@ -171,17 +170,22 @@
     function visibleShipments(stageKey = stage) {
       const q = document.getElementById("search").value.trim();
       const st = STAGES.find(x => x.key === stageKey);
-      const days = st.history ? parseInt(document.getElementById("period").value) : 0;
-      const since = days ? Date.now() - days * 864e5 : 0;
       const cust = document.getElementById("f-customer").value, packed = document.getElementById("f-packed").value, pod = document.getElementById("f-pod").value;
       const list = shipments.filter(s => inPlay(s) && st.test(s) && matches(s, q)
-        && (!since || q || !["invoiced", "delivered"].includes(s.status) || new Date(s.ship_date || s.created_at).getTime() >= since)
+        && (!st.history || q || !["invoiced", "delivered"].includes(s.status) || PeriodPicker.test("period", s.ship_date || s.created_at))
         && (!cust || String((order(s.order_id) || {}).customer_id) === cust)
         && (!packed || (packed === "packed") === isPacked(s))
         && (!pod || (pod === "has") === !!(s.pods && s.pods.length)));
       const sorted = sortShipments(list);
       // To pick: shipments whose packing is already accepted go last, under their own heading -- never mixed in
       return stageKey === "pick" ? sorted.filter(s => !hasPacking(s)).concat(sorted.filter(hasPacking)) : sorted;
+    }
+    // "Completed — last 90 days: 18 of 215 · Show All": a period hides older ones, so say how many there are
+    function periodCountHtml(st) {
+      const all = shipments.filter(s => inPlay(s) && st.test(s)).length;
+      const shown = visibleShipments(st.key).length;
+      if (document.getElementById("search").value.trim() || shown >= all) return "";
+      return ` <span class="period-count"><strong>${escapeHtml(PeriodPicker.label("period"))}: ${shown} of ${all}</strong> · <a class="link" onclick="PeriodPicker.set('period', '0')">Show All</a></span>`;
     }
     function searching() { return !!document.getElementById("search").value.trim() || ["f-customer", "f-packed", "f-pod"].some(id => document.getElementById(id).value); }
     // ---- sort & filter (remembered); default: most recent first ----
@@ -235,7 +239,7 @@
       document.getElementById("stage-tabs").innerHTML = STAGES.map((x, i) => `${i && x.key !== "all" ? `<span class="stage-arrow" aria-hidden="true">›</span>` : ""}
         <button role="tab" aria-selected="${x.key === stage}" class="stage-tab ${x.key === stage ? "on" : ""} ${x.key === "all" ? "stage-all" : ""}" onclick="setStage('${x.key}')">
           ${escapeHtml(x.label)}${x.key !== "all" ? `<span class="stage-count ${counts[x.key] ? "" : "zero"}" title="${x.history ? "Shipped within the period chosen below" : ""}">${counts[x.key]}</span>` : ""}</button>`).join("");
-      document.getElementById("stage-hint").innerHTML = st.hint;
+      document.getElementById("stage-hint").innerHTML = st.hint + (st.history ? periodCountHtml(st) : "");
       document.querySelectorAll(".pack-tools").forEach(el => { el.style.display = ["pick", "pack", "ship", "all"].includes(stage) ? "" : "none"; });
       document.getElementById("period-wrap").style.display = st.history ? "" : "none";
       document.getElementById("f-clear").style.display = ["f-customer", "f-packed", "f-pod"].some(id => document.getElementById(id).value) ? "" : "none";
@@ -809,7 +813,7 @@
           const open = bp.open.has(s.id);
           return `<tr class="bp-row ${open ? "open" : ""}" onclick="bpToggle(${s.id})" title="Show / hide what's on it">
             <td class="nowrap"><span class="caret">▶</span> <b>${escapeHtml(s.code)}</b> <span class="muted small">${s.status === "new" ? "booked" : "confirmed"}</span></td>
-            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</td>
+            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}</td>
             <td class="num">${shippedByLine(s).length}</td><td class="num">${fmtQty(units)}</td>
             <td class="num">${fmtQty(picked)}${picked >= units - 1e-9 ? " ✓" : ""}</td>
             <td>${s.packed_at ? `<span class="tag shipped">Accepted · ${s.boxes.length}</span>` : s.boxes.length ? `<span class="tag draft">Proposed · ${s.boxes.length}</span>` : `<span class="muted small">—</span>`}</td>
@@ -870,7 +874,7 @@
           <th class="num">Booked</th><th class="num">Picked</th><th>Pick now</th></tr></thead><tbody>
         ${list.map(s => { const o = order(s.order_id) || {}, todo = s.lines.filter(l => l.quantity - (l.picked_quantity || 0) > 1e-9)
             .sort((a, b) => (a.line_no || 0) - (b.line_no || 0) || a.id - b.id);
-          return `<tr class="bp-pick-head"><td colspan="6"><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</span></td></tr>
+          return `<tr class="bp-pick-head"><td colspan="6"><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}</span></td></tr>
             ${comboLineRows(s, todo, l => l.order_line_id).map(({ row: l, child }) => `<tr class="${comboRowCls(s, l.order_line_id, child)}"><td class="line-no">${child ? comboChildNo(l.line_no) : `#${l.line_no ?? ""}`}</td><td class="grow">${escapeHtml(String(itemLabel(l.item_id)))}${child ? comboKidNote(s, child) : comboTagHtml(s, l.order_line_id)}</td><td>${escapeHtml(lotCode(l.lot_id))}</td>
               <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.picked_quantity)}</td><td>${pickQtyInput(s, l)}</td></tr>`).join("")}`; }).join("")}</tbody></table>`;
     }
@@ -951,7 +955,7 @@
             <option value="default">Item defaults</option>
             ${presets.length ? `<optgroup label="Presets">${presets.map(p => `<option value="preset:${p.id}">${escapeHtml(p.name)}${p.customer_id ? ` — ${escapeHtml(customerName(p.customer_id))}` : ""}</option>`).join("")}</optgroup>` : ""}
             ${sources.length ? `<optgroup label="Copy from a packed shipment">${sources.map(s => { const o = order(s.order_id) || {};
-              return `<option value="ship:${s.id}">${escapeHtml(s.code)} · ${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""} · ${escapeHtml(customerName(o.customer_id) || "")} · ${fmtDate(s.packed_at || s.ship_date || s.created_at)}</option>`; }).join("")}</optgroup>` : ""}
+              return `<option value="ship:${s.id}">${escapeHtml(s.code)} · ${escapeHtml(o.code || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""} · ${escapeHtml(customerName(o.customer_id) || "")} · ${fmtDate(s.packed_at || s.ship_date || s.created_at)}</option>`; }).join("")}</optgroup>` : ""}
           </select></label>
           <a class="link small" id="sp-del-preset" style="display:none;" onclick="spDeletePreset()">Delete this preset</a>
           <span class="spacer"></span>
@@ -989,7 +993,7 @@
           Kept when you <b>Save</b> or <b>Accept Packaging</b>.</p>
         ${list.map(s => { const o = order(s.order_id) || {};
           return `<details class="bp-ship-pallets" data-sid="${s.id}" ${list.length <= 3 ? "open" : ""}>
-            <summary><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</span>
+            <summary><b>${escapeHtml(s.code)}</b> <span class="muted small">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}</span>
               <span class="bp-pal-sum small muted"></span></summary>
             <div class="bp-pal-tools">
               <label class="check-label">All lines on pallet <input type="text" class="bp-all-pallet" placeholder="E.g. P1" style="width:90px;"
@@ -1116,7 +1120,7 @@
         <table class="fit-table no-table-tools no-col-bands"><thead><tr><th>Shipment</th><th class="grow">Customer · PO</th><th class="num">Boxes</th><th>Pallets</th><th>Carrier</th><th>Tracking #</th></tr></thead><tbody>
         ${list.map(s => { const o = order(s.order_id) || {}, gaps = savedPalletGaps(s), n = usedPallets(s).length;
           return `<tr data-id="${s.id}"><td class="nowrap"><b>${escapeHtml(s.code)}</b></td>
-            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}</td>
+            <td class="grow">${escapeHtml(customerName(o.customer_id) || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}</td>
             <td class="num">${s.boxes.length}</td>
             <td>${n ? `${n}${gaps.length ? ` <span class="neg small" title="${escapeHtml(gaps.join("\n"))}">· ${gaps.length} missing data</span>` : ""}` : `<span class="muted">—</span>`}</td>
             <td><input type="text" class="sd-carrier" list="bp-carriers" value="${escapeHtml(s.carrier || "")}" placeholder="Carrier" style="width:130px;"></td>
@@ -1180,7 +1184,7 @@
         <tr class="${invSelected.has(i.id) ? "row-selected" : ""}">
           <td><input type="checkbox" ${invSelected.has(i.id) ? "checked" : ""} onchange="invToggle(${i.id}, this.checked)"></td>
           <td><a class="link" href="invoices.html?id=${i.id}">${escapeHtml(i.code)}</a></td>
-          <td class="grow">${escapeHtml(customerName(i.customer_id) || "")}</td><td>${escapeHtml(o.po_number || "")}</td>
+          <td class="grow">${escapeHtml(customerName(i.customer_id) || "")}</td><td>${custPoLink(o.po_number, o.id)}</td>
           <td>${escapeHtml((i.shipment_codes || []).join(", "))}</td><td>${fmtDate(i.invoice_date)}</td>
           <td class="num">${fmtMoney(i.total)}</td><td><span class="tag ${i.status === "draft" ? "draft" : i.status === "paid" ? "shipped" : "confirmed"}">${i.status}</span></td>
           <td>${i.emails && i.emails.length ? `${icon("check")} ${fmtDate(i.emails[i.emails.length - 1].sent_at)}` : `<span class="muted">—</span>`}</td></tr>`; }).join("")
@@ -1349,6 +1353,7 @@
     }
 
     async function init() {
+      document.getElementById("period-slot").innerHTML = PeriodPicker.html("period", { def: "90", onchange: "renderAll()", title: "Completed and To bill: shipped within" });
       try { await loadAll(); } catch (e) {
         document.getElementById("shipments-container").innerHTML = `<div class="card error">Couldn't load shipments: ${escapeHtml(e.message)}</div>`;
       }

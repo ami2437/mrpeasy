@@ -68,8 +68,13 @@ function rpWireTips(root, months) {
     g.addEventListener("mouseleave", () => { tip.hidden = true; g.classList.remove("hot"); });
   });
 }
-async function rpSales(months = 12) {
-  const d = await apiFetch(`/api/analytics/sales?months=${months}`);
+const SALES_PERIODS = [["90", "3 Months"], ["180", "6 Months"], ["365", "Year"], ["730", "2 Years"]];
+async function rpSales() {
+  // the shared period picker: a number of days -> whole months back; a custom range -> those dates
+  if (!document.getElementById("rp-months")) document.body.insertAdjacentHTML("beforeend", `<div id="rp-months-hold" hidden>${PeriodPicker.html("rp-months", { def: "365", opts: SALES_PERIODS, onchange: "rpSales()" })}</div>`);
+  const v = PeriodPicker.value("rp-months"), months = v.startsWith("r:") ? 12 : Math.max(1, Math.round((parseInt(v) || 365) / 30.4));
+  const d = await apiFetch(`/api/analytics/sales?${v.startsWith("r:") ? PeriodPicker.query("rp-months") : `months=${months}`}`);
+  const picker = document.getElementById("rp-months");
   const tot = d.months.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cost: a.cost + m.cost }), { revenue: 0, cost: 0 });
   const mar = tot.revenue - tot.cost;
   const table = (rows, first, extra = false) => `<table class="compact-table"><thead><tr><th>${first}</th>${extra ? `<th class="num sum">Qty</th>` : ""}
@@ -81,10 +86,10 @@ async function rpSales(months = 12) {
   const view = document.getElementById("rp-view");
   view.innerHTML = `<div class="card">
       <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;"><h3 style="margin:0;">Sales & Margin</h3>
-        <select id="rp-months" style="width:auto;" onchange="rpSales(+this.value)">${[3, 6, 12, 24].map(n => `<option value="${n}" ${n === months ? "selected" : ""}>Last ${n} months</option>`).join("")}</select>
+        <span id="rp-months-slot"></span>
         <span class="muted small">By ship date. Margin uses each lot's landed cost.</span></div>
       <div class="money-tiles" style="margin-top:12px; max-width:640px;">
-        <div class="mtile t-total"><span>Revenue shipped</span><strong>${rpMoney(tot.revenue)}</strong><small>last ${months} months</small></div>
+        <div class="mtile t-total"><span>Revenue shipped</span><strong>${rpMoney(tot.revenue)}</strong><small>${escapeHtml(v.startsWith("r:") ? PeriodPicker.label("rp-months") : `last ${months} months`)}</small></div>
         <div class="mtile t-wait"><span>Cost</span><strong>${rpMoney(tot.cost)}</strong><small>landed lot cost</small></div>
         <div class="mtile t-paid"><span>Margin</span><strong>${rpMoney(mar)}</strong><small>${tot.revenue ? (mar / tot.revenue * 100).toFixed(1) + "% of revenue" : "—"}</small></div></div>
       ${d.lines_without_cost ? `<div class="notice" style="margin-top:10px;">${d.lines_without_cost} shipped line${d.lines_without_cost === 1 ? "" : "s"} came from lots with no cost (mostly MRPeasy history),
@@ -95,6 +100,8 @@ async function rpSales(months = 12) {
     <div class="card"><h3 style="margin-top:0;">By Customer</h3>${table(d.customers, "Customer")}</div>
     <div class="card"><h3 style="margin-top:0;">By Item <span class="muted small">(top 100 by revenue)</span></h3>${table(d.items, "Item", true)}</div>`;
   rpWireTips(view, d.months);
+  const slot = document.getElementById("rp-months-slot");
+  if (slot && picker) slot.appendChild(picker);  // the picker keeps its state across redraws
 }
 
 // ---- Statements: receivables aging by customer + statement PDF ----
@@ -186,7 +193,7 @@ async function rpLots(q = "") {
           ${l.mtrs.length ? " · MTR: " + l.mtrs.map(m => `<a class="link" onclick="openAttachment(${m.id})">${escapeHtml(m.filename)}</a>`).join(", ") : ` · <span class="neg">no MTR linked</span>`}</div>
         ${l.shipments.length ? `<table class="compact-table no-table-tools" style="margin-top:6px;"><thead><tr><th>Shipment</th><th>Customer</th><th>Order / PO</th><th>Shipped</th><th class="num">Qty</th></tr></thead><tbody>
           ${l.shipments.map(s => `<tr><td><a class="link" href="shipments.html?id=${s.shipment_id}">${escapeHtml(s.shipment)}</a></td><td>${escapeHtml(s.customer || "")}</td>
-            <td><a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(s.order || "")}</a>${s.po_number ? ` · PO ${escapeHtml(s.po_number)}` : ""}</td>
+            <td><a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(s.order || "")}</a>${s.po_number ? ` · PO ${custPoLink(s.po_number, s.order_id)}` : ""}</td>
             <td>${s.ship_date ? fmtDate(s.ship_date) : `<span class="muted">${escapeHtml(s.status)}</span>`}</td><td class="num">${fmtQty(s.quantity)}</td></tr>`).join("")}</tbody></table>`
           : `<div class="small muted" style="margin-top:4px;">Not shipped to anyone yet.</div>`}</div>`).join("") || `<p class="muted">No lot matches "${escapeHtml(q)}".</p>`;
   } catch (e) { out.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
@@ -230,6 +237,6 @@ async function rpCreatePos() {
   } catch (e) { toast(e.message); }
 }
 
-const RP_LOADERS = { sales: () => rpSales(+(document.getElementById("rp-months") || {}).value || 12), statements: rpStatements, inventory: rpInventory,
+const RP_LOADERS = { sales: () => rpSales(), statements: rpStatements, inventory: rpInventory,
                      vendors: rpVendors, lots: () => rpLots(new URLSearchParams(location.search).get("lot") || ""), reorder: rpReorder };
 document.addEventListener("DOMContentLoaded", () => { rpRenderTabs(); if (rpTab !== "overview") rpShow(rpTab); });

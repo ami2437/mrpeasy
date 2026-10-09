@@ -480,6 +480,27 @@ def build_table(tspec, rows, width):
     flex = [c for c in cols if not float(c.get("w") or 0)]
     share = max(0.6 * inch, (width - fixed) / len(flex)) if flex else 0
     widths = [float(c.get("w") or 0) * inch or share for c in cols]
+    # no word is ever split (an item # like 79299-HPC-NUT, a header like BACKORDERED): each column is at least as wide as
+    # its widest word, the description gives up the room; if the page can't hold that, the table goes a size smaller
+    from app.services.no_split import fit_columns
+    hsize = float(st.get("header_size", 7.5))
+    def col_texts(c):
+        return [r.get("item_code", "") if c["key"] == "item_code_desc" else str(r.get(c["key"], "")) for r in rows]
+    flex = [i for i, c in enumerate(cols) if c["key"] in ("description", "item_code_desc")] or [max(range(len(cols)), key=lambda i: widths[i])]
+    bold_cols = [i for i, c in enumerate(cols) if c.get("bold") or c["key"] in ("amount", "item_code_desc")]
+    heads = [(c.get("header") or "").upper() if st.get("header_upper") else (c.get("header") or "") for c in cols]
+    base = list(widths)
+    for _ in range(4):
+        widths, fits = fit_columns(list(base), [col_texts(c) for c in cols], heads, flex, font=FONT, size=size, head_font=FONT_SEMI,
+                                   head_size=hsize, pad=float(st.get("pad", 5)), bold_cols=bold_cols, bold_font=FONT_SEMI)
+        if fits or size <= 6.2:
+            break
+        size, hsize = size * 0.9, hsize * 0.9
+    body = ParagraphStyle("td", fontName=FONT, fontSize=size, leading=size * 1.3, textColor=color(st.get("color"), colors.HexColor("#1e293b")))
+    muted = ParagraphStyle("tdm", parent=body, fontSize=size - 0.8, leading=(size - 0.8) * 1.3, textColor=colors.HexColor("#64748b"))
+    bold = ParagraphStyle("tdb", parent=body, fontName=FONT_SEMI, textColor=colors.HexColor("#0f172a"))
+    head = ParagraphStyle("th", fontName=FONT_SEMI, fontSize=hsize, leading=hsize * 1.3,
+                          textColor=color(st.get("header_color"), colors.HexColor("#64748b")))
 
     def cell(c, r):
         k, a = c["key"], c.get("align") or ("right" if c["key"] in ("qty", "price", "amount", "ordered", "shipped", "backorder") else "left")

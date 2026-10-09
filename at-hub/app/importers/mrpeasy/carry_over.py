@@ -61,6 +61,8 @@ def carry_over(db, live_path, rep) -> None:
     cust_by_name = {c.name.strip().lower(): c.id for c in db.query(Customer).all()}
     vend_by_name = {v.name.strip().lower(): v.id for v in db.query(Vendor).all()}
     co_line = {(o.code, l.line_no): l for o in db.query(CustomerOrder).all() for l in o.lines}
+    co_line_mrp = {l.mrp_id: l for o in db.query(CustomerOrder).all() for l in o.lines if l.mrp_id}
+    po_line_mrp = {l.mrp_id: l for po in db.query(PurchaseOrder).all() for l in po.lines if l.mrp_id}
     po_line = {}
     for po in db.query(PurchaseOrder).all():
         lines = sorted(po.lines, key=lambda l: (l.position if l.position is not None else 10**6, l.id))
@@ -164,12 +166,13 @@ def carry_over(db, live_path, rep) -> None:
 
     # ---- 5. line notes ----
     n = 0
-    for r in _rows(live, "select o.code, l.line_no, l.notes, l.print_notes from customer_order_lines l join customer_orders o on o.id=l.order_id where l.notes is not null"):
-        line = co_line.get((r["code"], r["line_no"]))
+    # MRPeasy's own line id first (the # can be renumbered in AT-HUB); order # + line # for lines made in AT-HUB
+    for r in _rows(live, "select o.code, l.line_no, l.mrp_id, l.notes, l.print_notes from customer_order_lines l join customer_orders o on o.id=l.order_id where l.notes is not null"):
+        line = co_line_mrp.get(r["mrp_id"]) if r["mrp_id"] else co_line.get((r["code"], r["line_no"]))
         if line and not line.notes:
             line.notes, line.print_notes, n = r["notes"], r["print_notes"] is not False and r["print_notes"] != 0, n + 1
-    for r in _rows(live, "select id, notes, print_notes from purchase_order_lines where notes is not null"):
-        line = po_line.get(live_po_line.get(r["id"]))
+    for r in _rows(live, "select id, mrp_id, notes, print_notes from purchase_order_lines where notes is not null"):
+        line = po_line_mrp.get(r["mrp_id"]) if r["mrp_id"] else po_line.get(live_po_line.get(r["id"]))
         if line and not line.notes:
             line.notes, line.print_notes, n = r["notes"], r["print_notes"] != 0, n + 1
     inv_lines = defaultdict(list)

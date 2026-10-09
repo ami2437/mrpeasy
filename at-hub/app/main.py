@@ -39,6 +39,8 @@ try:
     make_safe_saved(db)  # saved designs: no dark fills on paper
     from app.services.tz_migrate import run_once as tz_v2
     tz_v2(db)  # once: dates to the per-user time zone rules (app/services/clock.py)
+    from app.services.crud import renumber_all_once
+    renumber_all_once(db)  # once: line # = place on the order
     from app.services.terms import backfill_due_dates
     backfill_due_dates(db)  # an invoice without a due date gets invoice date + the customer's payment terms
     # Never seed TEST records into a database built by the MRPeasy import (it carries number series).
@@ -306,7 +308,8 @@ def activity(entity_type: str, entity_id: int, authorization: str = Header(None)
 
 
 @app.get("/api/activity-log")
-def activity_log(user: str = "", entity_type: str = "", days: int = 7, limit: int = 300, authorization: str = Header(None)):
+def activity_log(user: str = "", entity_type: str = "", days: int = 7, limit: int = 300, date_from: str = "", date_to: str = "",
+                 authorization: str = Header(None)):
     """Everything changed on orders, POs, shipments and invoices across AT-HUB, newest first (Admin > Activity Log)."""
     from datetime import datetime as _dt, timedelta as _td
     from app.models import ActivityLog, CustomerOrder, Invoice, PurchaseOrder, Shipment
@@ -320,7 +323,12 @@ def activity_log(user: str = "", entity_type: str = "", days: int = 7, limit: in
         perms = perms_for(db, me.role)
         if "recycle_bin" not in perms:
             raise HTTPException(status_code=403, detail="Your role doesn't include the activity log")
-        q = db.query(ActivityLog).filter(ActivityLog.at >= _dt.utcnow() - _td(days=max(1, min(days, 365))))
+        if date_from:  # a custom range (YYYY-MM-DD, both days included)
+            q = db.query(ActivityLog).filter(ActivityLog.at >= _dt.fromisoformat(date_from[:10]))
+            if date_to:
+                q = q.filter(ActivityLog.at < _dt.fromisoformat(date_to[:10]) + _td(days=1))
+        else:
+            q = db.query(ActivityLog).filter(ActivityLog.at >= _dt.utcnow() - _td(days=max(1, min(days, 3650))))
         if user:
             q = q.filter(ActivityLog.by == user)
         if entity_type:
@@ -494,3 +502,8 @@ def favicon():
 
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="static")
+
+
+# Compress replies (added last = outermost, so it sees the final body): the big lists are ~10x smaller on the wire.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=2000)

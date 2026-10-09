@@ -77,7 +77,47 @@ function recordKey(path) {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+// ---- Saving is visible: while anything is being saved a thin bar runs along the top of the page, and the button you
+// clicked shows a spinner, then a tick. Background calls (presence, Recently Viewed, checks that only read) don't. ----
+const SaveIndicator = {
+  QUIET: /^\/api\/(presence|auth\/recent|auth\/print-options|auth\/filters|invoices\/\d+\/qty-check|stock-items\/generic-sources)/,
+  open: 0, lastBtn: null, lastAt: 0,
+  bar() {
+    let b = document.getElementById("save-bar");
+    if (!b) { b = document.createElement("div"); b.id = "save-bar"; document.body.appendChild(b); }
+    return b;
+  },
+  start(path) {
+    if (this.QUIET.test(path)) return null;
+    this.open++;
+    this.bar().classList.add("on");
+    const btn = Date.now() - this.lastAt < 800 && this.lastBtn && this.lastBtn.isConnected ? this.lastBtn : null;
+    if (btn && !btn.classList.contains("is-busy")) { btn.classList.remove("is-done"); btn.classList.add("is-busy"); btn.dataset.wasDisabled = btn.disabled ? "1" : ""; btn.disabled = true; }
+    return { btn };
+  },
+  end(h, ok) {
+    if (!h) return;
+    this.open = Math.max(0, this.open - 1);
+    if (!this.open) this.bar().classList.remove("on");
+    const btn = h.btn;
+    if (btn && btn.classList.contains("is-busy")) {
+      btn.classList.remove("is-busy");
+      btn.disabled = !!btn.dataset.wasDisabled;
+      if (ok && btn.isConnected) { btn.classList.add("is-done"); setTimeout(() => btn.classList.remove("is-done"), 1300); }
+    }
+  },
+};
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("button");
+  if (b) { SaveIndicator.lastBtn = b; SaveIndicator.lastAt = Date.now(); }
+}, true);
 async function apiFetch(path, options = {}) {
+  if ((options.method || "GET").toUpperCase() === "GET") return apiFetchRaw(path, options);
+  const h = SaveIndicator.start(path);
+  try { const r = await apiFetchRaw(path, options); SaveIndicator.end(h, true); return r; }
+  catch (e) { SaveIndicator.end(h, false); throw e; }
+}
+async function apiFetchRaw(path, options = {}) {
   const token = AuthGuard.getToken();
   const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -2664,7 +2704,7 @@ const ACTION_COLUMNS = {
   not_delivered: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Carrier / Tracking", r => [r.carrier, r.tracking_number].filter(Boolean).join(" · ")], ["Shipped", r => actDate(r.ship_date)], ["Days", r => escapeHtml(r.days ?? "")]],
   missing_pod: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Shipped", r => actDate(r.ship_date)], ["Delivered?", r => r.delivered ? "Yes" : "No"], ["Days", r => escapeHtml(r.days ?? "")]],
   not_shipped: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Status", r => escapeHtml(r.status ?? "")], ["Days Waiting", r => escapeHtml(r.days ?? "")]],
-  late_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Due", r => actDate(r.due)], ["Days Late", r => escapeHtml(r.days ?? "")]],
+  late_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => custPoLink(r.po_number, r.id)], ["Due", r => actDate(r.due)], ["Days Late", r => escapeHtml(r.days ?? "")]],
   vendor_shipped: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Vendor Invoices", r => escapeHtml(r.bills ?? "")], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Since Invoice", r => escapeHtml(r.days ?? "")]],
   po_overdue: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Expected", r => actDate(r.expected)], ["Received", r => `${fmtQty(r.received_qty)} / ${fmtQty(r.ordered_qty)}`], ["Days Late", r => escapeHtml(r.days ?? "")]],
   bills_due: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Invoice #", r => escapeHtml(r.bill_number ?? "")], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => escapeHtml(r.days ?? "")]],
@@ -2674,10 +2714,10 @@ const ACTION_COLUMNS = {
   no_invoice: [["Shipment", r => actLink("shipments.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Shipped", r => actDate(r.ship_date)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
   draft_invoices: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Order", r => actLink("customer-orders.html", r.order_id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
   invoices_overdue: [["Invoice", r => actLink("invoices.html", r.id, r.code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Balance", r => fmtMoney(r.balance)], ["Due", r => actDate(r.due)], ["Days Overdue", r => escapeHtml(r.days ?? "")]],
-  not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
-  captured_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Captured By", r => escapeHtml(r.by ?? "")], ["Days", r => r.days]],
+  not_booked: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => custPoLink(r.po_number, r.id)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  captured_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => custPoLink(r.po_number, r.id)], ["Captured By", r => escapeHtml(r.by ?? "")], ["Days", r => r.days]],
   captured_pos: [["PO", r => actLink("purchase-orders.html", r.id, r.code)], ["Vendor", r => escapeHtml(r.vendor ?? "")], ["Vendor Ref", r => escapeHtml(r.ref ?? "")], ["Captured By", r => escapeHtml(r.by ?? "")], ["Days", r => r.days]],
-  draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => escapeHtml(r.po_number ?? "")], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
+  draft_orders: [["Order", r => actLink("customer-orders.html", r.id, r.order_code)], ["Customer", r => escapeHtml(r.customer ?? "")], ["Customer PO", r => custPoLink(r.po_number, r.id)], ["Amount", r => fmtMoney(r.amount)], ["Days", r => escapeHtml(r.days ?? "")]],
 };
 function actLink(page, id, text) { return id ? `<a class="link" href="${page}?id=${id}">${escapeHtml(text || "")}</a>` : escapeHtml(text || ""); }
 function actDate(v) { return fmtDate(v); }
@@ -2951,6 +2991,31 @@ function limitRows(tbody, key, rerender) {
   rows[Math.min(rows.length, open ? rows.length : ROW_LIMIT) - 1].after(toggle);
 }
 
+// Lines numbered 1..n on screen in their current order (after a drag, an add or a delete).
+function renumberRowsOnScreen(tbody) {
+  if (!tbody) return;
+  [...tbody.children].filter(tr => tr.dataset.line).forEach((tr, i) => {
+    const cell = tr.querySelector(".line-no");
+    if (!cell) return;
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const m = n.textContent.match(/^(\s*)(#?)(\d+)(\s*)$/);
+      if (m) { n.textContent = `${m[1]}${m[2]}${i + 1}${m[4]}`; break; }
+    }
+  });
+}
+// The entry row after its line was saved: emptied, ready for the next one.
+function resetEntryRow(tr) {
+  if (!tr) return;
+  tr.querySelectorAll("select").forEach(sel => { sel.value = ""; sel.dispatchEvent(new Event("change", { bubbles: true })); });
+  tr.querySelectorAll("input").forEach(i => {
+    if (i.closest(".search-select")) i.value = "";
+    else if (i.classList.contains("qty-input")) i.value = 1;
+    else if (i.type !== "checkbox") i.value = "";
+  });
+  tr.querySelectorAll(".vcode-hint, [data-price-delta]").forEach(el => { el.innerHTML = ""; });
+}
+
 // ---- order lines: drag to reorder, replace an item, tick several ----
 // Drag a line by its ⠿ handle (in the first cell). onReorder(ids) gets every row's data-line in the new order;
 // leave it out for a form that isn't saved yet (the rows are simply read in their new order on save).
@@ -2991,6 +3056,7 @@ function enableLineDrag(tbody, onReorder) {
     dragging.draggable = false;
     dragging = null;
     const ids = rows().map(tr => parseInt(tr.dataset.line)).filter(n => !isNaN(n));
+    renumberRowsOnScreen(tbody);  // the # follows the position straight away (the server does the same)
     if (onReorder && ids.length) onReorder(ids);
   });
 }
@@ -3521,7 +3587,7 @@ const PEEK_RENDER = {
     const total = o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0);
     const ships = {};
     o.lines.forEach(l => (l.shipments || []).forEach(s => { ships[s.shipment_id] = s.code || s.shipment_code || `#${s.shipment_id}`; }));
-    return { title: `${escapeHtml(o.code)} ${pk.tag(o.status)}`, sub: `${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}${o.job_number ? ` · Job ${escapeHtml(o.job_number)}` : ""}`,
+    return { title: `${escapeHtml(o.code)} ${pk.tag(o.status)}`, sub: `${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}${o.job_number ? ` · Job ${escapeHtml(o.job_number)}` : ""}`,
       body: pk.facts([["Created", pkDate(o.created_at || o.order_date)], ["Delivery", pkDate(o.delivery_date)], ["Customer PO date", pkDate(o.customer_po_date)], ["Order total", pk.money(total)]])
         + pk.table(["Line", "Item", "#Qty", "#Shipped", "#Booked", ...(hidesMoney() ? [] : ["#Price", "#Amount"])], o.lines.map(l => `<tr><td>#${l.line_no ?? ""}</td><td>${itemCell(items, l.item_id)}</td>
             <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.shipped_quantity)}</td><td class="num">${fmtQty(l.booked_quantity)}</td>
@@ -3546,7 +3612,7 @@ const PEEK_RENDER = {
     const lots = {};
     await Promise.all([...new Set(s.lines.map(l => l.lot_id).filter(Boolean))].map(lid => peekGet(`/api/lots/${lid}`).then(l => { lots[lid] = l.lot_code; }).catch(() => {})));
     return { title: `${escapeHtml(s.code)} ${pk.tag(s.status)}`,
-      sub: `${o ? `Order ${pk.link("customer-orders.html", o.id, o.code)} · ${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${escapeHtml(o.po_number)}` : ""}` : ""}`,
+      sub: `${o ? `Order ${pk.link("customer-orders.html", o.id, o.code)} · ${escapeHtml(cust.name || "")}${o.po_number ? ` · PO ${custPoLink(o.po_number, o.id)}` : ""}` : ""}`,
       body: pk.facts([["Created", pkDate(s.created_at)], ["Shipped", pkDate(s.ship_date)], ["Delivered", pkDate(s.delivered_at)], ["Carrier", escapeHtml(s.carrier || "")],
           ["Tracking", trackingLink(s.carrier, s.tracking_number)], ["Invoice", s.invoice_id ? invoiceChipFromShipment(s) : ""], ["POD", s.pods && s.pods.length ? `${s.pods.length} file${s.pods.length === 1 ? "" : "s"}` : ""]])
         + pk.table(["Line", "Item", "Lot", "#Booked", "#Picked"], s.lines.map(l => `<tr><td>#${l.line_no ?? ""}</td><td>${itemCell(items, l.item_id)}</td>
@@ -4574,19 +4640,16 @@ async function commitEntryRow(tr) {
   tr.dataset.busy = "1";
   tr.classList.add("entry-saving");
   const before = tr;
-  try { await Function(`return (${tr.dataset.commit})`)(); }
+  let ok = false;
+  try { ok = (await Function(`return (${tr.dataset.commit})`)()) !== false; }
   finally { delete tr.dataset.busy; tr.classList.remove("entry-saving"); }
-  // the record redraws with the new line; put the cursor in the fresh entry row
-  for (let i = 0; i < 40; i++) {
-    await new Promise(r => setTimeout(r, 75));
-    const fresh = document.querySelector("tr.entry-row");
-    if (fresh && fresh !== before) {
-      const box = fresh.querySelector(".search-select input") || fresh.querySelector("input, select");
-      if (box) { box.focus(); if (box.select) box.select(); }
-      break;
-    }
-  }
-  return true;
+  // cursor back in the (emptied) entry row for the next line
+  setTimeout(() => {
+    const row = document.querySelector("tr.entry-row") || before;
+    const box = row && (row.querySelector(".search-select input") || row.querySelector("input, select"));
+    if (box) { box.focus(); if (box.select) box.select(); }
+  }, 30);
+  return ok;
 }
 document.addEventListener("keydown", e => {
   const tr = e.target.closest && e.target.closest("tr.entry-row");
@@ -4619,3 +4682,116 @@ document.addEventListener("keydown", e => {
   document.addEventListener("dragend", stop);
   document.addEventListener("drop", stop);
 })();
+
+// ---- PO numbers are links, everywhere: the customer's PO # opens its order, our PO # (PO325xxx) opens the purchase order.
+// Without the order / PO id the page finds it from the number (customer-orders.html?po=..., purchase-orders.html?code=...).
+function custPoLink(po, orderId = null, prefix = "") {
+  if (!po) return "";
+  const href = orderId ? `customer-orders.html?id=${orderId}` : `customer-orders.html?po=${encodeURIComponent(po)}`;
+  return AuthGuard.can("orders.view") ? `${prefix}<a class="link" href="${href}" title="Open the order">${escapeHtml(po)}</a>` : `${prefix}${escapeHtml(po)}`;
+}
+function vendorPoLink(code, poId = null) {
+  if (!code) return "";
+  const href = poId ? `purchase-orders.html?id=${poId}` : `purchase-orders.html?code=${encodeURIComponent(code)}`;
+  return AuthGuard.can("purchasing") ? `<a class="link" href="${href}" title="Open the purchase order">${escapeHtml(code)}</a>` : escapeHtml(code);
+}
+
+// ---- One date-period picker for every screen: Today / 7 / 30 / 90 Days / 6 Months / Year / Any Time / Custom Range...
+// PeriodPicker.html("id", { def: "90", onchange: "renderAll()" }) draws it; the choice is remembered per screen.
+// PeriodPicker.test("id", date) -> is the date inside; .query("id") -> "days=90" or "date_from=..&date_to=.."; .label("id"). ----
+const PeriodPicker = {
+  OPTS: [["1", "Today"], ["7", "7 Days"], ["30", "30 Days"], ["90", "90 Days"], ["180", "6 Months"], ["365", "Year"], ["0", "Any Time"]],
+  key(id) { return `period:${location.pathname.split("/").pop()}:${id}:${(AuthGuard.getUser() || {}).username || ""}`; },
+  saved(id) { try { return localStorage.getItem(this.key(id)); } catch (e) { return null; } },
+  remember(id, v) { try { localStorage.setItem(this.key(id), v); } catch (e) { /* a nicety */ } },
+  rangeLabel(v) {
+    const [, a, b] = v.split(":");
+    const f = d => d ? fmtDate(d) : "…";
+    return `${f(a)} – ${f(b)}`;
+  },
+  html(id, { def = "90", onchange = "", opts = null, title = "Which dates to show" } = {}) {
+    const v = this.saved(id) || def;
+    const list = opts || this.OPTS;
+    const custom = v.startsWith("r:") ? `<option value="${escapeHtml(v)}" selected>${escapeHtml(this.rangeLabel(v))}</option>` : "";
+    return `<select id="${id}" class="period-pick" data-period data-onchange="${escapeHtml(onchange)}" title="${escapeHtml(title)}">
+      ${list.map(([k, l]) => `<option value="${k}" ${k === v ? "selected" : ""}>${l}</option>`).join("")}${custom}
+      <option value="custom">Custom Range…</option></select>`;
+  },
+  value(id) { const el = document.getElementById(id); return el ? el.value : "0"; },
+  range(id) {
+    const v = this.value(id);
+    if (v.startsWith("r:")) { const [, a, b] = v.split(":"); return { from: a || null, to: b || null }; }
+    const days = parseInt(v) || 0;
+    if (!days) return { from: null, to: null };
+    if (days === 1) return { from: todayISO(), to: null };
+    return { from: dayISO(new Date(Date.now() - (days - 1) * 864e5)), to: null };
+  },
+  // is this date (ISO / Date) inside the period? (no date: only when Any Time)
+  test(id, when) {
+    const { from, to } = this.range(id);
+    if (!from && !to) return true;
+    if (!when) return false;
+    const d = dayISO(when);
+    return (!from || d >= from) && (!to || d <= to);
+  },
+  query(id) {
+    const v = this.value(id);
+    if (v.startsWith("r:")) { const [, a, b] = v.split(":"); return `date_from=${a}${b ? `&date_to=${b}` : ""}`; }
+    return `days=${parseInt(v) || 3650}`;
+  },
+  label(id) {
+    const v = this.value(id);
+    if (v.startsWith("r:")) return this.rangeLabel(v);
+    const o = this.OPTS.find(([k]) => k === v);
+    return !o ? "" : v === "0" ? "any time" : v === "1" ? "today" : `last ${o[1].toLowerCase()}`;
+  },
+  set(id, v) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (![...el.options].some(o => o.value === v)) el.insertBefore(new Option(this.rangeLabel(v), v), el.querySelector('option[value="custom"]'));
+    el.value = v;
+    this.remember(id, v);
+    if (el.dataset.onchange) Function(el.dataset.onchange)();
+  },
+};
+document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches("select[data-period]")) e.target.dataset.prev = e.target.value; });
+document.addEventListener("change", async e => {
+  const el = e.target;
+  if (!el.matches || !el.matches("select[data-period]")) return;
+  if (el.value !== "custom") {
+    PeriodPicker.remember(el.id, el.value);
+    if (el.dataset.onchange) Function(el.dataset.onchange)();
+    return;
+  }
+  const prev = el.dataset.prev && el.dataset.prev !== "custom" ? el.dataset.prev : "90";
+  const cur = prev.startsWith("r:") ? prev.split(":") : [];
+  const { value, el: box } = await askDialog({ title: "Custom Date Range",
+    body: `<div class="row"><div><label>From</label><input type="date" class="pr-from" value="${cur[1] || ""}"></div>
+      <div><label>To</label><input type="date" class="pr-to" value="${cur[2] || todayISO()}"></div></div>
+      <p class="muted small">Both days included. Leave To empty for "until today".</p>`,
+    buttons: [{ label: "Show", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  const from = value === "go" ? box.querySelector(".pr-from").value : "", to = value === "go" ? box.querySelector(".pr-to").value : "";
+  if (!from) { el.value = prev; return; }
+  PeriodPicker.set(el.id, `r:${from}:${to && to >= from ? to : ""}`);
+});
+
+// ---- A Date filter on a list: which date (Created / Delivery...) + the shared period picker; Any Time by default ----
+const PeriodFilters = {
+  pages: {},
+  mount(prefix, redraw) {
+    const slot = document.getElementById(`${prefix}-period-slot`);
+    if (!slot) return;
+    this.pages[prefix] = redraw;
+    slot.innerHTML = PeriodPicker.html(`${prefix}-period`, { def: "0", onchange: redraw, title: "Show only records whose date falls in this period" });
+    const by = document.getElementById(`${prefix}-by`);
+    try { const v = localStorage.getItem(`periodby:${location.pathname}:${prefix}`); if (v && [...by.options].some(o => o.value === v)) by.value = v; } catch (e) {}
+    by.addEventListener("change", () => { try { localStorage.setItem(`periodby:${location.pathname}:${prefix}`, by.value); } catch (e) {} });
+  },
+  redraw() { Object.values(this.pages).forEach(r => Function(r)()); },
+  ok(prefix, dates) {
+    const el = document.getElementById(`${prefix}-period`);
+    if (!el || el.value === "0") return true;
+    const by = (document.getElementById(`${prefix}-by`) || {}).value;
+    return PeriodPicker.test(`${prefix}-period`, dates[by]);
+  },
+};

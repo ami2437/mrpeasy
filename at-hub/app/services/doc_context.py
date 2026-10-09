@@ -183,7 +183,8 @@ def _invoice(db, inv: Invoice, opt):
     ships = [s for s in ships if s]
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in inv.lines if l.item_id})).all()}
     show_notes = opt.get("show_notes", True)
-    printed = [l for l in inv.lines if inv.prints("zero_lines") or abs(line_amount(l.quantity, l.unit_price)) >= 0.005]
+    from app.models import in_order_line_order
+    printed = [l for l in in_order_line_order(inv.lines) if inv.prints("zero_lines") or abs(line_amount(l.quantity, l.unit_price)) >= 0.005]
     by_id = {s.id: s for s in ships}
     rows = []
     for i, l in enumerate(printed, 1):

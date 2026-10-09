@@ -33,8 +33,7 @@
     <div class="card" id="insights-card" style="display:none;">
       <div class="row" style="align-items:center;">
         <h3 style="margin:0;flex:1;">Item Insights</h3>
-        <div style="flex:0 0 180px;"><select id="ins-days" onchange="loadInsights()">
-          <option value="30">Last 30 Days</option><option value="90" selected>Last 90 Days</option><option value="180">Last 6 Months</option><option value="365">Last 12 Months</option><option value="3650">All Time</option></select></div>
+        <div style="flex:0 0 180px;"><span id="ins-days-slot"></span></div>
       </div>
       <div id="insights-body" class="muted" style="margin-top:10px;">Loading…</div>
     </div>
@@ -507,7 +506,8 @@
       const el = document.getElementById("insights-body");
       el.innerHTML = "Loading…";
       try {
-        const a = await apiFetch(`/api/stock-items/analytics/summary?days=${document.getElementById("ins-days").value}`);
+        if (!document.getElementById("ins-days")) document.getElementById("ins-days-slot").innerHTML = PeriodPicker.html("ins-days", { def: "90", onchange: "loadInsights()", opts: PeriodPicker.OPTS.filter(([k]) => k !== "0") });
+        const a = await apiFetch(`/api/stock-items/analytics/summary?${PeriodPicker.query("ins-days")}`);
         const max = Math.max(1, ...a.top_units.map(r => r.units));
         const itemCell = r => `<a class="link" onclick="showMovements(${r.item_id})"><strong>${escapeHtml(r.code)}</strong></a><div class="muted small">${escapeHtml(r.title || "")}</div>`;
         el.classList.remove("muted");

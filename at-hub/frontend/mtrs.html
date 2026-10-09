@@ -108,7 +108,7 @@ Thank you.</textarea>
           <td>${escapeHtml(r.heat_number || "")}</td>
           <td><a class="link" onclick="openAttachment(${r.attachment_id})">${escapeHtml(r.filename)}</a>${r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : ""}</td>
           <td class="mtr-trace">${orders.length ? orders.map(s => `<a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(s.order_code)}</a>
-              <span class="muted">${escapeHtml(s.customer)}${s.po_number ? ` · PO ${escapeHtml(s.po_number)}` : ""}</span>`).join("<br>") : `<span class="muted small">Not Shipped Yet</span>`}</td>
+              <span class="muted">${escapeHtml(s.customer)}${s.po_number ? ` · PO ${custPoLink(s.po_number, s.order_id)}` : ""}</span>`).join("<br>") : `<span class="muted small">Not Shipped Yet</span>`}</td>
         </tr>`;
       }).join("");
       updateEmail();

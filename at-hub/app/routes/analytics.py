@@ -19,10 +19,13 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[De
 SHIPPED = ("shipped", "delivered", "invoiced")
 
 
-def _shipped_lines(db: Session, since: datetime):
-    """(shipment, shipment line, order line, lot) for everything shipped since `since` (UTC)."""
-    rows = (db.query(ShipmentLine, Shipment).join(Shipment, Shipment.id == ShipmentLine.shipment_id)
-            .filter(Shipment.status.in_(SHIPPED), Shipment.ship_date >= since).all())
+def _shipped_lines(db: Session, since: datetime, until: datetime = None):
+    """(shipment, shipment line, order line, lot) for everything shipped since `since` (UTC), and before `until` if given."""
+    q = (db.query(ShipmentLine, Shipment).join(Shipment, Shipment.id == ShipmentLine.shipment_id)
+         .filter(Shipment.status.in_(SHIPPED), Shipment.ship_date >= since))
+    if until:
+        q = q.filter(Shipment.ship_date < until)
+    rows = q.all()
     ol_ids = {sl.order_line_id for sl, _ in rows}
     order_lines = {l.id: l for l in db.query(CustomerOrderLine).filter(CustomerOrderLine.id.in_(ol_ids or {0})).all()}
     lots = {l.id: l for l in db.query(Lot).filter(Lot.id.in_({sl.lot_id for sl, _ in rows if sl.lot_id} or {0})).all()}
@@ -30,20 +33,27 @@ def _shipped_lines(db: Session, since: datetime):
 
 
 @router.get("/sales")
-def sales(months: int = 12, db: Session = Depends(get_db)):
-    """Revenue, cost and margin by month, customer and item over the last `months` months."""
+def sales(months: int = 12, date_from: str = None, date_to: str = None, db: Session = Depends(get_db)):
+    """Revenue, cost and margin by month, customer and item over the last `months` months -- or a custom range
+    (date_from / date_to, YYYY-MM-DD, company calendar days, both included)."""
     months = max(1, min(36, months))
     today = clock.today()
     first = datetime(today.year, today.month, 1)
     for _ in range(months - 1):
         first = (first - timedelta(days=1)).replace(day=1)
-    since = clock.to_utc(first)
+    since, until = clock.to_utc(first), None
+    if date_from:
+        start = datetime.fromisoformat(date_from[:10])
+        since, first = clock.to_utc(start), datetime(start.year, start.month, 1)
+    if date_to:
+        end = datetime.fromisoformat(date_to[:10]) + timedelta(days=1)
+        until, today = clock.to_utc(end), end - timedelta(days=1)
     orders = {o.id: o for o in db.query(CustomerOrder).all()}
     customers = {c.id: c.name for c in db.query(Customer).all()}
     items = {i.id: i for i in db.query(StockItem).all()}
     by_month, by_customer, by_item = defaultdict(lambda: [0.0, 0.0, 0]), defaultdict(lambda: [0.0, 0.0, 0]), defaultdict(lambda: [0.0, 0.0, 0.0])
     no_cost = 0
-    for s, sl, ol, lot in _shipped_lines(db, since):
+    for s, sl, ol, lot in _shipped_lines(db, since, until):
         rev = sl.quantity * ((ol.unit_price if ol else sl.unit_price) or 0)
         cost = sl.quantity * (lot.unit_cost or 0) if lot else 0
         if not lot or not lot.unit_cost:

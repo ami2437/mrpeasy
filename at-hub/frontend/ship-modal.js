@@ -19,7 +19,7 @@ async function openShipModal(orderId) {
   back.innerHTML = `<div class="glass-panel" role="dialog" aria-modal="true" aria-labelledby="sm-title">
     <div class="sm-head">
       <div><h3 id="sm-title">New shipment</h3>
-        <div class="muted small">${escapeHtml(order.code)} · ${escapeHtml(customerName(order.customer_id))}${order.po_number ? ` · PO ${escapeHtml(order.po_number)}` : ""}</div></div>
+        <div class="muted small">${escapeHtml(order.code)} · ${escapeHtml(customerName(order.customer_id))}${order.po_number ? ` · PO ${custPoLink(order.po_number, order.id)}` : ""}</div></div>
       <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeShipModal()">${icon("x")}</button>
     </div>
     ${draft ? `<div class="sm-draft">${icon("pencil")}<span>${escapeHtml(order.code)} is still a draft — ${canConfirm ? "creating the shipment confirms it." : "ask a manager to confirm it first."}</span></div>` : ""}

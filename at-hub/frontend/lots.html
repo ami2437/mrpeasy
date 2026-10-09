@@ -113,7 +113,7 @@
             </td>
             <td>${fmtDate(lot.received_date)}</td>
             <td>${fmtDate(lot.expiry_date)}</td>
-            <td>${lot.source === "purchase" && lot.source_reference ? escapeHtml(lot.source_reference) : escapeHtml(lot.source || "")}</td>
+            <td>${lot.source === "purchase" && lot.source_reference ? vendorPoLink(lot.source_reference) : escapeHtml(lot.source || "")}</td>
             <td><span class="tag ${lot.status}">${lot.status.replace('_',' ')}</span></td>
             <td class="muted small">${options}</td>
           </tr>

@@ -55,7 +55,7 @@
       const rows = [[KIND[r.type] || r.type, `<a class="link" href="${r.link}">${escapeHtml(r.code)}</a> <span class="tag ${escapeHtml(r.status || "")}" style="font-size:10px;">${escapeHtml((r.status || "").replace("_", " "))}</span>`],
         [r.type === "purchase_order" ? "Vendor" : "Customer", escapeHtml(r.who || "—")]];
       if (r.order_code) rows.push(["Order", `<a class="link" href="customer-orders.html?id=${r.order_id}">${escapeHtml(r.order_code)}</a>`]);
-      if (r.po_number) rows.push(["Cust. PO #", escapeHtml(r.po_number)]);
+      if (r.po_number) rows.push(["Cust. PO #", custPoLink(r.po_number, r.order_id)]);
       if (r.job_number) rows.push(["Job #", escapeHtml(r.job_number)]);
       if (r.vendor_so) rows.push(["Vendor SO #", escapeHtml(r.vendor_so)]);
       return `<table class="nb-origin">${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}</table>`;

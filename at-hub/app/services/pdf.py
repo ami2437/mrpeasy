@@ -324,6 +324,13 @@ def _data_table(header, rows, col_widths, right_cols=(), repeat=1):
     body = []
     for r in rows:
         body.append([c if not isinstance(c, str) else p(c, "td_r" if i in right_cols else "td") for i, c in enumerate(r)])
+    # no word is ever split: each column as wide as its widest word, the description gives up the room
+    from app.services.no_split import fit_columns
+    flex = [i for i, h in enumerate(header) if "description" in str(h).lower()] or [max(range(len(col_widths)), key=lambda i: col_widths[i])]
+    cells = [[r[i] for r in rows if i < len(r)] for i in range(len(header))]
+    bold_cols = [i for i in range(len(header)) if any(getattr(getattr(r[i], "style", None), "fontName", "") == FONT_BOLD for r in rows if i < len(r))]
+    col_widths, _ = fit_columns(list(col_widths), cells, header, flex, font=FONT, size=S["td"].fontSize, head_font=FONT_BOLD,
+                                head_size=S["th"].fontSize, pad=6, bold_cols=bold_cols, bold_font=FONT_BOLD)
     t = Table([head] + body, colWidths=col_widths, repeatRows=repeat)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG), ("LINEBELOW", (0, 0), (-1, 0), 1, NAVY),
@@ -429,7 +436,8 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: Optional[bool] = None
 
     line_items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in invoice.lines if l.item_id})).all()}
     # $0 lines (free samples, no-charge items) stay off the customer's copy unless asked for.
-    printed = [l for l in invoice.lines if invoice.prints("zero_lines") or abs(l.amount) >= 0.005]
+    from app.models import in_order_line_order
+    printed = [l for l in in_order_line_order(invoice.lines) if invoice.prints("zero_lines") or abs(l.amount) >= 0.005]
     by_id = {s.id: s for s in shipments}
     rows = []
     for i, l in enumerate(printed, 1):

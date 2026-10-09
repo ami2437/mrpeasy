@@ -14,6 +14,7 @@
       <h1 class="page-title">Invoices</h1>
       <div class="row toolbar-row">
         <input type="text" id="search" placeholder="Search invoice code, customer, PO #, job #, or item code...">
+        <span class="period-filter" title="Only records whose date falls in this period"><select id="inv-by" class="period-by" title="Which date the period looks at" onchange="PeriodFilters.redraw()"><option value="invoice">Invoice Date</option><option value="due">Due Date</option></select><span id="inv-period-slot"></span></span>
         <button class="secondary" onclick="toggleFunding()">Bulk Funding Upload</button>
       </div>
     </div>
@@ -70,6 +71,7 @@
   </main>
 
   <script>
+    document.addEventListener("DOMContentLoaded", () => PeriodFilters.mount("inv", "renderInvoices()"));
     AuthGuard.requirePerm("invoices");
     document.getElementById("sidebar").innerHTML = renderSidebar("invoices.html");
 
@@ -198,7 +200,7 @@
     function renderInvoices() {
       const tbody = document.getElementById("invoices-body");
       const q = document.getElementById("search").value.trim();
-      const searchedAll = invoices.filter(inv => matchesSearch(inv, q));
+      const searchedAll = invoices.filter(inv => matchesSearch(inv, q) && PeriodFilters.ok("inv", { invoice: inv.invoice_date, due: inv.due_date }));
       const voided = searchedAll.filter(i => i.status === "void");
       const searched = searchedAll.filter(i => i.status !== "void");
       const ready = readyShipments().filter(s => readyMatches(s, q));
@@ -228,7 +230,7 @@
           <td><input type="checkbox" class="inv-tick" ${invTicked.has(inv.id) ? "checked" : ""} onchange="tickInvoice(${inv.id}, this.checked)"></td>
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}${lookAlikes(inv).length ? ` <span class="tag cancelled dup-tag" title="Same customer, PO # and total as ${escapeHtml(lookAlikes(inv).map(t => t.code).join(", "))} -- open it to check">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
-          <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
+          <td>${refLink("order", inv.order_id)}<div class="muted small">${[orderField(inv, "po_number") && `PO ${custPoLink(orderField(inv, "po_number"), inv.order_id)}`, orderField(inv, "job_number") && `Job ${escapeHtml(orderField(inv, "job_number"))}`].filter(Boolean).join(" · ")}</div></td>
           <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
           <td>${fmtDate(inv.due_date)}</td>
@@ -327,7 +329,7 @@
           <td><input type="checkbox" class="inv-tick" ${invTicked.has(inv.id) ? "checked" : ""} onchange="tickInvoice(${inv.id}, this.checked)"></td>
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
           <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
-          <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
+          <td>${refLink("order", inv.order_id)}<div class="muted small">${[orderField(inv, "po_number") && `PO ${custPoLink(orderField(inv, "po_number"), inv.order_id)}`, orderField(inv, "job_number") && `Job ${escapeHtml(orderField(inv, "job_number"))}`].filter(Boolean).join(" · ")}</div></td>
           <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
           <td>${fmtDate(inv.invoice_date)}</td>
           <td>${fmtDate(inv.due_date)}</td>
@@ -558,6 +560,8 @@
       const [invoice, check] = await Promise.all([apiFetch(`/api/invoices/${id}`), apiFetch(`/api/invoices/${id}/billing-check`).catch(() => ({ delivered: {}, differences: [] }))]);
       billingCheck = check;
       shownInvoiceId = invoice.id;
+      // lines as the order lists them (its line #); lines not from the order (Shipping...) last
+      invoice.lines.sort((a, b) => (a.order_line_no == null) - (b.order_line_no == null) || (a.order_line_no || 0) - (b.order_line_no || 0) || (a.shipment_id || 0) - (b.shipment_id || 0) || a.id - b.id);
       const card = document.getElementById("detail-card");
       card.style.display = "block";
       applyUnderlay(card, "invoice", invoice);  // DRAFT · sent blue · part paid pink · OVERDUE red · PAID · VOID
@@ -661,7 +665,7 @@
       const invShipments = (invoice.shipment_ids || []).map(id => shipments.find(s => s.id === id)).filter(Boolean);
       document.getElementById("invoice-refs").innerHTML = [
         order ? `Order <a class="link" href="customer-orders.html?id=${order.id}">${order.code}</a>` : "",
-        order && order.po_number ? `Customer PO ${escapeHtml(order.po_number)}` : "",
+        order && order.po_number ? `Customer PO ${custPoLink(order.po_number, order.id)}` : "",
         order && order.job_number ? `Job ${escapeHtml(order.job_number)}` : "",
         ...invShipments.map(sh => `Shipment <a class="link" href="shipments.html?id=${sh.id}">${sh.code}</a>`
           + (sh.delivered_at ? ` <strong>delivered ${deliveredDateHtml(sh)}</strong>` : sh.ship_date ? ` shipped ${fmtDate(sh.ship_date)}` : "")),

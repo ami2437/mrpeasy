@@ -21,6 +21,7 @@
     <div class="card">
       <div class="row" style="align-items:center;">
         <input type="text" id="search" placeholder="Search shipment, order, customer, PO #, job #, item, carrier or tracking #...">
+        <span class="period-filter" title="Only records whose date falls in this period"><select id="sh-by" class="period-by" title="Which date the period looks at" onchange="PeriodFilters.redraw()"><option value="shipped">Ship Date</option><option value="created">Created</option><option value="delivered">Delivered</option></select><span id="sh-period-slot"></span></span>
         <select id="status-filter" style="max-width:200px;">
           <option value="">All statuses</option>
           <option value="open">Open (new + ready)</option>
@@ -43,6 +44,7 @@
   </main>
 
   <script>
+    document.addEventListener("DOMContentLoaded", () => PeriodFilters.mount("sh", "renderShipments()"));
     AuthGuard.requirePerm("shipments.view");
     document.getElementById("sidebar").innerHTML = renderSidebar("shipments.html");
 
@@ -69,7 +71,7 @@
       document.getElementById("status-filter").style.display = cancelledTab ? "none" : "";
       const nCancelled = shipments.filter(s => s.status === "cancelled").length;
       document.getElementById("cancelled-count").textContent = nCancelled ? `(${nCancelled})` : "";
-      const filtered = shipments.filter(s => matchesSearch(s, q) && (s.status === "cancelled") === cancelledTab && (
+      const filtered = shipments.filter(s => matchesSearch(s, q) && PeriodFilters.ok("sh", { shipped: s.ship_date, created: s.created_at, delivered: s.delivered_at }) && (s.status === "cancelled") === cancelledTab && (
         cancelledTab || !statusFilter || (statusFilter === "open" ? ["new", "ready"].includes(s.status) : s.status === statusFilter)
       ));
       // work waiting on the floor first: ready, then new, then everything that has left

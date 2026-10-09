@@ -11,7 +11,7 @@
   <div id="sidebar"></div>
   <main>
     <div class="card page-toolbar"><h1 class="page-title">Activity Log</h1>
-      <select id="al-days" style="width:auto;" onchange="load()"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>
+      <span id="al-days-slot"></span>
       <select id="al-type" style="width:auto;" onchange="load()"><option value="">Every record</option><option value="customer_order">Customer orders</option>
         <option value="purchase_order">Purchase orders</option><option value="shipment">Shipments</option><option value="invoice">Invoices</option></select>
       <select id="al-user" style="width:auto;" onchange="load()"><option value="">Everyone</option></select>
@@ -29,7 +29,9 @@
     const KIND = { customer_order: "Order", purchase_order: "PO", shipment: "Shipment", invoice: "Invoice" };
     let usersLoaded = false;
     async function load() {
-      const q = new URLSearchParams({ days: document.getElementById("al-days").value, entity_type: document.getElementById("al-type").value,
+      if (!document.getElementById("al-days")) document.getElementById("al-days-slot").innerHTML = PeriodPicker.html("al-days", { def: "7", onchange: "load()" });
+      const range = new URLSearchParams(PeriodPicker.query("al-days"));
+      const q = new URLSearchParams({ ...Object.fromEntries(range), entity_type: document.getElementById("al-type").value,
                                       user: document.getElementById("al-user").value, limit: 500 });
       const d = await apiFetch(`/api/activity-log?${q}`);
       if (!usersLoaded) {

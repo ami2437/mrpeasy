@@ -917,10 +917,21 @@ class InvoiceLine(Base):
     notes = Column(Text, nullable=True)  # free-text note for this line; carried to packing lists / invoices
     print_notes = Column(Boolean, nullable=True, default=True)  # False = internal note, kept off printouts
 
+    order_line = relationship("CustomerOrderLine", viewonly=True)
+
     @property
     def amount(self) -> float:
         from app.services.money import line_amount
         return line_amount(self.quantity, self.unit_price)
+
+    @property
+    def order_line_no(self):
+        return self.order_line.line_no if self.order_line else None
+
+
+def in_order_line_order(lines) -> list:
+    """Invoice lines as the order lists them: by the order line's #; lines not from the order (Shipping...) last."""
+    return sorted(lines, key=lambda l: (l.order_line_no is None, l.order_line_no or 0, l.shipment_id or 0, l.id))
 
 
 class InvoiceEmail(Base):

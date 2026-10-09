@@ -2323,3 +2323,26 @@ html[data-theme="dark"] .exp-alert { background: rgba(251, 146, 60, .12); border
 
 .entry-row .search-select, .entry-row .search-select input { min-width: 160px; }
 .entry-row .search-select-list { min-width: 360px; }
+tr.row-new > td { animation: row-new 1.6s ease-out; }
+@keyframes row-new { from { background: color-mix(in srgb, #22c55e 22%, transparent); } to { background: transparent; } }
+
+/* ---- saving is visible: top bar + the clicked button's spinner / tick ---- */
+#save-bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 400; pointer-events: none; opacity: 0; transition: opacity .2s;
+  background: linear-gradient(90deg, transparent, var(--accent, #2f6fed), transparent); background-size: 40% 100%; background-repeat: no-repeat; }
+#save-bar.on { opacity: 1; animation: save-bar 1s linear infinite; }
+@keyframes save-bar { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+button.is-busy { position: relative; color: transparent !important; }
+button.is-busy::after { content: ""; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+  border: 2px solid currentColor; border-color: rgba(127, 127, 127, .45); border-top-color: var(--accent, #2f6fed); animation: btn-spin .7s linear infinite; }
+button.is-busy .ico { visibility: hidden; }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+button.is-done { box-shadow: 0 0 0 2px color-mix(in srgb, #22c55e 55%, transparent) !important; }
+button.is-done::before { content: "✓ "; color: #16a34a; font-weight: 700; }
+@media print { #save-bar { display: none !important; } }
+.save-tick { font-size: 12px; margin-left: 6px; text-transform: none; }
+.save-tick.busy { color: var(--muted); }
+.save-tick.done { color: #16a34a; font-weight: 600; }
+.save-tick.error { color: #dc2626; }
+.period-filter { display: inline-flex; gap: 4px; align-items: center; flex: 0 0 auto; }
+.period-filter select { width: auto; max-width: 150px; }
+.period-count { margin-left: 6px; }

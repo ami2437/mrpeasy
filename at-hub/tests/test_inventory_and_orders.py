@@ -87,7 +87,31 @@ def test_line_order_replace_and_nut_placement(make, api):
     api.put(f"/api/customer-orders/{o['id']}/line-order", json={"line_ids": ids[:1]}, expect=400)
     o = api.put(f"/api/customer-orders/{o['id']}/lines/{ids[0]}", json={"item_id": other["id"]})
     assert o["lines"][0]["item_id"] == other["id"]
-    assert [l["line_no"] for l in o["lines"]] == nos  # moving lines never renumbers them
+    assert [l["line_no"] for l in o["lines"]] == [1, 2, 3]  # the # follows the place on the order (links are by line id)
+
+
+def test_line_numbers_follow_the_order_everywhere(make, api, client, admin_headers):
+    import io
+    from pypdf import PdfReader
+    a, b, c = make.item(price=1), make.item(price=2), make.item(price=3)
+    for it in (a, b, c):
+        make.stock(it, 5)
+    o = make.order(lines=[(a, 5, 1), (b, 5, 2), (c, 5, 3)])
+    ids = [l["id"] for l in o["lines"]]
+    o = api.put(f"/api/customer-orders/{o['id']}/line-order", json={"line_ids": [ids[2], ids[0], ids[1]]})  # c to the top
+    assert [(l["line_no"], l["item_id"]) for l in o["lines"]] == [(1, c["id"]), (2, a["id"]), (3, b["id"])]
+    sh = make.ship(o)
+    inv = make.invoice(sh)
+    text = lambda r: " ".join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
+    for t in (text(client.get(f"/api/shipments/{sh['id']}/packing-list.pdf", headers=admin_headers)),
+              text(client.get(f"/api/invoices/{inv['id']}/pdf", headers=admin_headers))):
+        assert t.index(c["code"]) < t.index(a["code"]) < t.index(b["code"])       # documents list lines as the order does
+    assert [l["order_line_no"] for l in api.get(f"/api/invoices/{inv['id']}")["lines"] if l["order_line_no"]] == [1, 2, 3]
+    # removing a line closes the gap
+    o2 = make.order(lines=[(a, 1, 1), (b, 1, 1), (c, 1, 1)], confirm=False)
+    o2 = api.delete(f"/api/customer-orders/{o2['id']}/lines/{o2['lines'][0]['id']}")
+    o2 = api.get(f"/api/customer-orders/{o2['id']}") if not isinstance(o2, dict) else o2
+    assert [l["line_no"] for l in o2["lines"]] == [1, 2]
 
 
 def test_shipped_line_item_cannot_be_replaced(make, api):

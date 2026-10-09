@@ -630,12 +630,36 @@ vendor_service = PartyService(Vendor)
 
 
 def reorder_lines(db: Session, lines: list, line_ids: List[int]) -> None:
-    """Save a new display order: line_ids must be exactly the order's lines."""
+    """Save a new order: line_ids must be exactly the order's lines. The line # follows the position (#1 at the top), so
+    the screen, packing lists and invoices all list them the same way. Everything links by line id, never by #."""
     by_id = {l.id: l for l in lines}
     if sorted(line_ids) != sorted(by_id):
         raise HTTPException(status_code=400, detail="The list of lines doesn't match this order -- reload and try again")
     for pos, lid in enumerate(line_ids):
         by_id[lid].position = pos
+        if hasattr(by_id[lid], "line_no"):
+            by_id[lid].line_no = pos + 1
+    db.commit()
+
+
+def renumber_lines(lines: list) -> None:
+    """Lines numbered 1..n in their current order (after a line is added or removed)."""
+    for pos, l in enumerate(sorted(lines, key=lambda l: (l.position if l.position is not None else 10**6, l.id))):
+        l.position = pos
+        if hasattr(l, "line_no"):
+            l.line_no = pos + 1
+
+
+def renumber_all_once(db: Session) -> None:
+    """Once: every order's line # = its place on the order (before this, dragging only moved lines on screen)."""
+    from app.models import AppSetting
+    if db.query(AppSetting).filter(AppSetting.key == "line_numbers_follow_position").first():
+        return
+    for order in db.query(CustomerOrder).all():
+        renumber_lines(order.lines)
+    for po in db.query(PurchaseOrder).all():
+        renumber_lines(po.lines)
+    db.add(AppSetting(key="line_numbers_follow_position", value=datetime.utcnow().isoformat()))
     db.commit()
 
 
@@ -1012,6 +1036,7 @@ class CustomerOrderService:
         db.delete(line)
         db.flush()
         db.refresh(order)
+        renumber_lines(order.lines)  # no gap in the numbering
         CustomerOrderService._recompute_status(order)
         db.commit()
         db.refresh(order)
@@ -2586,6 +2611,7 @@ class PurchaseOrderService:
         db.delete(line)
         db.flush()
         db.refresh(po)
+        renumber_lines(po.lines)
         PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)

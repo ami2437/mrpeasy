@@ -292,7 +292,7 @@ function renderProc() {
   back.innerHTML = `<div class="glass-panel proc-panel ${shipped ? "ship-done" : "ship-inproc"}" role="dialog" aria-modal="true" aria-labelledby="proc-title">
     <div class="sm-head"><div>
         <h3 id="proc-title">${shipped ? "Modify" : "Process"} ${escapeHtml(sh.code)}</h3>
-        <div class="muted small">${escapeHtml(ord.code || "")} · ${escapeHtml(customerName(ord.customer_id) || "")}${ord.po_number ? ` · PO ${escapeHtml(ord.po_number)}` : ""}</div>
+        <div class="muted small">${escapeHtml(ord.code || "")} · ${escapeHtml(customerName(ord.customer_id) || "")}${ord.po_number ? ` · PO ${custPoLink(ord.po_number, ord.id)}` : ""}</div>
         ${shipTimelineHtml(sh, null, true)}</div>
       <button type="button" class="icon-btn sm-close" aria-label="Close" onclick="closeProcess()">${icon("x")}</button></div>
     ${shipped ? "" : `<div class="proc-tabs" role="tablist">${PROC_STEPS.map(([k, label], i) => `<button type="button" role="tab" aria-selected="${proc.step === k}"

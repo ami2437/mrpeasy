@@ -80,7 +80,7 @@
           <h4 style="margin-top:20px;">Orders</h4>
           ${mine.length ? `<div class="table-scroll"><table>
             <thead><tr><th>Code</th><th>PO #</th><th>Created</th><th>Status</th><th class="num sum">Total</th></tr></thead>
-            <tbody>${mine.map(o => `<tr><td><a class="link" href="customer-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${escapeHtml(o.po_number || "")}</td>
+            <tbody>${mine.map(o => `<tr><td><a class="link" href="customer-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${custPoLink(o.po_number, o.id)}</td>
               <td>${fmtDate(o.created_at || o.order_date)}</td><td><span class="tag ${o.status}">${o.status}</span></td><td class="num">${fmtMoney(orderTotal(o))}</td></tr>`).join("")}</tbody>
           </table></div>` : `<p class="muted">No orders yet.</p>`}`;
       },

@@ -206,25 +206,27 @@ def update_item(item_id: int, data: StockItemUpdate, db: Session = Depends(get_d
 
 
 @router.get("/analytics/summary")
-def analytics(days: int = Query(90, ge=1, le=3650), limit: int = Query(15, ge=1, le=100), db: Session = Depends(get_db)):
-    """Top sellers (by units shipped and by revenue) and slow movers over the last `days`."""
+def analytics(days: int = Query(90, ge=1, le=3650), limit: int = Query(15, ge=1, le=100), date_from: Optional[str] = None,
+              date_to: Optional[str] = None, db: Session = Depends(get_db)):
+    """Top sellers (by units shipped and by revenue) and slow movers over the last `days` -- or date_from..date_to."""
     from datetime import datetime, timedelta
     from sqlalchemy import func
     from app.models import InventoryTransaction, ShipmentLine, Shipment, StockItem, CustomerOrder
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.fromisoformat(date_from[:10]) if date_from else datetime.utcnow() - timedelta(days=days)
+    until = datetime.fromisoformat(date_to[:10]) + timedelta(days=1) if date_to else datetime.utcnow() + timedelta(days=1)
     items = {i.id: i for i in db.query(StockItem).all()}
     rows = (db.query(ShipmentLine.item_id, func.sum(ShipmentLine.picked_quantity),
                      func.sum(ShipmentLine.picked_quantity * ShipmentLine.unit_price),
                      func.count(func.distinct(CustomerOrder.customer_id)), func.count(func.distinct(Shipment.order_id)))
             .join(Shipment, Shipment.id == ShipmentLine.shipment_id)
             .join(CustomerOrder, CustomerOrder.id == Shipment.order_id)
-            .filter(Shipment.ship_date >= since, Shipment.status != "cancelled")
+            .filter(Shipment.ship_date >= since, Shipment.ship_date < until, Shipment.status != "cancelled")
             .group_by(ShipmentLine.item_id).all())
     sold = [{"item_id": iid, "code": items[iid].code if iid in items else iid, "title": items[iid].title if iid in items else "",
              "category": items[iid].category if iid in items else None,
              "units": round(q or 0), "revenue": round(rev or 0, 2), "customers": nc, "orders": no,
              "on_hand": items[iid].on_hand if iid in items else None} for iid, q, rev, nc, no in rows if (q or 0) > 0]
-    moved = {iid for (iid,) in db.query(InventoryTransaction.item_id).filter(InventoryTransaction.created_at >= since,
+    moved = {iid for (iid,) in db.query(InventoryTransaction.item_id).filter(InventoryTransaction.created_at >= since, InventoryTransaction.created_at < until,
                                                                            InventoryTransaction.quantity_delta < 0).distinct()}
     last_out = dict(db.query(InventoryTransaction.item_id, func.max(InventoryTransaction.created_at))
                     .filter(InventoryTransaction.quantity_delta < 0).group_by(InventoryTransaction.item_id).all())

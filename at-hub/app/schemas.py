@@ -717,6 +717,7 @@ class InvoiceLineInput(InputModel):
 
 class InvoiceLineResponse(InvoiceLineInput):
     id: int
+    order_line_no: Optional[int] = None  # the order line's # (the screen and PDFs list lines in the order's order)
 
 
     amount: float = 0  # quantity x price, rounded to the cent
