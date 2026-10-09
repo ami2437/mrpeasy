@@ -19,7 +19,9 @@ def test_builtin_roles_keep_the_old_ladder(client, admin_headers):
     assert "money.view" not in roles["employee"]["permissions"] and "shipments.work" in roles["employee"]["permissions"]
     # money ($) permissions start with Admin and Super admin only; Manager gets them only when ticked on the Roles screen
     assert not set(roles["manager"]["permissions"]) & P.MONEY and "orders.edit" in roles["manager"]["permissions"]
-    assert P.MONEY <= set(roles["admin"]["permissions"]) and "templates" not in roles["manager"]["permissions"]
+    super_only = {k for k, _m, _l, money, lowest in P.CATALOG if money and lowest == "super_admin"}  # e.g. backups.download
+    assert P.MONEY - super_only <= set(roles["admin"]["permissions"]) and not super_only & set(roles["admin"]["permissions"])
+    assert "templates" not in roles["manager"]["permissions"]
     assert set(roles["super_admin"]["permissions"]) == set(P.KEYS)
     me = client.get("/api/auth/me", headers=admin_headers).json()
     assert "users" in me["permissions"]
