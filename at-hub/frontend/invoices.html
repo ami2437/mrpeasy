@@ -629,7 +629,6 @@
             <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
           </table>
           </div>
-          ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add Line</button>` : ""}
           ${zeroLines ? `<p class="muted small">${zeroLines} line(s) at $0 — they print only when "$0 Lines" is ticked in PDF / Print.</p>` : ""}
         </section>
 

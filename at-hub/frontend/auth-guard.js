@@ -2957,7 +2957,7 @@ function limitRows(tbody, key, rerender) {
 function enableLineDrag(tbody, onReorder) {
   if (!tbody || tbody.dataset.dragReady) return;
   tbody.dataset.dragReady = "1";
-  const rows = () => Array.from(tbody.children).filter(tr => tr.tagName === "TR" && !tr.querySelector("td[colspan]"));
+  const rows = () => Array.from(tbody.children).filter(tr => tr.tagName === "TR" && !tr.querySelector("td[colspan]") && !tr.classList.contains("entry-row"));
   const addHandles = () => rows().forEach(tr => {
     if (tr.querySelector(".drag-handle")) return;
     const h = document.createElement("span");
@@ -4530,8 +4530,7 @@ document.addEventListener("keydown", e => {
   const visible = el => el.offsetParent !== null && !el.disabled && el.type !== "hidden" && el.type !== "checkbox";
   const fields = [...row.querySelectorAll("input, select, textarea")].filter(visible).filter(el => !el.closest(".line-note"));
   if (!fields.length || fields[fields.length - 1] !== t) return;
-  const isBlank = tr => !(tr.querySelector("select") || {}).value && !tr.dataset.itemId && !tr.dataset.orderLineId
-    && ![...tr.querySelectorAll('input[type="text"]')].filter(i => !i.closest(".search-select")).some(i => i.value.trim());
+  const isBlank = tr => lineRowBlank(tr);
   if (isBlank(row)) return;  // already on an empty line: Tab just moves on
   e.preventDefault();
   const blank = [...body.children].find(tr => tr !== row && isBlank(tr));
@@ -4544,3 +4543,79 @@ document.addEventListener("keydown", e => {
     if (first.closest(".search-select")) first.select();  // the item search box: type over the placeholder
   }, 60);
 });
+
+// ---- Line entry like MRPeasy: a blank line always waits at the bottom of a lines table.
+// Forms not saved yet (new order / PO, quote, invoice edit): <tbody data-add-line="addLine()"> -- as soon as the last
+// line gets something in it, another blank one is added under it (blank lines are skipped on save).
+// Saved records (order / PO screens): a <tr class="entry-row" data-commit="addLineToOrder(12)"> -- fill it in and
+// press Tab off its last box (or Enter) and the line is saved, then a fresh entry row is ready. ----
+function lineRowBlank(tr) {
+  return !(tr.querySelector("select") || {}).value && !tr.dataset.itemId && !tr.dataset.orderLineId && !tr.dataset.srcCode
+    && ![...tr.querySelectorAll('input[type="text"]')].filter(i => !i.closest(".search-select")).some(i => i.value.trim());
+}
+function ensureTrailingBlank(body) {
+  if (!body || !body.dataset.addLine || !body.isConnected) return;
+  const last = body.lastElementChild;
+  if (!last || !lineRowBlank(last)) Function(body.dataset.addLine)();
+}
+document.addEventListener("change", e => { const b = e.target.closest && e.target.closest("tbody[data-add-line]"); if (b) setTimeout(() => ensureTrailingBlank(b), 0); });
+new MutationObserver(muts => {
+  for (const m of muts) for (const n of m.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    const bodies = n.matches("tbody[data-add-line]") ? [n] : [...n.querySelectorAll("tbody[data-add-line]")];
+    bodies.forEach(b => { if (!b.dataset.blankReady) { b.dataset.blankReady = "1"; setTimeout(() => ensureTrailingBlank(b), 0); } });
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
+
+async function commitEntryRow(tr) {
+  if (tr.dataset.busy) return;
+  const filled = (tr.querySelector("select") || {}).value || [...tr.querySelectorAll('input[type="text"]')].filter(i => !i.closest(".search-select")).some(i => i.value.trim());
+  if (!filled) return false;
+  tr.dataset.busy = "1";
+  tr.classList.add("entry-saving");
+  const before = tr;
+  try { await Function(`return (${tr.dataset.commit})`)(); }
+  finally { delete tr.dataset.busy; tr.classList.remove("entry-saving"); }
+  // the record redraws with the new line; put the cursor in the fresh entry row
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 75));
+    const fresh = document.querySelector("tr.entry-row");
+    if (fresh && fresh !== before) {
+      const box = fresh.querySelector(".search-select input") || fresh.querySelector("input, select");
+      if (box) { box.focus(); if (box.select) box.select(); }
+      break;
+    }
+  }
+  return true;
+}
+document.addEventListener("keydown", e => {
+  const tr = e.target.closest && e.target.closest("tr.entry-row");
+  if (!tr) return;
+  if (e.key === "Enter" && e.target.tagName !== "TEXTAREA" && !e.target.closest(".search-select")) {
+    e.preventDefault();
+    commitEntryRow(tr);
+    return;
+  }
+  if (e.key !== "Tab" || e.shiftKey) return;
+  const visible = el => el.offsetParent !== null && !el.disabled && el.type !== "hidden";
+  const fields = [...tr.querySelectorAll("input, select, textarea")].filter(visible);
+  if (fields[fields.length - 1] !== e.target) return;
+  if (!(tr.querySelector("select") || {}).value && !tr.querySelector("#new-line-vcode")?.value.trim()) return;  // nothing picked: Tab just moves on
+  e.preventDefault();
+  commitEntryRow(tr);
+});
+
+// ---- Dragging a line near the top or bottom of the window scrolls the page, so a line can be moved anywhere ----
+(function dragAutoScroll() {
+  let speed = 0, raf = null;
+  const step = () => { if (speed) { window.scrollBy(0, speed); raf = requestAnimationFrame(step); } else raf = null; };
+  document.addEventListener("dragover", e => {
+    if (!document.querySelector(".row-dragging")) return;
+    const edge = 110, y = e.clientY, h = window.innerHeight;
+    speed = y < edge ? -Math.ceil((edge - y) / 6) : y > h - edge ? Math.ceil((y - (h - edge)) / 6) : 0;
+    if (speed && !raf) raf = requestAnimationFrame(step);
+  });
+  const stop = () => { speed = 0; };
+  document.addEventListener("dragend", stop);
+  document.addEventListener("drop", stop);
+})();

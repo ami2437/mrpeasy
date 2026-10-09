@@ -167,7 +167,6 @@ function drawQuote() {
       <tbody id="q-lines" ${locked ? "" : `data-add-line="addQuoteLine()"`} oninput="quoteHint(event.target.closest('tr')); quoteTotals()">${x.lines.map(quoteLineRow).join("")}</tbody>
       <tfoot><tr><td class="grow">Quote total</td><td></td><td></td><td class="num" id="q-total"></td><td></td></tr></tfoot>
     </table></div>
-    ${locked ? "" : `<button class="secondary" onclick="addQuoteLine()" style="margin-top:8px;">+ Add line</button>`}
     ${x.id ? `<section class="dsec" style="margin-top:12px;"><h4 class="dsec-title">Files</h4><div id="q-attachments"></div></section>` : ""}
     ${x.emails && x.emails.length ? `<div class="muted small" style="margin-top:8px;">${x.emails.map(e =>
       `Emailed to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : ""}

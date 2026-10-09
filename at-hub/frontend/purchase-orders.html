@@ -55,7 +55,6 @@
         <thead><tr><th>Our Item</th><th>Vendor Part #</th><th>Vendor Description <span class="muted small">(Optional)</span></th><th>Qty</th><th>Unit Cost</th><th></th></tr></thead>
         <tbody id="lines-body" data-add-line="addLine()"></tbody>
       </table>
-      <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
       <div style="margin-top:14px;">
         <button onclick="saveOrder()">Create PO</button>
         <button class="secondary" onclick="toggleForm(false)">Cancel</button>
@@ -615,6 +614,17 @@
               </tr>
             `).join("")}
           </tbody>
+          ${editable ? `<tbody class="entry-body"><tr class="entry-row" data-commit="addLineToOrder(${order.id})" title="Fill in the new line — Tab off the cost (or press Enter) saves it">
+            <td class="line-no">+</td>
+            <td class="grow"><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('tr').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add our item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
+            <td class="vendor-cell"><input type="text" id="new-line-vcode" placeholder="Vendor Part #" onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div>
+              <input type="text" id="new-line-vdesc" placeholder="Their description (optional)"></td>
+            <td class="num"><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></td>
+            <td></td>
+            <td class="num price-cell"><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="" oninput="refreshPriceDeltas(this.closest('tr'))"></span>
+              <div data-price-delta data-kind="purchase" data-item="" data-doc="${order.id}" data-price-input=".new-line-cost"></div></td>
+            <td colspan="${2 + (canReceive ? 1 : 0)}" class="muted small entry-hint"><kbd>Tab</kbd> off the cost or <kbd>Enter</kbd> saves the line</td>
+          </tr></tbody>` : ""}
           <tbody id="po-charges-body">
             ${order.charges.map(c => `
               <tr class="charge-row ${c.vendor_bill_id ? "locked" : ""}">
@@ -638,16 +648,6 @@
         </table>
         </div>
         ${editable ? `
-          <div class="row add-line-row" style="margin-top:8px; max-width:1100px;">
-            <div style="flex:3;"><label>Add Our Item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('.row').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></div>
-            <div style="flex:0;"><label>Vendor Part #</label><input type="text" id="new-line-vcode" style="width:130px;" placeholder="Vendor Part #"
-                onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div></div>
-            <div style="flex:2;"><label>Vendor Description</label><input type="text" id="new-line-vdesc" placeholder="Optional"></div>
-            <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
-            <div class="fixed price-cell"><label>Unit cost</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-cost" class="new-line-cost" value="" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
-              <div data-price-delta data-kind="purchase" data-item="" data-doc="${order.id}" data-price-input=".new-line-cost"></div></div>
-            <div class="fixed"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
-          </div>
           <div class="row" style="margin-top:6px; max-width:1100px;">
             <div style="flex:0 0 140px;"><label>Add S&amp;H</label><select id="chg-type" data-type-list="charge">${TypeLists.optionsHtml("charge", null, "shipping")}</select></div>
             <div style="flex:3;"><label>Description</label><input type="text" id="chg-desc" placeholder="E.g. Quoted Freight (S&amp;H On A Vendor Invoice Is Added Automatically)"></div>
@@ -1386,7 +1386,7 @@ Thank you.</textarea>
         });
         vendorItemCache = {};
         loadOrders();
-        showDetail(poId);
+        await showDetail(poId);
       } catch (err) {
         errorEl.textContent = err.message;
       }

@@ -2313,3 +2313,13 @@ body.notes-hidden .notes-cell > div { display: none; }
 html[data-theme="dark"] .exp-alert { background: rgba(251, 146, 60, .12); border-color: rgba(251, 146, 60, .4); color: #fdba74; }
 
 .sp-opt .sp-addr, .sp-opt strong, .cp-addr, .cp-row { text-transform: none; }
+
+/* ---- the entry row at the bottom of a saved record's lines ---- */
+.entry-body tr.entry-row td { background: color-mix(in srgb, var(--accent, #2f6fed) 4%, var(--surface)); border-top: 2px dashed var(--border-strong); vertical-align: top; }
+.entry-row .line-no { color: var(--accent, #2f6fed); font-weight: 700; }
+.entry-row .vendor-cell input { width: 100%; margin-bottom: 4px; }
+.entry-row.entry-saving { opacity: .55; pointer-events: none; }
+.entry-hint { white-space: normal; }
+
+.entry-row .search-select, .entry-row .search-select input { min-width: 160px; }
+.entry-row .search-select-list { min-width: 360px; }

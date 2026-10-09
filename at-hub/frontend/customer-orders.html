@@ -51,7 +51,6 @@
         <tfoot><tr><td></td><td class="grow">Order total</td><td class="num" id="new-order-qty"></td><td></td><td class="num" id="new-order-total">$0.00</td><td></td><td></td></tr></tfoot>
       </table>
       </div>
-      <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
       <div style="margin-top:14px;">
         <button onclick="saveOrder()">Create Order</button>
         <button class="secondary" onclick="toggleForm(false)">Cancel</button>
@@ -158,6 +157,12 @@
     function recalcLines(tbodyId, totalId) {
       let total = 0, totalQty = 0, n = 0;
       document.querySelectorAll(`#${tbodyId} > tr`).forEach(tr => {
+        const pick = tr.querySelector(".l-item");
+        if (pick && !pick.value && lineRowBlank(tr)) {  // the blank line waiting at the bottom: not counted
+          const subEl = tr.querySelector(".subtotal"); if (subEl) subEl.textContent = "";
+          const noEl = tr.querySelector(".line-no"); if (noEl && !tr.dataset.line) noEl.textContent = "+";
+          return;
+        }
         const qtyEl = tr.querySelector(".l-qty, .e-line-qty");
         const priceEl = tr.querySelector(".l-price, .e-line-price");
         const qty = qtyEl ? parseFloat(qtyEl.value) || 0 : parseFloat(tr.dataset.qty) || 0;
@@ -781,12 +786,12 @@
     }
 
     // Bolts on the order without their $0 nut line: shown (not added) so nobody forgets them.
-    async function autoNutCheck(orderId) {
+    async function autoNutCheck(orderId, quiet = false) {
       let props = [];
       try { props = await apiFetch(`/api/ai-orders/missing-nuts/${orderId}`); } catch (e) { return; }
       if (!props.length || !document.getElementById("nut-panel")) return;
       await checkMissingNuts(orderId);
-      document.getElementById("nut-panel").scrollIntoView({ behavior: "smooth", block: "center" });
+      if (!quiet) document.getElementById("nut-panel").scrollIntoView({ behavior: "smooth", block: "center" });
       toast(`${props.length} bolt${props.length === 1 ? " has" : "s have"} no nut line — check them below`);
     }
     async function nutsBeforeConfirming(id) {
@@ -1073,6 +1078,14 @@
             `;
             }).join("")}
           </tbody>
+          ${editable ? `<tbody class="entry-body"><tr class="entry-row" data-commit="addLineToOrder(${order.id})" title="Fill in the new line — Tab off the price (or press Enter) saves it">
+            <td class="line-no">+</td>
+            <td class="grow"><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('tr').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
+            <td class="num"><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></td>
+            <td class="num price-cell"><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="" oninput="refreshPriceDeltas(this.closest('tr'))"></span>
+              <div data-price-delta data-kind="sale" data-item="" data-doc="${order.id}" data-price-input=".new-line-price"></div></td>
+            <td colspan="8" class="muted small entry-hint">Pick the item, quantity and price — <kbd>Tab</kbd> off the price or <kbd>Enter</kbd> saves the line</td>
+          </tr></tbody>` : ""}
           <tfoot><tr>
             <td></td><td class="grow">Order total</td><td class="num" id="order-qty">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td>
             <td class="num" id="order-total">${fmtMoney(order.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
@@ -1082,15 +1095,6 @@
           </tr></tfoot>
         </table>
         </div>
-        ${editable ? `
-          <div class="row add-line-row" style="margin-top:8px; max-width:760px;">
-            <div style="flex:3;"><label>Add item</label><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('.row').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('.row'))"><option value="">— pick an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></div>
-            <div class="fixed"><label>Qty</label><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></div>
-            <div class="fixed price-cell"><label>Unit price</label><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="" oninput="refreshPriceDeltas(this.closest('.row'))"></span>
-              <div data-price-delta data-kind="sale" data-item="" data-doc="${order.id}" data-price-input=".new-line-price"></div></div>
-            <div class="fixed"><button class="secondary" onclick="addLineToOrder(${order.id})">+ Add line</button></div>
-          </div>
-        ` : ""}
         <div id="line-bulk"></div>
         <div id="lines-error" class="error"></div>
 
@@ -1409,7 +1413,7 @@
         });
         await loadOrders();
         await showDetail(orderId);
-        autoNutCheck(orderId);  // a bolt added: its nut line is offered
+        autoNutCheck(orderId, true);  // a bolt added: its nut line is offered (no jump: you may be typing the next line)
       } catch (err) {
         errorEl.textContent = err.message;
       }
