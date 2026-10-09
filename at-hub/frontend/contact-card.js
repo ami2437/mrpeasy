@@ -155,6 +155,7 @@ const ContactCards = {
       ${this.cfg.body ? this.cfg.body(rec) : ""}
     `;
     if (this.cfg.afterRender) this.cfg.afterRender(rec);
+    if (typeof Recent !== "undefined") Recent.track(id);
   },
   copy(key, i) {
     navigator.clipboard.writeText(this.rows.find(r => r.id === this.currentId).details[key][i].value);

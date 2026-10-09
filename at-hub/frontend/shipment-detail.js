@@ -132,12 +132,7 @@ function packingReadOnlyHtml(sh) {
       <button class="secondary" onclick="printPackingList(${sh.id})" title="${SHIPPED.includes(sh.status) ? "The packing list" : "Prints with a DRAFT watermark until the shipment has shipped"}">Packing List PDF${SHIPPED.includes(sh.status) ? "" : " (Draft)"}</button>
       <button class="secondary" onclick="exportPackingList(${sh.id}, 'xlsx')" title="The packing list as an Excel workbook: header, lines, boxes and pallets">Excel</button>
       <button class="secondary" onclick="exportPackingList(${sh.id}, 'csv')" title="The packing list lines as a CSV file (opens in Excel, imports anywhere)">CSV</button>
-      <span class="muted small" style="margin-left:6px;">Print on packing list:</span>
-      <label class="inline-check"><input type="checkbox" id="pl-boxes" checked> Box details</label>
-      <label class="inline-check"><input type="checkbox" id="pl-pallets" ${used.length ? "checked" : ""}> Pallet info</label>
-      <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-pallet-boxes"> Boxes per pallet</label>
-      <label class="inline-check"><input type="checkbox" id="pl-lots"> Lot #</label>
-      <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-notes" checked> Line notes</label>
+      <span class="muted small" style="margin-left:6px;">What prints is picked in the pop-up (remembered).</span>
     </div>` : ""}`;
 }
 
@@ -1542,17 +1537,24 @@ async function printPalletLabels(shipmentId, ids = null) {
   openPdf(ids ? `/api/shipments/pallet-labels.pdf?ids=${ids}&${q}` : `/api/shipments/${shipmentId}/pallet-labels.pdf?${q}`);
 }
 
-function packingListQuery() {
-  const boxes = document.getElementById("pl-boxes")?.checked ?? true;
-  const pallets = document.getElementById("pl-pallets")?.checked ?? false;
-  const lots = document.getElementById("pl-lots")?.checked ?? false;
-  const notes = document.getElementById("pl-notes")?.checked ?? true;
-  const palletBoxes = document.getElementById("pl-pallet-boxes")?.checked ?? false;
-  return `boxes=${boxes}&pallets=${pallets}&lots=${lots}&notes=${notes}&pallet_boxes=${palletBoxes}`;
+// Packing list options come from the Print Options pop-up (saved per person): Excel / CSV use the same choices.
+async function packingListQuery(shipmentId, ask = false, buttons = null) {
+  const sh = shipmentsById[shipmentId] || shipments.find(s => s.id === shipmentId) || {};
+  const pallets = (sh.boxes || []).some(b => b.pallet_number);
+  const disabled = pallets ? {} : { pallets: "This shipment has no pallets", pallet_boxes: "This shipment has no pallets" };
+  let opts, action = "pdf";
+  if (ask) {
+    const got = await PrintOptions.ask("packing_list", { title: `Packing List — ${sh.code || ""}`, disabled, buttons: buttons || [{ label: "Open PDF", value: "pdf" }] });
+    if (!got) return null;
+    ({ opts, action } = got);
+  } else opts = await PrintOptions.get("packing_list");
+  if (!pallets) { opts.pallets = false; opts.pallet_boxes = false; }
+  return { q: PrintOptions.query(opts), action };
 }
 
-function printPackingList(shipmentId) {
-  openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?${packingListQuery()}`);
+async function printPackingList(shipmentId) {
+  const got = await packingListQuery(shipmentId, true);
+  if (got) openPdf(`/api/shipments/${shipmentId}/packing-list.pdf?${got.q}`);
 }
 
 // Excel / CSV: the same content as the PDF, with the same ticks (box details, pallet info, lot #, line notes).
@@ -1560,7 +1562,7 @@ async function exportPackingList(shipmentId, fmt) {
   const sh = shipments.find(s => s.id === shipmentId) || {};
   const ord = (typeof orders !== "undefined" ? orders : []).find(o => o.id === sh.order_id) || {};
   const name = docFileName(sh.code || "Shipment", ord.po_number || "", "Packing List").replace(/\.pdf$/i, "") + "." + fmt;
-  try { await downloadFile(`/api/shipments/${shipmentId}/packing-list.${fmt}?${packingListQuery()}`, name); }
+  try { await downloadFile(`/api/shipments/${shipmentId}/packing-list.${fmt}?${(await packingListQuery(shipmentId)).q}`, name); }
   catch (e) { toast(e.message); }
 }
 

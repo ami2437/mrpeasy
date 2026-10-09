@@ -53,9 +53,16 @@
           <tbody id="ready-body"></tbody>
         </table>
       </div>
+      <div id="credits-view" style="display:none;">
+        <table class="list-fit">
+          <thead><tr><th>Credit Memo</th><th>Customer</th><th>Invoice / Order</th><th>Date</th><th class="num sum">Credit</th><th class="num sum">Used</th><th class="num sum">Left</th><th>Reason</th><th>Status</th></tr></thead>
+          <tbody id="credits-body"></tbody>
+        </table>
+      </div>
+      <div class="inv-bulk-bar" id="inv-bulk-bar" hidden></div>
       <table class="list-fit" id="invoices-table">
-        <thead><tr><th>Code</th><th>Customer</th><th title="Order, the customer's PO # and job #">Order / PO / Job</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Balance</th><th>Payment</th><th class="num" title="Factor funding: amount, discount and disbursement date">Funding</th><th>Status</th></tr></thead>
-        <tbody id="invoices-body"><tr><td colspan="11">Loading...</td></tr></tbody>
+        <thead><tr><th style="width:28px;"><input type="checkbox" id="inv-all" title="Tick all shown" onclick="tickAllInvoices(this.checked)"></th><th>Code</th><th>Customer</th><th title="Order, the customer's PO # and job #">Order / PO / Job</th><th>Shipment</th><th>Created</th><th>Due</th><th class="num sum">Total</th><th class="num sum">Balance</th><th>Payment</th><th class="num" title="Factor funding: amount, discount and disbursement date">Funding</th><th>Status</th></tr></thead>
+        <tbody id="invoices-body"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
 
@@ -183,7 +190,8 @@
       document.getElementById("list-tabs").innerHTML = `
         <div class="tab ${listView === "active" ? "active" : ""}" onclick="showView('active')">Invoices <span class="muted">(${active})</span></div>
         <div class="tab ${listView === "ready" ? "active" : ""}" onclick="showView('ready')" title="Shipped / delivered shipments not invoiced yet">Ready To Invoice <span class="muted">(${ready})</span></div>
-        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="showView('cancelled')" title="Voided invoices">Cancelled <span class="muted">(${cancelled})</span></div>`;
+        <div class="tab ${listView === "cancelled" ? "active" : ""}" onclick="showView('cancelled')" title="Voided invoices">Cancelled <span class="muted">(${cancelled})</span></div>
+        ${AuthGuard.can("credit_memos") ? `<div class="tab ${listView === "credits" ? "active" : ""}" onclick="showView('credits')" title="Money given back to customers">Credit Memos <span class="muted">(${creditMemos.filter(m => m.status !== "void").length})</span></div>` : ""}`;
     }
 
     function renderInvoices() {
@@ -196,19 +204,28 @@
       listTabs(searched.length, ready.length, voided.length);
       renderMetrics(searchedAll, !!q);
       document.getElementById("ready-view").style.display = listView === "ready" ? "" : "none";
-      document.getElementById("invoices-table").style.display = listView === "ready" ? "none" : "";
+      document.getElementById("credits-view").style.display = listView === "credits" ? "" : "none";
+      document.getElementById("invoices-table").style.display = ["ready", "credits"].includes(listView) ? "none" : "";
+      if (listView === "credits") { document.getElementById("inv-bulk-bar").hidden = true; renderCredits(q); return; }
       if (listView === "ready") { renderReady(ready); return; }
-      if (listView === "cancelled") { renderCancelled(voided); return; }
+      if (listView === "cancelled") { shownInvoices = voided; renderCancelled(voided); paintBulkBar(); return; }
       const filtered = statusOnly ? searched.filter(i => statusOnly === "sent" ? i.status !== "draft" && i.balance > 0.005 : i.status === statusOnly) : searched;
       document.querySelectorAll("#inv-metrics .stat-click").forEach(t => t.classList.toggle("on",
         (statusOnly === "sent" && t.textContent.includes("Unpaid")) || (statusOnly === "draft" && t.textContent.includes("Draft"))));
       if (!filtered.length) {
-        tbody.innerHTML = `<tr><td colspan="11" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" class="muted">${invoices.length ? "No invoices match your search." : "No invoices yet — create one from a shipment."}</td></tr>`;
+        shownInvoices = [];
+        paintBulkBar();
         return;
       }
-      tbody.innerHTML = filtered.map(inv => `
-        <tr class="${inv.is_combined ? "row-combined" : ""} ${rowUnderlay("invoice", inv, ["red"])}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}</td>
+      // Completed (paid in full, nothing left to do) fold away at the bottom unless opened or searched for.
+      const working = filtered.filter(i => !invoiceDone(i)), finished = filtered.filter(invoiceDone);
+      const expanded = showCompletedInv || (q && !working.length) || statusOnly === "paid";
+      shownInvoices = expanded ? filtered : working;
+      const row = inv => `
+        <tr class="${inv.is_combined ? "row-combined" : ""} ${invoiceDone(inv) ? "order-done" : ""} ${invTicked.has(inv.id) ? "row-selected" : ""} ${rowUnderlay("invoice", inv, ["red"])}">
+          <td><input type="checkbox" class="inv-tick" ${invTicked.has(inv.id) ? "checked" : ""} onchange="tickInvoice(${inv.id}, this.checked)"></td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a>${combinedBadge(inv)}${lookAlikes(inv).length ? ` <span class="tag cancelled dup-tag" title="Same customer, PO # and total as ${escapeHtml(lookAlikes(inv).map(t => t.code).join(", "))} -- open it to check">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
           <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
           <td>${(inv.shipment_ids && inv.shipment_ids.length ? inv.shipment_ids : [inv.shipment_id]).map(id => refLink("shipment", id)).join(", ")}</td>
@@ -220,15 +237,93 @@
           <td class="num">${inv.funding_amount != null ? `${fmtMoney(inv.funding_amount)}<div class="muted small">−${fmtMoney(inv.funding_discount || 0)} · ${fmtDate(inv.disbursement_date)}</div>` : ""}</td>
           <td><span class="tag ${inv.status === 'paid' ? 'shipped' : inv.status === 'void' ? 'cancelled' : inv.status === 'sent' ? 'confirmed' : 'draft'}">${inv.status}</span></td>
         </tr>
-      `).join("");
+      `;
+      tbody.innerHTML = (working.length ? working.map(row).join("") : `<tr><td colspan="12" class="muted">Nothing open${q ? " matches your search" : ""} — every invoice is paid.</td></tr>`)
+        + (finished.length ? `<tr class="completed-toggle" onclick="showCompletedInv = !showCompletedInv; renderInvoices();">
+            <td colspan="12"><span class="caret">${expanded ? "▾" : "▸"}</span> Completed <span class="muted">(${finished.length}${q ? " matching" : ""}) — paid in full, nothing left to do${expanded ? "" : " · click to show"}</span></td></tr>`
+          + (expanded ? finished.map(row).join("") : "") : "");
       limitRows(tbody, "invoices", renderInvoices);
+      paintBulkBar();
+    }
+
+    // ---- Completed: paid in full with nothing left to do ----
+    let showCompletedInv = false;
+    function invoiceDone(inv) { return inv.status === "paid" && inv.balance <= 0.005; }
+
+    // ---- Tick several invoices: actions offered when every ticked one is in the same status ----
+    const invTicked = new Set();
+    let shownInvoices = [];
+    function tickInvoice(id, on) { on ? invTicked.add(id) : invTicked.delete(id); renderInvoices(); }
+    function tickAllInvoices(on) { shownInvoices.forEach(i => on ? invTicked.add(i.id) : invTicked.delete(i.id)); renderInvoices(); }
+    function tickedInvoices() { return invoices.filter(i => invTicked.has(i.id)); }
+    function paintBulkBar() {
+      [...invTicked].forEach(id => { if (!invoices.some(i => i.id === id)) invTicked.delete(id); });
+      const bar = document.getElementById("inv-bulk-bar"), all = document.getElementById("inv-all");
+      const list = tickedInvoices(), n = list.length;
+      if (all) { const on = shownInvoices.filter(i => invTicked.has(i.id)).length; all.checked = !!shownInvoices.length && on === shownInvoices.length; all.indeterminate = on > 0 && on < shownInvoices.length; }
+      bar.hidden = !n;
+      if (!n) { bar.innerHTML = ""; return; }
+      const statuses = [...new Set(list.map(i => i.status))], st = statuses.length === 1 ? statuses[0] : null;
+      const total = list.reduce((t, i) => t + (i.status === "void" ? 0 : i.total), 0), owed = list.reduce((t, i) => t + (i.status === "void" ? 0 : i.balance), 0);
+      const noMoney = list.every(i => !i.payments.length && i.funding_amount == null);
+      const btn = (label, fn, cls = "secondary", title = "") => `<button class="${cls} small-btn" onclick="${fn}" title="${escapeHtml(title)}">${label}</button>`;
+      const actions = !st ? `<span class="warn-text small">These are in different states (${statuses.join(", ")}) — tick invoices in the same state to act on them together.</span>`
+        : st === "void" ? btn("Delete", "bulkInvoices('delete')", "danger")
+        : [btn(`${icon("mail")} Send / Print`, "bulkInvoices('send')", "next-step", "Email each customer their invoices, or print them all (Bulk Operations)"),
+           btn(`${icon("download")} PDFs`, "bulkInvoices('pdf')", "secondary", "All ticked invoices in one PDF, printed with your Print Options"),
+           st === "draft" ? btn("Mark Sent", "bulkInvoices('sent')") : "",
+           st === "sent" ? btn("Record Full Payment", "bulkInvoices('pay')", "secondary", "Record a payment of each invoice's balance (same date, method and reference)") : "",
+           st !== "paid" && noMoney ? btn("Void", "bulkInvoices('void')", "danger") : "",
+           st === "draft" && list.every(i => !(i.emails || []).length) ? btn("Delete", "bulkInvoices('delete')", "danger") : ""].join("");
+      bar.innerHTML = `<strong>${n} selected</strong> <span class="muted small">· ${st || "mixed"}${st === "void" ? "" : ` · ${fmtMoney(total)} total${owed > 0.005 ? `, ${fmtMoney(owed)} open` : ""}`}</span>
+        <span class="inv-bulk-actions">${actions}</span><a class="link small" onclick="invTicked.clear(); renderInvoices();">Clear</a>`;
+    }
+    async function bulkInvoices(action) {
+      const list = tickedInvoices(), ids = list.map(i => i.id), codes = list.map(i => i.code).join(", ");
+      if (!list.length) return;
+      if (action === "send") { location.href = `pack-shipments.html?area=invoices&invoice_ids=${ids.join(",")}`; return; }
+      if (action === "pdf") { openPdf(`/api/bulk/documents.pdf?invoice_ids=${ids.join(",")}&kinds=invoice`); return; }
+      let fn = null, verb = "";
+      if (action === "sent") {
+        if (!confirm(`Mark ${list.length} invoice${list.length === 1 ? "" : "s"} sent (${codes})? Nothing is emailed.`)) return;
+        fn = i => apiFetch(`/api/invoices/${i.id}/status`, { method: "PUT", body: JSON.stringify({ status: "sent" }) }); verb = "marked sent";
+      } else if (action === "void") {
+        const { value, el } = await askDialog({ title: `Void ${list.length} Invoice${list.length === 1 ? "" : "s"}?`, tone: "warn",
+          body: `<p>${escapeHtml(codes)}</p><p class="muted small">Their shipments can be invoiced again.</p><label>Why (kept on each invoice)</label><input type="text" class="bv-reason">`,
+          buttons: [{ label: "Void", value: "go", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+        const reason = el.querySelector(".bv-reason").value.trim() || null;
+        fn = i => apiFetch(`/api/invoices/${i.id}/status`, { method: "PUT", body: JSON.stringify({ status: "void", reason }) }); verb = "voided";
+      } else if (action === "delete") {
+        if (!confirm(`Delete ${codes}? They go to the Recycle Bin, where they can be restored.`)) return;
+        fn = i => apiFetch(`/api/invoices/${i.id}`, { method: "DELETE" }); verb = "deleted";
+      } else if (action === "pay") {
+        try { await TypeLists.load("payment_method"); } catch {}
+        const { value, el } = await askDialog({ title: `Record Full Payment — ${list.length} Invoice${list.length === 1 ? "" : "s"}`,
+          body: `<p class="muted" style="margin-top:0;">Each invoice gets a payment of its open balance (${fmtMoney(list.reduce((t, i) => t + i.balance, 0))} in all) and is marked paid.</p>
+            <div class="row"><div><label>Paid Date</label><input type="date" class="bp-date" value="${todayISO()}" max="${todayISO()}"></div>
+            <div><label>Method</label><select class="bp-method">${TypeLists.optionsHtml("payment_method", null, "", { blank: "—" })}</select></div>
+            <div><label>Reference</label><input type="text" class="bp-ref" placeholder="Check # / confirmation"></div></div>`,
+          buttons: [{ label: "Record Payments", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+        const pay = { paid_date: el.querySelector(".bp-date").value || null, method: el.querySelector(".bp-method").value || null, reference: el.querySelector(".bp-ref").value || null };
+        fn = i => i.balance > 0.005 ? apiFetch(`/api/invoices/${i.id}/payments`, { method: "POST", body: JSON.stringify({ ...pay, amount: i.balance }) }) : Promise.resolve();
+        verb = "paid";
+      }
+      const failed = [];
+      for (const inv of list) { try { await fn(inv); } catch (e) { failed.push(`${inv.code}: ${e.message}`); } }
+      invTicked.clear();
+      await loadInvoices();
+      if (failed.length) askDialog({ title: "Some Didn't Go Through", tone: "warn", body: `<ul>${failed.map(f => `<li>${escapeHtml(f)}</li>`).join("")}</ul>`, buttons: [{ label: "OK", value: null, cls: "secondary" }] });
+      else toast(`${list.length} invoice${list.length === 1 ? "" : "s"} ${verb}`);
     }
 
     function renderCancelled(list) {
       const tbody = document.getElementById("invoices-body");
-      if (!list.length) { tbody.innerHTML = `<tr><td colspan="11" class="muted">No cancelled invoices.</td></tr>`; return; }
+      if (!list.length) { tbody.innerHTML = `<tr><td colspan="12" class="muted">No cancelled invoices.</td></tr>`; return; }
       tbody.innerHTML = list.map(inv => `
-        <tr class="order-done">
+        <tr class="order-done ${invTicked.has(inv.id) ? "row-selected" : ""}">
+          <td><input type="checkbox" class="inv-tick" ${invTicked.has(inv.id) ? "checked" : ""} onchange="tickInvoice(${inv.id}, this.checked)"></td>
           <td class="nowrap"><a class="link" onclick="showDetail(${inv.id})">${inv.code}</a></td>
           <td>${escapeHtml(String(customerName(inv.customer_id)))}</td>
           <td>${refLink("order", inv.order_id)}<div class="muted small">${escapeHtml([orderField(inv, "po_number") && `PO ${orderField(inv, "po_number")}`, orderField(inv, "job_number") && `Job ${orderField(inv, "job_number")}`].filter(Boolean).join(" · "))}</div></td>
@@ -468,7 +563,6 @@
       const editable = invoice.status !== "void";  // sent/paid invoices can be corrected too
 
       const zeroLines = invoice.lines.filter(l => Math.abs(lineAmount(l.quantity, l.unit_price)) < 0.005).length;
-      const paidCount = invoice.payments.filter(p => !p.funding_import_id && !["factoring", "factoring discount"].includes((p.method || "").toLowerCase())).length;
       // Other draft invoices of the same order that can be folded into this one.
       const mergeable = editable ? invoices.filter(i => i.id !== invoice.id && i.order_id && i.order_id === invoice.order_id
         && i.status === "draft" && !i.payments.length && !i.emails.length && i.funding_amount == null) : [];
@@ -487,18 +581,11 @@
           ${invoice.status !== "void" ? `<button class="${invoice.status === "draft" ? "next-step" : "secondary"}" onclick="openEmailComposer(${invoice.id})">✉ Send Via Email</button>` : ""}
           <button class="secondary" onclick="printInvoice(${invoice.id})">PDF / Print</button>
           ${invoice.status === "draft" ? `<button class="secondary" onclick="setStatus(${invoice.id}, 'sent')">Mark Sent</button>` : ""}
+          ${AuthGuard.can("credit_memos") && ["sent", "paid"].includes(invoice.status) ? `<button class="secondary" onclick="openCreditMemo(null, { invoice: invoices.find(i => i.id === ${invoice.id}) })" title="Credit the customer for units or money on this invoice (a draft invoice can simply be edited)">Credit Memo</button>` : ""}
           ${canSplitLines(invoice) ? `<button class="secondary" onclick="splitLines(${invoice.id})" title="Bill some lines (or part of a line) on a separate invoice -- same shipment, same order">Split Lines</button>` : ""}
           ${invoice.status !== "paid" && invoice.status !== "void" && !invoice.payments.length ? `<button class="danger" onclick="setStatus(${invoice.id}, 'void')">Void</button>` : ""}
           ${(invoice.status === "void" || (invoice.status === "draft" && !(invoice.emails || []).length)) && !invoice.payments.length
             ? `<button class="danger" onclick="deleteInvoice(${invoice.id})" title="${invoice.status === "void" ? "Remove the voided invoice" : "A draft that never went out"} -- it goes to the Recycle Bin">Delete</button>` : ""}
-          <label class="check-label" title="$0 lines are left off the PDF unless this is ticked">
-            <input type="checkbox" ${invoice.print_zero_lines ? "checked" : ""} onchange="setPrintZero(${invoice.id}, this.checked)">
-            Print $0 Lines${zeroLines ? ` <span class="muted small">(${zeroLines} on this invoice)</span>` : ""}</label>
-          <label class="check-label" title="The PDF and email list the customer's payments so far and show only the balance left as due (factoring payments are never listed: the customer still owes the factor)">
-            <input type="checkbox" ${invoice.print_payments !== false ? "checked" : ""} onchange="setPrintPayments(${invoice.id}, this.checked)">
-            Print Previous Payments${paidCount ? ` <span class="muted small">(${paidCount} paid, ${fmtMoney(invoice.amount_due_printed)} due)</span>` : ""}</label>
-          <label class="check-label" title="Line notes on the PDF (a note with Print unticked never prints)">
-            <input type="checkbox" id="inv-print-notes" checked> Print Line Notes</label>
           <span style="flex:1;"></span>
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
@@ -530,6 +617,8 @@
 
         <section class="dsec"><h4 class="dsec-title">Lines</h4>
           <div id="billing-banner">${billingBannerHtml()}</div>
+          ${duplicateBannerHtml(invoice)}
+          ${editable ? printAllNotesHtml() : ""}
           <div class="table-scroll">
           <table class="fit-table ${editable ? "lines-table" : ""}">
             <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num" title="What this invoice's shipments delivered on that order line (less what a split-off invoice bills)">Delivered</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
@@ -538,7 +627,7 @@
           </table>
           </div>
           ${editable ? `<button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add Line</button>` : ""}
-          ${zeroLines && !invoice.print_zero_lines ? `<p class="muted small">${zeroLines} line(s) at $0 won't print on the PDF. Tick "Print $0 Lines" above to include them.</p>` : ""}
+          ${zeroLines ? `<p class="muted small">${zeroLines} line(s) at $0 — they print only when "$0 Lines" is ticked in PDF / Print.</p>` : ""}
         </section>
 
         ${mergeable.length ? `
@@ -621,22 +710,6 @@
           return;
         } catch (e) { error = e.message; }
       }
-    }
-
-    async function setPrintPayments(id, on) {
-      try {
-        await apiFetch(`/api/invoices/${id}/print-options`, { method: "PUT", body: JSON.stringify({ print_payments: on }) });
-        await loadInvoices();
-        showDetail(id);
-      } catch (e) { document.getElementById("detail-error").textContent = e.message; }
-    }
-
-    async function setPrintZero(id, on) {
-      try {
-        await apiFetch(`/api/invoices/${id}/print-options`, { method: "PUT", body: JSON.stringify({ print_zero_lines: on }) });
-        await loadInvoices();
-        showDetail(id);
-      } catch (e) { document.getElementById("detail-error").textContent = e.message; }
     }
 
     async function mergeInvoices(id) {
@@ -850,6 +923,38 @@
       tr.querySelector(".line-desc").focus();
     }
 
+    // ---- duplicate warnings ----
+    // Manual lines (not tied to an order line) with the same description, quantity and price.
+    function duplicateManualLines(lines) {
+      const seen = {}, out = [];
+      lines.filter(l => !l.order_line_id && (l.description || "").trim()).forEach(l => {
+        const k = `${l.description.trim().toLowerCase()}|${l.quantity}|${l.unit_price}`;
+        if (seen[k] === 1) out.push(l);
+        seen[k] = (seen[k] || 0) + 1;
+      });
+      return out;
+    }
+    // Another live invoice for the same customer, the same customer PO # and the same total: billed twice?
+    let dupIndex = null, dupIndexOf = null;
+    const dupKey = i => `${i.customer_id}|${orderField(i, "po_number") || ""}|${Math.round(i.total * 100)}`;
+    function lookAlikes(inv) {
+      if (inv.status === "void" || !(inv.total > 0.005)) return [];
+      if (dupIndexOf !== invoices) {  // built once per load of the list
+        dupIndex = new Map();
+        invoices.filter(i => i.status !== "void").forEach(i => { const k = dupKey(i); dupIndex.set(k, [...(dupIndex.get(k) || []), i]); });
+        dupIndexOf = invoices;
+      }
+      return (dupIndex.get(dupKey(inv)) || []).filter(o => o.id !== inv.id && o.split_from_id !== inv.id && inv.split_from_id !== o.id);
+    }
+    function duplicateBannerHtml(inv) {
+      const twins = lookAlikes(inv), lines = duplicateManualLines(inv.lines);
+      if (!twins.length && !lines.length) return "";
+      return `<div class="notice billing-off"><strong>Possible duplicate</strong><ul>
+        ${twins.map(t => `<li>Same customer, ${orderField(inv, "po_number") ? `PO ${escapeHtml(orderField(inv, "po_number"))}` : "no PO #"} and total (${fmtMoney(t.total)}) as
+          <a class="link" onclick="showDetail(${t.id})">${escapeHtml(t.code)}</a> (${escapeHtml(t.status)}) — check it isn't billed twice.</li>`).join("")}
+        ${lines.map(l => `<li>The line “${escapeHtml(l.description)}” (${fmtQty(l.quantity)} × ${fmtPrice(l.unit_price)}) is on this invoice more than once.</li>`).join("")}</ul></div>`;
+    }
+
     async function saveInvoice(id) {
       const inv = invoices.find(x => x.id === id);
       if (inv && ["sent", "paid"].includes(inv.status)
@@ -865,6 +970,9 @@
         shipment_id: tr.dataset.shipmentId ? parseInt(tr.dataset.shipmentId) : null,
         ...lineNoteValue(tr),
       }));
+      // the same manual line (not from the order) twice is usually a slip
+      const twice = duplicateManualLines(lines);
+      if (twice.length && !confirm(`These lines appear more than once:\n${twice.map(l => `• ${l.description} — ${l.quantity} × ${fmtPrice(l.unit_price)}`).join("\n")}\n\nSave anyway?`)) return;
       try {
         // billing more or less than was delivered: say so, and keep the accepted difference on the order
         const diffs = await apiFetch(`/api/invoices/${id}/qty-check`, { method: "POST", body: JSON.stringify({ lines }) });
@@ -932,8 +1040,15 @@
       }
     }
 
-    function printInvoice(id) {
-      openPdf(`/api/invoices/${id}/pdf?notes=${document.getElementById("inv-print-notes")?.checked ?? true}`);
+    // PDF / Print: the Print Options pop-up (remembered), then the PDF with exactly those choices.
+    async function printInvoice(id) {
+      const inv = invoices.find(i => i.id === id) || {};
+      const paid = (inv.payments || []).filter(p => !p.funding_import_id && !["factoring", "factoring discount"].includes((p.method || "").toLowerCase())).length;
+      const zero = (inv.lines || []).filter(l => Math.abs(lineAmount(l.quantity, l.unit_price)) < 0.005).length;
+      const got = await PrintOptions.ask("invoice", { title: `Print ${inv.code || "Invoice"}`,
+        note: [paid ? `${paid} payment${paid === 1 ? "" : "s"} recorded` : "", zero ? `${zero} line${zero === 1 ? "" : "s"} at $0` : ""].filter(Boolean).join(" · "),
+        buttons: [{ label: "Open PDF", value: "pdf" }] });
+      if (got) openPdf(`/api/invoices/${id}/pdf?${PrintOptions.query(got.opts)}`);
     }
 
     // ---- Email ----
@@ -1012,9 +1127,123 @@
     }
 
     async function loadInvoices() {
-      invoices = await apiFetch("/api/invoices/");
+      [invoices] = await Promise.all([apiFetch("/api/invoices/"), loadCredits()]);
       renderInvoices();
     }
+    // ---- Credit memos: money back to a customer (over-billing, returns, price corrections) ----
+    let creditMemos = [];
+    async function loadCredits() {
+      if (!AuthGuard.can("credit_memos")) { creditMemos = []; return; }
+      try { creditMemos = await apiFetch("/api/credit-memos/"); } catch (e) { creditMemos = []; }
+    }
+    function creditStatusTag(m) {
+      const used = m.status === "issued" && m.remaining <= 0.005;
+      return `<span class="tag ${m.status === "void" ? "cancelled" : m.status === "draft" ? "draft" : used ? "shipped" : "confirmed"}">${m.status === "issued" ? (used ? "used" : "open") : m.status}</span>`;
+    }
+    function renderCredits(q) {
+      const tbody = document.getElementById("credits-body");
+      const ql = (q || "").toLowerCase();
+      const list = creditMemos.filter(m => !ql || [m.code, customerName(m.customer_id), (invoices.find(i => i.id === m.invoice_id) || {}).code, m.reason]
+        .some(v => String(v || "").toLowerCase().includes(ql)));
+      tbody.innerHTML = list.length ? list.map(m => `<tr class="${m.status === "void" ? "order-done" : ""}">
+          <td class="nowrap"><a class="link" onclick="openCreditMemo(${m.id})">${escapeHtml(m.code)}</a></td>
+          <td>${escapeHtml(String(customerName(m.customer_id)))}</td>
+          <td>${m.invoice_id ? `<a class="link" onclick="showDetail(${m.invoice_id})">${escapeHtml((invoices.find(i => i.id === m.invoice_id) || {}).code || "")}</a>` : ""}${m.order_id ? `<div class="muted small">${refLink("order", m.order_id)}</div>` : ""}</td>
+          <td>${fmtDate(m.memo_date)}</td>
+          <td class="num">${fmtMoney(m.total)}</td><td class="num">${fmtMoney(m.applied)}</td><td class="num">${m.status === "void" ? "" : fmtMoney(m.remaining)}</td>
+          <td class="small">${escapeHtml(m.reason || "")}</td><td>${creditStatusTag(m)}</td></tr>`).join("")
+        : `<tr><td colspan="9" class="muted">No credit memos${q ? " match your search" : " yet — open a sent invoice and use Credit Memo"}.</td></tr>`;
+    }
+
+    // The editor: a pop-up over whatever screen is open. opts.invoice / opts.order prefill a new one.
+    async function openCreditMemo(id, opts = {}) {
+      let m = id ? await apiFetch(`/api/credit-memos/${id}`) : null;
+      const inv = m ? invoices.find(i => i.id === m.invoice_id) : opts.invoice || null;
+      const customerId = m ? m.customer_id : inv ? inv.customer_id : opts.customer_id;
+      const draft = !m || m.status === "draft";
+      let rows = m ? m.lines.map(l => ({ ...l })) : opts.lines ? opts.lines
+        : inv ? inv.lines.filter(l => l.item_id || l.description).map(l => ({ item_id: l.item_id, order_line_id: l.order_line_id, description: lineDescription(l), quantity: 0, unit_price: l.unit_price, max: l.quantity }))
+        : [];
+      if (draft && !rows.some(r => !r.order_line_id && !r.item_id)) rows.push({ description: "", quantity: 0, unit_price: 0, other: true });
+      let reason = m ? m.reason || "" : opts.reason || "", date = m ? dayISO(m.memo_date) : todayISO(), error = "";
+      const openInvoices = () => invoices.filter(i => i.customer_id === customerId && i.status === "sent" && i.balance > 0.005);
+      while (true) {
+        const total = rows.reduce((t, r) => t + lineAmount(r.quantity || 0, r.unit_price || 0), 0);
+        const body = `<p class="muted small" style="margin-top:0;">${escapeHtml(String(customerName(customerId)))}${inv ? ` · corrects ${escapeHtml(inv.code)}` : ""}
+            ${m ? ` · ${creditStatusTag(m)}` : ""}${m && m.applied > 0.005 ? ` · ${fmtMoney(m.applied)} used, ${fmtMoney(m.remaining)} left` : ""}</p>
+          <div class="row"><div><label>Date</label><input type="date" class="cm-date" value="${date}" ${draft ? "" : "disabled"}></div>
+            <div style="flex:3;"><label>Reason (prints on the memo)</label><input type="text" class="cm-reason" value="${escapeHtml(reason)}" ${draft ? "" : "disabled"} placeholder="e.g. 20 bolts billed twice on INV-1234"></div></div>
+          <div class="no-table-tools" style="max-height:46vh; overflow-y:auto; margin-top:8px;"><table class="fit-table">
+            <thead><tr><th class="grow">What's Credited</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Credit</th></tr></thead>
+            <tbody>${rows.map((r, i) => `<tr data-i="${i}">
+              <td class="grow">${r.order_line_id || r.item_id ? `<strong>${escapeHtml(((items.find(x => x.id === r.item_id) || {}).code) || "")}</strong> <span class="small">${escapeHtml(r.description || "")}</span>${r.order_line_id ? `<div class="muted small">units back off the order line${r.max ? ` (${fmtQty(r.max)} billed)` : ""}</div>` : ""}`
+                : `<input type="text" class="cm-desc" value="${escapeHtml(r.description || "")}" placeholder="Price adjustment / other credit" ${draft ? "" : "disabled"}>`}</td>
+              <td class="num"><input type="number" class="cm-qty qty-input" style="width:80px;" min="0" step="any" value="${r.quantity || 0}" ${draft ? "" : "disabled"}></td>
+              <td class="num"><input type="number" class="cm-price" style="width:100px;" min="0" step="0.00001" value="${r.unit_price || 0}" ${draft ? "" : "disabled"}></td>
+              <td class="num">${fmtMoney(lineAmount(r.quantity || 0, r.unit_price || 0))}</td></tr>`).join("")}</tbody>
+            <tfoot><tr><td class="grow">Credit Total</td><td></td><td></td><td class="num"><strong>${fmtMoney(total)}</strong></td></tr></tfoot></table></div>
+          <p class="muted small">Lines from the invoice credit <b>units</b> (they come off what the order billed). Use the free line for a price adjustment or any other credit.</p>
+          ${m && m.status === "issued" && m.remaining > 0.005 ? `<div class="row" style="align-items:flex-end;"><div style="flex:2;"><label>Use It On An Open Invoice</label>
+              <select class="cm-apply">${openInvoices().map(i => `<option value="${i.id}">${escapeHtml(i.code)} — owes ${fmtMoney(i.balance)}</option>`).join("") || `<option value="">No open invoices for this customer</option>`}</select></div>
+              <div><label>Amount</label><input type="number" class="cm-apply-amt" step="0.01" min="0" placeholder="as much as fits"></div></div>` : ""}
+          ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`;
+        const buttons = draft
+          ? [{ label: "Issue Credit Memo", value: "issue", cls: "confirm-btn" }, { label: "Save Draft", value: "save", cls: "secondary" },
+             ...(m ? [{ label: "Delete Draft", value: "delete", cls: "danger" }] : []), { label: "Close", value: null, cls: "secondary" }]
+          : [...(m.status === "issued" && m.remaining > 0.005 && openInvoices().length ? [{ label: "Apply To Invoice", value: "apply", cls: "confirm-btn" }] : []),
+             { label: "PDF", value: "pdf", cls: "secondary" }, ...(m.status === "issued" && !m.applied_to.length ? [{ label: "Void", value: "void", cls: "danger" }] : []),
+             { label: "Close", value: null, cls: "secondary" }];
+        const { value, el } = await askDialog({ title: m ? `Credit Memo ${m.code}` : "New Credit Memo", body, buttons, wide: true });
+        if (!value) { await loadCredits(); renderInvoices(); return; }
+        if (draft) {
+          date = el.querySelector(".cm-date").value; reason = el.querySelector(".cm-reason").value;
+          el.querySelectorAll("tbody tr[data-i]").forEach(tr => {
+            const r = rows[+tr.dataset.i];
+            r.quantity = parseFloat(tr.querySelector(".cm-qty").value) || 0;
+            r.unit_price = parseFloat(tr.querySelector(".cm-price").value) || 0;
+            const d = tr.querySelector(".cm-desc");
+            if (d) r.description = d.value;
+          });
+        }
+        error = "";
+        try {
+          if (value === "pdf") { openPdf(`/api/credit-memos/${m.id}/pdf`); continue; }
+          if (value === "delete") {
+            if (!confirm(`Delete draft ${m.code}?`)) continue;
+            await apiFetch(`/api/credit-memos/${m.id}`, { method: "DELETE" }); await loadCredits(); renderInvoices(); toast(`Deleted ${m.code}`); return;
+          }
+          if (value === "void") {
+            const why = prompt(`Void ${m.code}? Why:`, "");
+            if (why === null) continue;
+            m = await apiFetch(`/api/credit-memos/${m.id}/void`, { method: "POST", body: JSON.stringify({ reason: why }) }); continue;
+          }
+          if (value === "apply") {
+            const target = parseInt(el.querySelector(".cm-apply").value), amt = parseFloat(el.querySelector(".cm-apply-amt").value);
+            if (!target) { error = "Pick the invoice."; continue; }
+            m = await apiFetch(`/api/credit-memos/${m.id}/apply`, { method: "POST", body: JSON.stringify({ invoice_id: target, amount: isNaN(amt) ? null : amt }) });
+            await loadInvoices(); toast(`${m.code} applied`); continue;
+          }
+          const payload = { memo_date: date ? `${date}T00:00:00` : null, reason,
+            lines: rows.filter(r => (r.quantity || 0) > 0).map(r => ({ item_id: r.item_id || null, order_line_id: r.order_line_id || null,
+              description: r.description || ((items.find(x => x.id === r.item_id) || {}).title) || "Credit", quantity: r.quantity, unit_price: r.unit_price })) };
+          m = m ? await apiFetch(`/api/credit-memos/${m.id}`, { method: "PUT", body: JSON.stringify(payload) })
+                : await apiFetch("/api/credit-memos/", { method: "POST", body: JSON.stringify({ ...payload, invoice_id: inv ? inv.id : null,
+                    customer_id: customerId, order_id: inv ? inv.order_id : opts.order_id || null }) });
+          rows = m.lines.map(l => ({ ...l }));
+          if (value === "issue") { m = await apiFetch(`/api/credit-memos/${m.id}/issue`, { method: "POST" }); toast(`${m.code} issued for ${fmtMoney(m.total)}`); }
+          else toast(`${m.code} saved`);
+          return openCreditMemo(m.id);
+        } catch (e) { error = e.message; }
+      }
+    }
+    // From the customer order's billing check: credit the over-billed units (invoices.html?credit_order=ID)
+    async function creditFromOrder(orderId) {
+      const [b, o] = await Promise.all([apiFetch(`/api/customer-orders/${orderId}/billing`), apiFetch(`/api/customer-orders/${orderId}`)]);
+      const lines = b.lines.filter(l => l.billed - l.shipped > 1e-6 && l.unit_price).map(l => ({ item_id: l.item_id, order_line_id: l.order_line_id,
+        description: ((items.find(x => x.id === l.item_id) || {}).title) || "", quantity: l.billed - l.shipped, unit_price: l.unit_price, max: l.billed }));
+      openCreditMemo(null, { customer_id: o.customer_id, order_id: o.id, lines, reason: `Over-billed on ${o.code}` });
+    }
+
 
     // Delivery Date pop-up saved (auth-guard.js): fresh shipments, then redraw the list and the open invoice.
     let shownInvoiceId = null;
@@ -1038,6 +1267,8 @@
       const params = new URLSearchParams(window.location.search);
       const id = params.get("id");
       if (id) showDetail(parseInt(id));
+      const creditOrder = parseInt(params.get("credit_order"));
+      if (creditOrder && AuthGuard.can("credit_memos")) { listView = "credits"; renderInvoices(); creditFromOrder(creditOrder); }
     }
     init();
   </script>

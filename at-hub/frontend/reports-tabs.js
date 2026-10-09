@@ -106,9 +106,35 @@ async function rpStatements() {
       <th class="num sum">61–90</th><th class="num sum">90+</th><th class="num sum">Total</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><strong>${escapeHtml(r.customer)}</strong><div class="muted small">${r.invoices.length} invoice${r.invoices.length === 1 ? "" : "s"}</div></td>
       <td class="num">${rpMoney(r.current)}</td><td class="num ${r.d30 ? "neg" : ""}">${rpMoney(r.d30)}</td><td class="num ${r.d60 ? "neg" : ""}">${rpMoney(r.d60)}</td>
-      <td class="num ${r.d90 ? "neg" : ""}">${rpMoney(r.d90)}</td><td class="num ${r.d90p ? "neg" : ""}">${rpMoney(r.d90p)}</td><td class="num"><strong>${rpMoney(r.total)}</strong></td>
-      <td class="nowrap"><a class="link" onclick="openPdf('/api/analytics/statement/${r.customer_id}.pdf')">Statement PDF</a></td></tr>`).join("")
+      <td class="num ${r.d90 ? "neg" : ""}">${rpMoney(r.d90)}</td><td class="num ${r.d90p ? "neg" : ""}">${rpMoney(r.d90p)}</td><td class="num"><strong>${rpMoney(r.total)}</strong>${r.credit ? `<div class="muted small" title="${escapeHtml((r.credits || []).map(c => c.code).join(", "))}">after ${rpMoney(-r.credit)} credit</div>` : ""}</td>
+      <td class="nowrap"><a class="link" onclick="openPdf('/api/analytics/statement/${r.customer_id}.pdf')">Statement PDF</a>
+        ${(r.d30 || r.d60 || r.d90 || r.d90p) && AuthGuard.can("invoices") ? ` · <a class="link" onclick="sendReminder(${r.customer_id})" title="Email this customer a reminder with their statement attached">Send Reminder</a>` : ""}</td></tr>`).join("")
       || `<tr><td colspan="8" class="muted">Nobody owes anything on a sent invoice.</td></tr>`}</tbody></table></div>`;
+}
+
+// Overdue reminder: the email (editable) with the customer's statement attached; logged so Tasks stops nagging.
+async function sendReminder(customerId) {
+  let d;
+  try { d = await apiFetch(`/api/reminders/draft/${customerId}`); } catch (e) { return toast(e.message); }
+  let error = "";
+  while (true) {
+    const { value, el } = await askDialog({ title: `Payment Reminder — ${d.customer}`,
+      body: `<p class="muted small" style="margin-top:0;">${d.invoices.length} overdue · ${rpMoney(d.amount)} · oldest ${d.oldest_days} days late${d.last_reminder ? ` · last reminder ${fmtDate(d.last_reminder)}` : ""}. Their statement is attached.</p>
+        <label>To</label><input type="text" class="rm-to" value="${escapeHtml(d.to)}">
+        <label>CC</label><input type="text" class="rm-cc" value="${escapeHtml(d.cc || "")}">
+        <label>Subject</label><input type="text" class="rm-subject" value="${escapeHtml(d.subject)}">
+        <label>Message</label><textarea class="rm-body" rows="10">${escapeHtml(d.body)}</textarea>
+        ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`,
+      buttons: [{ label: "Send Reminder", value: "send", cls: "confirm-btn" }, { label: "Statement PDF", value: "pdf", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (!value) return;
+    d = { ...d, to: el.querySelector(".rm-to").value, cc: el.querySelector(".rm-cc").value, subject: el.querySelector(".rm-subject").value, body: el.querySelector(".rm-body").value };
+    if (value === "pdf") { openPdf(`/api/analytics/statement/${customerId}.pdf`); continue; }
+    try {
+      const r = await apiFetch(`/api/reminders/send/${customerId}`, { method: "POST", body: JSON.stringify({ to: d.to, cc: d.cc, subject: d.subject, body: d.body }) });
+      toast(`Reminder sent to ${r.to.join(", ")}`);
+      return;
+    } catch (e) { error = e.message; }
+  }
 }
 
 // ---- Inventory value and slow movers ----

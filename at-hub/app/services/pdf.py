@@ -774,3 +774,37 @@ def quote_pdf(db: Session, q, show_notes: Optional[bool] = None) -> bytes:
     story += _notes_box([("NOTES", q.notes), ("TERMS", f"Prices valid until {date(q.valid_until)}." if q.valid_until else None)])
     story += [Spacer(1, 18), p("Thank you for the opportunity to quote.", "thanks")]
     return _build(story, _footer_text(company), f"Quote {q.code}")
+
+
+# ---- credit memo ----
+def credit_memo_pdf(db: Session, memo) -> bytes:
+    """The customer's credit memo: what's credited and why, the invoice it corrects, and what's been used so far."""
+    company = get_company_profile(db)
+    customer = db.query(Customer).filter(Customer.id == memo.customer_id).first()
+    order = db.query(CustomerOrder).filter(CustomerOrder.id == memo.order_id).first() if memo.order_id else None
+    inv = db.query(Invoice).filter(Invoice.id == memo.invoice_id).first() if memo.invoice_id else None
+    story = _header(company, "CREDIT MEMO", memo.code)
+    to = _party_box("CREDIT TO", customer.name if customer else "", [*address_lines(customer.address if customer else None)])
+    meta = _meta_table([("Date", date(memo.memo_date)), ("Invoice #", inv.code if inv else None),
+                        ("Order #", order.code if order else None), ("Customer PO #", order.po_number if order else None)])
+    story += [_two_boxes(to, meta), Spacer(1, 18)]
+    items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in memo.lines if l.item_id})).all()}
+    rows = [[str(n), p(items[l.item_id].code if l.item_id in items else "", "td"), p(l.description, "td"), qty(l.quantity), price(l.unit_price), money(l.amount)]
+            for n, l in enumerate(memo.lines, 1)]
+    code_w = fit_width([i.code for i in items.values()], 0.9 * inch)
+    story.append(_data_table(["#", "Item #", "Description", "Qty", "Unit price", "Credit"], rows or [["", "", "Nothing credited yet", "", "", ""]],
+                             [0.35 * inch, code_w, 7.3 * inch - 0.35 * inch - code_w - 3.1 * inch, 0.9 * inch, 1.05 * inch, 1.15 * inch],
+                             right_cols=(3, 4, 5)))
+    used = [[p(f"Applied to {db.get(Invoice, a.invoice_id).code if db.get(Invoice, a.invoice_id) else ''}", "total_k"), p(money(-a.amount), "total_v")]
+            for a in memo.applications]
+    total_rows = [[p("Credit total", "total_k" if used else "grand_k"), p(money(memo.total), "total_v" if used else "grand_v")]] + used \
+        + ([[p("Credit remaining", "grand_k"), p(money(memo.remaining), "grand_v")]] if used else [])
+    totals = Table(total_rows, colWidths=[2.4 * inch, 1.4 * inch])
+    totals.setStyle(TableStyle([("BACKGROUND", (0, -1), (-1, -1), HEAD_BG), ("BOX", (0, 0), (-1, -1), 1, NAVY),
+                                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    totals.hAlign = "RIGHT"
+    story += [Spacer(1, 10), KeepTogether(totals)]
+    story += _notes_box([("REASON", memo.reason)])
+    if memo.status == "void":
+        story += [Spacer(1, 12), p(f"VOID{f' -- {memo.void_reason}' if memo.void_reason else ''}", "thanks")]
+    return _build(story, _footer_text(company), f"Credit Memo {memo.code}")

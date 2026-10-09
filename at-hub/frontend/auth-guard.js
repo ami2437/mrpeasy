@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.split": 3, "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -648,12 +648,12 @@ function applyUnderlay(el, kind, rec, ...extra) {
 // A small choice pop-up: resolves to the clicked button's value (null on Esc / click outside),
 // with the dialog element so the caller can read any inputs in `body` before it closes.
 // askDialog({ title, body: html, buttons: [{ label, value, cls }] }) -> Promise<{ value, el }>
-function askDialog({ title, body = "", buttons = [], tone = "" }) {
+function askDialog({ title, body = "", buttons = [], tone = "", wide = false }) {
   return new Promise(resolve => {
     const back = document.createElement("div");
     back.className = "modal-backdrop";
     if (document.body.classList.contains("glass-open")) back.classList.add("over-glass");  // asked from inside a glass window: show above it
-    back.innerHTML = `<div class="modal ask-dialog ${tone}" role="dialog" aria-modal="true"><h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
+    back.innerHTML = `<div class="modal ask-dialog ${tone} ${wide ? "ask-wide" : ""}" role="dialog" aria-modal="true"><h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
       <div class="ask-body">${body}</div>
       <div class="btn-row" style="margin-top:14px;">${buttons.map((b, i) => `<button type="button" class="${b.cls || ""}" data-i="${i}">${escapeHtml(b.label)}</button>`).join("")}</div></div>`;
     const done = value => { document.removeEventListener("keydown", onKey); back.remove(); resolve({ value, el: back }); };
@@ -1654,10 +1654,9 @@ function renderSidebar(activePage) {
       ${PhoneNav.groupHtml(activePage)}
       ${groups}
       <div class="sidebar-footer">
-        ${user ? `<div class="user-line">${escapeHtml(user.full_name || user.username)}<div class="small">${escapeHtml(user.role_name || ROLE_LABELS[user.role] || user.role)}</div></div>` : ""}
         <a href="#" onclick="toggleTheme(); return false;" id="theme-toggle">${icon("moon")}<span>${currentTheme() === "dark" ? "Light Mode" : "Dark Mode"}</span></a>
-        <a href="account.html" class="${activePage === "account.html" ? "active" : ""}">${icon("user")}My Account</a>
-        <a href="#" onclick="AuthGuard.logout(); return false;">${icon("logout")}Logout</a>
+        <a href="account.html" class="m-only ${activePage === "account.html" ? "active" : ""}">${icon("user")}My Account</a>
+        <a href="#" class="m-only" onclick="AuthGuard.logout(); return false;">${icon("logout")}Logout</a>
       </div>
     </nav>
   `;
@@ -2788,13 +2787,13 @@ function aiVendorChips(cands, selectId) {
         recId = id;
         if (open) setUrl(id, true);
         const done = orig.call(this, id, ...rest);
-        Promise.resolve(done).then(() => presence.start());
+        Promise.resolve(done).then(() => { presence.start(); Recent.track(id); });
         return done;
       };
     }
     const urlFor = id => { const u = new URL(location.href); if (id) u.searchParams.set("id", id); else u.searchParams.delete("id"); return u.pathname + u.search + u.hash; };
     const setUrl = (id, replace) => history[replace ? "replaceState" : "pushState"]({ record: true, id }, "", urlFor(id));
-    window.setRecordId = id => { recId = id; if (open) setUrl(id, true); presence.start(); };  // records drawn without showDetail (a quote)
+    window.setRecordId = id => { recId = id; if (open) setUrl(id, true); presence.start(); if (id) Recent.track(id); };  // records drawn without showDetail (a quote)
     // presence: who else has this record open, and whether someone else saved it meanwhile
     const COLLECTION = { "customer-orders.html": "customer-orders", "purchase-orders.html": "purchase-orders",
                          "shipments.html": "shipments", "invoices.html": "invoices" }[location.pathname.split("/").pop()];
@@ -3191,19 +3190,24 @@ function printSections(card) {
   });
   return groups;
 }
-function printRecord() {
+async function printRecord() {
   const card = document.getElementById("detail-card");
   if (!card) { window.print(); return; }
   const groups = printSections(card);
+  // last time's choices on this screen (Print Options, saved per person): sections left out, prices, notes
+  const key = `record_${location.pathname.split("/").pop().replace(/\.html$/, "").replace(/-/g, "_")}`;
+  const last = ((await PrintOptions.load()).other || {})[key] || null;
+  const ticked = g => last && Array.isArray(last.off) ? !last.off.includes(g.name) && !(g.money && !(last.on || []).includes(g.name)) : !g.money;
   document.querySelectorAll(".print-dialog").forEach(d => d.remove());
   const dlg = document.createElement("div");
   dlg.className = "qf-backdrop print-dialog";
   dlg.innerHTML = `<div class="qf-box" style="padding:14px 16px;">
     <h3 style="margin:0 0 4px;">Print — what to include?</h3>
     <p class="muted small" style="margin:0 0 10px;">Sections with money start unticked.</p>
-    <div class="print-opts">${groups.map((g, i) => `<label><input type="checkbox" data-g="${i}" ${g.money ? "" : "checked"}> ${escapeHtml(g.name)}${g.money ? ' <span class="muted small">($)</span>' : ""}</label>`).join("")}</div>
-    <label style="display:block; margin-top:10px;"><input type="checkbox" id="print-prices"> Show prices and totals in the line table</label>
-    <label style="display:block; margin-top:4px;" title="Notes marked 'don't print' never print"><input type="checkbox" id="print-notes" checked> Show line notes</label>
+    <div class="print-opts">${groups.map((g, i) => `<label><input type="checkbox" data-g="${i}" ${ticked(g) ? "checked" : ""}> ${escapeHtml(g.name)}${g.money ? ' <span class="muted small">($)</span>' : ""}</label>`).join("")}</div>
+    <label style="display:block; margin-top:10px;"><input type="checkbox" id="print-prices" ${last && last.prices ? "checked" : ""}> Show prices and totals in the line table</label>
+    <label style="display:block; margin-top:4px;" title="Notes marked 'don't print' never print"><input type="checkbox" id="print-notes" ${!last || last.notes !== false ? "checked" : ""}> Show line notes</label>
+    <p class="muted small" style="margin:8px 0 0;">Remembered for next time.</p>
     <div style="display:flex; gap:8px; margin-top:14px; justify-content:flex-end;">
       <button class="secondary" data-cancel>Cancel</button><button data-go>Print</button></div></div>`;
   document.body.appendChild(dlg);
@@ -3212,6 +3216,8 @@ function printRecord() {
   dlg.querySelector("[data-go]").onclick = () => {
     const keep = new Set([...dlg.querySelectorAll("[data-g]:checked")].map(c => +c.dataset.g));
     const prices = dlg.querySelector("#print-prices").checked;
+    PrintOptions.save(key, { off: groups.filter((g, i) => !keep.has(i)).map(g => g.name), on: groups.filter((g, i) => keep.has(i) && g.money).map(g => g.name),
+                             prices, notes: dlg.querySelector("#print-notes").checked });
     document.body.classList.toggle("print-no-notes", !dlg.querySelector("#print-notes").checked);
     dlg.remove();
     const hidden = [], opened = [];
@@ -3548,12 +3554,17 @@ const TopBar = {
         ${AuthGuard.can("insights") && AuthGuard.can("money.view") ? `<button type="button" class="tb-btn tb-insights" onclick="openQuickInsights(TopBar.insightsFocus())"
           title="Money at a glance: orders shipped / pending, shipments in process / not invoiced, invoices paid / owed, POs received / owed">${icon("chart")}<span>Quick Insights</span></button>` : ""}
         <a class="tb-btn" href="todo.html" title="To-Do and reminders">${icon("listTodo")}<span class="tb-badge" id="tb-todo" hidden></span></a>
+        <span class="tb-pop-wrap"><button type="button" class="tb-btn" id="tb-recent" onclick="Recent.toggle(event)" title="Recently viewed records">${icon("clock")}</button>
+          <div class="tb-menu-pop tb-recent-pop" id="tb-recent-pop" hidden role="menu"></div></span>
+        <button type="button" class="tb-btn" id="tb-notes" onclick="NotesView.toggle()"></button>
         <button type="button" class="tb-btn" onclick="toggleTheme(); TopBar.themeIcon();" title="Light / dark" id="tb-theme"></button>
         <button type="button" class="tb-clock" onclick="TopBar.toggle(event)" title="Calendar">
           ${icon("calendar")}<span class="tb-date" id="tb-date"></span><span class="tb-time" id="tb-time"></span></button>
+        <span class="tb-pop-wrap">${AccountMenu.html()}</span>
       </div>
       <div class="tb-cal" id="tb-cal" hidden></div>`;
     main.prepend(bar);
+    NotesView.apply();
     this.siteLabel();
     LocalBackup.check();  // a backup to this computer is due every 3 days (backups.download)
     this.tick();
@@ -3920,3 +3931,326 @@ async function openLocalBackup({ forced = false, status = null } = {}) {
     }
   });
 }
+
+// ---- Print Options: the pop-up behind every PDF / Print button. What's ticked is remembered per person per document
+// type on the server (app/services/print_options.py), so emails and Bulk Operations print the same way. ----
+const PrintOptions = {
+  data: null,
+  async load(force = false) {
+    if (this.data && !force) return this.data;
+    try { this.data = await apiFetch("/api/auth/print-options"); } catch (e) { this.data = { docs: {}, other: {} }; }
+    return this.data;
+  },
+  async get(docType) {  // {key: bool} as last saved
+    const d = await this.load();
+    return Object.fromEntries((d.docs[docType] || []).map(o => [o.key, o.value]));
+  },
+  query(opts) { return Object.entries(opts).map(([k, v]) => `${k}=${v ? "true" : "false"}`).join("&"); },
+  async save(docType, opts) {
+    try {
+      await apiFetch(`/api/auth/print-options/${docType}`, { method: "PUT", body: JSON.stringify(opts) });
+      const d = await this.load();
+      if (d.docs[docType]) d.docs[docType].forEach(o => { if (o.key in opts) o.value = !!opts[o.key]; });
+      else d.other[docType] = opts;
+    } catch (e) { /* remembering is a nicety; the print still goes ahead */ }
+  },
+  // Ask what to print. buttons: [{label, value}] (default one "Print"); disabled: {key: "why"} greys an option out.
+  // Resolves {action, opts} or null when cancelled. The choices are saved as the new default.
+  async ask(docType, { title = "Print Options", note = "", buttons = null, disabled = {} } = {}) {
+    const d = await this.load();
+    const rows = d.docs[docType] || [];
+    const btns = buttons || [{ label: "Print", value: "print" }];
+    const { value, el } = await askDialog({ title,
+      body: `${note ? `<p class="muted small" style="margin-top:0;">${note}</p>` : ""}
+        <div class="print-opts po-list">${rows.map(o => `<label class="check-label po-opt" title="${escapeHtml(disabled[o.key] || o.hint || "")}">
+          <input type="checkbox" data-k="${o.key}" ${o.value ? "checked" : ""} ${disabled[o.key] ? "disabled" : ""}>
+          <span>${escapeHtml(o.label)}<span class="muted small po-hint">${escapeHtml(disabled[o.key] || o.hint || "")}</span></span></label>`).join("")}</div>
+        <p class="muted small" style="margin-bottom:0;">Remembered for next time — emailed and bulk-printed copies use the same choices.</p>`,
+      buttons: [...btns.map((b, i) => ({ label: b.label, value: b.value, cls: i === 0 ? "confirm-btn" : "secondary" })), { label: "Cancel", value: null, cls: "secondary" }] });
+    if (!value) return null;
+    const opts = Object.fromEntries([...el.querySelectorAll("[data-k]")].map(c => [c.dataset.k, c.checked]));
+    await this.save(docType, opts);
+    return { action: value, opts };
+  },
+};
+
+// ---- Line notes: "Print All" ticks / unticks every line's own Print box in that table (a select-all), and the
+// Hide / Show Notes button in the top bar folds every note away on every screen (remembered on this computer). ----
+function printAllNotesHtml() {
+  return `<label class="check-label ln-print-all-label no-print" title="Tick or untick Print on every line's note at once (saved with the record)">
+    <input type="checkbox" class="ln-print-all"> Print All Line Notes</label>`;
+}
+function syncPrintAll(root = document) {
+  root.querySelectorAll(".ln-print-all").forEach(master => {
+    const scope = master.closest("section, .dsec, .card, .modal, form") || document;
+    const boxes = [...scope.querySelectorAll(".ln-print")];
+    const on = boxes.filter(b => b.checked).length;
+    master.checked = boxes.length > 0 && on === boxes.length;
+    master.indeterminate = on > 0 && on < boxes.length;
+    master.disabled = !boxes.length;
+    const label = master.closest("label");
+    if (label) label.style.display = boxes.length ? "" : "none";  // no editable notes here: nothing to tick
+  });
+}
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (!t.classList) return;
+  if (t.classList.contains("ln-print-all")) {
+    const scope = t.closest("section, .dsec, .card, .modal, form") || document;
+    scope.querySelectorAll(".ln-print").forEach(b => { if (b.checked !== t.checked) { b.checked = t.checked; b.dispatchEvent(new Event("input", { bubbles: true })); } });
+    t.indeterminate = false;
+  } else if (t.classList.contains("ln-print")) syncPrintAll();
+});
+// a list redrawn with new lines: keep the master in step
+new MutationObserver(() => { if (document.querySelector(".ln-print-all")) requestAnimationFrame(() => syncPrintAll()); })
+  .observe(document.documentElement, { childList: true, subtree: true });
+
+const NotesView = {
+  KEY: "at_hub_notes_hidden",
+  hidden() { try { return localStorage.getItem(this.KEY) === "1"; } catch (e) { return false; } },
+  apply() {
+    document.body.classList.toggle("notes-hidden", this.hidden());
+    const b = document.getElementById("tb-notes");
+    if (b) {
+      b.classList.toggle("on", this.hidden());
+      b.title = this.hidden() ? "Notes are hidden on every screen -- click to show them" : "Hide every note (line notes, sticky notes) on every screen";
+      b.innerHTML = icon(this.hidden() ? "eyeOff" : "notePen");
+    }
+  },
+  toggle() {
+    try { localStorage.setItem(this.KEY, this.hidden() ? "0" : "1"); } catch (e) { /* stays as it is */ }
+    this.apply();
+    toast(this.hidden() ? "Notes hidden on every screen" : "Notes shown");
+  },
+};
+document.addEventListener("DOMContentLoaded", () => NotesView.apply());
+
+// ---- Who am I: round badge with initials at the right of the top bar; click for name, role, time zone,
+// My Account and Sign Out. The colour follows the role. ----
+const AccountMenu = {
+  COLORS: { super_admin: "#7c3aed", admin: "#2563eb", manager: "#0d9488", employee: "#ea580c" },
+  initials(u) {
+    const name = (u.full_name || u.username || "?").trim();
+    const w = name.split(/\s+/).filter(Boolean);
+    return ((w[0] || "?")[0] + (w.length > 1 ? w[w.length - 1][0] : (w[0] || "")[1] || "")).toUpperCase();
+  },
+  html() {
+    const u = AuthGuard.getUser();
+    if (!u) return "";
+    const first = (u.full_name || u.username).trim().split(/\s+/)[0];
+    const role = u.role_name || (typeof ROLE_LABELS !== "undefined" && ROLE_LABELS[u.role]) || u.role;
+    return `<button type="button" class="tb-account" onclick="AccountMenu.toggle(event)" title="${escapeHtml(u.full_name || u.username)} · ${escapeHtml(role)}" aria-haspopup="menu">
+      <span class="tb-avatar" style="background:${this.COLORS[u.role] || "#475569"}">${escapeHtml(this.initials(u))}</span>
+      <span class="tb-account-text"><span class="tb-account-name">${escapeHtml(first)}</span><span class="tb-account-role">${escapeHtml(role)}</span></span></button>
+      <div class="tb-menu-pop" id="tb-account-pop" hidden role="menu">
+        <div class="tb-menu-who"><span class="tb-avatar big" style="background:${this.COLORS[u.role] || "#475569"}">${escapeHtml(this.initials(u))}</span>
+          <div><strong>${escapeHtml(u.full_name || u.username)}</strong><div class="muted small">${escapeHtml(u.username)} · ${escapeHtml(role)}</div>
+          <div class="muted small">Time zone: ${escapeHtml(userTz())}</div></div></div>
+        <a href="account.html" role="menuitem">${icon("user")} My Account</a>
+        <a href="#" role="menuitem" onclick="openShortcuts(); return false;">${icon("info")} Keyboard Shortcuts <kbd>?</kbd></a>
+        <a href="#" role="menuitem" onclick="AuthGuard.logout(); return false;">${icon("logout")} Sign Out</a>
+      </div>`;
+  },
+  toggle(e) {
+    e.stopPropagation();
+    const pop = document.getElementById("tb-account-pop");
+    if (!pop) return;
+    Recent.close();
+    pop.hidden = !pop.hidden;
+  },
+  close() { const pop = document.getElementById("tb-account-pop"); if (pop) pop.hidden = true; },
+};
+document.addEventListener("click", e => {
+  if (!e.target.closest("#tb-account-pop") && !e.target.closest(".tb-account")) AccountMenu.close();
+  if (!e.target.closest("#tb-recent-pop") && !e.target.closest("#tb-recent")) Recent.close();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") { AccountMenu.close(); Recent.close(); } });
+
+// ---- Recently Viewed: every record opened (any record page) goes to the top of this person's list, kept on the
+// server so it follows them between computers. Top bar clock button + the empty Ctrl+K search. ----
+const Recent = {
+  rows: null,
+  KIND: { "customer-orders.html": "Order", "purchase-orders.html": "PO", "invoices.html": "Invoice", "shipments.html": "Shipment",
+          "item.html": "Item", "customers.html": "Customer", "vendors.html": "Vendor", "landed-costs.html": "Landed Cost", "stock-items.html": "Item" },
+  async load() {
+    if (this.rows) return this.rows;
+    try { this.rows = await apiFetch("/api/auth/recent"); } catch (e) { this.rows = []; }
+    return this.rows;
+  },
+  // called when a record page shows a record: label = its heading (first line), read once it has drawn
+  track(id) {
+    const page = location.pathname.split("/").pop(), kind = this.KIND[page];
+    if (!kind || !id) return;
+    setTimeout(async () => {
+      const head = ["#detail-card h3", "#detail-card h2", "#cc-card h2", "main h1.page-title"].map(q => document.querySelector(q)).find(Boolean);
+      let label = head ? head.textContent.replace(/\s+/g, " ").trim() : `${kind} ${id}`;
+      label = label.replace(/\b(draft|sent|paid|void|confirmed|shipped|invoiced|cancelled|open|ordered|received)\b.*$/i, "").trim().slice(0, 80) || `${kind} ${id}`;
+      try { this.rows = await apiFetch("/api/auth/recent", { method: "POST", body: JSON.stringify({ kind, id, label, url: `${page}?id=${id}` }) }); }
+      catch (e) { /* a nicety */ }
+    }, 900);
+  },
+  async toggle(e) {
+    e.stopPropagation();
+    AccountMenu.close();
+    const pop = document.getElementById("tb-recent-pop");
+    if (!pop) return;
+    if (!pop.hidden) { pop.hidden = true; return; }
+    this.rows = null;
+    const rows = await this.load();
+    pop.innerHTML = `<div class="tb-menu-head">Recently Viewed</div>${rows.length ? rows.map(r => `<a href="${escapeHtml(r.url)}" role="menuitem">
+        <span class="qf-kind">${escapeHtml(r.kind)}</span><span class="tb-recent-label">${escapeHtml(r.label)}</span></a>`).join("")
+      : `<div class="muted small" style="padding:8px 12px;">Records you open show up here.</div>`}`;
+    pop.hidden = false;
+  },
+  close() { const pop = document.getElementById("tb-recent-pop"); if (pop) pop.hidden = true; },
+};
+
+// ---- Saved filters: name what the list is showing (search box + the screen's filters) and bring it back in one
+// click. Per person, per screen, on the server. A page can add its own state with savedFilterState / applySavedFilter. ----
+const SavedFilters = {
+  page: null, rows: [],
+  stateNow() {
+    const box = document.querySelector(".page-toolbar") || document;
+    const fields = {};
+    box.querySelectorAll("input[id], select[id]").forEach(el => {
+      if (el.type === "file" || el.type === "button") return;
+      fields[el.id] = el.type === "checkbox" ? el.checked : el.value;
+    });
+    return { fields, extra: typeof window.savedFilterState === "function" ? window.savedFilterState() : null };
+  },
+  apply(state) {
+    Object.entries(state.fields || {}).forEach(([id, v]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+      el.dispatchEvent(new Event(el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input", { bubbles: true }));
+    });
+    if (state.extra != null && typeof window.applySavedFilter === "function") window.applySavedFilter(state.extra);
+  },
+  async mount() {
+    const search = document.querySelector(".page-toolbar #search");
+    if (!search || document.getElementById("sf-btn")) return;
+    this.page = location.pathname.split("/").pop().replace(/\.html$/, "");
+    const wrap = document.createElement("span");
+    wrap.className = "sf-wrap";
+    wrap.innerHTML = `<button type="button" class="secondary sf-btn" id="sf-btn" title="Saved filters: name what this list shows now and bring it back in one click">${icon("sliders")}<span>Saved</span></button>
+      <div class="tb-menu-pop sf-pop" id="sf-pop" hidden></div>`;
+    search.after(wrap);
+    wrap.querySelector("#sf-btn").addEventListener("click", e => { e.stopPropagation(); this.open(); });
+    document.addEventListener("click", e => { if (!e.target.closest(".sf-wrap")) { const p = document.getElementById("sf-pop"); if (p) p.hidden = true; } });
+  },
+  async open() {
+    const pop = document.getElementById("sf-pop");
+    if (!pop.hidden) { pop.hidden = true; return; }
+    try { this.rows = await apiFetch(`/api/auth/filters/${this.page}`); } catch (e) { this.rows = []; }
+    pop.innerHTML = `<div class="tb-menu-head">Saved Filters</div>
+      ${this.rows.map((r, i) => `<div class="sf-row"><a href="#" onclick="SavedFilters.use(${i}); return false;">${escapeHtml(r.name)}</a>
+        <button type="button" class="icon-btn" title="Forget this filter" onclick="SavedFilters.remove(${i})">${icon("x")}</button></div>`).join("")
+        || `<div class="muted small" style="padding:6px 12px;">None yet.</div>`}
+      <div class="sf-add"><a href="#" onclick="SavedFilters.add(); return false;">${icon("plus")} Save What's Showing Now…</a></div>`;
+    pop.hidden = false;
+  },
+  use(i) { const r = this.rows[i]; if (r) { this.apply(r.state); toast(`Filter: ${r.name}`); } document.getElementById("sf-pop").hidden = true; },
+  async add() {
+    const name = prompt("Name this filter", (document.querySelector(".page-toolbar #search") || {}).value || "");
+    if (!name || !name.trim()) return;
+    const rows = this.rows.filter(r => r.name.toLowerCase() !== name.trim().toLowerCase()).concat([{ name: name.trim(), state: this.stateNow() }]);
+    try { this.rows = await apiFetch(`/api/auth/filters/${this.page}`, { method: "PUT", body: JSON.stringify(rows) }); toast(`Saved “${name.trim()}”`); }
+    catch (e) { toast(e.message); }
+    document.getElementById("sf-pop").hidden = true;
+  },
+  async remove(i) {
+    const rows = this.rows.filter((_, n) => n !== i);
+    try { this.rows = await apiFetch(`/api/auth/filters/${this.page}`, { method: "PUT", body: JSON.stringify(rows) }); } catch (e) { return toast(e.message); }
+    document.getElementById("sf-pop").hidden = true;
+    this.open();
+  },
+};
+document.addEventListener("DOMContentLoaded", () => { if (AuthGuard.getToken()) SavedFilters.mount(); });
+
+// ---- "+ New" opens its own screen (like a new quote): the form alone, at the top, with a Back bar and its own
+// address (?creating=1) -- the list and any open record step aside. Leaving with unsaved typing asks first. ----
+(function newRecordPages() {
+  const FORMS = { "customer-orders.html": "form-card", "purchase-orders.html": "form-card", "stock-items.html": "item-form-card",
+                  "landed-costs.html": "form-card", "users.html": "form-card" };
+  document.addEventListener("DOMContentLoaded", () => {
+    const formId = FORMS[location.pathname.split("/").pop()];
+    const form = formId && document.getElementById(formId);
+    const main = form && form.closest("main");
+    if (!form || !main || form.parentElement !== main) return;
+    const listName = (document.title.split("—")[1] || "List").trim();
+    let open = false, dirty = false;
+    form.addEventListener("input", () => { dirty = true; });
+    // ?creating=1 (?new= already means "new order for this customer" on the order / PO screens)
+    const urlWith = on => { const u = new URL(location.href); u.searchParams.delete("id"); u.searchParams.delete("new"); on ? u.searchParams.set("creating", "1") : u.searchParams.delete("creating"); return u.pathname + u.search; };
+    const hide = () => {
+      const cancel = [...form.querySelectorAll("button")].find(b => /^\s*cancel\s*$/i.test(b.textContent));
+      if (cancel) cancel.click(); else form.style.display = "none";
+    };
+    window.closeNewRecord = async () => {
+      if (dirty) {
+        const { value } = await askDialog({ title: "Leave without saving?", tone: "warn", body: "<p>What you've typed on this new record will be lost.</p>",
+          buttons: [{ label: "Leave", value: "go", cls: "danger" }, { label: "Keep Editing", value: null, cls: "secondary" }] });
+        if (value !== "go") return;
+      }
+      dirty = false;
+      if (history.state && history.state.newRecord) history.back(); else hide();
+    };
+    const sync = () => {
+      const visible = form.style.display !== "none";
+      if (visible && !form.querySelector(":scope > .record-backbar"))
+        form.insertAdjacentHTML("afterbegin", `<div class="record-backbar no-print"><a class="link" onclick="closeNewRecord()">← Back to ${escapeHtml(listName)}</a></div>`);
+      if (visible === open) return;
+      open = visible;
+      main.classList.toggle("new-mode", open);
+      if (open) {
+        dirty = false;
+        const detail = document.getElementById("detail-card");
+        if (detail && detail.style.display !== "none") detail.style.display = "none";  // an open record steps aside
+        window.scrollTo({ top: 0 });
+        if (!(history.state && history.state.newRecord)) history.pushState({ newRecord: true }, "", urlWith(true));
+        const first = form.querySelector("input:not([type=hidden]):not([type=file]):not([type=checkbox]), select, textarea");
+        if (first) setTimeout(() => first.focus(), 50);
+      } else {
+        dirty = false;
+        if (history.state && history.state.newRecord) history.replaceState(null, "", urlWith(false));
+      }
+    };
+    new MutationObserver(sync).observe(form, { attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("popstate", e => { if (open && !(e.state && e.state.newRecord)) { dirty = false; hide(); } });
+    sync();
+    if (new URL(location.href).searchParams.get("creating") && !open) {  // reloaded on the new-record screen: open it again
+      setTimeout(() => { const b = [...document.querySelectorAll("main button")].find(x => /^\s*\+\s*New\b/i.test(x.textContent)); if (b) b.click(); }, 400);
+    }
+  });
+})();
+
+// ---- Keyboard shortcuts (not while typing): N new record, / search, E edit, ? this list. Ctrl+S saves, Ctrl+K finds. ----
+function openShortcuts() {
+  AccountMenu.close();
+  askDialog({ title: "Keyboard Shortcuts", body: `<table class="fit-table no-table-tools kb-table"><tbody>
+      ${[["N", "New record on this screen (order, PO, item…)"], ["/", "Jump to this screen's search box"], ["E", "Edit the record on screen"],
+         ["Ctrl + S", "Save what you're working on"], ["Ctrl + K", "Find anything"], ["Esc", "Close a pop-up / menu"], ["?", "This list"]]
+        .map(([k, what]) => `<tr><td class="nowrap"><kbd>${k}</kbd></td><td class="grow">${what}</td></tr>`).join("")}</tbody></table>`,
+    buttons: [{ label: "Close", value: null, cls: "secondary" }] });
+}
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  if (document.querySelector(".modal-backdrop, .qf-backdrop, .glass-back, .print-dialog")) return;
+  const visible = el => el && el.offsetParent !== null && !el.disabled;
+  const buttons = () => [...document.querySelectorAll("main button, main a.link")].filter(visible);
+  if (e.key === "?") { e.preventDefault(); openShortcuts(); }
+  else if (e.key === "/") {
+    const s = document.querySelector(".page-toolbar #search, #search, #cc-search");
+    e.preventDefault();
+    if (visible(s)) s.focus(); else QuickFind.open();
+  } else if (e.key === "n" || e.key === "N") {
+    const b = buttons().find(x => /^\s*\+\s*New\b/i.test(x.textContent));
+    if (b) { e.preventDefault(); b.click(); }
+  } else if (e.key === "e" || e.key === "E") {
+    const b = buttons().find(x => /^\s*(✎\s*)?Edit(\s+(Order|PO|Item|Invoice|Lines))?\s*$/i.test(x.textContent));
+    if (b) { e.preventDefault(); b.click(); }
+  }
+});

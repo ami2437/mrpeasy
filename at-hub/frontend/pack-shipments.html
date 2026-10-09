@@ -52,13 +52,6 @@
         <span class="sel-count" id="sel-count">0 selected</span>
         <span class="stage-actions" id="stage-actions"></span>
       </div>
-      <div class="small muted pack-tools" style="margin-top:6px;">Packing list prints:
-        <label class="inline-check"><input type="checkbox" id="pl-all-boxes" checked> Box details</label>
-        <label class="inline-check"><input type="checkbox" id="pl-all-pallets" checked> Pallet info</label>
-        <label class="inline-check" title="How many boxes ride on each pallet, in the pallet table (off unless needed)"><input type="checkbox" id="pl-all-pallet-boxes"> Boxes per pallet</label>
-        <label class="inline-check"><input type="checkbox" id="pl-all-lots"> Lot #</label>
-        <label class="inline-check" title="Line notes from the order (a note marked 'don't print' never prints)"><input type="checkbox" id="pl-all-notes" checked> Line notes</label>
-      </div>
       <div id="bulk-error" class="error"></div>
       <div id="bulk-result" class="small"></div>
     </div>
@@ -443,10 +436,7 @@
       } catch (e) { document.getElementById(`err-${id}`).textContent = e.message; }
     }
 
-    function plQuery() {
-      return `boxes=${document.getElementById("pl-all-boxes").checked}&pallets=${document.getElementById("pl-all-pallets").checked}&lots=${document.getElementById("pl-all-lots").checked}&notes=${document.getElementById("pl-all-notes").checked}&pallet_boxes=${document.getElementById("pl-all-pallet-boxes").checked}`;
-    }
-    function packingListOne(id) { openPdf(`/api/shipments/${id}/packing-list.pdf?${plQuery()}`); }
+    function packingListOne(id) { printPackingList(id); }  // Print Options pop-up (shipment-detail.js)
 
     // ---- full detail panel (shared with the Shipments page), embedded in the card ----
     function attachDetail(id) {
@@ -549,13 +539,12 @@
       const chosen = selectedShipments();
       if (!chosen.length) { showError("Tick at least one shipment."); return; }
       const n = chosen.length, ids = chosen.map(s => s.id).join(",");
-      const { value: mode } = await askDialog({ title: `Packing lists for ${n} shipment${n === 1 ? "" : "s"}`,
-        body: `<p>Which format? Excel and CSV have the same lines as the PDF, with the shipment and PO # on every row${n > 1 ? " (one workbook / one file for all of them)" : ""}.</p>`,
-        buttons: [{ label: n > 1 ? "PDF — One Combined" : "PDF", value: "pdf", cls: "confirm-btn" },
-                  ...(n > 1 ? [{ label: "PDF — One Per Shipment (ZIP)", value: "zip", cls: "secondary" }] : []),
-                  { label: "Excel", value: "xlsx", cls: "secondary" }, { label: "CSV", value: "csv", cls: "secondary" },
-                  { label: "Cancel", value: null, cls: "secondary" }] });
-      if (!mode) return;
+      const got = await PrintOptions.ask("packing_list", { title: `Packing Lists for ${n} Shipment${n === 1 ? "" : "s"}`,
+        note: `Excel and CSV have the same lines as the PDF, with the shipment and PO # on every row${n > 1 ? " (one workbook / one file for all of them)" : ""}. Pallet info prints only for shipments with pallets.`,
+        buttons: [{ label: n > 1 ? "PDF — One Combined" : "PDF", value: "pdf" }, ...(n > 1 ? [{ label: "PDF — One Per Shipment (ZIP)", value: "zip" }] : []),
+                  { label: "Excel", value: "xlsx" }, { label: "CSV", value: "csv" }] });
+      if (!got) return;
+      const mode = got.action, plQuery = () => PrintOptions.query(got.opts);
       if (mode === "pdf") return openPdf(`/api/shipments/packing-lists.pdf?ids=${ids}&${plQuery()}`);
       if (mode === "zip") return downloadZip(`/api/shipments/packing-lists.pdf?ids=${ids}&${plQuery()}&split=true`, "Packing Lists.zip");
       const one = n === 1 ? docFileName(chosen[0].code, (order(chosen[0].order_id) || {}).po_number, "Packing List").replace(/\.pdf$/i, "") : "Packing Lists";
@@ -1391,6 +1380,14 @@
       let area = params.get("area");
       try { area = area || localStorage.getItem("bulk_area"); } catch {}
       if ((area === "invoices" || !AuthGuard.can("shipments.work")) && AuthGuard.can("invoices")) setArea("invoices");
+      // from the Invoices list (ticked there, "Send / Print"): those invoices ticked here, Send / Print open
+      const fromList = (params.get("invoice_ids") || "").split(",").map(Number).filter(Boolean);
+      if (fromList.length && AuthGuard.can("invoices")) {
+        setArea("invoices");
+        fromList.forEach(i => invSelected.add(i));
+        renderInvoices();
+        setTimeout(() => openDocsDialog("invoices"), 200);
+      }
     }
 
     document.getElementById("search").addEventListener("input", renderAll);

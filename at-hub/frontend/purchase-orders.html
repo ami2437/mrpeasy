@@ -50,6 +50,7 @@
         <div class="wide"><label>Notes</label><textarea id="f-notes" rows="2"></textarea></div>
       </div>
       <h4>Lines</h4>
+      <label class="check-label ln-print-all-label no-print" title="Tick or untick Print on every line's note at once (saved with the record)"><input type="checkbox" class="ln-print-all"> Print All Line Notes</label>
       <table class="lines-table">
         <thead><tr><th>Our Item</th><th>Vendor Part #</th><th>Vendor Description <span class="muted small">(Optional)</span></th><th>Qty</th><th>Unit Cost</th><th></th></tr></thead>
         <tbody id="lines-body"></tbody>
@@ -91,6 +92,14 @@
     let orders = [];
     let currentOrder = null;
 
+
+    // PDF / Print: vendor copy or internal, with the Print Options pop-up (remembered).
+    async function printPo(id) {
+      const got = await PrintOptions.ask("purchase_order", { title: "Print Purchase Order",
+        note: "The vendor's copy shows their part #s only; the internal copy has our item #s.",
+        buttons: [{ label: "Vendor Copy", value: "vendor" }, { label: "Internal Copy", value: "internal" }] });
+      if (got) openPdf(`/api/purchase-orders/${id}/pdf?vendor=${got.action === "vendor"}&${PrintOptions.query(got.opts)}`);
+    }
 
     function toggleForm(show = true) {
       document.getElementById("form-card").style.display = show ? "block" : "none";
@@ -531,9 +540,7 @@
         <p class="muted" style="margin:0 0 4px;">${escapeHtml((vendors.find(v => v.id === order.vendor_id) || {}).name || "")}${order.order_date && !["draft", "validation"].includes(order.status) ? ` — ordered ${fmtDate(order.order_date)}` : ""}</p>
 
         <div class="action-bar">
-          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?vendor=true&notes=' + document.getElementById('po-print-notes').checked)" title="What the vendor sees: Vendor Part #s Only">PDF For Vendor</button>
-          <button class="secondary" onclick="openPdf('/api/purchase-orders/${order.id}/pdf?notes=' + document.getElementById('po-print-notes').checked)" title="Internal copy with our item #s">Internal PDF</button>
-          <label class="check-label" title="Line notes on the PDF (a note with Print unticked never prints)"><input type="checkbox" id="po-print-notes" checked> Line notes</label>
+          <button class="secondary" onclick="printPo(${order.id})" title="The vendor's copy (their part #s only) or our internal copy">PDF / Print</button>
           ${!["cancelled", "validation"].includes(order.status) ? `<button class="secondary" onclick="toggleEmailForm(${order.id})">Email To Vendor</button>` : ""}
           ${order.status === "draft" ? `<button class="secondary" onclick="markOrdered(${order.id}).then(() => showDetail(${order.id}))">Mark Ordered</button>` : ""}
           <span style="flex:1;"></span>
@@ -556,6 +563,7 @@
         </section>
 
         <section class="dsec"><h4 class="dsec-title">Lines</h4>
+        ${printAllNotesHtml()}
         <div class="table-scroll">
         <table class="lines-table fit-table wrap-cells">
           <thead><tr><th>#</th><th class="grow">Item</th><th title="What this vendor calls the item, and their description — remembered for this vendor">Vendor Part # / Description</th><th class="num">Qty</th><th class="num">Received</th><th class="num">Unit cost</th><th class="num">Subtotal</th><th class="num" title="Unit cost with landed costs (freight, tariffs...) spread onto it">Landed unit</th>${canReceive ? `<th title="Quantity to receive now, and the lot # (blank = next lot #)">Receive now / Lot #</th>` : ""}</tr></thead>
@@ -1104,6 +1112,10 @@ Thank you.</textarea>
       const amount = parseFloat(document.getElementById("bill-amount").value);
       if (!number) { errorEl.textContent = "Enter the vendor's invoice #."; return; }
       if (!amount || amount <= 0) { errorEl.textContent = "Enter the invoice amount."; return; }
+      // the same vendor invoice # on another PO of this vendor: usually the same bill entered twice
+      const po = orders.find(o => o.id === poId) || {};
+      const twin = orders.find(o => o.id !== poId && o.vendor_id === po.vendor_id && (o.bills || []).some(b => b.bill_number.toLowerCase() === number.toLowerCase()));
+      if (twin && !confirm(`Vendor invoice ${number} is already recorded on ${twin.code} (same vendor). Entering it twice would pay it twice.\n\nRecord it on this PO too?`)) return;
       const sum = checkBillSum();
       if (sum !== null && Math.abs(sum - amount) > 0.005
           && !confirm(`Goods + S&H = ${fmtMoney(sum)} but the invoice total is ${fmtMoney(amount)} (off by ${fmtMoney(amount - sum)}). Record it anyway?`)) return;
@@ -1131,6 +1143,7 @@ Thank you.</textarea>
             amount,
             shipping_amount: parseFloat(document.getElementById("bill-shipping").value) || null,
             attachment_id: attachmentId,
+            allow_duplicate: !!twin,
           }),
         });
         await loadOrders();

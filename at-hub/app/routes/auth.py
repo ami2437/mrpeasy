@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -167,7 +167,7 @@ def my_filters(page: str, current_user: User = Depends(get_current_active_user),
 
 
 @router.put("/filters/{page}")
-def save_my_filters(page: str, rows: list, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+def save_my_filters(page: str, rows: list = Body(...), current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """This screen's saved filters, replaced as a whole: [{name, state}] (state = whatever the screen restores)."""
     import json
     if not re.fullmatch(r"[a-z_-]{2,40}", page):

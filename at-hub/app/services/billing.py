@@ -115,13 +115,16 @@ def order_ledger(db: Session, order: CustomerOrder) -> List[dict]:
             .filter(Invoice.order_id == order.id, Invoice.status != "void", InvoiceLine.order_line_id.isnot(None)).all())
     for olid, qty in rows:
         billed[olid] = billed.get(olid, 0) + (qty or 0)
+    from app.services.credit_memos import credited_by_order_line
+    credits = credited_by_order_line(db, order.id)
     on_shipments: Dict[int, float] = {}
     for sh in db.query(Shipment).filter(Shipment.order_id == order.id, Shipment.status.in_(SHIPPED_STATUSES)).all():
         for sl in sh.lines:
             on_shipments[sl.order_line_id] = on_shipments.get(sl.order_line_id, 0) + sl.quantity
     out = []
     for l in order.lines:
-        ordered, shipped, b = l.quantity or 0, l.shipped_quantity or 0, billed.get(l.id, 0)
+        credited = credits.get(l.id, (0, 0))[0]
+        ordered, shipped, b = l.quantity or 0, l.shipped_quantity or 0, billed.get(l.id, 0) - credited  # credit memos take billing back
         counted = on_shipments.get(l.id, 0)
         problems = []
         if b > ordered + EPS and (l.unit_price or 0):
@@ -133,7 +136,7 @@ def order_ledger(db: Session, order: CustomerOrder) -> List[dict]:
         if abs(b - shipped) > EPS and ((l.unit_price or 0) or b > EPS):
             problems.append("billed_vs_shipped")
         out.append({"order_line_id": l.id, "line_no": l.line_no, "item_id": l.item_id, "ordered": ordered, "unit_price": l.unit_price or 0,
-                    "shipped": shipped, "shipped_on_shipments": counted, "billed": b, "problems": problems})
+                    "shipped": shipped, "shipped_on_shipments": counted, "billed": b, "credited": credited, "problems": problems})
     return out
 
 
@@ -145,10 +148,13 @@ def order_mismatches(db: Session) -> List[dict]:
                   .filter(Invoice.status != "void", InvoiceLine.order_line_id.isnot(None)).group_by(InvoiceLine.order_line_id).all())
     counted = dict(db.query(ShipmentLine.order_line_id, func.sum(ShipmentLine.quantity)).join(Shipment, Shipment.id == ShipmentLine.shipment_id)
                    .filter(Shipment.status.in_(SHIPPED_STATUSES)).group_by(ShipmentLine.order_line_id).all())
+    from app.services.credit_memos import credited_by_order_line
+    credits = credited_by_order_line(db)
     by_order: Dict[int, list] = {}
     for l in (db.query(CustomerOrderLine).join(CustomerOrder, CustomerOrder.id == CustomerOrderLine.order_id)
               .filter(CustomerOrder.status != "cancelled").all()):
-        ordered, shipped, b, c = l.quantity or 0, l.shipped_quantity or 0, billed.get(l.id) or 0, counted.get(l.id) or 0
+        ordered, shipped, c = l.quantity or 0, l.shipped_quantity or 0, counted.get(l.id) or 0
+        b = (billed.get(l.id) or 0) - credits.get(l.id, (0, 0))[0]
         problems = ([p for p, bad in (("over_ordered_billed", b > ordered + EPS and (l.unit_price or 0)),
                                       ("over_ordered_shipped", shipped > ordered + EPS),
                                       ("shipments_disagree", abs(c - shipped) > EPS)) if bad])

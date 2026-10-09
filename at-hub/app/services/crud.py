@@ -2750,6 +2750,14 @@ class VendorBillService:
             raise HTTPException(status_code=400, detail="Invoice amount must be greater than 0")
         if any(b.bill_number.lower() == number.lower() for b in po.bills):
             raise HTTPException(status_code=400, detail=f"Vendor invoice {number} is already recorded on {po.code}")
+        # the same vendor invoice # on another of this vendor's POs is usually the same bill entered twice
+        if not getattr(data, "allow_duplicate", False):
+            other = (db.query(VendorBill, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == VendorBill.po_id)
+                     .filter(PurchaseOrder.vendor_id == po.vendor_id, PurchaseOrder.id != po.id,
+                             func.lower(VendorBill.bill_number) == number.lower()).first())
+            if other:
+                raise HTTPException(status_code=409, detail=f"Vendor invoice {number} is already recorded on {other[1].code} "
+                                                            f"(same vendor, {other[0].amount:,.2f}) -- record it here too only if it really covers both POs")
         shipping = cents(data.shipping_amount)
         if shipping < 0 or shipping > data.amount + 0.005:
             raise HTTPException(status_code=400, detail="S&H on the invoice must be between 0 and the invoice amount")
@@ -3057,8 +3065,20 @@ class OrderProfitService:
         shipped  -- the lots the units actually left from (actual)
         booked   -- the lots open shipments reserved (committed)
         unbooked -- projected from the free lots booking would draw next, oldest first
-        Landed costs are already inside each lot's unit_cost."""
+        Landed costs are already inside each lot's unit_cost. Shipped revenue is what was actually invoiced for the line
+        (live invoices, less credit memos); shipped units not invoiced yet count at the order price."""
+        from app.services.credit_memos import credited_by_order_line
+        from app.services.money import line_amount
         order = CustomerOrderService.get(db, order_id)
+        live_invoices = db.query(Invoice).filter(Invoice.order_id == order.id, Invoice.status != "void").all()
+        invoiced = {}  # order line -> [qty, amount]
+        for inv in live_invoices:
+            for l in inv.lines:
+                if l.order_line_id:
+                    v = invoiced.setdefault(l.order_line_id, [0.0, 0.0])
+                    v[0] += l.quantity or 0
+                    v[1] += line_amount(l.quantity, l.unit_price)
+        credits = credited_by_order_line(db, order.id)
         buckets = {k: {"quantity": 0.0, "revenue": 0.0, "cost": 0.0, "profit": 0.0} for k in ("shipped", "booked", "unbooked")}
         missing, warnings, lines_out = {}, [], []
         free_lots_by_item = {}  # item_id -> [[lot, free]], consumed as unbooked lines are projected
@@ -3119,6 +3139,20 @@ class OrderProfitService:
                         "cost": remaining * est, "revenue": remaining * line.unit_price, "estimated": True,
                     })
 
+            # shipped units: revenue as invoiced (less credits); any shipped but not yet invoiced at the order price
+            shipped = [c for c in comps if c["kind"] == "shipped"]
+            shipped_qty = sum(c["quantity"] for c in shipped)
+            inv_qty, inv_amt = invoiced.get(line.id, (0.0, 0.0))
+            cr_qty, cr_amt = credits.get(line.id, (0.0, 0.0))
+            billed_qty, billed_amt = inv_qty - cr_qty, inv_amt - cr_amt
+            if shipped and (inv_qty > 1e-9 or cr_qty > 1e-9):
+                actual = billed_amt + max(0.0, shipped_qty - billed_qty) * line.unit_price
+                at_price = shipped_qty * line.unit_price
+                for c in shipped:
+                    c["revenue"] = actual * (c["quantity"] / shipped_qty) if shipped_qty > 1e-9 else 0
+                if abs(actual - at_price) > 0.01:
+                    warnings.append(f"#{line.line_no} {item.code}: revenue is what was invoiced ({cents(actual):,.2f}) -- "
+                                    f"at the order price it would be {cents(at_price):,.2f}")
             revenue = sum(c["revenue"] for c in comps)
             cost = sum(c["cost"] for c in comps)
             for c in comps:
@@ -3139,9 +3173,11 @@ class OrderProfitService:
 
         shipping_cost = cents(sum(s.shipping_cost or 0 for s in db.query(Shipment).filter(
             Shipment.order_id == order.id, Shipment.status != "cancelled").all()))
-        other_charges = cents(sum(l.amount
-                                  for inv in db.query(Invoice).filter(Invoice.order_id == order.id, Invoice.status != "void").all()
-                                  for l in inv.lines if l.item_id is None))
+        # non-item invoice lines (shipping charged...), less credit memo lines not tied to an order line
+        from app.models import CreditMemo
+        general_credit = sum(l.amount for m in db.query(CreditMemo).filter(CreditMemo.order_id == order.id, CreditMemo.status == "issued").all()
+                             for l in m.lines if not l.order_line_id)
+        other_charges = cents(sum(l.amount for inv in live_invoices for l in inv.lines if l.item_id is None) - general_credit)
         for b in buckets.values():
             b["revenue"], b["cost"], b["profit"] = cents(b["revenue"]), cents(b["cost"]), cents(b["profit"])
         revenue = cents(sum(b["revenue"] for b in buckets.values()))

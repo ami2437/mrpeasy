@@ -20,6 +20,11 @@ function renderQuotes(q) {
     || `<tr><td colspan="9" class="muted">${quotes.length ? "No quotes match." : "No quotes yet — click + New Quote."}</td></tr>`;
 }
 
+async function printQuote(id) {
+  const got = await PrintOptions.ask("quote", { title: "Print Quote", buttons: [{ label: "Open PDF", value: "pdf" }] });
+  if (got) openPdf(`/api/quotes/${id}/pdf?${PrintOptions.query(got.opts)}`);
+}
+
 function newQuote() {
   currentQuote = { id: null, customer_id: customers[0] ? customers[0].id : null, customer_ref: "", notes: "", valid_until: null, status: "draft", lines: [] };
   drawQuote();
@@ -136,7 +141,7 @@ function drawQuote() {
       ${x.id ? `<span class="tag ${QUOTE_TAG[x.status]}">${x.status}</span>` : ""}
       <span style="margin-left:auto;"></span>
       ${x.id ? `<button class="secondary small-btn" onclick="toggleQuoteEmail()">Email</button>
-        <button class="secondary small-btn" onclick="openPdf('/api/quotes/${x.id}/pdf')">PDF / Print</button>` : ""}</h3>
+        <button class="secondary small-btn" onclick="printQuote(${x.id})">PDF / Print</button>` : ""}</h3>
     <div id="q-email-form" style="display:none;"></div>
     <div class="field-grid">
       <div class="wide"><label>Customer</label><select id="q-customer" ${locked ? "disabled" : ""} onchange="loadQuoteHints()">${customers.map(c => `<option value="${c.id}" ${c.id === x.customer_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select></div>
@@ -150,6 +155,7 @@ function drawQuote() {
       <button class="ai-btn" data-icon="sparkles" onclick="readQuoteText()" style="margin-top:6px;">Read Lines</button>
       <span id="q-paste-msg" class="small muted"></span></details>`}
     <h4>Lines</h4>
+    ${locked ? "" : printAllNotesHtml()}
     <div class="table-scroll"><table class="lines-table fit-table">
       <thead><tr><th class="grow">Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Amount</th><th></th></tr></thead>
       <tbody id="q-lines" oninput="quoteHint(event.target.closest('tr')); quoteTotals()">${x.lines.map(quoteLineRow).join("")}</tbody>

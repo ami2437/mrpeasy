@@ -938,6 +938,7 @@ class InvoicePayment(Base):
     reference = Column(String, nullable=True)
     note = Column(Text, nullable=True)
     funding_import_id = Column(Integer, ForeignKey("funding_imports.id"), nullable=True, index=True)  # created by a bulk funding upload
+    credit_memo_id = Column(Integer, nullable=True, index=True)  # a credit memo applied to the invoice (method "credit memo")
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1116,6 +1117,81 @@ class Role(Base):
     builtin = Column(Boolean, nullable=False, default=False)
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CreditMemo(Base):
+    """Money given back to a customer: over-billing, returns, price corrections. Linked to the order (and usually the
+    invoice it corrects). Lines tied to an order line count against what that line billed (app/services/billing.py).
+    draft -> issued (the customer's) -> applied to open invoices as payments ("credit memo"), or void.
+    remaining = total - applied: what the customer can still use."""
+    __tablename__ = "credit_memos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    row_version = Column(Integer, nullable=False, default=1)
+    row_updated_at = Column(DateTime, nullable=True)
+    updated_by = Column(String, nullable=True)
+    code = Column(String, unique=True, nullable=False, index=True)  # CM-0001
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey("customer_orders.id"), nullable=True, index=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True, index=True)  # the invoice it corrects
+    memo_date = Column(DateTime, default=clock.today)  # a calendar date
+    reason = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="draft")  # draft | issued | void
+    void_reason = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lines = relationship("CreditMemoLine", backref="memo", cascade="all, delete-orphan", order_by="CreditMemoLine.id")
+    applications = relationship("InvoicePayment", backref="credit_memo", primaryjoin="CreditMemo.id == foreign(InvoicePayment.credit_memo_id)")
+
+    @property
+    def total(self) -> float:
+        from app.services.money import total
+        return total(self.lines)
+
+    @property
+    def applied(self) -> float:
+        from app.services.money import cents
+        return cents(sum(p.amount for p in self.applications))
+
+    @property
+    def remaining(self) -> float:
+        from app.services.money import cents
+        return 0.0 if self.status == "void" else cents(self.total - self.applied)
+
+    @property
+    def applied_to(self) -> list:
+        return [{"payment_id": p.id, "invoice_id": p.invoice_id, "amount": p.amount, "paid_date": p.paid_date} for p in self.applications]
+
+
+class ReminderLog(Base):
+    """An overdue-payment reminder emailed to a customer (statement attached): who, which invoices, when, by whom."""
+    __tablename__ = "reminder_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    invoice_codes = Column(Text, nullable=True)  # the overdue invoices it was about, comma separated
+    amount = Column(Float, nullable=True)        # overdue total at the time
+    to_address = Column(String, nullable=True)
+    sent_by = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CreditMemoLine(Base):
+    __tablename__ = "credit_memo_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    memo_id = Column(Integer, ForeignKey("credit_memos.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("stock_items.id"), nullable=True)
+    order_line_id = Column(Integer, ForeignKey("customer_order_lines.id"), nullable=True)  # the order line it credits
+    description = Column(String, nullable=False)
+    quantity = Column(Float, nullable=False, default=1)
+    unit_price = Column(Float, nullable=False, default=0)
+
+    @property
+    def amount(self) -> float:
+        from app.services.money import line_amount
+        return line_amount(self.quantity, self.unit_price)
 
 
 class BillingVariance(Base):

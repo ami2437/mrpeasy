@@ -2195,3 +2195,66 @@ html[data-theme="dark"] .lb-due { background: rgba(251, 146, 60, .12); border-co
 .lb-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .lb-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .lb-foot .lb-skip { margin-right: auto; }
+
+/* ---- top bar: account badge, Recently Viewed, Hide / Show Notes ---- */
+.tb-pop-wrap { position: relative; display: inline-flex; }
+.tb-account { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 3px; border-radius: 18px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer; box-shadow: none; }
+.tb-account:hover, .tb-account:focus { border-color: var(--accent, #2f6fed); background: var(--surface); }
+.tb-avatar { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; flex: 0 0 auto; text-transform: none; }
+.tb-avatar.big { width: 40px; height: 40px; font-size: 15px; }
+.tb-account-text { display: flex; flex-direction: column; line-height: 1.05; text-align: left; }
+.tb-account-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tb-account-role { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.tb-menu-pop { position: absolute; top: 40px; right: 0; z-index: 70; min-width: 250px; max-width: calc(100vw - 32px); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .18); padding: 6px 0; }
+.tb-menu-pop > a, .sf-row > a { display: flex; align-items: center; gap: 8px; padding: 8px 14px; color: var(--text); text-decoration: none; font-size: 13px; }
+.tb-menu-pop > a:hover, .sf-row > a:hover { background: color-mix(in srgb, var(--accent, #2f6fed) 9%, transparent); color: var(--accent, #2f6fed); }
+.tb-menu-pop > a .ico { width: 15px; height: 15px; }
+.tb-menu-pop > a kbd { margin-left: auto; }
+.tb-menu-who { display: flex; gap: 10px; align-items: center; padding: 8px 14px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.tb-menu-head { padding: 4px 14px 6px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.tb-recent-pop { min-width: 320px; }
+.tb-recent-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tb-notes.on { border-color: #d97706; color: #b45309; }
+body.notes-hidden .line-note, body.notes-hidden .line-note-read, body.notes-hidden .sticky-row, body.notes-hidden .ln-print-all-label { display: none !important; }
+body.notes-hidden .note-btn.has-note { outline: 2px dashed #d97706; outline-offset: 1px; }  /* a hidden note is still there */
+@media (max-width: 1100px) { .tb-account-text { display: none; } .tb-account { padding: 0 3px; } }
+@media print { .tb-menu-pop, .sf-wrap { display: none !important; } }
+
+/* ---- Print Options pop-up ---- */
+.po-list { display: grid; gap: 4px; }
+.po-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 8px; margin: 0; }
+.po-opt:hover { background: color-mix(in srgb, var(--accent, #2f6fed) 6%, transparent); }
+.po-opt input { margin-top: 3px; width: auto; }
+.po-opt > span { display: flex; flex-direction: column; }
+.po-hint { text-transform: none; font-weight: 400; }
+.ln-print-all-label { font-size: 12px; margin: 0 0 6px; display: inline-flex; gap: 6px; align-items: center; }
+.ln-print-all-label input { width: auto; }
+
+/* ---- saved filters ---- */
+.sf-wrap { position: relative; display: inline-flex; }
+.sf-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sf-btn .ico { width: 14px; height: 14px; }
+.sf-pop { top: 38px; left: 0; right: auto; }
+.sf-row { display: flex; align-items: center; justify-content: space-between; padding-right: 6px; }
+.sf-row > a { flex: 1; }
+.sf-add { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.sf-add a { display: flex; gap: 6px; align-items: center; padding: 8px 14px; font-size: 13px; color: var(--accent, #2f6fed); text-decoration: none; }
+
+/* ---- "+ New" on its own screen ---- */
+main.new-mode > *:not(#topbar):not([id$="form-card"]) { display: none !important; }
+main.new-mode > [id$="form-card"] { margin-top: 0; }
+
+.kb-table td { padding: 6px 10px; }
+
+/* ---- Invoices list: ticked invoices' action bar ---- */
+.inv-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; margin: 0 0 8px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #2f6fed) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent, #2f6fed) 30%, var(--border)); }
+.inv-bulk-bar[hidden] { display: none; }
+.inv-bulk-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.inv-bulk-actions .ico { width: 14px; height: 14px; }
+.modal.ask-dialog.ask-wide { max-width: 880px; }
+
+body.notes-hidden .notes-cell > div { display: none; }

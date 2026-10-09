@@ -898,6 +898,7 @@ class VendorBillInput(BaseModel):
     attachment_id: Optional[int] = None
     shipping_amount: Optional[float] = None  # freight/shipping on this invoice -> added to the PO as a charge
     shipping_type: Optional[str] = None
+    allow_duplicate: bool = False  # the same invoice # is already on another PO of this vendor, and that's right
 
 
 class PurchaseOrderChargeInput(BaseModel):

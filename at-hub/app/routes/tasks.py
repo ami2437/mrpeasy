@@ -57,6 +57,15 @@ def _suggestions(db: Session) -> dict:
     words = {"over_ordered_billed": lambda r: f"billed {r['billed']:g} of {r['ordered']:g} ordered",
              "over_ordered_shipped": lambda r: f"shipped {r['shipped']:g} of {r['ordered']:g} ordered",
              "shipments_disagree": lambda r: f"order says {r['shipped']:g} shipped, its shipments add up to {r['shipped_on_shipments']:g}"}
+    # overdue invoices: a customer with something past due and no reminder in the last week
+    from app.routes.reminders import overdue_by_customer
+    for row in overdue_by_customer(db).values():
+        # only what went overdue lately (within 30 days): older debts are on the statements already
+        if row["reminder_due"] and any(i["days_late"] <= 30 for i in row["invoices"]):
+            out[f"overdue:{row['customer_id']}"] = ("Overdue", f"Send {row['customer']} a payment reminder",
+                f"{len(row['invoices'])} invoice{'s' if len(row['invoices']) != 1 else ''} overdue (${row['amount']:,.2f}), oldest {row['oldest_days']} days late: "
+                + ", ".join(i["code"] for i in row["invoices"][:6]) + ("…" if len(row["invoices"]) > 6 else "")
+                + ". Reports > Statements > Send Reminder emails it with their statement.", "reports.html?tab=statements")
     for row in billing.order_mismatches(db):
         o = row["order"]
         codes = dict(db.query(StockItem.id, StockItem.code).filter(StockItem.id.in_([r["item_id"] for r in row["lines"]])).all())

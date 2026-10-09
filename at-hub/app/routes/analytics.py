@@ -71,7 +71,7 @@ def sales(months: int = 12, db: Session = Depends(get_db)):
 
 def _aging(db: Session):
     today = clock.today()
-    out = defaultdict(lambda: {"current": 0.0, "d30": 0.0, "d60": 0.0, "d90": 0.0, "d90p": 0.0, "total": 0.0, "invoices": []})
+    out = defaultdict(lambda: {"current": 0.0, "d30": 0.0, "d60": 0.0, "d90": 0.0, "d90p": 0.0, "credit": 0.0, "total": 0.0, "invoices": [], "credits": []})
     for inv in db.query(Invoice).filter(Invoice.status == "sent").all():
         bal = inv.balance
         if bal <= 0.005:
@@ -84,6 +84,13 @@ def _aging(db: Session):
         a["total"] += bal
         a["invoices"].append({"id": inv.id, "code": inv.code, "invoice_date": inv.invoice_date, "due_date": due, "total": inv.total,
                               "paid": inv.amount_paid, "balance": round(bal, 2), "days_late": max(0, late), "bucket": b})
+    # credit memos not used up yet: the customer owes that much less
+    from app.services.credit_memos import open_credits
+    for m in open_credits(db):
+        a = out[m.customer_id]
+        a["credit"] -= m.remaining
+        a["total"] -= m.remaining
+        a["credits"].append({"id": m.id, "code": m.code, "memo_date": m.memo_date, "total": m.total, "remaining": m.remaining})
     return out
 
 
@@ -93,7 +100,7 @@ def ar_aging(db: Session = Depends(get_db)):
     names = {c.id: c.name for c in db.query(Customer).all()}
     rows = []
     for cid, a in _aging(db).items():
-        rows.append({"customer_id": cid, "customer": names.get(cid, "?"), **{k: round(v, 2) for k, v in a.items() if k != "invoices"},
+        rows.append({"customer_id": cid, "customer": names.get(cid, "?"), "credits": a["credits"], **{k: round(v, 2) for k, v in a.items() if k not in ("invoices", "credits")},
                      "invoices": sorted(a["invoices"], key=lambda i: i["due_date"])})
     return sorted(rows, key=lambda r: -r["total"])
 
@@ -101,6 +108,12 @@ def ar_aging(db: Session = Depends(get_db)):
 @router.get("/statement/{customer_id}.pdf")
 def statement_pdf(customer_id: int, db: Session = Depends(get_db)):
     """A statement of account for one customer: every open invoice and the aging totals."""
+    pdf, name = build_statement(db, customer_id)
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{name}"'})
+
+
+def build_statement(db: Session, customer_id: int):
+    """(pdf bytes, file name) of the customer's statement -- the Reports tab and overdue reminders use it."""
     from reportlab.lib.units import inch
     from reportlab.platypus import Spacer
     from app.services import pdf as P
@@ -108,7 +121,7 @@ def statement_pdf(customer_id: int, db: Session = Depends(get_db)):
     cust = db.get(Customer, customer_id)
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
-    a = _aging(db).get(customer_id) or {"current": 0, "d30": 0, "d60": 0, "d90": 0, "d90p": 0, "total": 0, "invoices": []}
+    a = _aging(db).get(customer_id) or {"current": 0, "d30": 0, "d60": 0, "d90": 0, "d90p": 0, "credit": 0, "total": 0, "invoices": [], "credits": []}
     company = get_company_profile(db)
     today = clock.today()
     story = P._header(company, "STATEMENT", today.strftime("%b %d, %Y"))
@@ -117,16 +130,19 @@ def statement_pdf(customer_id: int, db: Session = Depends(get_db)):
                                           ("Balance due", P.money(a["total"]))])), Spacer(1, 12)]
     rows = [[i["code"], P.date(i["invoice_date"]), P.date(i["due_date"]), str(i["days_late"]) if i["days_late"] else "—",
              P.money(i["total"]), P.money(i["paid"]), P.money(i["balance"])] for i in sorted(a["invoices"], key=lambda i: i["due_date"])]
+    rows += [[f"Credit {c['code']}", P.date(c["memo_date"]), "", "", P.money(-c["total"]), P.money(-(c["total"] - c["remaining"])), P.money(-c["remaining"])]
+             for c in a["credits"]]
     story.append(P._data_table(["Invoice", "Date", "Due", "Days late", "Total", "Paid", "Balance"], rows or [["No open invoices", "", "", "", "", "", ""]],
                                [1.25 * inch, 0.95 * inch, 0.95 * inch, 0.8 * inch, 1.1 * inch, 1.05 * inch, 1.2 * inch], right_cols=(3, 4, 5, 6)))
-    story += [Spacer(1, 14), P._data_table(["Current", "1-30 days", "31-60 days", "61-90 days", "Over 90", "Total due"],
-                                           [[P.money(a[k]) for k in ("current", "d30", "d60", "d90", "d90p", "total")]],
-                                           [7.3 * inch / 6] * 6, right_cols=(0, 1, 2, 3, 4, 5))]
+    keys = ("current", "d30", "d60", "d90", "d90p") + (("credit",) if a["credits"] else ()) + ("total",)
+    heads = ["Current", "1-30 days", "31-60 days", "61-90 days", "Over 90"] + (["Credits"] if a["credits"] else []) + ["Total due"]
+    story += [Spacer(1, 14), P._data_table(heads, [[P.money(a[k]) for k in keys]], [7.3 * inch / len(keys)] * len(keys),
+                                           right_cols=tuple(range(len(keys))))]
     if company.invoice_notes:
         story += P._notes_box([("PAYMENT INSTRUCTIONS", company.invoice_notes)])
     pdf = P._build(story, P._footer_text(company), f"Statement {cust.name}")
     name = f"Statement-{''.join(ch for ch in cust.name if ch.isalnum() or ch in ' -_').strip()}-{today:%Y-%m-%d}.pdf"
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{name}"'})
+    return pdf, name
 
 
 @router.get("/inventory")

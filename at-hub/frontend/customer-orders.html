@@ -51,6 +51,7 @@
         <div class="wide"><label>Notes</label><textarea id="f-notes" rows="3"></textarea></div>
       </div>
       <h4>Lines</h4>
+      <label class="check-label ln-print-all-label no-print" title="Tick or untick Print on every line's note at once (saved with the record)"><input type="checkbox" class="ln-print-all"> Print All Line Notes</label>
       <div class="table-scroll">
       <table class="lines-table fit-table">
         <thead><tr><th>#</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Subtotal</th><th>Delivery date</th><th></th></tr></thead>
@@ -858,7 +859,8 @@
           return `<li>#${l.line_no ?? ""} <strong>${escapeHtml(code(l.item_id))}</strong>: ordered ${fmtQty(l.ordered)}, shipped ${fmtQty(l.shipped)}, billed ${fmtQty(l.billed)}
             — <span class="${d > 0 ? "neg" : "warn-text"}">${d > 0 ? "over" : "under"}-billed by ${fmtQty(Math.abs(d))}</span>
             ${why.map(a => `<span class="muted">· ${escapeHtml(a.invoice || "")}${a.reason ? `: “${escapeHtml(a.reason)}”` : ""} (${escapeHtml(a.by || "")})</span>`).join(" ")}</li>`; }).join("")}</ul>
-        <span class="muted small">Square it up with a credit or a further invoice — once the order is fully billed AT-HUB raises a task if it still differs.</span></div>`;
+        <span class="muted small">Square it up with a credit or a further invoice — once the order is fully billed AT-HUB raises a task if it still differs.</span>
+        ${off.some(l => l.billed > l.shipped) && AuthGuard.can("credit_memos") ? `<div style="margin-top:6px;"><a class="link" href="invoices.html?credit_order=${order.id}">Issue A Credit Memo For The Over-Billed Units</a></div>` : ""}</div>`;
     }
 
     async function showDetail(id) {
@@ -920,6 +922,7 @@
         <h4 style="margin-top:20px; display:flex; align-items:center; gap:10px;">Lines
           ${editable ? `<button class="secondary small-btn" onclick="checkMissingNuts(${order.id})" title="Find bolt lines with no $0 nut line under them">+ Add missing nuts</button>` : ""}</h4>
         <div id="nut-panel"></div>
+        ${editable ? printAllNotesHtml() : ""}
         <div class="table-scroll">
         <table class="lines-table compact-table fit-table wrap-cells">
           <thead><tr>
