@@ -355,7 +355,7 @@
           <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.received_quantity)}</td><td class="num">${fmtQty(Math.max(0, l.quantity - l.received_quantity))}</td>
           <td class="num">${fmtPrice(l.unit_cost)}</td><td class="num">${fmtMoney(lineAmount(l.quantity, l.unit_cost))}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
-          <td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td></tr>`);
+          <td>${poStatusTag(o)}</td></tr>`);
       }));
       const tbody = document.getElementById("items-body");
       tbody.innerHTML = rows.join("") || `<tr><td colspan="11" class="muted">No lines match.</td></tr>`;
@@ -392,7 +392,7 @@
     }
     const soLine = o => o.vendor_so_number ? `<div class="muted small">SO ${escapeHtml(o.vendor_so_number)}</div>` : "";
 
-    // ---- PO timeline: Created > Ordered > Received > Billed > Paid (same look as a customer order's) ----
+    // ---- PO timeline: Created > Ordered > Shipped > Received > Billed > Paid (same look as a customer order's) ----
     function poTimeline(order, rec) {
       if (order.status === "cancelled") return `<div class="timeline cancelled"><span class="tag cancelled">Cancelled</span></div>`;
       const goods = order.lines.filter(l => !l.is_charge);
@@ -402,9 +402,14 @@
       const billed = order.bills.reduce((s, b) => s + b.amount, 0), total = order.order_total || 0, paid = order.amount_paid || 0;
       const payDates = order.payments.map(p => p.paid_date || p.created_at).filter(Boolean).sort();
       const fullyReceived = qty > 0 && got >= qty - 1e-9, partly = got > 0 && !fullyReceived;
+      // Shipped: a vendor shipment recorded -- or anything received (it must have shipped)
+      const vsh = order.vendor_shipments || [], moving = vsh.filter(v => v.status === "in_transit");
+      const eta = moving.map(v => v.eta).filter(Boolean).sort()[0];
+      const shipSub = moving.length ? `in transit${eta ? ` · ETA ${fmtDate(eta)}` : ""}${vsh.length > 1 ? ` · ${vsh.length} shipments` : ""}` : vsh.length > 1 ? `${vsh.length} shipments` : "";
       const steps = [
         ["Created", true, order.created_at || order.order_date, order.created_by && order.created_by !== "mrpeasy-import" ? order.created_by : ""],
         ["Ordered", !["draft", "validation"].includes(order.status), rec && rec.ordered_at ? rec.ordered_at : order.order_date, rec && rec.ordered_by ? rec.ordered_by : ""],
+        ["Shipped", vsh.length > 0 || got > 0, vsh.map(v => v.shipped_date).filter(Boolean).sort()[0] || recDates[0], shipSub],
         ["Received", fullyReceived, recDates[recDates.length - 1], partly ? `partly · ${fmtQty(got)} of ${fmtQty(qty)}` : !got && order.expected_date ? `due ${fmtDate(order.expected_date)}` : ""],
         ["Billed", total > 0 && billed >= total - 0.01, order.bills.map(b => b.bill_date).filter(Boolean).sort().pop(), billed > 0.005 && billed < total - 0.01 ? "partly" : ""],
         ["Paid", total > 0 && paid >= total - 0.01, payDates[payDates.length - 1], paid > 0.005 && paid < total - 0.01 ? "partly" : ""],
@@ -508,7 +513,7 @@
             ${progressBar("Received", qty ? received / qty * 100 : 0, "recv", `${fmtQty(received)} of ${fmtQty(qty)} units received`)}
             ${progressBar("Paid", total ? paid / total * 100 : 0, "paid", `${fmtMoney(paid)} of ${fmtMoney(total)} paid`)}
           </td>
-          <td><span class="tag ${o.status}">${o.status.replace('_',' ')}</span></td>
+          <td>${poStatusTag(o)}${o.status === "shipped" && (o.vendor_shipments || []).some(v => v.eta) ? `<div class="muted small">ETA ${fmtDate((o.vendor_shipments.filter(v => v.status === "in_transit" && v.eta).map(v => v.eta).sort()[0]) || "")}</div>` : ""}</td>
           <td class="muted notes-cell" title="${escapeHtml(o.notes || "")}"><div>${escapeHtml(o.notes || "")}</div></td>
           <td>${o.status === "draft" ? `<a class="link" onclick="markOrdered(${o.id})">Mark ordered</a>` : ""}</td>
         </tr>
@@ -550,7 +555,7 @@
       const canCancel = order.status !== "cancelled" && order.lines.every(l => l.received_quantity === 0);
 
       card.innerHTML = `
-        <h3 class="detail-head" style="margin-top:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} <span class="tag ${order.status}">${order.status === "validation" ? "Validation Needed" : order.status.replace('_',' ')}</span>
+        <h3 class="detail-head" style="margin-top:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} ${poStatusTag(order, true)}
           ${order.vendor_so_number ? `<span class="muted small" style="font-weight:400;">Vendor SO # ${escapeHtml(order.vendor_so_number)}</span>` : ""}
           <span class="file-strip" id="po-file-strip" style="margin-left:auto;"></span>
           ${order.status !== "cancelled" ? aiValidateButton("po", order.id) : ""}
@@ -637,6 +642,9 @@
         ` : ""}
         <div id="lines-error" class="error"></div>
         </section>
+
+        <section class="dsec"><h4 class="dsec-title">Vendor Shipments <span class="muted small" style="font-weight:normal;">— shipped from the vendor: carrier, tracking, ETA</span></h4>
+          <div id="po-vendor-shipments">${vendorShipmentsHtml(order)}</div></section>
 
         <section class="dsec"><h4 class="dsec-title">Receipts <span class="muted small" style="font-weight:normal;">— who received what, when</span></h4>
           <div id="po-receipts"><p class="muted small">Loading…</p></div></section>
@@ -1195,6 +1203,119 @@ Thank you.</textarea>
       } catch (err) {
         errorEl.textContent = err.message;
       }
+    }
+
+    // ---- Vendor shipments: the PO's Shipped stage -- the goods left the vendor's dock (carrier, tracking, ETA...).
+    // In transit until received; completes itself when its goods are received (server: services/vendor_shipments.py) ----
+    const VS_CARRIERS = ["UPS", "UPS Freight", "FedEx", "FedEx Freight", "USPS", "DHL", "Old Dominion", "Estes", "XPO", "SAIA", "R+L Carriers",
+      "ABF Freight", "Southeastern Freight", "AAA Cooper", "Central Transport", "Averitt", "Vendor Truck", "Our Truck"];
+    const VS_MODES = ["Parcel", "LTL", "FTL", "Ocean", "Air", "Rail", "Vendor Truck", "We Pick Up"];
+    const VS_TERMS = ["Prepaid", "Collect", "Prepaid & Add", "Third Party"];
+    const VS_PACKS = ["Pallets", "Boxes", "Crates", "Bundles", "Drums", "Coils"];
+    const vsItem = id => items.find(i => i.id === id) || {};
+
+    function poStatusTag(o, detail) {
+      const word = o.status === "validation" && detail ? "Validation Needed" : o.status === "shipped" ? "shipped · in transit" : o.status.replace("_", " ");
+      return `<span class="tag ${o.status === "shipped" ? "in_transit" : o.status}">${word}</span>`;
+    }
+    // per PO line: still to ship = ordered - received - on other shipments still in transit
+    function vsLeft(order, skipId) {
+      const transit = {};
+      (order.vendor_shipments || []).filter(s => s.status === "in_transit" && s.id !== skipId)
+        .forEach(s => s.lines.forEach(l => { transit[l.po_line_id] = (transit[l.po_line_id] || 0) + l.quantity; }));
+      return Object.fromEntries(order.lines.map(l => [l.id, Math.max(0, l.quantity - l.received_quantity - (transit[l.id] || 0))]));
+    }
+    function vendorShipmentsHtml(order) {
+      const list = order.vendor_shipments || [];
+      const can = AuthGuard.can("po_shipments");
+      const canAdd = can && !["validation", "received", "cancelled"].includes(order.status);
+      const v = x => x === null || x === undefined || x === "" ? "" : escapeHtml(String(x));
+      const cards = list.map((s, i) => {
+        const facts = [
+          ["Carrier", [s.carrier, s.ship_mode].filter(Boolean).map(escapeHtml).join(" · ")],
+          ["Tracking #", s.tracking_number ? trackingLink(s.carrier, s.tracking_number) : ""],
+          ["PRO #", v(s.pro_number)], ["BOL #", v(s.bol_number)], ["Container / Trailer #", v(s.container_number)],
+          ["Vendor Packing Slip / ASN #", v(s.vendor_ref)], ["Freight Terms", v(s.freight_terms)],
+          ["Packages", s.packages ? `${s.packages} ${escapeHtml(s.package_type || "")}` : ""], ["Weight", s.weight ? `${fmtQty(s.weight)} lb` : ""],
+        ].filter(([, x]) => x);
+        const late = s.status === "in_transit" && s.eta && dayISO(s.eta) < todayISO();
+        return `<div class="vs-card ${s.status}">
+          <div class="vs-head">${icon("truck")}<strong>Shipment ${i + 1}</strong>
+            <span class="muted">shipped</span> <strong>${fmtDate(s.shipped_date)}</strong>
+            ${s.status === "received" ? `<span class="tag received">received${s.received_at ? ` ${fmtDate(s.received_at)}` : ""}</span>`
+              : `<span class="tag in_transit">in transit</span>${s.eta ? ` <span class="${late ? "neg" : "muted"}">ETA <strong>${fmtDate(s.eta)}</strong>${late ? " · late" : ""}</span>` : ""}`}
+            <span style="flex:1;"></span>
+            ${can ? `<a class="link" onclick="editVendorShipment(${order.id}, ${s.id})">Edit</a> <a class="link neg" onclick="deleteVendorShipment(${order.id}, ${s.id})">Delete</a>` : ""}</div>
+          ${facts.length ? `<div class="vs-facts">${facts.map(([k, x]) => `<div><label>${k}</label><div>${x}</div></div>`).join("")}</div>` : ""}
+          ${s.lines.length ? `<table class="compact-table no-table-tools"><thead><tr><th>Item</th><th>Vendor Part #</th><th class="num">Qty Shipped</th></tr></thead><tbody>
+            ${s.lines.map(sl => { const pl = order.lines.find(l => l.id === sl.po_line_id) || {}; const it = vsItem(pl.item_id);
+              return `<tr><td><strong>${escapeHtml(it.code || "")}</strong> <span class="muted small">${escapeHtml(it.title || "")}</span></td><td>${v(pl.vendor_item_code)}</td><td class="num">${fmtQty(sl.quantity)}</td></tr>`; }).join("")}
+            </tbody></table>` : `<p class="muted small" style="margin:4px 0 0;">Everything still to come on the PO.</p>`}
+          ${s.note ? `<p class="small" style="margin:6px 0 0;">${escapeHtml(s.note)}</p>` : ""}
+          <div class="muted small" style="margin-top:4px;">Recorded by ${escapeHtml(s.created_by || "")} · ${fmtWhen(s.created_at)}</div></div>`;
+      }).join("");
+      return `${cards || `<p class="muted small" style="margin:0;">Not shipped yet${canAdd ? " — when the vendor says it left their warehouse, record it here (carrier, tracking, ETA)" : ""}.</p>`}
+        ${canAdd ? `<button class="secondary" style="margin-top:8px;" onclick="editVendorShipment(${order.id}, null)" data-icon="truck">Record Vendor Shipment</button>` : ""}`;
+    }
+    async function editVendorShipment(poId, sid) {
+      const order = currentOrder && currentOrder.id === poId ? currentOrder : await apiFetch(`/api/purchase-orders/${poId}`);
+      const s = sid ? order.vendor_shipments.find(x => x.id === sid) : null;
+      const left = vsLeft(order, sid);
+      const onIt = s ? Object.fromEntries(s.lines.map(l => [l.po_line_id, l.quantity])) : null;
+      const val = (k, d = "") => escapeHtml(s && s[k] != null ? String(s[k]) : d);
+      const day = k => s && s[k] ? String(s[k]).substring(0, 10) : "";
+      const opts = (list, cur) => `<option value=""></option>${list.map(x => `<option ${x === cur ? "selected" : ""}>${escapeHtml(x)}</option>`).join("")}${cur && !list.includes(cur) ? `<option selected>${escapeHtml(cur)}</option>` : ""}`;
+      const lines = order.lines.filter(l => (onIt ? onIt[l.id] !== undefined : false) || left[l.id] > 1e-9 || l.received_quantity < l.quantity - 1e-9);
+      const { value, el } = await askDialog({ title: s ? `Edit Vendor Shipment — ${order.code}` : `Record Vendor Shipment — ${order.code}`, wide: true,
+        body: `<p class="muted small" style="margin-top:0;">The goods left ${escapeHtml((vendors.find(x => x.id === order.vendor_id) || {}).name || "the vendor")}'s warehouse. It stays <strong>in transit</strong> until its goods are received, then it completes itself.</p>
+          <datalist id="vs-carriers">${VS_CARRIERS.map(c => `<option value="${escapeHtml(c)}">`).join("")}</datalist>
+          <div class="field-grid vs-form">
+            <div><label>Ship Date</label><input type="date" class="vs-shipped_date" value="${day("shipped_date") || todayISO()}"></div>
+            <div><label>ETA (Expected At Our Dock)</label><input type="date" class="vs-eta" value="${day("eta")}"></div>
+            <div><label>Carrier</label><input type="text" class="vs-carrier" list="vs-carriers" value="${val("carrier")}" placeholder="UPS, Old Dominion…"></div>
+            <div><label>Mode</label><select class="vs-ship_mode">${opts(VS_MODES, s && s.ship_mode)}</select></div>
+            <div><label>Tracking #</label><input type="text" class="vs-tracking_number" value="${val("tracking_number")}"></div>
+            <div><label>PRO #</label><input type="text" class="vs-pro_number" value="${val("pro_number")}" placeholder="LTL carrier's PRO #"></div>
+            <div><label>BOL #</label><input type="text" class="vs-bol_number" value="${val("bol_number")}"></div>
+            <div><label>Container / Trailer #</label><input type="text" class="vs-container_number" value="${val("container_number")}"></div>
+            <div><label>Vendor Packing Slip / ASN #</label><input type="text" class="vs-vendor_ref" value="${val("vendor_ref")}"></div>
+            <div><label>Freight Terms</label><select class="vs-freight_terms">${opts(VS_TERMS, s && s.freight_terms)}</select></div>
+            <div><label>Packages</label><input type="number" min="0" step="1" class="vs-packages" value="${val("packages")}"></div>
+            <div><label>Package Type</label><select class="vs-package_type">${opts(VS_PACKS, s ? s.package_type : "Pallets")}</select></div>
+            <div><label>Weight (lb)</label><input type="number" min="0" step="any" class="vs-weight" value="${val("weight")}"></div>
+            <div class="wide"><label>Note</label><input type="text" class="vs-note" value="${val("note")}"></div>
+          </div>
+          <h4 style="margin:12px 0 4px;">What Shipped</h4>
+          <table class="compact-table no-table-tools vs-lines"><thead><tr><th>Item</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Qty On This Shipment</th></tr></thead><tbody>
+            ${lines.map(l => { const it = vsItem(l.item_id); const q = onIt ? (onIt[l.id] || 0) : left[l.id];
+              return `<tr><td><strong>${escapeHtml(it.code || "")}</strong> <span class="muted small">${escapeHtml(it.title || "")}</span>${l.vendor_item_code ? `<div class="muted small">Vendor Part # ${escapeHtml(l.vendor_item_code)}</div>` : ""}</td>
+                <td class="num">${fmtQty(l.quantity)}</td><td class="num">${fmtQty(l.received_quantity)}</td>
+                <td class="num"><input type="number" min="0" step="any" class="vs-qty" data-line="${l.id}" value="${q ? +q.toFixed(4) : ""}" style="width:110px;"></td></tr>`; }).join("")
+              || `<tr><td colspan="4" class="muted">Nothing left to ship on this PO.</td></tr>`}
+          </tbody></table>
+          <label class="check-label" style="margin-top:8px;"><input type="checkbox" class="vs-update_expected" checked> Use the ETA as the PO's expected date (planning and late alerts)</label>`,
+        buttons: [{ label: s ? "Save Shipment" : "Record Shipment", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      const g = k => el.querySelector(`.vs-${k}`);
+      const body = { shipped_date: g("shipped_date").value || null, eta: g("eta").value || null, update_expected: g("update_expected").checked,
+        packages: parseInt(g("packages").value) || null, weight: parseFloat(g("weight").value) || null,
+        lines: [...el.querySelectorAll(".vs-qty")].map(i => ({ po_line_id: parseInt(i.dataset.line), quantity: parseFloat(i.value) || 0 })).filter(l => l.quantity > 0) };
+      for (const k of ["carrier", "ship_mode", "tracking_number", "pro_number", "bol_number", "container_number", "vendor_ref", "freight_terms", "package_type", "note"])
+        body[k] = g(k).value.trim() || null;
+      try {
+        const po = await apiFetch(`/api/purchase-orders/${poId}/vendor-shipments${s ? `/${s.id}` : ""}`, { method: s ? "PUT" : "POST", body: JSON.stringify(body) });
+        toast(s ? "Vendor shipment saved" : `${po.code}: shipped — in transit`);
+        loadOrders();
+        showDetail(poId);
+      } catch (e) { alert(e.message); }
+    }
+    async function deleteVendorShipment(poId, sid) {
+      if (!confirm("Delete this vendor shipment? (Receipts aren't touched.)")) return;
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/vendor-shipments/${sid}`, { method: "DELETE" });
+        loadOrders();
+        showDetail(poId);
+      } catch (e) { alert(e.message); }
     }
 
     async function saveOrderHeader(poId) {

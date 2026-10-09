@@ -7,7 +7,7 @@ from app.schemas import (
     LineOrderRequest,
     PurchaseOrderCreate, PurchaseOrderResponse, ReceiveOrderRequest,
     PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
-    PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput,
+    PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput, VendorShipmentInput,
 )
 from app.dependencies import require_perm, require_any
 from app.services.pdf import purchase_order_pdf
@@ -222,6 +222,25 @@ def add_bill(po_id: int, data: VendorBillInput, db: Session = Depends(get_db), c
 @router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("purchasing"))])
 def delete_bill(po_id: int, bill_id: int, db: Session = Depends(get_db)):
     return VendorBillService.delete(db, po_id, bill_id)
+
+
+@router.post("/{po_id}/vendor-shipments", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("po_shipments"))])
+def add_vendor_shipment(po_id: int, data: VendorShipmentInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """The vendor shipped: carrier, tracking, ETA... (the PO's Shipped stage; completes itself when the goods are received)."""
+    from app.services import vendor_shipments
+    return vendor_shipments.create(db, po_id, data, created_by=current_user.username)
+
+
+@router.put("/{po_id}/vendor-shipments/{sid}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("po_shipments"))])
+def edit_vendor_shipment(po_id: int, sid: int, data: VendorShipmentInput, db: Session = Depends(get_db)):
+    from app.services import vendor_shipments
+    return vendor_shipments.update(db, po_id, sid, data)
+
+
+@router.delete("/{po_id}/vendor-shipments/{sid}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("po_shipments"))])
+def delete_vendor_shipment(po_id: int, sid: int, db: Session = Depends(get_db)):
+    from app.services import vendor_shipments
+    return vendor_shipments.delete(db, po_id, sid)
 
 
 @router.post("/{po_id}/charges", response_model=PurchaseOrderResponse)

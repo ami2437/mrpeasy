@@ -128,7 +128,7 @@ def _purchasing(db: Session) -> dict:
            .filter(PurchaseOrder.status != "cancelled").all())
     today = clock.today()
     live = [p for p in pos if p.status not in ("draft", "validation")]
-    open_ = [p for p in live if p.status in ("ordered", "partially_received")]
+    open_ = [p for p in live if p.status in ("ordered", "shipped", "partially_received")]
     received = not_received = 0.0
     for p in open_:
         for l in p.lines:

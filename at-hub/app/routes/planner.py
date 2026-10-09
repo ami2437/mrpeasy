@@ -449,7 +449,7 @@ def calendar(start: str, end: str, db: Session = Depends(get_db), user: User = D
     if has(user, "purchasing"):
         names = {v.id: v.name for v in db.query(Vendor).all()}
         for p in db.query(PurchaseOrder).filter(PurchaseOrder.expected_date >= a, PurchaseOrder.expected_date < b_end,
-                                                PurchaseOrder.status.in_(("ordered", "partially_received"))).all():
+                                                PurchaseOrder.status.in_(("ordered", "shipped", "partially_received"))).all():
             add(p.expected_date, "po", f"{p.code} expected", names.get(p.vendor_id, ""), f"purchase-orders.html?id={p.id}")
     if has(user, "invoices"):
         names = {c.id: c.name for c in db.query(Customer).all()}

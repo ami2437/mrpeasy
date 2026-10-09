@@ -978,6 +978,51 @@ class VendorBillResponse(VendorBillInput):
         from_attributes = True
 
 
+class VendorShipmentLineInput(BaseModel):
+    po_line_id: int
+    quantity: float
+
+
+class VendorShipmentInput(BaseModel):
+    """The vendor shipped. No lines = everything still to come on the PO."""
+    shipped_date: Optional[datetime] = None  # default: today
+    eta: Optional[datetime] = None
+    carrier: Optional[str] = None
+    ship_mode: Optional[str] = None
+    tracking_number: Optional[str] = None
+    pro_number: Optional[str] = None
+    bol_number: Optional[str] = None
+    container_number: Optional[str] = None
+    vendor_ref: Optional[str] = None
+    freight_terms: Optional[str] = None
+    packages: Optional[int] = None
+    package_type: Optional[str] = None
+    weight: Optional[float] = None
+    note: Optional[str] = None
+    lines: List[VendorShipmentLineInput] = []
+    update_expected: bool = True  # the ETA becomes the PO's expected date (planning, late alerts)
+
+
+class VendorShipmentLineResponse(VendorShipmentLineInput):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class VendorShipmentResponse(VendorShipmentInput):
+    id: int
+    po_id: int
+    status: str
+    received_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    lines: List[VendorShipmentLineResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
 class MarkDeliveredRequest(BaseModel):
     delivered_at: Optional[datetime] = None  # default: now
 
@@ -1042,6 +1087,7 @@ class PurchaseOrderResponse(BaseModel):
     payments: List[PurchaseOrderPaymentResponse] = []
     emails: List["PurchaseOrderEmailLog"] = []
     bills: List[VendorBillResponse] = []
+    vendor_shipments: List[VendorShipmentResponse] = []
 
     class Config:
         from_attributes = True

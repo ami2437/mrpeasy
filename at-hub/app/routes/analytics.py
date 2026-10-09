@@ -257,7 +257,7 @@ def _reorder_rows(db: Session):
     last_vendor = {}
     for line, po in (db.query(PurchaseOrderLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
                      .filter(PurchaseOrder.status != "cancelled").order_by(PurchaseOrder.id).all()):
-        if po.status in ("draft", "ordered", "partially_received"):
+        if po.status in ("draft", "ordered", "shipped", "partially_received"):
             on_order[line.item_id] += max(0, line.quantity - line.received_quantity)
         last_vendor[line.item_id] = (po.vendor_id, line.unit_cost, po.code)
     demand = defaultdict(float)

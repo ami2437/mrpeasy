@@ -406,7 +406,7 @@ class PurchaseOrder(Base):
     vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False)
     order_date = Column(DateTime, default=clock.today)  # a calendar date
     expected_date = Column(DateTime, nullable=True)
-    status = Column(String, nullable=False, default="draft")  # validation (captured, not checked yet) | draft | ordered | partially_received | received | cancelled
+    status = Column(String, nullable=False, default="draft")  # validation (captured, not checked yet) | draft | ordered | shipped (vendor shipment in transit, nothing received yet) | partially_received | received | cancelled
     validated_by = Column(String, nullable=True)  # who checked a quick-captured PO (and when)
     validated_at = Column(DateTime, nullable=True)
     ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher)
@@ -432,6 +432,7 @@ class PurchaseOrder(Base):
     emails = relationship("PurchaseOrderEmail", cascade="all, delete-orphan", order_by="PurchaseOrderEmail.sent_at.desc()")
     bills = relationship("VendorBill", cascade="all, delete-orphan", order_by="VendorBill.bill_date")
     charges = relationship("PurchaseOrderCharge", cascade="all, delete-orphan", order_by="PurchaseOrderCharge.id")
+    vendor_shipments = relationship("VendorShipment", cascade="all, delete-orphan", order_by="[VendorShipment.shipped_date, VendorShipment.id]")
 
     @property
     def landed_cost_total(self) -> float:
@@ -501,6 +502,47 @@ class VendorBill(Base):
     @property
     def balance(self) -> float:
         return round(self.amount - self.amount_paid, 2)
+
+
+class VendorShipment(Base):
+    """The vendor shipped (goods left their warehouse): carrier, tracking, BOL / PRO #, ETA... -- the PO's "Shipped"
+    stage. A PO can ship in several. In transit until its goods are received, then it completes itself
+    (services/vendor_shipments.settle); no lines = the whole rest of the PO."""
+    __tablename__ = "vendor_shipments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="in_transit")  # in_transit | received
+    shipped_date = Column(DateTime, nullable=True)  # a calendar date: left the vendor's dock (not "ship_date": that key is a moment in API responses)
+    eta = Column(DateTime, nullable=True)  # a calendar date: expected at our dock
+    carrier = Column(String, nullable=True)
+    ship_mode = Column(String, nullable=True)  # Parcel | LTL | FTL | Ocean | Air | Vendor Truck | We Pick Up
+    tracking_number = Column(String, nullable=True, index=True)
+    pro_number = Column(String, nullable=True)  # LTL carrier's PRO #
+    bol_number = Column(String, nullable=True)  # bill of lading #
+    container_number = Column(String, nullable=True)  # ocean container / trailer #
+    vendor_ref = Column(String, nullable=True)  # the vendor's packing slip / ASN / invoice #
+    freight_terms = Column(String, nullable=True)  # Prepaid | Collect | Prepaid & Add | Third Party
+    packages = Column(Integer, nullable=True)
+    package_type = Column(String, nullable=True)  # Pallets | Boxes | Crates | Drums | Bundles
+    weight = Column(Float, nullable=True)  # lb
+    note = Column(Text, nullable=True)
+    received_at = Column(DateTime, nullable=True)  # when it completed (all of its goods received)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    lines = relationship("VendorShipmentLine", cascade="all, delete-orphan", order_by="VendorShipmentLine.id")
+
+
+class VendorShipmentLine(Base):
+    """How much of a PO line is on a vendor shipment."""
+    __tablename__ = "vendor_shipment_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey("vendor_shipments.id"), nullable=False, index=True)
+    po_line_id = Column(Integer, ForeignKey("purchase_order_lines.id"), nullable=False, index=True)
+    quantity = Column(Float, nullable=False, default=0)
 
 
 class PurchaseOrderLine(Base):

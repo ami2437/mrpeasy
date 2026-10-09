@@ -174,7 +174,7 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
     # still coming in: open PO lines (ordered / partly received), per PO so the page can leave out POs it already counts
     incoming = {}
     for line, po in (db.query(PurchaseOrderLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.po_id)
-                     .filter(PurchaseOrderLine.item_id.in_(ids), PurchaseOrder.status.in_(("ordered", "partially_received"))).all()):
+                     .filter(PurchaseOrderLine.item_id.in_(ids), PurchaseOrder.status.in_(("ordered", "shipped", "partially_received"))).all()):
         left = (line.quantity or 0) - (line.received_quantity or 0)
         if left > 1e-9:
             incoming.setdefault(line.item_id, []).append({"po_id": po.id, "code": po.code, "vendor_id": po.vendor_id, "qty": left,
@@ -206,7 +206,7 @@ def insights(data: ItemsIn, db: Session = Depends(get_db), user: User = Depends(
 
 
 # ---------- what changed since the simulation was last worked on ----------
-OPEN_PO = ("draft", "ordered", "partially_received")
+OPEN_PO = ("draft", "ordered", "shipped", "partially_received")
 OPEN_QUOTE = ("draft", "sent", "accepted")
 
 

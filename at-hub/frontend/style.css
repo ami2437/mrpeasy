@@ -2346,3 +2346,14 @@ button.is-done::before { content: "✓ "; color: #16a34a; font-weight: 700; }
 .period-filter { display: inline-flex; gap: 4px; align-items: center; flex: 0 0 auto; }
 .period-filter select { width: auto; max-width: 150px; }
 .period-count { margin-left: 6px; }
+
+/* vendor shipments on a PO (Shipped stage) */
+.tag.in_transit { background: #ccfbf1; color: #115e59; }
+html[data-theme="dark"] .tag.in_transit { background: #134e4a; color: #99f6e4; }
+.vs-card { border: 1px solid var(--border, #e5e7eb); border-left: 4px solid #14b8a6; border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.vs-card.received { border-left-color: #16a34a; }
+.vs-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vs-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 14px; margin: 6px 0; }
+.vs-facts label { font-size: 11px; color: var(--muted, #6b7280); margin: 0; }
+.vs-facts > div > div { overflow-wrap: anywhere; }
+.vs-lines input.vs-qty { text-align: right; }

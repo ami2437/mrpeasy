@@ -15,7 +15,7 @@ from datetime import datetime
 
 from app.models import (Attachment, Customer, CustomerOrder, CustomerOrderLine, Invoice, InvoiceLine, ItemAlias, MtrLink, PackSizePreset,
                         PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, Quote, QuoteLine, Shipment, StockItem, Task, Vendor,
-                        VendorBill, VendorItem)
+                        VendorBill, VendorItem, VendorShipment, VendorShipmentLine)
 
 ENTITY_MODELS = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
 
@@ -202,6 +202,31 @@ def carry_over(db, live_path, rep) -> None:
         n += 1
     if n:
         rep.add("carry-over", f"PO payments entered in AT-HUB: {n} {S}")
+
+    # ---- 5c. vendor shipments (the PO's Shipped stage: carrier, tracking, ETA) -- AT-HUB only ----
+    n = 0
+    from app.services import vendor_shipments as vs
+    cols = {c.name for c in VendorShipment.__table__.columns} - {"id", "po_id"}
+    for r in _rows(live, "select p.code as po_code, s.* from vendor_shipments s join purchase_orders p on p.id=s.po_id order by s.id"):
+        po = po_by_code.get(r["po_code"])
+        if not po:
+            continue
+        s = VendorShipment(po_id=po.id, **{k: (_dt(r[k]) if k in ("shipped_date", "eta", "received_at", "created_at", "updated_at") else r[k])
+                                           for k in r.keys() if k in cols})
+        for ln in _rows(live, "select l.po_line_id, l.quantity, pl.mrp_id from vendor_shipment_lines l "
+                              "join purchase_order_lines pl on pl.id=l.po_line_id where l.shipment_id=?", r["id"]):
+            line = po_line_mrp.get(ln["mrp_id"]) if ln["mrp_id"] else po_line.get(live_po_line.get(ln["po_line_id"]))
+            if line:
+                s.lines.append(VendorShipmentLine(po_line_id=line.id, quantity=ln["quantity"]))
+        po.vendor_shipments.append(s)
+        n += 1
+    for po in po_by_code.values():
+        if po.vendor_shipments:
+            vs.settle(po)
+            if po.status == "ordered" and vs.in_transit(po):
+                po.status = "shipped"
+    if n:
+        rep.add("carry-over", f"vendor shipments: {n} {S}")
 
     # ---- 6. quotes (AT-HUB only; a quote converted to an order that no longer exists loses that link) ----
     n = 0

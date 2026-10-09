@@ -72,7 +72,7 @@ def all_sections(db: Session, user: User) -> list:
                      "help": "Not fully shipped and the requested delivery date has passed.", "rows": sorted(late_orders, key=lambda r: -r["days"])})
 
     if has(user, "purchasing"):
-        pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("draft", "ordered", "partially_received"))).all()
+        pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("draft", "ordered", "shipped", "partially_received"))).all()
         # services / do-not-sell POs (freight, coating, rent...) are never "received": not chased for receiving
         from app.models import ProductGroup
         non_stock = {g.name for g in db.query(ProductGroup).filter(ProductGroup.non_stock.is_(True)).all()}
@@ -193,7 +193,7 @@ def today_board(db: Session = Depends(get_db), user: User = Depends(get_current_
         out["orders"] = {"due_this_week": sum(1 for o in due if today <= o.delivery_date < week_end),
                          "overdue": sum(1 for o in due if o.delivery_date < today)}
     if has(user, "purchasing"):
-        pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("ordered", "partially_received")), PurchaseOrder.expected_date.isnot(None)).all()
+        pos = db.query(PurchaseOrder).filter(PurchaseOrder.status.in_(("ordered", "shipped", "partially_received")), PurchaseOrder.expected_date.isnot(None)).all()
         out["purchasing"] = {"arriving_this_week": sum(1 for p in pos if today <= p.expected_date < week_end),
                              "late": sum(1 for p in pos if p.expected_date < today)}
     if has(user, "invoices"):

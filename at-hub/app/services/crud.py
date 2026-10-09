@@ -2583,11 +2583,15 @@ class PurchaseOrderService:
         """Lines can be added or changed after receipt, so re-derive received/partial/ordered."""
         if po.status in ("validation", "draft", "cancelled"):
             return
+        from app.services import vendor_shipments
+        vendor_shipments.settle(po)  # vendor shipments whose goods are in complete themselves
         goods = [l for l in po.lines if not getattr(l, "is_charge", False)]
         if goods and all(l.received_quantity >= l.quantity - 1e-9 for l in goods):
             po.status = "received"
         elif any(l.received_quantity > 0 for l in goods):
             po.status = "partially_received"
+        elif vendor_shipments.in_transit(po):
+            po.status = "shipped"
         else:
             po.status = "ordered"
 
@@ -2608,6 +2612,8 @@ class PurchaseOrderService:
             raise HTTPException(status_code=400, detail=f"This line carries landed cost {codes} -- edit or delete that landed cost first")
         if len(po.lines) <= 1:
             raise HTTPException(status_code=400, detail="Order must have at least one line")
+        from app.models import VendorShipmentLine
+        db.query(VendorShipmentLine).filter(VendorShipmentLine.po_line_id == line.id).delete()  # off any vendor shipment too
         db.delete(line)
         db.flush()
         db.refresh(po)
