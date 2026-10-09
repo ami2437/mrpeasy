@@ -172,22 +172,49 @@ def redact_customer_po(text: str, db: Session) -> Tuple[str, List[str], Any]:
     return text, removed, customer
 
 
+_local_seen = {"at": 0.0, "up": False}
+
+
+def local_available() -> bool:
+    """Does the local model answer right now? (auto mode: the office PC lends its Ollama over an SSH link while it's on.)
+    Checked at most every 15 seconds, with a short timeout, so a PC that's off never slows a page down."""
+    import time
+    import httpx
+    now = time.monotonic()
+    if now - _local_seen["at"] < 15:
+        return _local_seen["up"]
+    up = False
+    try:
+        r = httpx.get(f"{settings.ai_ollama_url.rstrip('/')}/api/tags", timeout=1.5)
+        names = {m.get("name", "") for m in r.json().get("models", [])} if r.status_code == 200 else set()
+        want = settings.ai_model if ":" in settings.ai_model else f"{settings.ai_model}:latest"
+        up = want in names or settings.ai_model in names
+    except Exception:
+        up = False
+    _local_seen.update(at=now, up=up)
+    return up
+
+
+def engine_mode() -> str:
+    return (settings.ai_engine or "local").strip().lower()
+
+
 def claude_engine() -> bool:
-    """AI_ENGINE=claude: there's no local model here (the cloud server) -- the readers use Claude instead."""
-    return (settings.ai_engine or "").strip().lower() == "claude"
+    """Should the readers use Claude instead of the local model? Always with AI_ENGINE=claude; with AI_ENGINE=auto only
+    while the local model (the office PC's Ollama) doesn't answer."""
+    mode = engine_mode()
+    return mode == "claude" or (mode == "auto" and not local_available())
 
 
 SCAN_NOT_SENT = ("This is a scan or photo. Here only text PDFs are read by AI -- scans are never sent out, because their "
                  "contents can't be cleaned first. Type the details in (or ask the sender for a text PDF).")
 
 
-def claude_engine() -> bool:
-    """AI_ENGINE=claude: there's no local model here (the cloud server) -- the readers use Claude instead."""
-    return (settings.ai_engine or "").strip().lower() == "claude"
-
-
-SCAN_NOT_SENT = ("This is a scan or photo. Here only text PDFs are read by AI -- scans are never sent out, because their "
-                 "contents can't be cleaned first. Type the details in (or ask the sender for a text PDF).")
+def scan_not_sent() -> str:
+    if engine_mode() == "auto":
+        return ("This is a scan or photo, and the office PC's AI is offline right now -- scans are only read there, never "
+                "sent to Claude. Try again when that PC is on, or type the details in.")
+    return SCAN_NOT_SENT
 
 
 def ask_claude(prompt: str, text: str, schema: Dict[str, Any]) -> Dict[str, Any]:

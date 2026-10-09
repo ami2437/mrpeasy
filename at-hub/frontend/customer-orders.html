@@ -190,7 +190,8 @@
       try {
         const s = await apiFetch("/api/ai-orders/status");
         el.innerHTML = s.reachable && s.model_installed
-          ? (s.engine === "claude" ? `<span class="pos">● Ready</span> — <strong>Claude</strong> reads text PDFs (names and contact details are removed first; scans aren't sent)`
+          ? (s.engine === "claude" ? `<span class="pos">● Ready</span> — <strong>Claude</strong> reads text PDFs (names and contact details are removed first; scans aren't sent)${s.pc_offline ? " · the office PC's private AI is offline" : ""}`
+            : s.via === "pc-link" ? `<span class="pos">● Ready</span> — <strong>the office PC's private AI</strong> (${escapeHtml(s.model)}) — nothing leaves your own machines`
             : `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`)
           : `<span class="neg">● Not Ready</span> — ${escapeHtml(s.message)}`;
       } catch (e) { el.textContent = e.message; }

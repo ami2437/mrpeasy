@@ -36,13 +36,10 @@ class Settings(BaseSettings):
     ai_ollama_url: str = "http://127.0.0.1:11434"
     ai_model: str = "qwen2.5:7b"
     anthropic_api_key: str = ""  # optional "Ask Claude" (cloud) document reading; blank = feature off
-    # Which AI reads documents: "local" (the Ollama model above, on this network) or "claude" (the cloud server, where
-    # no local model runs: every reader uses Claude -- text PDFs only, with our / the customer's details removed first;
-    # scans and photos are never sent and have to be typed in).
-    ai_engine: str = "local"
-    # Which AI reads documents: "local" (the Ollama model above, on this network) or "claude" (the cloud server, where
-    # no local model runs: every reader uses Claude -- text PDFs only, with our / the customer's details removed first;
-    # scans and photos are never sent and have to be typed in).
+    # Which AI reads documents: "local" (the Ollama model above, on this network), "claude" (no local model: every reader
+    # uses Claude -- text PDFs only, with our / the customer's details removed first; scans and photos are never sent),
+    # or "auto" (the cloud server: the office PC's Ollama, reached over its private SSH link at AI_OLLAMA_URL, whenever
+    # that PC is on -- scans included; Claude for text PDFs while it's off).
     ai_engine: str = "local"
     ai_vision_model: str = "qwen2.5vl:7b"  # reads photos and scanned PDFs (PODs, scanned invoices)
     ai_timeout_seconds: int = 180

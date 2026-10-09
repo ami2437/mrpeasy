@@ -294,7 +294,7 @@ def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Opt
         if kind not in ai_cloud.SCHEMAS:
             raise HTTPException(status_code=400, detail="Ask Claude isn't available for this kind of document")
         if doc["images"]:
-            raise HTTPException(status_code=400, detail=ai_cloud.SCAN_NOT_SENT if ai_cloud.claude_engine() else
+            raise HTTPException(status_code=400, detail=ai_cloud.scan_not_sent() if ai_cloud.claude_engine() else
                                 "This is a scanned image: it can't be redacted, so it isn't sent to Claude. Use the local AI scan.")
         safe, removed = ai_cloud.redact(doc["text"], db)
         result = ai_cloud.ask_claude(PROMPTS[kind], safe, ai_cloud.SCHEMAS[kind])

@@ -88,3 +88,51 @@ def test_status_says_claude(cloud, client, admin_headers, monkeypatch):
 def test_local_mode_is_unchanged(monkeypatch):
     monkeypatch.setattr(settings, "ai_engine", "local")
     assert ai_cloud.claude_engine() is False
+
+
+# ---- AI_ENGINE=auto: the office PC's Ollama while it's on, Claude while it's off ----
+def _pc(monkeypatch, up):
+    import time
+    monkeypatch.setattr(ai_cloud, "_local_seen", {"at": time.monotonic(), "up": up})   # as if just checked
+
+
+def test_auto_uses_the_pc_while_it_is_on(cloud, monkeypatch, client, admin_headers):
+    monkeypatch.setattr(settings, "ai_engine", "auto")
+    _pc(monkeypatch, True)
+    from app.services import ai_docs
+    local = []
+    monkeypatch.setattr(ai_docs, "_ask_model", lambda text, prompt=None, images=None: local.append(bool(images)) or
+                        {"invoices": [{"invoice_number": "LOCAL-1", "lines": [], "total": 1}]})
+    for pdf in (_text_pdf(["INVOICE LOCAL-1", "Total 1.00"]), _scan_pdf()):   # scans too: they never leave our machines
+        r = client.post("/api/ai-docs/extract", headers=admin_headers, data={"kind": "vendor_invoice"},
+                        files={"file": ("doc.pdf", pdf, "application/pdf")})
+        assert r.status_code == 200, r.text[:300]
+    assert local == [False, True] and cloud == []                            # the PC read both; Claude never called
+    s = client.get("/api/ai-orders/status", headers=admin_headers).json()
+    assert s.get("engine") == "local" and s.get("via") == "pc-link"
+
+
+def test_auto_falls_back_to_claude_while_the_pc_is_off(cloud, monkeypatch, client, admin_headers):
+    monkeypatch.setattr(settings, "ai_engine", "auto")
+    _pc(monkeypatch, False)
+    r = client.post("/api/ai-docs/extract", headers=admin_headers, data={"kind": "vendor_invoice"},
+                    files={"file": ("inv.pdf", _text_pdf(["INVOICE VB-77", "Total 12.50"]), "application/pdf")})
+    assert r.status_code == 200 and len(cloud) == 1                          # text: Claude
+    r = client.post("/api/ai-docs/extract", headers=admin_headers, data={"kind": "vendor_invoice"},
+                    files={"file": ("scan.pdf", _scan_pdf(), "application/pdf")})
+    assert r.status_code == 400 and "office PC" in r.json()["detail"] and len(cloud) == 1   # scan: refused, not sent
+    s = client.get("/api/ai-orders/status", headers=admin_headers).json()
+    assert s["engine"] == "claude" and s["pc_offline"] is True
+
+
+def test_pc_check_is_cached_and_quick(monkeypatch):
+    import httpx
+    monkeypatch.setattr(settings, "ai_engine", "auto")
+    monkeypatch.setattr(ai_cloud, "_local_seen", {"at": 0.0, "up": False})
+    calls = []
+    def boom(*a, **k):
+        calls.append(k.get("timeout"))
+        raise httpx.ConnectError("PC off")
+    monkeypatch.setattr(httpx, "get", boom)
+    assert ai_cloud.claude_engine() is True and ai_cloud.claude_engine() is True
+    assert calls == [1.5]                                                    # one short check, then the cached answer

@@ -81,8 +81,11 @@ def status() -> Dict[str, Any]:
     from app.services import ai_cloud
     if ai_cloud.claude_engine():
         ok = bool(settings.anthropic_api_key)
+        auto = ai_cloud.engine_mode() == "auto"
         return {"url": "Anthropic", "model": "Claude", "private": False, "reachable": ok, "model_installed": ok, "installed_models": [],
-                "engine": "claude", "message": "" if ok else "Claude isn't set up on this server yet (no API key)."}
+                "engine": "claude", "pc_offline": auto,
+                "message": "" if ok else ("The office PC's AI is offline and Claude isn't set up yet (no API key)." if auto
+                                          else "Claude isn't set up on this server yet (no API key).")}
     out = {"url": settings.ai_ollama_url, "model": settings.ai_model, "private": False, "reachable": False,
            "model_installed": False, "installed_models": [], "message": ""}
     try:
@@ -104,6 +107,8 @@ def status() -> Dict[str, Any]:
     except Exception:
         out["message"] = ("No local AI server found. Install Ollama (https://ollama.com/download), "
                           f"then run: ollama pull {settings.ai_model}")
+    if ai_cloud.engine_mode() == "auto":
+        out.update(engine="local", via="pc-link")  # the office PC's Ollama, over its private link
     return out
 
 
