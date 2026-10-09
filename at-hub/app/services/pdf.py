@@ -2,6 +2,7 @@
 so the same file is what the user prints, downloads, and what gets emailed."""
 import os
 from io import BytesIO
+from typing import Optional
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.models import CustomerOrder, Customer, Shipment, ShipmentLine, StockItem, Lot, Invoice, PurchaseOrder, Vendor
 from app.services.crud import get_company_profile
+from app.services.terms import due_date_for
 
 NAVY = colors.HexColor("#1b2430")
 ACCENT = colors.HexColor("#2563eb")
@@ -381,7 +383,14 @@ def payment_lines(db: Session, invoice: Invoice) -> list:
     return out
 
 
-def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes:
+def invoice_pdf(db: Session, invoice: Invoice, show_notes: Optional[bool] = None, opts: Optional[dict] = None) -> bytes:
+    """opts: Print Options (due_date, payments, zero_lines, notes) -- default: the requesting user's saved ones."""
+    from app.services import print_options
+    opts = dict(opts or print_options.current("invoice"))
+    if show_notes is not None:
+        opts["notes"] = show_notes
+    invoice._print_opts = opts  # read by printed_payments / prints() while this document is made
+    show_notes = opts.get("notes", True)
     designed = _designed(db, "invoice", invoice, invoice.customer_id, show_notes=show_notes)
     if designed:
         return designed
@@ -407,7 +416,7 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
         bill_to += [Spacer(1, 8), p("SHIP TO", "label"), Spacer(1, 3)] + [p(l, "body") for l in address_lines(ship_addr)]
     meta = _meta_table([
         ("Invoice date", date(invoice.invoice_date)),
-        ("Due date", date(invoice.due_date)),
+        ("Due date", date(invoice.due_date or due_date_for(customer, invoice.invoice_date)) if invoice.prints("due_date") else None),
         ("Order #", order.code if order else None),
         ("Customer PO #", order.po_number if order else None),
         ("Job #", order.job_number if order else None),
@@ -420,7 +429,7 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
 
     line_items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in invoice.lines if l.item_id})).all()}
     # $0 lines (free samples, no-charge items) stay off the customer's copy unless asked for.
-    printed = [l for l in invoice.lines if invoice.print_zero_lines or abs(l.amount) >= 0.005]
+    printed = [l for l in invoice.lines if invoice.prints("zero_lines") or abs(l.amount) >= 0.005]
     by_id = {s.id: s for s in shipments}
     rows = []
     for i, l in enumerate(printed, 1):
@@ -465,13 +474,21 @@ def invoice_pdf(db: Session, invoice: Invoice, show_notes: bool = True) -> bytes
 
 
 # ---- packing list ----
-def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True, include_pallets: bool = False,
-                     include_lots: bool = False, show_notes: bool = True, include_pallet_boxes: bool = False) -> bytes:
+def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: Optional[bool] = None, include_pallets: Optional[bool] = None,
+                     include_lots: Optional[bool] = None, show_notes: Optional[bool] = None, include_pallet_boxes: Optional[bool] = None) -> bytes:
     """include_boxes adds the per-line box breakdown; include_pallets adds a Pallet # column
     plus the pallet weight/dimensions section; include_lots adds the Lot # column; include_pallet_boxes adds the
     box count per pallet -- all chosen by the user at print time. Lines follow the customer order, each nut
-    under its bolt and on its bolt's pallet (app/services/nut_pairing.py)."""
+    under its bolt and on its bolt's pallet (app/services/nut_pairing.py). Anything not given follows the user's Print
+    Options for packing lists (pallet info only when the shipment has pallets)."""
     from app.services.nut_pairing import line_order, pallets_by_line
+    from app.services import print_options
+    o = print_options.current("packing_list")
+    include_boxes = o["boxes"] if include_boxes is None else include_boxes
+    include_pallets = (o["pallets"] and any(b.pallet_number for b in shipment.boxes)) if include_pallets is None else include_pallets
+    include_lots = o["lots"] if include_lots is None else include_lots
+    show_notes = o["notes"] if show_notes is None else show_notes
+    include_pallet_boxes = o["pallet_boxes"] if include_pallet_boxes is None else include_pallet_boxes
     order = db.query(CustomerOrder).filter(CustomerOrder.id == shipment.order_id).first()
     designed = _designed(db, "packing_list", shipment, order.customer_id if order else None, include_boxes=include_boxes,
                          include_pallets=include_pallets, include_lots=include_lots, show_notes=show_notes,
@@ -645,7 +662,10 @@ def packing_list_pdf(db: Session, shipment: Shipment, include_boxes: bool = True
 
 
 # ---- purchase order ----
-def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False, show_notes: bool = True) -> bytes:
+def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False, show_notes: Optional[bool] = None) -> bytes:
+    if show_notes is None:
+        from app.services import print_options
+        show_notes = print_options.current("purchase_order")["notes"]
     """for_vendor=True is the copy that goes out: lines show only the vendor's part # and
     description -- our own item numbers stay internal. The internal copy shows both."""
     designed = _designed(db, "purchase_order", po, for_vendor=for_vendor, show_notes=show_notes)
@@ -718,8 +738,11 @@ def purchase_order_pdf(db: Session, po: PurchaseOrder, for_vendor: bool = False,
 
 
 # ---- quotation ----
-def quote_pdf(db: Session, q) -> bytes:
-    designed = _designed(db, "quote", q, q.customer_id)
+def quote_pdf(db: Session, q, show_notes: Optional[bool] = None) -> bytes:
+    if show_notes is None:
+        from app.services import print_options
+        show_notes = print_options.current("quote")["notes"]
+    designed = _designed(db, "quote", q, q.customer_id, show_notes=show_notes)
     if designed:
         return designed
     from app.services.money import line_amount
@@ -738,7 +761,7 @@ def quote_pdf(db: Session, q) -> bytes:
         it = items.get(l.item_id)
         amt = line_amount(l.quantity, l.unit_price)
         total += amt
-        rows.append([str(n), p(it.code if it else "", "td"), described(l.description or (it.title if it else ""), l),
+        rows.append([str(n), p(it.code if it else "", "td"), described(l.description or (it.title if it else ""), l, show_notes),
                      qty(l.quantity), price(l.unit_price), money(amt)])
     code_w = fit_width([i.code for i in items.values()], 0.9 * inch)
     story.append(_data_table(["#", "Item #", "Description", "Qty", "Unit price", "Amount"], rows,

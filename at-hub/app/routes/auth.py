@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -108,6 +109,79 @@ def set_my_timezone(data: TimezoneIn, current_user: User = Depends(get_current_a
     user.role_name = role_name(db, user.role)
     return user
 
+
+
+# ---- own preferences: Print Options, Recently Viewed, saved filters (each person's own, nothing shared) ----
+@router.get("/print-options")
+def my_print_options(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    from app.services import print_options
+    return print_options.all_for_user(db.get(User, current_user.id))
+
+
+@router.put("/print-options/{doc_type}")
+def save_my_print_options(doc_type: str, choices: dict, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    from app.services import print_options
+    if not re.fullmatch(r"[a-z_]{2,40}", doc_type):
+        raise HTTPException(status_code=400, detail="Unknown document type")
+    try:
+        return print_options.save(db, db.get(User, current_user.id), doc_type, choices)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class RecentIn(BaseModel):
+    kind: str   # order | po | invoice | shipment | item | quote | customer | vendor
+    id: int
+    label: str  # what to show: "C89124 · Hudson"
+    url: str    # where it opens
+
+
+RECENT_MAX = 12
+
+
+@router.get("/recent")
+def my_recent(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    import json
+    return json.loads(db.get(User, current_user.id).recent_json or "[]")
+
+
+@router.post("/recent")
+def add_recent(data: RecentIn, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """A record was opened: it goes to the top of this person's Recently Viewed (one entry per record)."""
+    import json
+    if not data.url.endswith(f"?id={data.id}") or "//" in data.url or not re.fullmatch(r"[a-z_-]+\.html\?id=\d+", data.url):
+        raise HTTPException(status_code=400, detail="Not a record link")
+    user = db.get(User, current_user.id)
+    rows = [r for r in json.loads(user.recent_json or "[]") if not (r["kind"] == data.kind and r["id"] == data.id)]
+    rows.insert(0, {"kind": data.kind[:20], "id": data.id, "label": data.label[:120], "url": data.url,
+                    "at": datetime.utcnow().isoformat(timespec="seconds")})
+    user.recent_json = json.dumps(rows[:RECENT_MAX])
+    db.commit()
+    return rows[:RECENT_MAX]
+
+
+@router.get("/filters/{page}")
+def my_filters(page: str, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    import json
+    return json.loads(db.get(User, current_user.id).filters_json or "{}").get(page, [])
+
+
+@router.put("/filters/{page}")
+def save_my_filters(page: str, rows: list, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """This screen's saved filters, replaced as a whole: [{name, state}] (state = whatever the screen restores)."""
+    import json
+    if not re.fullmatch(r"[a-z_-]{2,40}", page):
+        raise HTTPException(status_code=400, detail="Unknown screen")
+    clean = [{"name": str(r.get("name") or "").strip()[:60], "state": r.get("state") or {}} for r in rows[:30]
+             if isinstance(r, dict) and str(r.get("name") or "").strip()]
+    if len(json.dumps(clean)) > 20000:
+        raise HTTPException(status_code=400, detail="Too many saved filters")
+    user = db.get(User, current_user.id)
+    allf = json.loads(user.filters_json or "{}")
+    allf[page] = clean
+    user.filters_json = json.dumps(allf)
+    db.commit()
+    return clean
 
 
 # ---- two-step login (authenticator app) ----

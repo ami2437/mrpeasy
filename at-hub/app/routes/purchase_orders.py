@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -117,7 +119,7 @@ def get_order(po_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{po_id}/pdf")
-def po_pdf(po_id: int, vendor: bool = False, notes: bool = True, db: Session = Depends(get_db)):
+def po_pdf(po_id: int, vendor: bool = False, notes: Optional[bool] = None, db: Session = Depends(get_db)):
     """?vendor=true: the copy for the vendor (their part #s only). Default: internal copy with our item #s."""
     po = PurchaseOrderService.get(db, po_id)
     suffix = "" if vendor else "-internal"

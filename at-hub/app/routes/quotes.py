@@ -214,7 +214,7 @@ def delete(quote_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{quote_id}/pdf")
-def pdf(quote_id: int, db: Session = Depends(get_db)):
+def pdf(quote_id: int, notes: Optional[bool] = None, db: Session = Depends(get_db)):
     from app.services.pdf import quote_pdf
     q = _get(db, quote_id)
-    return Response(quote_pdf(db, q), media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="Quote-{q.code}.pdf"'})
+    return Response(quote_pdf(db, q, show_notes=notes), media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="Quote-{q.code}.pdf"'})

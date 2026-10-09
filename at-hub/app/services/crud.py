@@ -1950,13 +1950,16 @@ class InvoiceService:
                 raise HTTPException(status_code=400, detail=f"Shipment {shipment.code} is already on invoice {live.code}")
         shipments.sort(key=lambda s: (s.ship_date or s.created_at or datetime.min, s.id))
         order = db.query(CustomerOrder).filter(CustomerOrder.id == shipments[0].order_id).first()
+        from app.services.terms import due_date_for
+        today = clock.today()
 
         invoice = Invoice(
             code=generate_code(db, Invoice, "INV"),
             customer_id=order.customer_id,
             order_id=order.id,
             shipment_id=shipments[0].id,
-            due_date=data.due_date,
+            invoice_date=today,
+            due_date=data.due_date or due_date_for(db.get(Customer, order.customer_id), today),  # the customer's terms
             free_text=data.free_text or None,
             status="draft",
             created_by=created_by,

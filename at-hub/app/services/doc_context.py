@@ -5,7 +5,6 @@ rows of its line-items table -- built from a real record (or from a label's own 
     FIELDS[doc_type] -> [(key, label)]   the field picker in the designer
     COLUMNS[doc_type] -> [(key, label)]  the table columns it can have
 Every value is already a display string ("$1,234.50", "Sep 25, 2026")."""
-from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ from app.config.settings import settings
 from app.models import Customer, CustomerOrder, Invoice, Lot, PurchaseOrder, Shipment, ShipmentLine, StockItem, Vendor
 from app.services.crud import get_company_profile
 from app.services.money import line_amount
+from app.services.terms import due_date_for, terms_of
 
 DOC_TYPES = {
     "invoice": "Invoice", "packing_list": "Packing list", "purchase_order": "Purchase order", "quote": "Quote",
@@ -183,7 +183,7 @@ def _invoice(db, inv: Invoice, opt):
     ships = [s for s in ships if s]
     items = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l.item_id for l in inv.lines if l.item_id})).all()}
     show_notes = opt.get("show_notes", True)
-    printed = [l for l in inv.lines if inv.print_zero_lines or abs(line_amount(l.quantity, l.unit_price)) >= 0.005]
+    printed = [l for l in inv.lines if inv.prints("zero_lines") or abs(line_amount(l.quantity, l.unit_price)) >= 0.005]
     by_id = {s.id: s for s in ships}
     rows = []
     for i, l in enumerate(printed, 1):
@@ -198,11 +198,11 @@ def _invoice(db, inv: Invoice, opt):
     shipping = sum(line_amount(l.quantity, l.unit_price) for l in printed if _is_shipping(l, items.get(l.item_id)))
     from app.services.pdf import payment_lines
     paid = payment_lines(db, inv)  # "Print Previous Payments": the customer's payments and the balance left
-    due = inv.due_date or (inv.invoice_date + timedelta(days=30) if inv.invoice_date else None)
+    due = inv.due_date or due_date_for(cust, inv.invoice_date)
     order_ship_to = order.ship_to_address if order else None
     ctx = {"doc": {"title": "INVOICE", "number": inv.code, "date": date(inv.invoice_date), "status": inv.status},
            "customer": _customer(cust, order_ship_to), "order": _order(order),
-           "invoice": {"date": date(inv.invoice_date), "due_date": date(due), "terms": "Net 30",
+           "invoice": {"date": date(inv.invoice_date), "due_date": date(due) if inv.prints("due_date") else "", "terms": terms_of(cust),
                        "shipments": ", ".join(s.code for s in ships), "shipped": moment(ships[0].ship_date) if ships else "",
                        "delivered": moment(ships[0].delivered_at) if ships else "",
                        "notes": inv.free_text if inv.free_text and inv.free_text != "Generated via AT-HUB" else ""},
@@ -342,7 +342,7 @@ def _quote(db, q, opt):
     rows = []
     for i, l in enumerate(q.lines, 1):
         it = items.get(l.item_id)
-        rows.append({"line_no": str(i), "item_code": it.code if it else "", "description": _desc(l.description or (it.title if it else ""), l, True),
+        rows.append({"line_no": str(i), "item_code": it.code if it else "", "description": _desc(l.description or (it.title if it else ""), l, opt.get("show_notes", True)),
                      "qty": qty(l.quantity), "price": price(l.unit_price), "amount": money(line_amount(l.quantity, l.unit_price))})
     total = sum(line_amount(l.quantity, l.unit_price) for l in q.lines)
     ctx = {"doc": {"title": "QUOTATION", "number": q.code, "date": date(q.quote_date)}, "customer": _customer(cust),

@@ -25,11 +25,18 @@ def test_part_paid_invoice_prints_payments_and_balance_by_default(make, api, cli
 
 def test_unticked_prints_the_full_total_as_due(make, api, client, admin_headers):
     inv = _part_paid(make, api)
-    inv = api.put(f"/api/invoices/{inv['id']}/print-options", json={"print_payments": False})
-    assert inv["print_payments"] is False and inv["amount_due_printed"] == 100
-    assert inv["print_zero_lines"] is False                                # the other option is left alone
-    text = _text(client.get(f"/api/invoices/{inv['id']}/pdf", headers=admin_headers).content)
+    # one print, asked for in the request (the Print Options pop-up sends what's ticked)
+    text = _text(client.get(f"/api/invoices/{inv['id']}/pdf?payments=false", headers=admin_headers).content)
     assert "Total due" in text and "Balance due" not in text and "-$70.00" not in text
+    # saved as this user's choice: every invoice they print, email or bulk-print follows it
+    api.put("/api/auth/print-options/invoice", json={"payments": False, "due_date": True, "zero_lines": False, "notes": True})
+    try:
+        assert api.get(f"/api/invoices/{inv['id']}")["amount_due_printed"] == 100
+        text = _text(client.get(f"/api/invoices/{inv['id']}/pdf", headers=admin_headers).content)
+        assert "Balance due" not in text and "-$70.00" not in text
+    finally:
+        api.put("/api/auth/print-options/invoice", json={"payments": True, "due_date": True, "zero_lines": False, "notes": True})
+    assert api.get(f"/api/invoices/{inv['id']}")["amount_due_printed"] == 30
 
 
 def test_factoring_payments_never_reduce_what_the_customer_owes(make, api, client, admin_headers):

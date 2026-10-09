@@ -21,6 +21,9 @@ class User(Base):
     timezone = Column(String, nullable=True)  # IANA zone, e.g. America/New_York; None = the company's (app/services/clock.py)
     totp_secret = Column(String, nullable=True)  # authenticator-app key (app/services/totp.py); set up on My Account
     totp_enabled = Column(Boolean, nullable=False, default=False)
+    print_prefs = Column(Text, nullable=True)    # JSON: Print Options pop-up choices per document type (services/print_options.py)
+    recent_json = Column(Text, nullable=True)    # JSON: records this person opened last (Recently Viewed)
+    filters_json = Column(Text, nullable=True)   # JSON: saved filters per screen {page: [{name, state}]}
 
     @property
     def effective_timezone(self) -> str:
@@ -217,6 +220,12 @@ class ContactCardMixin:
 
 class Customer(ContactCardMixin, Base):
     __tablename__ = "customers"
+
+    @property
+    def payment_terms(self) -> str:
+        """Net 15 / 30 / 45 / 60 or Due on Receipt, from the contact card (app/services/terms.py; none = Net 30)."""
+        from app.services.terms import terms_of
+        return terms_of(self)
 
     id = Column(Integer, primary_key=True, index=True)
     row_version = Column(Integer, nullable=False, default=1)  # bumped on every change to it or its lines (optimistic locking)
@@ -845,10 +854,19 @@ class Invoice(Base):
         return [p for p in self.payments
                 if not p.funding_import_id and (p.method or "").lower() not in ("factoring", "factoring discount")]
 
+    def prints(self, key: str) -> bool:
+        """Whether the customer's copy prints this (Print Options: due_date, payments, zero_lines, notes). The
+        renderer sets the choices for the document being made (_print_opts); without them, the saved defaults."""
+        opts = getattr(self, "_print_opts", None)
+        if opts is None:
+            from app.services import print_options
+            opts = print_options.current("invoice")
+        return bool(opts.get(key, True))
+
     @property
     def printed_payments(self) -> list:
-        """The payments the customer's copy lists ("Print Previous Payments", on unless unticked)."""
-        if self.print_payments is False or self.status == "void":
+        """The payments the customer's copy lists ("Previous Payments" in Print Options, on unless unticked)."""
+        if not self.prints("payments") or self.status == "void":
             return []
         return sorted(self.customer_payments, key=lambda p: (p.paid_date or p.created_at or datetime.min, p.id))
 

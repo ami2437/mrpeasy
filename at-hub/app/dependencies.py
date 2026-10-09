@@ -47,6 +47,8 @@ async def get_current_active_user(
     if user.must_change_password and not payload.get("view_as_by") and request.url.path.rstrip("/") not in TEMP_PASSWORD_ALLOWED:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Set your own password first (My Account) -- the temporary one only opens that page")
+    from app.services import print_options
+    print_options.use(user)  # documents made in this request (PDFs, emails, Bulk Operations) follow their Print Options
     return user
 
 

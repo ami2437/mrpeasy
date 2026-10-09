@@ -54,7 +54,8 @@ def list_unpacked(db: Session = Depends(get_db)):
 
 
 @router.get("/packing-lists.pdf")
-def packing_lists(ids: str, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, pallet_boxes: bool = False,
+def packing_lists(ids: str, boxes: Optional[bool] = None, pallets: Optional[bool] = None, lots: Optional[bool] = None,
+                  notes: Optional[bool] = None, pallet_boxes: Optional[bool] = None,
                   split: bool = False, db: Session = Depends(get_db)):
     """Several packing lists (batch screen): ?ids=3,7,9 -- one PDF, or with ?split=true a ZIP of one PDF each."""
     from app.services.bulk_docs import merge_pdfs, zip_files
@@ -186,7 +187,8 @@ def email_pod(shipment_id: int, data: PodEmailRequest, db: Session = Depends(get
 
 
 @router.get("/{shipment_id}/packing-list.pdf")
-def packing_list(shipment_id: int, boxes: bool = True, pallets: bool = False, lots: bool = False, notes: bool = True, pallet_boxes: bool = False,
+def packing_list(shipment_id: int, boxes: Optional[bool] = None, pallets: Optional[bool] = None, lots: Optional[bool] = None,
+                 notes: Optional[bool] = None, pallet_boxes: Optional[bool] = None,
                  db: Session = Depends(get_db)):
     """?boxes= / ?pallets= / ?lots= choose whether box breakdown, pallet info and lot #s print on the list."""
     shipment = ShipmentService.get(db, shipment_id)

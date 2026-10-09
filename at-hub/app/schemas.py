@@ -319,6 +319,7 @@ class PartyResponse(BaseModel):
     invoice_email: Optional[str] = None  # customers: where invoices go (an "invoices / AP" email, else the main one)
     mtr_email: Optional[str] = None
     po_email: Optional[str] = None  # vendors: where our POs go (a "purchasing" / "orders" email, else the main one)
+    payment_terms: Optional[str] = None  # customers: Net 30 etc. -- sets an invoice's due date
 
     class Config:
         from_attributes = True

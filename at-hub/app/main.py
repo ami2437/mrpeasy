@@ -39,6 +39,8 @@ try:
     make_safe_saved(db)  # saved designs: no dark fills on paper
     from app.services.tz_migrate import run_once as tz_v2
     tz_v2(db)  # once: dates to the per-user time zone rules (app/services/clock.py)
+    from app.services.terms import backfill_due_dates
+    backfill_due_dates(db)  # an invoice without a due date gets invoice date + the customer's payment terms
     # Never seed TEST records into a database built by the MRPeasy import (it carries number series).
     if settings.test_data_enabled and not db.query(NumberSeries).first():
         ensure_test_data(db)

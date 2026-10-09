@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.config.database import get_db
@@ -42,10 +42,14 @@ def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{invoice_id}/pdf")
-def get_invoice_pdf(invoice_id: int, notes: bool = True, db: Session = Depends(get_db)):
-    """?notes=false leaves every line note off this print."""
+def get_invoice_pdf(invoice_id: int, notes: Optional[bool] = None, due_date: Optional[bool] = None, payments: Optional[bool] = None,
+                    zero_lines: Optional[bool] = None, db: Session = Depends(get_db)):
+    """Print Options: whatever the request names (?notes=false&due_date=true ...), the rest as the user saved them."""
+    from app.services import print_options
     invoice = InvoiceService.get(db, invoice_id)
-    return Response(invoice_pdf(db, invoice, show_notes=notes), media_type="application/pdf",
+    opts = {**print_options.current("invoice"), **{k: v for k, v in
+            {"notes": notes, "due_date": due_date, "payments": payments, "zero_lines": zero_lines}.items() if v is not None}}
+    return Response(invoice_pdf(db, invoice, opts=opts), media_type="application/pdf",
                     headers={"Content-Disposition": filenames.disposition(filenames.invoice_name(db, invoice))})
 
 

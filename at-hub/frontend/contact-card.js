@@ -33,7 +33,7 @@ const ContactCards = {
 
   /* cfg: { endpoint, noun, labels: {phones, emails, addresses, websites, roles}, hints: {key: text},
             usedFor(rec, key, entry, index) -> [notes], newDraft() -> details, loadExtra() -> Promise,
-            headExtra(rec) -> html, quickExtra(rec) -> html, body(rec) -> html (stats/docs/sections), afterRender(rec) } */
+            headExtra(rec) -> html, quickExtra(rec) -> html, editExtra(details) -> html (extra fields while editing), body(rec) -> html (stats/docs/sections), afterRender(rec) } */
   async init(cfg) {
     this.cfg = cfg;
     document.getElementById("cc-search").addEventListener("input", () => this.renderList());
@@ -238,6 +238,8 @@ const ContactCards = {
                              : `<input value="${a(r.value)}" oninput="ContactCards.set('${s.key}', ${i}, 'value', this.value)">`}</div>
           <button class="minus" title="Remove" onclick="ContactCards.remove('${s.key}', ${i})">−</button></div>`).join("")}
         <div class="add-row" onclick="ContactCards.add('${s.key}')">⊕ add ${s.title.toLowerCase()}</div></div>`).join("")}
+
+      ${this.cfg.editExtra ? this.cfg.editExtra(d) : ""}
 
       <div class="grp"><div class="grp-title">Notes</div><div class="ent" style="grid-template-columns:1fr;">
         <textarea rows="4" placeholder="Hours, packing rules, anything worth remembering…" oninput="ContactCards.set('notes', null, null, this.value)">${a(d.notes)}</textarea></div></div>
