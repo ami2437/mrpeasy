@@ -465,7 +465,7 @@
         <tr class="${item.is_active === false ? "order-done" : ""} ${selected.has(item.id) ? "row-selected" : ""}" data-item="${item.id}">
           <td class="sel-col"><input type="checkbox" ${selected.has(item.id) ? "checked" : ""} onchange="toggleSelect(${item.id}, this.checked)"></td>
           <td><a class="link" href="item.html?id=${item.id}" data-nopeek><strong>${escapeHtml(item.code)}</strong></a>${item.is_active === false ? ' <span class="tag cancelled">archived</span>' : ""}${item.created_via === "ai-scan" && !item.verified_by ? ' <span class="tag on_hold">verify</span>' : ""}</td>
-          <td>${escapeHtml(item.title)} ${hidesMoney() ? "" : `<a class="link small" onclick="showPriceHistory(${item.id})">Prices</a>`} <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a> <a class="link small" onclick="showMovements(${item.id})">Movement</a></td>
+          <td style="overflow-wrap:anywhere;">${escapeHtml(item.title)} ${hidesMoney() ? "" : `<a class="link small" onclick="showPriceHistory(${item.id})">Prices</a>`} <a class="link small" href="mtrs.html?item_id=${item.id}">MTRs</a> <a class="link small" onclick="showMovements(${item.id})">Movement</a></td>
           <td>${groupTag(item)}</td>
           <td>${item.unit || ""}</td>
           <td class="num">${fmtQty(item.on_hand)}</td>

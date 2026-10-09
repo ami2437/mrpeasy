@@ -121,7 +121,7 @@
     // stay on the form, flagged, so the user picks our item (and the vendor # is learned).
     let scannedOrder = null;
     async function applyOrderScan(r, file) {
-      scannedOrder = { file, sh: r.shipping_handling || 0, docNumber: r.document_number };
+      scannedOrder = { file, sh: r.shipping_handling || 0, docNumber: r.document_number, lines: r.lines };
       if (r.vendor && r.vendor.vendor_id) {
         const sel = document.getElementById("f-vendor");
         sel.value = r.vendor.vendor_id;
@@ -143,7 +143,9 @@
           sel.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (l.vendor_item_code || l.description) {
           tr.classList.add("ai-unmatched");
-          tr.querySelector(".vcode-hint").innerHTML = `<span class="neg">Not sure: pick our item (your pick is remembered)</span>`;
+          tr.dataset.scanIdx = n;
+          tr.querySelector(".vcode-hint").innerHTML = `<span class="tag overdue">Pick The Item</span> <span class="small">Not sure which of our items this is — pick it (remembered for this vendor)${AuthGuard.can("stock.edit") ? ` or <a class="link" onclick="quickAddPoLine(${n})">Quick Add</a>` : ""}.</span>`;
+          tr.querySelector(".l-item").addEventListener("change", e => { if (e.target.value) { tr.classList.remove("ai-unmatched"); tr.querySelector(".vcode-hint").innerHTML = ""; } });
         }
         if (l.item_id && (l.match || "").startsWith("learned")) setTimeout(() => { tr.querySelector(".vcode-hint").innerHTML = `<span class="muted">Remembered from your earlier pick</span>`; }, 450);
         if (l.candidates) tr.querySelector("td").insertAdjacentHTML("beforeend", aiCandidateChips(l.candidates, `ai-po-item-${n}`, l.item_id));
@@ -158,13 +160,29 @@
         }, 400);
       });
       const unmatched = r.lines.filter(l => !l.item_id).length;
-      document.getElementById("po-ai-note").innerHTML = `<div class="ai-review"><div class="ai-review-head">${icon("sparkles")}
-        <strong>Drafted from ${escapeHtml(file.name)}</strong>${r.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((r.redacted || []).join("; ") || "nothing needed")}">☁ Claude, redacted</span>` : ""}
-        <span class="muted small">${r.lines.length} line${r.lines.length === 1 ? "" : "s"}${unmatched ? `, <span class="neg">${unmatched} need our item picked</span>` : ""}.
-        ${r.vendor && r.vendor.vendor_id ? "" : `<span class="neg">Vendor “${escapeHtml(r.vendor_name || "?")}” not certain: pick it${r.vendor && r.vendor.candidates && r.vendor.candidates.length ? " below" : " (or add it under Vendors)"}.</span>`}
-        ${r.shipping_handling ? `Quoted S&amp;H ${fmtMoney(r.shipping_handling)} will be added as an S&amp;H line.` : ""}
-        The document is attached to the PO when you create it.</span></div>
-        ${r.vendor && !r.vendor.vendor_id ? aiVendorChips(r.vendor.candidates, "f-vendor") : ""}</div>`;
+      document.getElementById("po-ai-note").innerHTML = `<div class="ai-review scan-head"><div><div class="ai-review-head">${icon("sparkles")}
+        <strong>Read from ${escapeHtml(file.name)}</strong>${r.cloud ? ` <span class="tag draft" title="Blanked out on this PC before sending: ${escapeHtml((r.redacted || []).join("; ") || "nothing needed")}">☁ Claude, redacted</span>` : ""}</div>
+        <div class="small">${r.lines.length} line${r.lines.length === 1 ? "" : "s"}: ${r.lines.length - unmatched} matched${unmatched ? `, <span class="neg">${unmatched} need${unmatched === 1 ? "s" : ""} you to pick the item</span>` : ""}.
+        ${r.vendor && r.vendor.vendor_id ? "" : `<span class="neg">The vendor on it (“${escapeHtml(r.vendor_name || "?")}”) isn't certain — pick it${r.vendor && r.vendor.candidates && r.vendor.candidates.length ? " below" : " (or add it under Vendors)"}.</span>`}
+        ${r.shipping_handling ? `The quoted S&amp;H (${fmtMoney(r.shipping_handling)}) is added as an S&amp;H line.` : ""}
+        Check every line against the document, then <strong>Create PO</strong>.</div>
+        ${r.vendor && !r.vendor.vendor_id ? aiVendorChips(r.vendor.candidates, "f-vendor") : ""}</div>
+        ${scannedDocHtml(file, "Attached to the PO when you create it")}</div>`;
+    }
+
+    // A scanned line we don't have the item for: add it (cost from the document) or say which item it is.
+    async function quickAddPoLine(n) {
+      const l = scannedOrder.lines[n], tr = document.querySelector(`#lines-body tr[data-scan-idx="${n}"]`);
+      let groups = [];
+      try { groups = (await apiFetch("/api/stock-items/groups/list")).map(g => g.name); } catch {}
+      const got = await quickAddItem({ side: "vendor", heading: "Add This Line's Item", said: [l.vendor_item_code, l.description, l.unit_price != null ? fmtPrice(l.unit_price) : ""].filter(Boolean).join(" · "),
+        code: "", title: l.description || "", price: l.unit_price || 0, groups, items, candidates: l.candidates });
+      if (!got || !tr) return;
+      if (!items.some(i => i.id === got.item.id)) items.push(got.item);
+      const sel = tr.querySelector(".l-item");
+      if (![...sel.options].some(o => o.value === String(got.item.id))) sel.add(new Option(`${got.item.code} — ${got.item.title}`, got.item.id));
+      sel.value = got.item.id;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
     function addLine() {

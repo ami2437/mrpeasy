@@ -19,24 +19,15 @@
         <button class="secondary toolbar-end" data-perm="quotes" onclick="newQuote()" title="Quote a customer: by hand, or paste their request and AT-HUB reads the lines and suggests prices">+ New Quote</button>
         <button class="capture-btn" data-perm="orders.edit" data-icon="upload" onclick="captureOrder()" title="Keep a customer's PO now, fill it in later: just the customer and the file">Quick Capture</button>
         <button data-perm="orders.edit" onclick="toggleForm()">+ New Order</button>
-        <button class="ai-btn" data-perm="orders.edit" data-icon="sparkles" onclick="toggleAiPanel()">Import PO PDF (AI)</button>
+        <button class="ai-btn" data-perm="orders.edit" data-icon="sparkles" onclick="toggleForm(true); scanOrderPdf()" title="Read a customer's PO PDF into a new order">Scan PO (AI)</button>
       </div>
     </div>
 
-    <div class="card" id="ai-card" style="display:none;">
-      <h3 style="margin-top:0;">Create an order from a customer PO (private AI)</h3>
-      <p class="muted" style="margin-top:0;">The PDF is read by an AI model running on our own machine, not a cloud service, so nothing leaves the company.
-        It fills in a draft order for you to check. Nothing is saved until you click <strong>Create Order</strong>, and the PDF is then attached to the order as the customer PO.</p>
-      <div id="ai-status" class="small muted">Checking the local AI…</div>
-      <div class="row" style="align-items:center; margin-top:8px;">
-        <input type="file" id="ai-file" accept=".pdf" style="flex:1 1 280px;">
-        <button style="flex:0 0 auto;" id="ai-read-btn" onclick="readPoWithAi()">Read PDF</button>
-      </div>
-      <div id="ai-error" class="error"></div>
-    </div>
 
     <div class="card" id="form-card" style="display:none;">
-      <h3>New Customer Order</h3>
+      <h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">New Customer Order
+        <button type="button" class="ai-btn co-scan-btn" data-icon="sparkles" onclick="scanOrderPdf()" title="Read the customer's PO PDF and fill this order in">AI Scan</button>
+        <button type="button" class="ai-btn cloud co-scan-btn" data-perm="ai" onclick="scanOrderPdf('claude')" title="For a hard PO: read it with Claude (cloud). Names and contact details are removed on this PC first; only that text is sent.">☁ Ask Claude</button></h3>
       <div id="ai-draft-note"></div>
       <div id="po-dup-warning"></div>
       <div class="field-grid">
@@ -180,118 +171,198 @@
       if (qtyCell) qtyCell.textContent = fmtQty(totalQty);
     }
 
-    // ---- AI PO import: local model reads the PDF, we prefill the New Order form ----
+    // ---- Scan a customer PO: the AI fills the New Order form; the PDF is attached when the order is created ----
     let aiPdfFile = null;  // attached to the order as its customer PO once it's created
 
-    async function toggleAiPanel() {
-      const card = document.getElementById("ai-card");
-      card.style.display = card.style.display === "none" ? "block" : "none";
-      if (card.style.display === "none") return;
-      const el = document.getElementById("ai-status");
+    // "AI Scan" / "Ask Claude" on the New Order form (and the toolbar's Scan PO, which opens the form first)
+    function scanOrderPdf(engine = null) {
+      if (engine === "claude" && !confirm("Read this PO with Claude (Anthropic's cloud)?\n\nNames, addresses and contact details are removed on this PC first; "
+          + "only that text is sent, never the PDF. Scans and photos are not sent.")) return;
+      const picker = Object.assign(document.createElement("input"), { type: "file", accept: "application/pdf" });
+      picker.onchange = () => { if (picker.files[0]) readOrderPdf(picker.files[0], engine); };
+      picker.click();
+    }
+    async function readOrderPdf(file, engine = null) {
+      const note = document.getElementById("ai-draft-note");
+      if (document.getElementById("form-card").style.display === "none") toggleForm(true);
+      note.innerHTML = `<div class="notice info">${icon("sparkles")} Reading <strong>${escapeHtml(file.name)}</strong>${engine === "claude" ? " with Claude" : ""}… this can take a minute.</div>`;
+      document.querySelectorAll(".co-scan-btn").forEach(b => { b.disabled = true; });
       try {
-        const s = await apiFetch("/api/ai-orders/status");
-        el.innerHTML = s.reachable && s.model_installed
-          ? (s.engine === "claude" ? `<span class="pos">● Ready</span> — <strong>Claude</strong> reads text PDFs (names and contact details are removed first; scans aren't sent)${s.pc_offline ? " · the office PC's private AI is offline" : ""}`
-            : s.via === "pc-link" ? `<span class="pos">● Ready</span> — <strong>the office PC's private AI</strong> (${escapeHtml(s.model)}) — nothing leaves your own machines`
-            : `<span class="pos">● Ready</span> — model <strong>${escapeHtml(s.model)}</strong> on ${escapeHtml(s.url)} (local)`)
-          : `<span class="neg">● Not Ready</span> — ${escapeHtml(s.message)}`;
-      } catch (e) { el.textContent = e.message; }
+        const form = new FormData();
+        form.append("file", file);
+        if (engine) form.append("engine", engine);
+        fillOrderFromDraft(await apiUpload("/api/ai-orders/extract", form), file);
+      } catch (e) {
+        note.innerHTML = `<div class="notice billing-off"><strong>Couldn't read ${escapeHtml(file.name)}.</strong> ${escapeHtml(e.message)}</div>`;
+      } finally { document.querySelectorAll(".co-scan-btn").forEach(b => { b.disabled = false; }); }
     }
 
-    // Items on the scanned PO that we don't have yet (and bolts' $0 nuts): create them all in one click,
-    // then the PO is read again so every line picks up its item and nut.
+    // Items on the scanned PO that we don't have yet (and bolts' $0 nuts). Each can be added on its own (Quick Add)
+    // or matched to an item we have; ticked ones can be created together. Every order line waiting for one fills in.
     let lastDraft = null;
     let productGroups = [];  // the fixed list to pick from -- new items never invent a group
     apiFetch("/api/stock-items/groups/list").then(gs => { productGroups = gs.map(g => g.name); }).catch(() => {});
     // "BOLT" / "Bolts" from the PO -> the listed "Bolt"; nothing when there's no such group
     const groupKey = n => { const k = (n || "").trim().toLowerCase(); return k.length > 3 && k.endsWith("s") && !k.endsWith("ss") ? k.slice(0, -1) : k; };
     function groupMatch(name) { return productGroups.find(g => groupKey(g) === groupKey(name)) || ""; }
+    // what a PO line said, without saying the same number twice
+    const poSaid = l => [...new Set([l.item_code, l.customer_item_code, l.description].filter(Boolean).map(x => String(x).trim()))].join(" · ");
     function newItemSuggestions(d) {
+      if (d._suggestions) return d._suggestions;
       const out = [];
-      d.lines.forEach(l => {
-        if (l.new_item) out.push({ ...l.new_item, kind: "item" });
-        if (l.new_nut) out.push({ ...l.new_nut, kind: "nut", bolt: (l.new_item || {}).code || l.item_code });
+      d.lines.forEach((l, n) => {
+        const said = poSaid(l);
+        if (l.new_item) out.push({ ...l.new_item, kind: "item", line: n, said: `${said}${l.unit_price != null ? ` · ${fmtPrice(l.unit_price)}` : ""}`, candidates: l.candidates || [] });
+        if (l.new_nut) out.push({ ...l.new_nut, kind: "nut", line: n, bolt: (l.new_item || {}).code || l.item_code, said });
       });
+      d._suggestions = out;
       return out;
+    }
+    function lineRow(n) { return document.querySelector(`#lines-body tr[data-draft-idx="${n}"]`); }
+    function suggestionStatus(x) {
+      if (x.done) return `<span class="tag shipped">${x.done.created ? "Added" : "Using"} ${escapeHtml(x.done.item.code)}</span>`;
+      if (x.kind === "nut") return `<span class="tag ${x.confidence === "check" ? "overdue" : "draft"}">$0 Nut For ${escapeHtml(x.bolt)}</span>
+        <div class="small ${x.confidence === "check" ? "warn-text" : "muted"}">${x.confidence === "check" ? "The PO doesn't say which nut — check it." : `Nut named on the PO${x.per_bolt > 1 ? ` (${x.per_bolt} per bolt)` : ""}.`}</div>`;
+      return `${x.looks_like ? `<span class="tag confirmed">Close To ${escapeHtml(x.looks_like.code)} · ${Math.round(x.looks_like.score * 100)}%</span>` : `<span class="tag draft">New Item</span>`}
+        <div class="small muted" title="${escapeHtml(x.said)}">PO line ${x.line + 1}: ${escapeHtml(x.said.length > 70 ? x.said.slice(0, 70) + "…" : x.said)}</div>`;
     }
     function newItemsHtml(d) {
       const list = newItemSuggestions(d);
       if (!list.length || !AuthGuard.can("stock.edit")) return "";
-      return `<div class="notice"><strong>${list.length} item${list.length === 1 ? "" : "s"} on this PO ${list.length === 1 ? "isn't" : "aren't"} in AT-HUB yet.</strong>
-        <table class="compact-table no-table-tools" style="margin:6px 0; max-width:900px;">
-          <thead><tr><th></th><th>Code</th><th>Title</th><th>Group</th><th class="num">Price</th><th>How it was named</th></tr></thead>
-          <tbody>${list.map((x, i) => `<tr>
-            <td><input type="checkbox" class="new-item-pick" data-i="${i}" ${x.kind === "nut" || x.tick !== false ? "checked" : ""} style="width:auto;"></td>
-            <td><input type="text" class="new-item-code" data-autocorrect="item-code" data-i="${i}" value="${escapeHtml(x.code)}" style="width:120px;"></td>
-            <td><input type="text" class="new-item-title" data-i="${i}" value="${escapeHtml(x.title)}" style="min-width:320px;"></td>
-            <td>${(() => { const pick = groupMatch(x.category);
-              return `<select class="new-item-group" data-i="${i}" style="width:120px;" ${pick ? "" : 'title="No matching group: pick one"'}>
+      const open = list.filter(x => !x.done), oi = open.filter(x => x.kind === "item").length, on = open.length - oi;
+      const what = [oi && `${oi} item${oi === 1 ? "" : "s"}`, on && `${on} $0 nut${on === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
+      return `<div class="notice scan-new" id="scan-new"><div class="scan-new-head"><div><strong>${open.length ? `${what} from this PO ${open.length === 1 ? "isn't" : "aren't"} in AT-HUB yet` : "Every item from the PO is sorted"}</strong>
+          <div class="small">${open.length ? "The order lines below that use them say “Waiting”. Add each one (Quick Add), say it's an item we already have, or create all the ticked ones at once." : "The order lines below are filled in. Check them, then Create Order."}</div></div>
+          ${open.length ? `<button class="small-btn" id="create-items-btn" onclick="createNewItems()">Create Ticked Items &amp; Fill In The Lines</button>` : ""}</div>
+        <table class="compact-table no-table-tools scan-new-table">
+          <thead><tr><th></th><th class="grow">New Item</th><th>Group</th><th>From The PO</th><th></th></tr></thead>
+          <tbody>${list.map((x, i) => `<tr class="${x.done ? "order-done" : ""}">
+            <td>${x.done ? icon("check") : `<input type="checkbox" class="new-item-pick" data-i="${i}" ${x.kind === "nut" || x.tick !== false ? "checked" : ""} style="width:auto;">`}</td>
+            <td class="grow"><strong>${escapeHtml(x.code)}</strong> <span class="muted small">${x.selling_price ? fmtPrice(x.selling_price) : "$0"}</span><div class="small">${escapeHtml(x.title)}</div></td>
+            <td>${x.done ? "" : (() => { const pick = groupMatch(x.category);
+              return `<select class="new-item-group" data-i="${i}" style="width:110px;" ${pick ? "" : 'title="No matching group: pick one"'}>
                 <option value="">— pick —</option>${productGroups.map(g => `<option ${g === pick ? "selected" : ""}>${escapeHtml(g)}</option>`).join("")}</select>`; })()}</td>
-            <td class="num"><span class="price-input"><span>$</span><input type="number" class="new-item-price" data-i="${i}" step="${PRICE_STEP}" min="0" value="${x.selling_price || 0}" style="width:90px;"></span></td>
-            <td class="small ${x.confidence === "check" || x.tick === false ? "neg" : "muted"}">${x.looks_like ? `${x.tick !== false ? "New item # — similar to" : "Reads like"} our <strong>${escapeHtml(x.looks_like.code)}</strong> (${Math.round(x.looks_like.score * 100)}%)${x.tick !== false ? "" : " — tick only if it's a different item"}. ` : ""}${x.kind === "nut" ? `$0 nut for ${escapeHtml(x.bolt)}${x.per_bolt > 1 ? ` (${x.per_bolt} per bolt)` : ""} — ${escapeHtml(x.why)}` : "their item # and description, PO price"}</td>
+            <td class="scan-status">${suggestionStatus(x)}</td>
+            <td class="nowrap">${x.done ? "" : `<button class="small-btn secondary" onclick="quickAddSuggestion(${i})" title="Check or change it, then add it — or pick the item we already have">${icon("plus")} Quick Add</button>
+              ${x.looks_like ? `<button class="small-btn secondary" onclick="useExistingFor(${i}, '${escapeHtml(x.looks_like.code)}')" title="It's the same as our ${escapeHtml(x.looks_like.code)}: use that, don't create a new item">Same As ${escapeHtml(x.looks_like.code)}</button>` : ""}`}</td>
           </tr>`).join("")}</tbody>
         </table>
-        <button class="small-btn" id="create-items-btn" onclick="createNewItems()">Create ticked items &amp; re-read the PO</button>
-        <span class="muted small">Check the titles first — anything in red needs a look.</span>
         <div id="new-items-error" class="error"></div></div>`;
+    }
+    function redrawSuggestions() {
+      const box = document.getElementById("scan-new");
+      if (box) box.outerHTML = newItemsHtml(lastDraft);
+      document.querySelectorAll("#lines-body tr[data-draft-idx]").forEach(tr => paintWaiting(tr));
+    }
+    // Put an item on the order line(s) a suggestion was for; a nut goes on a $0 line under its bolt.
+    function placeItem(x, item) {
+      x.done = { item, created: !!x._created };
+      if (!items.some(i => i.id === item.id)) items.push(item);
+      if (x.kind === "item") {
+        const tr = lineRow(x.line);
+        if (tr) setLineItem(tr, item);
+        // the bolt is now one of ours: its nut follows ours ("<code>-NUT"), if we have that
+        const nutSug = lastDraft._suggestions.find(s => s.kind === "nut" && s.line === x.line && !s.done);
+        if (nutSug && item.code !== x.code) {
+          const ourNut = items.find(i => i.code.toLowerCase() === `${item.code}-nut`.toLowerCase());
+          nutSug.bolt = item.code;
+          if (ourNut) placeItem(nutSug, ourNut);
+          else { nutSug.code = `${item.code}-NUT`; }
+        }
+      } else {
+        const bolt = lineRow(x.line);
+        if (bolt && !document.querySelector(`#lines-body tr[data-nut-for="${x.line}"]`)) {
+          addLine();
+          const tr = document.querySelector("#lines-body tr:last-child");
+          bolt.after(tr);
+          tr.dataset.nutFor = x.line;
+          tr.classList.add("nut-companion");
+          tr.querySelector(".l-qty").value = (parseFloat(bolt.querySelector(".l-qty").value) || 1) * (x.per_bolt || 1);
+          tr.querySelector(".l-delivery").value = bolt.querySelector(".l-delivery").value;
+          tr.keepOnPick = true;
+          tr.querySelector(".l-price").value = 0;
+          setLineItem(tr, item);
+          tr.querySelector(".grow").insertAdjacentHTML("beforeend", `<div class="small muted">↳ $0 matching nut for ${escapeHtml(x.bolt)}</div>`);
+        }
+      }
+      recalcLines("lines-body", "new-order-total");
+      redrawSuggestions();
+    }
+    function setLineItem(tr, item) {
+      const sel = tr.querySelector(".l-item");
+      let opt = [...sel.options].find(o => o.value === String(item.id));
+      if (!opt) { opt = new Option(`${item.code} — ${item.title}`, item.id); sel.add(opt); }
+      opt.dataset.price = item.selling_price || 0;
+      sel.value = item.id;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      tr.classList.remove("ai-unmatched");
+      tr.dataset.waiting = "";
+      tr.querySelectorAll(".ai-cands").forEach(c => c.remove());  // decided: the suggestions go
+      paintWaiting(tr);
+    }
+    async function quickAddSuggestion(i) {
+      const x = newItemSuggestions(lastDraft)[i];
+      const groupSel = document.querySelector(`.new-item-group[data-i="${i}"]`);
+      const got = await quickAddItem({ side: "customer", heading: x.kind === "nut" ? `$0 Nut For ${x.bolt}` : `Add ${x.code}`,
+        said: x.said, code: x.code, title: x.title, category: (groupSel && groupSel.value) || groupMatch(x.category), price: x.selling_price || 0,
+        note: x.kind === "nut" && x.confidence === "check" ? "The PO doesn't say which nut — check the title before adding it." : "",
+        groups: productGroups, items, candidates: x.candidates, looksLike: x.looks_like });
+      if (!got) return;
+      x._created = got.created;
+      placeItem(x, got.item);
+    }
+    function useExistingFor(i, code) {
+      const x = newItemSuggestions(lastDraft)[i], item = items.find(it => it.code === code);
+      if (!item) return toast(`${code} isn't in Stock Items any more`);
+      x._created = false;
+      placeItem(x, item);
+      toast(`Line ${x.line + 1} uses ${item.code} — the customer's wording is remembered when you create the order`);
     }
     async function createNewItems() {
       const list = newItemSuggestions(lastDraft);
       const err = document.getElementById("new-items-error");
       const btn = document.getElementById("create-items-btn");
       err.textContent = "";
+      const picks = [...document.querySelectorAll(".new-item-pick:checked")].map(p => parseInt(p.dataset.i)).filter(i => !list[i].done);
+      if (!picks.length) { err.textContent = "Tick the items to create (or use Quick Add on each)."; return; }
+      const noGroup = picks.filter(i => !document.querySelector(`.new-item-group[data-i="${i}"]`).value);
+      if (noGroup.length) { err.textContent = `Pick a group for ${noGroup.map(i => list[i].code).join(", ")} first.`; return; }
       btn.disabled = true;
       const failed = [];
-      const noGroup = [...document.querySelectorAll(".new-item-pick:checked")].filter(p => !document.querySelector(`.new-item-group[data-i="${p.dataset.i}"]`).value);
-      if (noGroup.length) {
-        err.textContent = `Pick a group for ${noGroup.map(p => list[parseInt(p.dataset.i)].code).join(", ")} first.`;
-        btn.disabled = false;
-        return;
-      }
-      for (const pick of document.querySelectorAll(".new-item-pick:checked")) {
-        const i = parseInt(pick.dataset.i), x = list[i];
+      for (const i of picks.filter(i => list[i].kind === "item").concat(picks.filter(i => list[i].kind === "nut"))) {  // bolts first, then their nuts
+        const x = list[i];
+        if (x.done) continue;
         try {
-          await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({
-            code: document.querySelector(`.new-item-code[data-i="${i}"]`).value.trim(),
-            keep_code: document.querySelector(`.new-item-code[data-i="${i}"]`).dataset.keep === "1",
-            title: document.querySelector(`.new-item-title[data-i="${i}"]`).value.trim(),
-            category: document.querySelector(`.new-item-group[data-i="${i}"]`).value.trim() || null,
-            selling_price: parseFloat(document.querySelector(`.new-item-price[data-i="${i}"]`).value) || 0,
-            created_via: "ai-scan" }) });
+          const item = await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({ code: x.code, title: x.title,
+            category: document.querySelector(`.new-item-group[data-i="${i}"]`).value, selling_price: x.selling_price || 0, created_via: "ai-scan" }) });
+          x._created = true;
+          placeItem(x, item);
         } catch (e) { failed.push(`${x.code}: ${e.message}`); }
       }
-      items = await apiFetch("/api/stock-items/");
-      try {
-        const form = new FormData();
-        form.append("file", aiPdfFile);
-        fillOrderFromDraft(await apiUpload("/api/ai-orders/extract", form), aiPdfFile);
-        if (failed.length) document.getElementById("new-items-error").textContent = `Not created: ${failed.join("; ")}`;
-      } catch (e) {
-        err.textContent = e.message;
-        btn.disabled = false;
-      }
+      const errNow = document.getElementById("new-items-error");
+      if (errNow && failed.length) errNow.textContent = `Not created: ${failed.join("; ")}`;
+      else if (!failed.length) toast(`${picks.length} item${picks.length === 1 ? "" : "s"} added — the order lines are filled in`);
+    }
+    // An order line with no item yet: say why, and what to do.
+    function paintWaiting(tr) {
+      const box = tr.querySelector(".scan-wait");
+      if (!box) return;
+      const n = parseInt(tr.dataset.draftIdx), l = lastDraft && lastDraft.lines[n];
+      if (!l || tr.querySelector(".l-item").value) { box.innerHTML = ""; return; }
+      const sug = (lastDraft._suggestions || []).find(s => s.kind === "item" && s.line === n && !s.done);
+      box.innerHTML = sug
+        ? `<span class="tag overdue">Waiting</span> for new item <strong>${escapeHtml(sug.code)}</strong> — add it above${sug.looks_like ? `, or use our <a class="link" onclick="useExistingFor(${lastDraft._suggestions.indexOf(sug)}, '${escapeHtml(sug.looks_like.code)}')">${escapeHtml(sug.looks_like.code)}</a> if it's the same` : ""}.`
+        : `<span class="tag overdue">Pick The Item</span> We're not sure which of our items this is — pick it below${AuthGuard.can("stock.edit") ? ` or <a class="link" onclick="quickAddForLine(${n})">Quick Add it</a>` : ""}. Your pick is remembered for this customer.`;
+    }
+    async function quickAddForLine(n) {
+      const l = lastDraft.lines[n], tr = lineRow(n);
+      const got = await quickAddItem({ side: "customer", heading: "Add This Line's Item", said: poSaid(l),
+        code: l.item_code || l.customer_item_code || "", title: l.description || "", price: l.unit_price || 0, groups: productGroups, items, candidates: l.candidates });
+      if (got && tr) setLineItem(tr, got.item);
     }
 
-    async function readPoWithAi() {
-      const err = document.getElementById("ai-error");
-      err.textContent = "";
-      const file = document.getElementById("ai-file").files[0];
-      if (!file) { err.textContent = "Choose the PO PDF first."; return; }
-      const btn = document.getElementById("ai-read-btn");
-      btn.disabled = true;
-      btn.textContent = "Reading… (can take a minute)";
-      try {
-        const form = new FormData();
-        form.append("file", file);
-        const draft = await apiUpload("/api/ai-orders/extract", form);
-        fillOrderFromDraft(draft, file);
-        document.getElementById("ai-card").style.display = "none";
-      } catch (e) {
-        err.textContent = e.message;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "Read PDF";
-      }
+    function readerName(d) {
+      return d.template ? `the ${d.template} layout reader (exact)` : /claude/i.test(d.model || "") ? "Claude" : "the office PC's AI";
     }
 
     function fillOrderFromDraft(d, file) {
@@ -302,9 +373,9 @@
       if (d.customer.customer_id) {
         document.getElementById("f-customer").value = d.customer.customer_id;
         fillShipTo();
-        if (d.customer.confidence < 1) notes.push(`Customer read as "${d.customer_name}" and matched to <strong>${escapeHtml(d.customer.suggested_name)}</strong>. Check it.`);
+        if (d.customer.confidence < 1) notes.push(`The PO says “${escapeHtml(d.customer_name)}” — we took that to be <strong>${escapeHtml(d.customer.suggested_name)}</strong>. Check the customer.`);
       } else {
-        notes.push(`<span class="neg">Customer "${escapeHtml(d.customer_name || "?")}" isn't in Customers. Pick one (or add them first).</span>`);
+        notes.push(`<span class="neg">The customer on the PO (“${escapeHtml(d.customer_name || "?")}”) isn't in Customers — pick them, or add them first.</span>`);
       }
       document.getElementById("f-po-number").value = d.po_number || "";
       document.getElementById("f-delivery").value = d.delivery_date || "";
@@ -317,18 +388,19 @@
       (d.skipped || []).forEach(p => notes.push(escapeHtml(p)));
       const nuts = d.lines.filter(l => l.companion_of).length;
       d.lines.filter(l => l.nut_skipped).forEach(l => notes.push(escapeHtml(l.nut_skipped)));
-      if (nuts) notes.push(`Added ${nuts} matching $0 nut line${nuts === 1 ? "" : "s"} under the bolts (our standard). Remove any that aren't wanted.`);
+      if (nuts) notes.push(`${nuts} $0 nut line${nuts === 1 ? " was" : "s were"} added under the bolts (our standard) — remove any the customer doesn't want.`);
 
       d.lines.forEach((l, n) => {
         addLine();
         const tr = document.querySelector("#lines-body tr:last-child");
+        tr.dataset.draftIdx = n;
         const select = tr.querySelector(".l-item");
         select.id = `ai-co-item-${n}`;
         if (!l.item_id) tr.classList.add("ai-unmatched");
         // remembered on save: what their PO said -> the item picked here (fixes the next scan)
         tr.dataset.srcCode = l.customer_item_code || l.item_code || "";
         tr.dataset.srcDesc = l.description || "";
-        const said = [l.item_code, l.customer_item_code, l.description].filter(Boolean).join(" · ");
+        const said = poSaid(l);
         if (l.item_id) {
           select.value = l.item_id;
           select.dispatchEvent(new Event("change"));
@@ -340,23 +412,32 @@
         if (l.unit_price != null) tr.querySelector(".l-price").value = l.unit_price;
         if (l.delivery_date) tr.querySelector(".l-delivery").value = l.delivery_date;
         if (l.unit_price != null) tr.keepOnPick = true;  // from now on, picking another item keeps the PO's price
+        select.addEventListener("change", () => { if (select.value) { tr.classList.remove("ai-unmatched"); paintWaiting(tr); } });
         if (l.companion_of) {
           tr.classList.add("nut-companion");
           tr.querySelector(".grow").insertAdjacentHTML("beforeend", `<div class="small muted">↳ ${escapeHtml(l.companion_note)}</div>`);
           refreshPriceDeltas(tr);
           return;
         }
+        const how = !l.item_id ? "" : l.match === "description" ? ` <span class="warn-text">— matched by its description: check it</span>`
+          : l.match === "learned" ? " — matched from your earlier pick" : "";
         tr.querySelector(".grow").insertAdjacentHTML("beforeend",
-          `<div class="small ${l.item_id && ["code", "learned"].includes(l.match) ? "muted" : "neg"}">PO: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${
-            !l.item_id ? " — not sure which item: pick one below (your pick is remembered)" : l.match === "description" ? " — matched by description, check it" : l.match === "learned" ? " — remembered from your earlier pick" : ""}</div>`
-          + aiCandidateChips(l.candidates, select.id, l.item_id));
+          `<div class="small muted">PO says: ${escapeHtml(said)}${l.unit ? ` (${escapeHtml(l.unit)})` : ""}${how}</div><div class="small scan-wait"></div>`
+          + (l.item_id && l.match !== "description" ? "" : aiCandidateChips(l.candidates, select.id, l.item_id)));
         refreshPriceDeltas(tr);
       });
-      if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF.</span>`); }
+      if (!d.lines.length) { addLine(); notes.push(`<span class="neg">No order lines were found on the PDF — add them by hand.</span>`); }
       recalcLines("lines-body", "new-order-total");
       lastDraft = d;
-      document.getElementById("ai-draft-note").innerHTML = newItemsHtml(d) + `<div class="notice info">Filled from <strong>${escapeHtml(aiPdfFile.name)}</strong> ${d.template ? `using the exact <strong>${escapeHtml(d.template)}</strong> PO reader` : `by the local AI (${escapeHtml(d.model)})`}.
-        Check every field before creating the order. The PDF will be attached as the customer PO.${notes.length ? `<ul>${notes.map(n => `<li>${n}</li>`).join("")}</ul>` : ""}</div>`;
+      const sug = newItemSuggestions(d).filter(x => x.kind === "item").length;
+      const matched = d.lines.filter(l => l.item_id && !l.companion_of).length, mine = d.lines.filter(l => !l.companion_of).length;
+      const waiting = d.lines.filter(l => !l.item_id && !l.companion_of).length;
+      document.getElementById("ai-draft-note").innerHTML = `<div class="notice info scan-head"><div>
+          <strong>${icon("sparkles")} Read by ${escapeHtml(readerName(d))}</strong> — ${mine} line${mine === 1 ? "" : "s"}: ${matched} matched${waiting ? `, <span class="neg">${waiting} need${waiting === 1 ? "s" : ""} you</span>${sug ? ` (${sug} new item${sug === 1 ? "" : "s"} to add)` : ""}` : ""}.
+          <div class="small" style="margin-top:4px;">Check every field against the PO, then <strong>Create Order</strong>. Lines marked <span class="tag overdue">Waiting</span> or <span class="tag overdue">Pick The Item</span> need you first.</div>
+          ${notes.length ? `<ul class="small">${notes.map(n => `<li>${n}</li>`).join("")}</ul>` : ""}</div>
+          ${scannedDocHtml(file, "Attached to the order as its Customer PO when you create it")}</div>` + newItemsHtml(d);
+      document.querySelectorAll("#lines-body tr[data-draft-idx]").forEach(paintWaiting);
       document.getElementById("form-card").scrollIntoView({ behavior: "smooth" });
     }
 

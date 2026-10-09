@@ -834,6 +834,9 @@ class CustomerOrderService:
         order = CustomerOrderService.get(db, order_id)
         if order.status != "validation":
             raise HTTPException(status_code=400, detail=f"{order.code} is {order.status} -- only a captured order needs validating")
+        if order.ai_pending_lines:
+            raise HTTPException(status_code=400, detail=f"{len(order.ai_pending_lines)} line(s) from the PO still need an item -- "
+                                                        "pick one for each (or drop it) first")
         if not order.lines:
             raise HTTPException(status_code=400, detail="Add the order's lines from the customer's PO first")
         po = (order.po_number or "").strip().lower()
@@ -2446,6 +2449,9 @@ class PurchaseOrderService:
         po = PurchaseOrderService.get(db, po_id)
         if po.status != "validation":
             raise HTTPException(status_code=400, detail=f"{po.code} is {po.status} -- only a captured PO needs validating")
+        if po.ai_pending_lines:
+            raise HTTPException(status_code=400, detail=f"{len(po.ai_pending_lines)} line(s) from the vendor's document still need an item -- "
+                                                        "pick one for each (or drop it) first")
         if not po.lines:
             raise HTTPException(status_code=400, detail="Add the PO's lines from the vendor's document first")
         po.status = "ordered" if ordered else "draft"

@@ -23,7 +23,8 @@ from app.services.crud import ShipmentService
 
 router = APIRouter(prefix="/api/attachments", tags=["attachments"])
 
-ENTITIES = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment}
+from app.models import Quote  # noqa: E402
+ENTITIES = {"customer_order": CustomerOrder, "purchase_order": PurchaseOrder, "shipment": Shipment, "quote": Quote}
 # Which kinds of document belong on which record: Company Settings -> Types & Tags (app/services/type_lists.py).
 def _categories(db: Session, entity_type: str) -> set:
     return type_lists.keys(db, "attachment", entity_type)

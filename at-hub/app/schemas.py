@@ -401,6 +401,8 @@ class CustomerOrderLineResponse(BaseModel):
 
 class CustomerOrderResponse(BaseModel):
     id: int
+    ai_source: Optional[str] = None       # made from an AI read of this file -- check it
+    ai_pending_lines: List[dict] = []     # lines the read couldn't match to an item yet
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
     row_updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
@@ -1006,6 +1008,8 @@ class PurchaseOrderPaymentResponse(PurchaseOrderPaymentInput):
 class PurchaseOrderResponse(BaseModel):
     jobs: List[str] = []  # job #s its received material shipped to (search)
     id: int
+    ai_source: Optional[str] = None
+    ai_pending_lines: List[dict] = []
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
     row_updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None

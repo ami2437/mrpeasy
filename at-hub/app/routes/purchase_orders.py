@@ -107,6 +107,25 @@ class ValidatePoIn(BaseModel):
     ordered: bool = False  # validate and mark ordered in one go
 
 
+class PendingMatchIn(BaseModel):
+    item_id: int
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+
+
+@router.post("/{po_id}/ai-pending/{idx}/match", response_model=PurchaseOrderResponse)
+def match_pending(po_id: int, idx: int, data: PendingMatchIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """A line the AI read couldn't place: add it with this item (the vendor's part # is remembered)."""
+    from app.services import ai_pending
+    return ai_pending.match(db, "vendor", po_id, idx, data.item_id, data.quantity, data.unit_price, current_user.username)
+
+
+@router.post("/{po_id}/ai-pending/{idx}/discard", response_model=PurchaseOrderResponse)
+def discard_pending(po_id: int, idx: int, db: Session = Depends(get_db)):
+    from app.services import ai_pending
+    return ai_pending.discard(db, "vendor", po_id, idx)
+
+
 @router.post("/{po_id}/validate", response_model=PurchaseOrderResponse)
 def validate_order(po_id: int, data: ValidatePoIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """A quick-captured PO checked against the vendor's document: on to Draft (or Ordered)."""

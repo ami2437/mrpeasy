@@ -602,7 +602,7 @@ function setUnderlay(el, tone, word = "") {
 // Status -> [tone, watermark] for each kind of record (one place, so every screen reads the same)
 const UNDERLAYS = {
   order(o) {
-    if (o.status === "validation") return ["orange", "VALIDATE"];  // quick-captured: hazard stripes, not the draft's amber
+    if (o.status === "validation") return ["orange", o.ai_source ? "AI READ · VALIDATE" : "VALIDATE"];  // hazard stripes, not the draft's amber
     if (o.status === "draft") return ["amber", "DRAFT"];
     if (o.status === "cancelled") return ["grey", "CANCELLED"];
     if (o.status === "invoiced") return ["green", "COMPLETE"];
@@ -619,6 +619,7 @@ const UNDERLAYS = {
     return ["blue"];
   },
   po(p) {
+    if (p.status === "validation" && p.ai_source) return ["orange", "AI READ · VALIDATE"];
     return { validation: ["orange", "VALIDATE"], draft: ["amber", "DRAFT"], ordered: ["blue"], partially_received: ["pink"], received: ["green", "RECEIVED"],
              cancelled: ["grey", "CANCELLED"] }[p.status] || [null];
   },
@@ -900,6 +901,7 @@ const fileViewer = {
         <span class="fv-name"></span>
         <span class="fv-img-tools"><button class="fv-btn" data-act="out" title="Zoom out">−</button><button class="fv-btn" data-act="fit" title="Fit">Fit</button>
           <button class="fv-btn" data-act="in" title="Zoom in">+</button><button class="fv-btn" data-act="rot" title="Rotate">⟳</button></span>
+        <button class="fv-btn" data-act="max" title="Enlarge to fill the window (again: back beside the form)">⤢</button>
         <button class="fv-btn" data-act="tab" title="Open in a new tab">↗</button><button class="fv-btn" data-act="dl" title="Download">${icon("download")}</button>
         <button class="fv-btn fv-close" data-act="close" title="Close (Esc)">${icon("x")}</button></div>
       <div class="fv-body"></div>`;
@@ -970,6 +972,13 @@ const fileViewer = {
     const id = this.ids[this.at];
     if (a === "close") { this.el.remove(); this.el = null; document.removeEventListener("keydown", this.key); return; }
     if (a === "next" || a === "prev") { if (this.ids.length > 1) this.show(this.ids[(this.at + (a === "next" ? 1 : -1) + this.ids.length) % this.ids.length], this.ids); return; }
+    if (a === "max") {
+      const el = this.el, big = el.classList.toggle("fv-max");
+      if (big) { this.prev = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+        Object.assign(el.style, { left: "2vw", top: "3vh", width: "96vw", height: "94vh" }); }
+      else if (this.prev) Object.assign(el.style, this.prev);
+      return;
+    }
     if (a === "in") this.zoomBy(1.25);
     if (a === "out") this.zoomBy(1 / 1.25);
     if (a === "fit") { this.zoom = 1; this.dx = 0; this.dy = 0; this.paint(); }
@@ -1354,13 +1363,60 @@ async function quickCapture(kind) {
 // The banner on a captured record: what it is, open the document, Validate (and the one-step Validate & ...)
 function validationBannerHtml(kind, rec, canEdit) {
   if (rec.status !== "validation") return "";
-  const isOrder = kind === "order", noLines = !(rec.lines || []).length;
-  return `<div class="validation-banner">${icon("fileCheck")}<div><strong>Validation needed — quick-captured${rec.created_by ? ` by ${escapeHtml(rec.created_by)}` : ""} ${fmtDate(rec.created_at)}.</strong>
-      Check it against the ${isOrder ? "customer's PO" : "vendor's document"}${noLines ? ", add the lines" : ""}, then Validate.
+  const isOrder = kind === "order", noLines = !(rec.lines || []).length, waiting = rec.ai_pending_lines || [];
+  const blocked = noLines || waiting.length;
+  const why = waiting.length ? `title='Every line from the ${isOrder ? "PO" : "document"} needs its item first'` : noLines ? "title='Add the lines first'" : "";
+  const all = typeof items !== "undefined" && Array.isArray(items) ? items : [];
+  return `<div class="validation-banner ${rec.ai_source ? "ai-read" : ""}">${icon(rec.ai_source ? "sparkles" : "fileCheck")}<div>
+      ${rec.ai_source
+        ? `<strong>AI read — check it, then Validate.</strong> Made from <a class="link" onclick="openCapturedDoc('${isOrder ? "customer_order" : "purchase_order"}', ${rec.id})">${escapeHtml(rec.ai_source)}</a>
+           ${rec.created_by ? `by ${escapeHtml(rec.created_by)} ` : ""}${fmtDate(rec.created_at)}. Compare every line with the ${isOrder ? "customer's PO" : "vendor's document"}${waiting.length ? `, and give the ${waiting.length} line${waiting.length === 1 ? "" : "s"} below their item` : ""}.`
+        : `<strong>Validation needed — quick-captured${rec.created_by ? ` by ${escapeHtml(rec.created_by)}` : ""} ${fmtDate(rec.created_at)}.</strong>
+           Check it against the ${isOrder ? "customer's PO" : "vendor's document"}${noLines ? ", add the lines" : ""}, then Validate.
+           <a class="link" onclick="openCapturedDoc('${isOrder ? "customer_order" : "purchase_order"}', ${rec.id})">Open the document</a>`}
       ${isOrder ? "It can't be confirmed, booked or shipped before that." : "It can't be ordered, emailed or received before that."}
-      <a class="link" onclick="openCapturedDoc('${isOrder ? "customer_order" : "purchase_order"}', ${rec.id})">Open the document</a></div>
-    ${canEdit ? `<div class="vb-actions"><button class="small-btn secondary" onclick="validateCaptured('${kind}', ${rec.id}, false)" ${noLines ? "disabled title='Add the lines first'" : ""}>Validate</button>
-      <button class="small-btn capture-btn" onclick="validateCaptured('${kind}', ${rec.id}, true)" ${noLines ? "disabled title='Add the lines first'" : ""}>Validate &amp; ${isOrder ? "Confirm" : "Mark Ordered"}</button></div>` : ""}</div>`;
+      ${waiting.length ? `<table class="compact-table no-table-tools ai-wait-table"><thead><tr><th class="grow">The ${isOrder ? "PO" : "Document"} Says</th><th class="num">Qty</th><th class="num">Price</th><th>Our Item</th><th></th></tr></thead><tbody>
+        ${waiting.map((w, n) => `<tr><td class="grow"><strong>${escapeHtml(w.item_code || "")}</strong> <span class="small">${escapeHtml(w.description || "")}</span>
+            ${w.new_item ? `<div class="small muted">Not in Stock Items yet${w.new_item.looks_like ? ` — closest we have: ${escapeHtml(w.new_item.looks_like.code)}` : ""}</div>` : ""}</td>
+          <td class="num">${fmtQty(w.quantity)}</td><td class="num">${fmtPrice(w.unit_price || 0)}</td>
+          <td>${canEdit ? `<select class="ai-wait-pick" data-n="${n}" data-searchable style="min-width:220px;"><option value="">— pick our item —</option>${all.map(i =>
+              `<option value="${i.id}" ${(w.candidates || [])[0] && w.candidates[0].item_id === i.id && w.candidates[0].score >= 0.85 ? "selected" : ""}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select>` : ""}</td>
+          <td class="nowrap">${canEdit ? `<button class="small-btn" onclick="aiWaitUse('${kind}', ${rec.id}, ${n}, this)">Use</button>
+            ${AuthGuard.can("stock.edit") ? `<button class="small-btn secondary" onclick="aiWaitQuick('${kind}', ${rec.id}, ${n})">Quick Add</button>` : ""}
+            <a class="link small neg" onclick="aiWaitDrop('${kind}', ${rec.id}, ${n})">Drop</a>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}</div>
+    ${canEdit ? `<div class="vb-actions"><button class="small-btn secondary" onclick="validateCaptured('${kind}', ${rec.id}, false)" ${blocked ? `disabled ${why}` : ""}>Validate</button>
+      <button class="small-btn capture-btn" onclick="validateCaptured('${kind}', ${rec.id}, true)" ${blocked ? `disabled ${why}` : ""}>Validate &amp; ${isOrder ? "Confirm" : "Mark Ordered"}</button></div>` : ""}</div>`;
+}
+// The waiting lines of an AI read: give one its item (picked, or added with Quick Add), or drop it.
+async function aiWaitSend(kind, id, n, body, path = "match") {
+  try {
+    await apiFetch(`/api/${kind === "order" ? "customer-orders" : "purchase-orders"}/${id}/ai-pending/${n}/${path}`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+    if (typeof showDetail === "function") await showDetail(id);
+  } catch (e) { toast(e.message); }
+}
+function aiWaitUse(kind, id, n, btn) {
+  const sel = btn.closest("tr").querySelector(".ai-wait-pick");
+  if (!sel || !sel.value) return toast("Pick our item for this line first");
+  aiWaitSend(kind, id, n, { item_id: parseInt(sel.value) });
+}
+async function aiWaitQuick(kind, id, n) {
+  const rec = await apiFetch(`/api/${kind === "order" ? "customer-orders" : "purchase-orders"}/${id}`);
+  const w = (rec.ai_pending_lines || [])[n];
+  if (!w) return;
+  let groups = [];
+  try { groups = (await apiFetch("/api/stock-items/groups/list")).map(g => g.name); } catch {}
+  const all = typeof items !== "undefined" && Array.isArray(items) ? items : [];
+  const got = await quickAddItem({ side: kind === "order" ? "customer" : "vendor", heading: "Add This Line's Item",
+    said: [w.item_code, w.description, fmtPrice(w.unit_price || 0)].filter(Boolean).join(" · "),
+    code: (w.new_item && w.new_item.code) || (kind === "order" ? w.item_code || "" : ""), title: (w.new_item && w.new_item.title) || w.description || "",
+    category: w.new_item && w.new_item.category, price: w.unit_price || 0, groups, items: all, candidates: w.candidates,
+    looksLike: w.new_item && w.new_item.looks_like });
+  if (!got) return;
+  if (!all.some(i => i.id === got.item.id)) all.push(got.item);
+  aiWaitSend(kind, id, n, { item_id: got.item.id });
+}
+function aiWaitDrop(kind, id, n) {
+  if (confirm("Drop this line? It won't be on the record (the document still shows it).")) aiWaitSend(kind, id, n, null, "discard");
 }
 async function openCapturedDoc(entityType, id) {
   const files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${id}`);
@@ -1387,7 +1443,7 @@ function groupTag(item) {
 // Items created from a scanned PO carry a small tag until someone has checked them.
 function aiMadeTag(item) {
   return item && item.created_via === "ai-scan"
-    ? `<span class="ai-made-tag" title="Created from a scanned customer PO${item.created_at ? " on " + fmtDate(item.created_at) : ""} — check the title, group and price">AI</span>` : "";
+    ? ` <span class="ai-made-tag" title="Created from a scanned customer PO${item.created_at ? " on " + fmtDate(item.created_at) : ""} — check the title, group and price">AI</span>` : "";
 }
 
 // ---- 4x6 labels: same layout and fields as the main portal's labels, plus our logo ----
@@ -2744,8 +2800,8 @@ function invoiceChipFromShipment(s) {
 // Chips under a scanned line: "15343 · BOLT_HH_5/8-11x1-1/4… 85%". Clicking one picks that item in the
 // line's <select> (and fires change). The chosen one is highlighted; nothing is final until the form is saved.
 function aiCandidateChips(candidates, selectId, pickedId) {
-  if (!candidates || !candidates.length) return `<div class="ai-cands muted small">No similar items found: pick one from the list.</div>`;
-  return `<div class="ai-cands"><span class="small muted">${pickedId ? "Other matches:" : "Best matches, pick one:"}</span>${candidates.map(c =>
+  if (!candidates || !candidates.length) return `<div class="ai-cands muted small">Nothing close in Stock Items — pick from the list, or Quick Add it.</div>`;
+  return `<div class="ai-cands"><span class="small muted">${pickedId ? "Other close items:" : "Closest we have — pick one:"}</span>${candidates.map(c =>
     `<button type="button" class="ai-cand${c.item_id === pickedId ? " on" : ""}" title="${escapeHtml(`${c.title}\n${c.why}`)}"
       onclick="aiPickCandidate(this, '${selectId}', ${c.item_id})"><b>${escapeHtml(c.code)}</b> ${escapeHtml(c.title.length > 38 ? c.title.slice(0, 38) + "…" : c.title)}
       <i>${Math.round(c.score * 100)}%</i></button>`).join("")}</div>`;
@@ -4254,3 +4310,85 @@ document.addEventListener("keydown", e => {
     if (b) { e.preventDefault(); b.click(); }
   }
 });
+
+// ---- Scanned documents: the file an AI read came from, shown beside the work (the floating file window) before it's
+// saved anywhere. scannedDocHtml() is the small card; viewScannedDoc() opens it on the right, Enlarge fills the window. ----
+let scannedDocSeq = 0;
+function registerScannedDoc(file) {
+  if (!file) return null;
+  if (file._viewId) return file._viewId;
+  const id = `scan-${++scannedDocSeq}`;
+  attachmentBlobUrls[id] = URL.createObjectURL(file);
+  attachmentTypes[id] = file.type || (/\.pdf$/i.test(file.name) ? "application/pdf" : "");
+  attachmentNames[id] = file.name;
+  file._viewId = id;
+  return id;
+}
+function viewScannedDoc(idOrFile) {
+  const id = typeof idOrFile === "string" || typeof idOrFile === "number" ? idOrFile : registerScannedDoc(idOrFile);
+  if (id) fileViewer.show(id, [id]);
+}
+// The card: a live thumbnail of page 1, the file name, and what happens to it. attachNote: e.g. "Attached to the order when you create it".
+function scannedDocHtml(file, attachNote = "") {
+  const id = registerScannedDoc(file);
+  if (!id) return "";
+  const isPdf = attachmentTypes[id] === "application/pdf";
+  return `<div class="scan-doc" title="Open it beside the form — drag or resize the window, or Enlarge it">
+      <div class="scan-doc-thumb" onclick="viewScannedDoc('${id}')">${isPdf ? `<iframe src="${attachmentBlobUrls[id]}#toolbar=0&navpanes=0&view=FitH" tabindex="-1" title="Preview"></iframe>`
+        : `<img src="${attachmentBlobUrls[id]}" alt="">`}<span class="scan-doc-cover"></span></div>
+      <div class="scan-doc-info"><strong title="${escapeHtml(file.name)}">${icon("paperclip")} ${escapeHtml(file.name)}</strong>
+        ${attachNote ? `<span class="muted small">${escapeHtml(attachNote)}</span>` : ""}
+        <button type="button" class="small-btn secondary" onclick="viewScannedDoc('${id}')">${icon("eye")} View Beside</button></div></div>`;
+}
+
+// ---- Quick Add: one line of a scan that isn't an item we know -- create it, or say which item we have it is. ----
+// opts: { side: "customer"|"vendor", said, code, title, category, price, groups, items, candidates:[{item_id, code, title, score}],
+//         looksLike:{code, score}, note } -> resolves { item, created } or null
+async function quickAddItem(opts) {
+  const groups = opts.groups || [], all = opts.items || [];
+  const canCreate = AuthGuard.can("stock.edit");
+  const near = (opts.candidates || []).filter(c => c.item_id);
+  const guess = opts.looksLike ? all.find(i => i.code === opts.looksLike.code) : null;
+  const pickId = guess ? guess.id : near[0] && near[0].score >= 0.85 ? near[0].item_id : "";
+  const priceLabel = opts.side === "vendor" ? "Our Cost" : "Selling Price";
+  let error = "", form = { code: opts.code || "", title: opts.title || "", category: opts.category || "", price: opts.price ?? 0, use: pickId };
+  while (true) {
+    const { value, el } = await askDialog({ title: opts.heading || "Add This Item", wide: true,
+      body: `${opts.said ? `<div class="qa-said"><span class="muted small">The ${opts.side === "vendor" ? "vendor's document" : "PO"} says</span><div>${escapeHtml(opts.said)}</div></div>` : ""}
+        ${opts.note ? `<p class="warn-text small" style="margin:4px 0 0;">${escapeHtml(opts.note)}</p>` : ""}
+        <div class="qa-grid">
+          <section class="qa-col"><h4>${icon("plus")} New Item</h4>
+            ${canCreate ? `<label>Item #</label><input type="text" class="qa-code" data-autocorrect="item-code" value="${escapeHtml(form.code)}">
+              <label>Title</label><input type="text" class="qa-title" value="${escapeHtml(form.title)}">
+              <div class="row"><div><label>Group</label><select class="qa-group"><option value="">— pick —</option>${groups.map(g => `<option ${g === form.category ? "selected" : ""}>${escapeHtml(g)}</option>`).join("")}</select></div>
+                <div><label>${priceLabel}</label><span class="price-input"><span>$</span><input type="number" class="qa-price" step="0.00001" min="0" value="${form.price || 0}"></span></div></div>`
+              : `<p class="muted small">Your role can't add stock items — pick the item we have instead, or ask a manager.</p>`}
+          </section>
+          <section class="qa-col"><h4>${icon("link")} An Item We Have</h4>
+            <label>Same item as</label><select class="qa-use" data-searchable><option value="">— pick our item —</option>${all.map(i => `<option value="${i.id}" ${String(i.id) === String(form.use) ? "selected" : ""}>${escapeHtml(i.code)} — ${escapeHtml(i.title)}</option>`).join("")}</select>
+            ${near.length ? `<div class="qa-near"><span class="muted small">Closest we have:</span>${near.slice(0, 4).map(c => `<a class="qa-chip" onclick="const s = this.closest('.qa-col').querySelector('.qa-use'); s.value = '${c.item_id}'; s.dispatchEvent(new Event('change', { bubbles: true }));">
+                <b>${escapeHtml(c.code)}</b> ${escapeHtml((c.title || "").slice(0, 34))} <i>${Math.round((c.score || 0) * 100)}%</i></a>`).join("")}</div>` : ""}
+            <p class="muted small">Picked here, the ${opts.side === "vendor" ? "vendor's part #" : "customer's wording"} is remembered, so the next read matches it by itself.</p>
+          </section></div>
+        ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`,
+      buttons: [...(canCreate ? [{ label: "Create New Item", value: "create", cls: "confirm-btn" }] : []), { label: "Use Item We Have", value: "use", cls: canCreate ? "secondary" : "confirm-btn" },
+                { label: "Cancel", value: null, cls: "secondary" }] });
+    if (!value) return null;
+    if (canCreate) form = { code: el.querySelector(".qa-code").value.trim(), title: el.querySelector(".qa-title").value.trim(), category: el.querySelector(".qa-group").value,
+                            price: parseFloat(el.querySelector(".qa-price").value) || 0, use: el.querySelector(".qa-use").value };
+    else form.use = el.querySelector(".qa-use").value;
+    if (value === "use") {
+      const item = all.find(i => String(i.id) === String(form.use));
+      if (!item) { error = "Pick the item we have on the right."; continue; }
+      return { item, created: false };
+    }
+    if (!form.code || !form.title) { error = "Give the new item an item # and a title."; continue; }
+    if (!form.category) { error = "Pick the new item's group."; continue; }
+    try {
+      const item = await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({ code: form.code, title: form.title, category: form.category,
+        [opts.side === "vendor" ? "cost_price" : "selling_price"]: form.price, created_via: "ai-scan" }) });
+      toast(`${item.code} added to Stock Items`);
+      return { item, created: true };
+    } catch (e) { error = e.message; }
+  }
+}

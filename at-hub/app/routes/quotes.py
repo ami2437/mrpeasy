@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -133,6 +133,30 @@ class ParseIn(BaseModel):
 def parse(data: ParseIn, db: Session = Depends(get_db)):
     """Pasted RFQ text -> suggested lines (nothing saved)."""
     return quote_svc.parse_text(db, data.customer_id, data.text)
+
+
+@router.post("/ai-read")
+def ai_read(file: UploadFile = File(...), customer_id: Optional[int] = Form(None), engine: Optional[str] = Form(None),
+            db: Session = Depends(get_db)):
+    """The customer's RFQ / PO as a PDF -> suggested quote lines (nothing saved), read like a customer PO.
+    Also says which customer it looks like, for a quote not filled in yet."""
+    from app.services import ai_orders
+    data = file.file.read()
+    if not (file.filename or "").lower().endswith(".pdf") or not data:
+        raise HTTPException(status_code=400, detail="Upload the customer's request as a PDF")
+    d = ai_orders.extract_order(db, data, engine=engine)
+    cid = customer_id or (d.get("customer") or {}).get("customer_id")
+    by_id = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l["item_id"] for l in d["lines"] if l.get("item_id")})).all()}
+    rows = []
+    for l in d["lines"]:
+        said = " ".join(x for x in [l.get("item_code") or l.get("customer_item_code"), l.get("description")] if x)
+        row = {"source": said, "quantity": l.get("quantity") or 1, "qty_found": bool(l.get("quantity")), "description": l.get("description") or "",
+               "item_id": l.get("item_id"), "candidates": l.get("candidates") or [], "match": l.get("match"), "companion_of": l.get("companion_of")}
+        if l.get("item_id") and cid and l["item_id"] in by_id:
+            row["price"] = quote_svc.suggest_price(db, by_id[l["item_id"]], cid)
+        rows.append(row)
+    return {"customer": d.get("customer"), "customer_name": d.get("customer_name"), "reference": d.get("po_number"),
+            "model": d.get("model"), "lines": rows}
 
 
 @router.get("/price/{item_id}")

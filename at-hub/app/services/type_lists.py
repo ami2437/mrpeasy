@@ -22,7 +22,7 @@ from app.models import TypeOption
 # list -> what it is, and (for document types) the records a type can be attached to
 LISTS = {
     "attachment": {"title": "Document types", "help": "The type of a file attached to an order, purchase order or shipment.",
-                   "scopes": {"customer_order": "Customer orders", "purchase_order": "Purchase orders", "shipment": "Shipments"}},
+                   "scopes": {"customer_order": "Customer orders", "purchase_order": "Purchase orders", "shipment": "Shipments", "quote": "Quotes"}},
     "charge": {"title": "S&H / charge types", "help": "Shipping & handling lines on a purchase order (Add S&H)."},
     "landed_cost": {"title": "Landed cost types", "help": "Costs spread over received stock (freight, tariff...)."},
     "payment_method": {"title": "Payment methods", "help": "How a payment was made, on invoices, POs and vendor payments."},
@@ -34,7 +34,8 @@ BUILTINS = {
                    ("vendor_quote", "Vendor Quote / Confirmation", [PO], True), ("vendor_invoice", "Vendor Invoice", [PO], True),
                    ("invoice", "Our Invoice", [CO], True), ("packing_list", "Packing List", [CO, PO, SH], False),
                    ("bol", "Bill of Lading", [CO, PO, SH], False), ("mtr", "Material Test Report (MTR)", [CO, PO], False),
-                   ("pod", "Proof of Delivery", [SH], False), ("other", "Other", [CO, PO, SH], False)],
+                   ("pod", "Proof of Delivery", [SH], False), ("other", "Other", [CO, PO, SH], False),
+                   ("customer_rfq", "Customer RFQ / Request", ["quote"], True)],
     "charge": [("shipping", "Shipping", None, False), ("freight", "Freight", None, False), ("handling", "Handling", None, False),
                ("other", "Other", None, False)],
     "landed_cost": [("freight", "Freight", None, False), ("tariff", "Tariff", None, False), ("customs", "Customs", None, False),

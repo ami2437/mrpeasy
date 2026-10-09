@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.dependencies import require_perm, require_any
@@ -16,7 +18,7 @@ def ai_status():
 
 
 @router.post("/extract")
-def extract(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def extract(file: UploadFile = File(...), engine: Optional[str] = Form(None), db: Session = Depends(get_db)):
     """Read a customer PO PDF with the local model and return a draft order to review.
     Nothing is saved -- the order is created only when the user confirms the draft."""
     if not (file.filename or "").lower().endswith(".pdf"):
@@ -26,7 +28,7 @@ def extract(file: UploadFile = File(...), db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(data) > MAX_PDF_BYTES:
         raise HTTPException(status_code=400, detail="PDF is larger than 15 MB")
-    return ai_orders.extract_order(db, data)
+    return ai_orders.extract_order(db, data, engine=engine)
 
 
 @router.post("/validate/{order_id}")

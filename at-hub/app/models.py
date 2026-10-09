@@ -283,6 +283,13 @@ class CustomerOrder(Base):
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
     duplicate_po_ok = Column(String, nullable=True)  # "who, when" a manager OK'd sharing this customer PO # with an earlier order
+    ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher): shown as "AI READ"
+    ai_pending = Column(Text, nullable=True)   # JSON: lines the read couldn't match to an item yet (app/services/ai_pending.py)
+
+    @property
+    def ai_pending_lines(self) -> list:
+        from app.services.ai_pending import pending
+        return pending(self)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -396,6 +403,13 @@ class PurchaseOrder(Base):
     status = Column(String, nullable=False, default="draft")  # validation (captured, not checked yet) | draft | ordered | partially_received | received | cancelled
     validated_by = Column(String, nullable=True)  # who checked a quick-captured PO (and when)
     validated_at = Column(DateTime, nullable=True)
+    ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher)
+    ai_pending = Column(Text, nullable=True)   # JSON: lines the read couldn't match to an item yet
+
+    @property
+    def ai_pending_lines(self) -> list:
+        from app.services.ai_pending import pending
+        return pending(self)
     freight_cost = Column(Float, nullable=True, default=0)
     tariff_cost = Column(Float, nullable=True, default=0)
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it

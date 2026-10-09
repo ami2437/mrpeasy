@@ -45,7 +45,8 @@
     const STATUS = {
       match: ["Will attach", "shipped", "Certain match"], attached: ["Already attached", "draft", ""], has_one: ["Has one already", "draft", ""],
       ambiguous: ["Not certain", "overdue", ""], no_match: ["No match", "cancelled", ""],
-      ready: ["AI: ready", "shipped", ""], unsure: ["AI: needs a person", "overdue", ""], created: ["Created", "confirmed", ""], failed: ["Failed", "overdue", ""],
+      ready: ["AI: Complete", "shipped", ""], unsure: ["AI: Needs A Look", "overdue", ""], blocked: ["AI: Can't Create", "cancelled", ""],
+      created: ["Created", "confirmed", ""], validating: ["Created — Validate", "overdue", ""], failed: ["Failed", "overdue", ""],
     };
     let rows = [], folder = "", kind = "customer", view = "match", fileByRel = {}, allNames = [];
     document.getElementById("fm-kind").onchange = e => {
@@ -78,7 +79,7 @@
     const count = s => rows.filter(r => (Array.isArray(s) ? s : [s]).includes(r.status)).length;
     const recLink = r => r.record_id ? `<a class="link" href="${kind === "customer" ? "customer-orders" : "purchase-orders"}.html?id=${r.record_id}" target="_blank">${escapeHtml(r.record)}</a>` : "";
     const TABS = [["match", "To attach", ["match"]], ["done", "Already done", ["attached", "has_one"]], ["ambiguous", "Not certain", ["ambiguous"]],
-                  ["no_match", "No match → AI", ["no_match", "ready", "unsure", "created", "failed"]]];
+                  ["no_match", "No match → AI", ["no_match", "ready", "unsure", "blocked", "created", "validating", "failed"]]];
     function render() {
       document.getElementById("fm-summary").innerHTML = `<div class="money-tiles">
         <div class="mtile t-total"><span>PDFs</span><strong>${rows.length}</strong><small style="overflow-wrap:anywhere;">${escapeHtml(folder)}</small></div>
@@ -91,7 +92,7 @@
       tabs.innerHTML = TABS.map(([k, label, st]) => `<div class="tab ${view === k ? "active" : ""}" onclick="view='${k}'; render()">${label} <span class="muted">(${count(st)})</span></div>`).join("");
       const st = TABS.find(t => t[0] === view)[2];
       const shown = rows.filter(r => st.includes(r.status));
-      const pickable = r => (view === "match" && r.status === "match") || (view === "no_match" && ["no_match", "ready", "unsure", "failed"].includes(r.status));
+      const pickable = r => (view === "match" && r.status === "match") || (view === "no_match" && ["no_match", "ready", "unsure", "blocked", "failed"].includes(r.status));
       document.getElementById("fm-table").style.display = "";
       document.getElementById("fm-all").checked = false;
       document.getElementById("fm-body").innerHTML = shown.map(r => {
@@ -105,7 +106,8 @@
           ${kind === "vendor" ? `<select id="fm-cat" style="width:auto;"><option value="auto">Type: guess from file name</option><option value="vendor_invoice">Vendor invoice</option><option value="vendor_quote">Vendor quote / SO</option><option value="packing_list">Packing list</option><option value="mtr">MTR</option><option value="other">Other</option></select>` : `<span class="muted small">Saved as the order's Customer PO.</span>`}` : "";
       else if (view === "no_match") acts.innerHTML = `<button class="ai-btn" data-icon="sparkles" onclick="readPicked()">Read Ticked With AI</button>
           <button onclick="createReady()" ${count("ready") ? "" : "disabled"}>Create ${count("ready")} Draft ${kind === "customer" ? "Order" : "PO"}${count("ready") === 1 ? "" : "s"}</button>
-          <span class="muted small">Only complete reads are created (as drafts, PDF attached). The rest: use Import PO PDF on the ${kind === "customer" ? "Customer Orders" : "Purchase Orders"} page.</span>`;
+          <button class="capture-btn" onclick="createForValidation()" ${count("unsure") ? "" : "disabled"} title="Reads that need a look: create them anyway, in Validation, with the PDF attached — finish the unsure lines on the record">Create ${count("unsure")} For Validation</button>
+          <span class="muted small">Complete reads become drafts. Reads that need a look become <b>Validation</b> records: the lines it matched are on them, the rest wait there for you to pick the item. The PDF is attached either way.</span>`;
       else acts.innerHTML = "";
     }
     function tickAll(on) { document.querySelectorAll(".fm-pick").forEach(c => c.checked = on); }
@@ -145,14 +147,29 @@
         try {
           const res = await (() => { const fd = new FormData(); fd.append("kind", kind); fd.append("rel", r.file); fd.append("file", fileByRel[r.file], fileByRel[r.file].name); return apiUpload("/api/file-matcher/read-upload", fd); })();
           const d = res.draft, who = kind === "customer" ? (d.customer?.suggested_name || d.customer_name) : (d.vendor?.suggested_name || d.vendor_name);
-          r.status = res.ready ? "ready" : "unsure";
+          r.status = res.ready ? "ready" : res.can_validate ? "unsure" : "blocked";
           r.why = `${who || "?"} · ${kind === "customer" ? "PO " + (d.po_number || "?") : "SO " + (d.document_number || "?")} · ${(d.lines || []).length} lines`
-            + (res.problems.length ? " — " + res.problems.join("; ") : " — complete");
+            + (res.problems.length ? " — " + res.problems.join("; ") : " — every line matched");
         } catch (e) { r.status = "failed"; r.why = e.message; }
         render();
       }
       busy = false;
       document.getElementById("fm-msg").textContent = `Read ${todo.length}. ${count("ready")} ready to create.`;
+    }
+
+    async function createForValidation() {
+      const todo = rows.filter(r => r.status === "unsure");
+      if (!todo.length || !confirm(`Create ${todo.length} ${kind === "customer" ? "order" : "PO"}${todo.length === 1 ? "" : "s"} in Validation, each with its PDF attached? Lines the AI wasn't sure of wait on the record for you to pick the item.`)) return;
+      for (const [n, r] of todo.entries()) {
+        document.getElementById("fm-msg").textContent = `Creating ${n + 1} of ${todo.length}… (each is read again)`;
+        try {
+          const res = await (() => { const fd = new FormData(); fd.append("kind", kind); fd.append("rel", r.file); fd.append("validation", "true"); fd.append("file", fileByRel[r.file], fileByRel[r.file].name); return apiUpload("/api/file-matcher/create-upload", fd); })();
+          r.status = res.validation ? "validating" : "created"; r.record = res.record; r.record_id = res.record_id;
+          r.why = res.validation ? `in Validation${res.waiting ? ` — ${res.waiting} line${res.waiting === 1 ? "" : "s"} wait for you to pick the item` : ""}, PDF attached` : "draft created, PDF attached — check and confirm it";
+        } catch (e) { r.status = "failed"; r.why = e.message; }
+        render();
+      }
+      document.getElementById("fm-msg").textContent = `Done: ${count("validating")} in Validation. Open each to finish it.`;
     }
 
     async function createReady() {

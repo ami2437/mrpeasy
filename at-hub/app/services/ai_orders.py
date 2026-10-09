@@ -358,7 +358,7 @@ def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes
                                "per_bolt": nut["per_bolt"], "confidence": nut["confidence"], "why": nut["why"]}
 
 
-def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
+def extract_order(db: Session, file_bytes: bytes, engine: Optional[str] = None) -> Dict[str, Any]:
     from app.services import customer_po_templates
     from app.services.item_match import ItemMatcher
     text = pdf_text(file_bytes)
@@ -367,7 +367,7 @@ def extract_order(db: Session, file_bytes: bytes) -> Dict[str, Any]:
     source = data["template"] if data else settings.ai_model
     if not data:
         from app.services import ai_cloud
-        if ai_cloud.claude_engine():  # cloud: Claude reads it, with both sides' names and contacts removed first
+        if engine == "claude" or ai_cloud.claude_engine():  # cloud: Claude reads it, with both sides' names and contacts removed first
             safe, _removed, cust = ai_cloud.redact_customer_po(text, db)
             prompt = EXTRACTION_PROMPT.replace("Purchase order text:", "Names, addresses and contact details were replaced "
                                                "with [CUSTOMER], [PERSON], [EMAIL] etc. before you saw this; ignore them.\nPurchase order text:")

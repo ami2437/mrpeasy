@@ -27,9 +27,10 @@ async function printQuote(id) {
 
 function newQuote() {
   currentQuote = { id: null, customer_id: customers[0] ? customers[0].id : null, customer_ref: "", notes: "", valid_until: null, status: "draft", lines: [] };
+  quoteRfqFile = null;
   drawQuote();
 }
-async function openQuote(id) { currentQuote = await apiFetch(`/api/quotes/${id}`); drawQuote(); }
+async function openQuote(id) { currentQuote = await apiFetch(`/api/quotes/${id}`); quoteRfqFile = null; drawQuote(); }
 
 function quoteItemOptions(selected) {
   return `<option value="">— not matched: pick our item —</option>` + items.map(i => `<option value="${i.id}" ${i.id === selected ? "selected" : itemPickAttr(i, true)}
@@ -150,7 +151,12 @@ function drawQuote() {
       <div class="wide"><label>Notes on the quote</label><textarea id="q-notes" rows="2">${escapeHtml(x.notes || "")}</textarea></div>
     </div>
     ${locked ? "" : `<details class="fold-section" ${x.lines.length ? "" : "open"} style="margin:10px 0;">
-      <summary><strong>Paste the customer's request</strong> <span class="muted small">— email text or rows copied from Excel; each line becomes a quote line</span></summary>
+      <summary><strong>Fill it from the customer's request</strong> <span class="muted small">— their RFQ as a PDF, or email text / rows copied from Excel</span></summary>
+      <div class="row" style="align-items:center; gap:8px; margin:6px 0 8px;">
+        <button type="button" class="ai-btn q-scan-btn" style="flex:0 0 auto;" data-icon="sparkles" onclick="scanQuotePdf()" title="Read the customer's RFQ PDF into quote lines">AI Scan PDF</button>
+        ${AuthGuard.can("ai") ? `<button type="button" class="ai-btn cloud q-scan-btn" style="flex:0 0 auto;" onclick="scanQuotePdf('claude')" title="For a hard RFQ: read it with Claude (cloud). Names and contact details are removed on this PC first.">☁ Ask Claude</button>` : ""}
+        <span class="muted small" style="flex:1 1 auto;">or paste the text below</span></div>
+      <div id="q-scan-doc"></div>
       <textarea id="q-paste" rows="6" placeholder="e.g.\n500 pcs 5/8-11 x 2 A325 HDG hex bolt\n1,000 - 5/8 F436 washer HDG\n15343   250"></textarea>
       <button class="ai-btn" data-icon="sparkles" onclick="readQuoteText()" style="margin-top:6px;">Read Lines</button>
       <span id="q-paste-msg" class="small muted"></span></details>`}
@@ -162,6 +168,7 @@ function drawQuote() {
       <tfoot><tr><td class="grow">Quote total</td><td></td><td></td><td class="num" id="q-total"></td><td></td></tr></tfoot>
     </table></div>
     ${locked ? "" : `<button class="secondary" onclick="addQuoteLine()" style="margin-top:8px;">+ Add line</button>`}
+    ${x.id ? `<section class="dsec" style="margin-top:12px;"><h4 class="dsec-title">Files</h4><div id="q-attachments"></div></section>` : ""}
     ${x.emails && x.emails.length ? `<div class="muted small" style="margin-top:8px;">${x.emails.map(e =>
       `Emailed to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : ""}
     <div id="q-error" class="error"></div>
@@ -175,6 +182,8 @@ function drawQuote() {
   document.querySelectorAll("#q-lines tr").forEach(quoteHint);
   quoteTotals();
   loadQuoteHints();
+  if (x.id) renderAttachments("q-attachments", "quote", x.id, ["customer_rfq"]);
+  if (quoteRfqFile && !x.id) document.getElementById("q-scan-doc").innerHTML = scannedDocHtml(quoteRfqFile, "Attached to the quote when you save it");
   card.scrollIntoView({ behavior: "smooth" });
 }
 
@@ -208,6 +217,41 @@ function pickQuoteCandidate(a, id) {
   sel.value = id;
   sel.dispatchEvent(new Event("change", { bubbles: true }));
 }
+// The customer's RFQ as a PDF: read like a customer PO, each line suggested against our items (with price hints).
+let quoteRfqFile = null;
+function scanQuotePdf(engine = null) {
+  if (engine === "claude" && !confirm("Read this RFQ with Claude (Anthropic's cloud)?\n\nNames, addresses and contact details are removed on this PC first; only that text is sent, never the PDF.")) return;
+  const picker = Object.assign(document.createElement("input"), { type: "file", accept: "application/pdf" });
+  picker.onchange = async () => {
+    const file = picker.files[0];
+    if (!file) return;
+    const msg = document.getElementById("q-paste-msg");
+    msg.innerHTML = `Reading ${escapeHtml(file.name)}… this can take a minute.`;
+    document.querySelectorAll(".q-scan-btn").forEach(b => { b.disabled = true; });
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const cid = parseInt(document.getElementById("q-customer").value);
+      if (cid && currentQuote.id) form.append("customer_id", cid);
+      if (engine) form.append("engine", engine);
+      const r = await apiUpload("/api/quotes/ai-read", form);
+      // a new quote takes the customer and their reference from the RFQ
+      if (!currentQuote.id && r.customer && r.customer.customer_id) { document.getElementById("q-customer").value = r.customer.customer_id; loadQuoteHints(); }
+      if (r.reference && !document.getElementById("q-ref").value) document.getElementById("q-ref").value = r.reference;
+      const body = document.getElementById("q-lines"), before = body.children.length;
+      body.insertAdjacentHTML("beforeend", r.lines.map(quoteLineRow).join(""));
+      [...body.children].slice(before).forEach(quoteHint);
+      quoteTotals();
+      quoteRfqFile = file;
+      document.getElementById("q-scan-doc").innerHTML = scannedDocHtml(file, currentQuote.id ? "Attached to the quote when you save it" : "Attached to the quote when you save it");
+      const unmatched = r.lines.filter(l => !l.item_id).length;
+      msg.innerHTML = `Read ${r.lines.length} line${r.lines.length === 1 ? "" : "s"} from ${escapeHtml(file.name)}${unmatched ? ` · <span class="neg">${unmatched} need${unmatched === 1 ? "s" : ""} you to pick our item</span>` : ""}. Check the lines and prices, then Save Quote.`;
+    } catch (e) { msg.innerHTML = `<span class="neg">Couldn't read it: ${escapeHtml(e.message)}</span>`; }
+    finally { document.querySelectorAll(".q-scan-btn").forEach(b => { b.disabled = false; }); }
+  };
+  picker.click();
+}
+
 async function readQuoteText() {
   const msg = document.getElementById("q-paste-msg");
   msg.textContent = "Reading…";
@@ -242,6 +286,12 @@ async function saveQuote() {
   try {
     const x = currentQuote.id ? await apiFetch(`/api/quotes/${currentQuote.id}`, { method: "PUT", body: JSON.stringify(quotePayload()) })
                               : await apiFetch("/api/quotes/", { method: "POST", body: JSON.stringify(quotePayload()) });
+    if (quoteRfqFile) {  // the RFQ it was read from goes on the quote
+      const form = new FormData();
+      form.append("entity_type", "quote"); form.append("entity_id", x.id); form.append("category", "customer_rfq");
+      form.append("note", "Read with AI"); form.append("files", quoteRfqFile);
+      try { await apiUpload("/api/attachments/", form); quoteRfqFile = null; } catch (e) { alert(`Saved ${x.code}, but attaching the RFQ failed: ${e.message}`); }
+    }
     currentQuote = x; await loadQuotes(); renderOrders(); drawQuote(); toast(`Saved ${x.code}`);
   } catch (e) { err.textContent = e.message; }
 }

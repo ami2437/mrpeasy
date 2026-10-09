@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -42,6 +43,25 @@ def capture_order(customer_id: int = Form(...), po_number: str | None = Form(Non
 
 class ValidateIn(BaseModel):
     confirm: bool = False  # validate and confirm in one go
+
+
+class PendingMatchIn(BaseModel):
+    item_id: int
+    quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+
+
+@router.post("/{order_id}/ai-pending/{idx}/match", response_model=CustomerOrderResponse, dependencies=manager)
+def match_pending(order_id: int, idx: int, data: PendingMatchIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """A line the AI read couldn't place: add it with this item (their wording is remembered for the next read)."""
+    from app.services import ai_pending
+    return ai_pending.match(db, "customer", order_id, idx, data.item_id, data.quantity, data.unit_price, current_user.username)
+
+
+@router.post("/{order_id}/ai-pending/{idx}/discard", response_model=CustomerOrderResponse, dependencies=manager)
+def discard_pending(order_id: int, idx: int, db: Session = Depends(get_db)):
+    from app.services import ai_pending
+    return ai_pending.discard(db, "customer", order_id, idx)
 
 
 @router.post("/{order_id}/validate", response_model=CustomerOrderResponse, dependencies=manager)

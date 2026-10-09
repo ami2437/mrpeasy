@@ -194,39 +194,42 @@ def read(req: ReadRequest, db: Session = Depends(get_db)):
 
 
 def _read_bytes(db: Session, kind: str, data: bytes, name: str, label: str) -> dict:
-    problems = []
+    problems, blocking = [], []
     if kind == "customer":
         from app.services import ai_orders
         d = ai_orders.extract_order(db, data)
         if not d["customer"].get("customer_id"):
-            problems.append(f"customer \"{d.get('customer_name') or '?'}\" not certain")
+            blocking.append(f"Customer \"{d.get('customer_name') or '?'}\" isn't one we know -- add them or pick them on the order")
         if not d.get("po_number"):
             problems.append("no PO # read")
         elif db.query(CustomerOrder).filter(CustomerOrder.status != "cancelled", CustomerOrder.customer_id == d["customer"].get("customer_id"),
                                             CustomerOrder.po_number == d["po_number"]).first():
-            problems.append(f"PO {d['po_number']} is already on an order")
+            blocking.append(f"PO {d['po_number']} is already on an order")
         problems += d.get("problems") or []
     else:
         from app.services import ai_docs
         d = ai_docs.extract(db, "vendor_order", data, name)
         vid = (d.get("vendor") or {}).get("vendor_id")
         if not vid:
-            problems.append(f"vendor \"{d.get('vendor_name') or '?'}\" not certain")
+            blocking.append(f"Vendor \"{d.get('vendor_name') or '?'}\" isn't one we know -- add them or pick them on the PO")
         if d.get("document_number") and vid and db.query(PurchaseOrder).filter(
                 PurchaseOrder.vendor_id == vid, PurchaseOrder.status != "cancelled", PurchaseOrder.vendor_so_number == d["document_number"]).first():
-            problems.append(f"SO {d['document_number']} is already on a PO")
+            blocking.append(f"SO {d['document_number']} is already on a PO")
     lines = d.get("lines") or []
     if not lines:
-        problems.append("no lines read")
+        problems.append("No lines found on it")
     unsure = [l for l in lines if not l.get("item_id")]
     if unsure:
-        problems.append(f"{len(unsure)} line(s) need an item picked")
-    return {"file": label, "draft": d, "problems": problems, "ready": not problems}
+        problems.append(f"{len(unsure)} of {len(lines)} line{'s' if len(lines) != 1 else ''} need you to pick the item")
+    # complete -> a draft; only "needs a look" -> it can still be created, in Validation, for someone to finish
+    return {"file": label, "draft": d, "problems": blocking + problems, "blocking": blocking,
+            "ready": not blocking and not problems, "can_validate": not blocking}
 
 
 class CreateRequest(BaseModel):
     path: str
     kind: str = "customer"
+    validation: bool = False  # not sure of every line: create it anyway, in Validation
     file: str
 
 
@@ -235,13 +238,25 @@ def create(req: CreateRequest, db: Session = Depends(get_db), user: User = Depen
     """Read the file again and create a draft order / PO from it, with the PDF attached -- only when the
     read is complete. Anything unsure is refused, to be done by hand in the New Order form."""
     f = _file(_folder(req.path), req.file)
-    return _create_bytes(db, req.kind, f.read_bytes(), f.name, req.file, user)
+    return _create_bytes(db, req.kind, f.read_bytes(), f.name, req.file, user, validation=req.validation)
 
 
-def _create_bytes(db: Session, kind: str, data: bytes, name: str, label: str, user: User) -> dict:
+def _create_bytes(db: Session, kind: str, data: bytes, name: str, label: str, user: User, validation: bool = False) -> dict:
     r = _read_bytes(db, kind, data, name, label)
+    if r["blocking"]:
+        raise HTTPException(status_code=400, detail="Can't create it: " + "; ".join(r["blocking"]))
     if not r["ready"]:
-        raise HTTPException(status_code=400, detail="Not certain enough to create: " + "; ".join(r["problems"]))
+        if not validation:
+            raise HTTPException(status_code=400, detail="Needs a look first: " + "; ".join(r["problems"])
+                                + " -- use Create For Validation to make it anyway and finish it on the record")
+        from app.services import ai_pending
+        rec = ai_pending.create_for_validation(db, kind, r["draft"], name, user.username)
+        if kind == "customer":
+            store_file(db, "customer_order", rec.id, "customer_po", name, "application/pdf", data, "AI read -- validate against this file", user.username)
+        else:
+            store_file(db, "purchase_order", rec.id, "vendor_quote", name, "application/pdf", data, "AI read -- validate against this file", user.username)
+        db.commit()
+        return {"file": label, "record_id": rec.id, "record": rec.code, "validation": True, "waiting": len(rec.ai_pending_lines)}
     d = r["draft"]
     from app import schemas
     if kind == "customer":
@@ -319,6 +334,6 @@ def read_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = 
 
 
 @router.post("/create-upload")
-def create_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db),
-                        user: User = Depends(get_current_active_user)):
-    return _create_bytes(db, kind, _blob(file), PATHSEP.split(rel)[-1], rel, user)
+def create_upload(kind: str = Form(...), rel: str = Form(...), file: UploadFile = File(...), validation: bool = Form(False),
+                  db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return _create_bytes(db, kind, _blob(file), PATHSEP.split(rel)[-1], rel, user, validation=validation)
