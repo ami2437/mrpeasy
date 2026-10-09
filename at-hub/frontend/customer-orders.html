@@ -31,14 +31,15 @@
       <div id="ai-draft-note"></div>
       <div id="po-dup-warning"></div>
       <div class="field-grid">
-        <div class="wide"><label>Customer</label><select id="f-customer" onchange="fillShipTo(); checkDuplicatePo()"></select></div>
+        <div class="wide"><label>Customer <button type="button" class="contact-ico" data-icon="user" title="Open the customer's contact card" onclick="ContactPop.open('customer', parseInt(document.getElementById('f-customer').value))"></button></label><select id="f-customer" onchange="fillShipTo(); checkDuplicatePo()"></select></div>
         <div><label>PO #</label><input type="text" id="f-po-number" placeholder="Customer's PO #" oninput="checkDuplicatePo()"></div>
         <div><label>Customer PO Date</label><input type="date" id="f-po-date"></div>
         <div><label>Job #</label><input type="text" id="f-job-number"></div>
         <div><label>Delivery date</label><input type="date" id="f-delivery"></div>
       </div>
       <div class="field-grid">
-        <div class="wide"><label>Ship to <span class="muted small">(from the customer — edit for this order)</span></label><textarea id="f-ship-to" rows="3"></textarea></div>
+        <div class="wide"><label>Ship to <a class="link small" onclick="pickShipTo('f-ship-to', () => customers.find(c => c.id === parseInt(document.getElementById('f-customer').value)))" title="Pick one of the customer's addresses on file, or add a new one">Addresses On File</a></label><textarea id="f-ship-to" rows="3"></textarea>
+          <label class="check-label" style="margin-top:6px;" title="Shipped expedited: its invoices remind you to charge the extra"><input type="checkbox" id="f-expedited"> Expedited Shipping (Charge Extra)</label></div>
         <div class="wide"><label>Notes</label><textarea id="f-notes" rows="3"></textarea></div>
       </div>
       <h4>Lines</h4>
@@ -46,7 +47,7 @@
       <div class="table-scroll">
       <table class="lines-table fit-table">
         <thead><tr><th>#</th><th class="grow">Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Subtotal</th><th>Delivery date</th><th></th></tr></thead>
-        <tbody id="lines-body" oninput="recalcLines('lines-body', 'new-order-total')" onchange="recalcLines('lines-body', 'new-order-total')"></tbody>
+        <tbody id="lines-body" data-add-line="addLine()" oninput="recalcLines('lines-body', 'new-order-total')" onchange="recalcLines('lines-body', 'new-order-total')"></tbody>
         <tfoot><tr><td></td><td class="grow">Order total</td><td class="num" id="new-order-qty"></td><td></td><td class="num" id="new-order-total">$0.00</td><td></td><td></td></tr></tfoot>
       </table>
       </div>
@@ -120,7 +121,10 @@
       return c ? (c.shipping_address || c.address || "N/A") : "N/A";
     }
     function fillShipTo() {
-      document.getElementById("f-ship-to").value = customerShipTo(parseInt(document.getElementById("f-customer").value));
+      const id = parseInt(document.getElementById("f-customer").value);
+      document.getElementById("f-ship-to").value = customerShipTo(id);
+      const c = customers.find(x => x.id === id);  // this customer's orders usually ship expedited?
+      document.getElementById("f-expedited").checked = !!(c && c.expedited);
     }
 
     function addLine() {
@@ -444,9 +448,14 @@
     async function saveOrder(allowDuplicate = false) {
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
-      const missing = Array.from(document.querySelectorAll("#lines-body tr")).findIndex(tr => !tr.querySelector(".l-item").value);
+      // a line left completely blank (Tab adds one) isn't an order line
+      const rowsIn = Array.from(document.querySelectorAll("#lines-body tr")).filter(tr => tr.querySelector(".l-item").value || tr.dataset.srcCode || tr.dataset.draftIdx);
+      const missing = rowsIn.findIndex(tr => !tr.querySelector(".l-item").value);
       if (missing >= 0) { errorEl.textContent = `Pick an item for line ${missing + 1}.`; return; }
-      const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
+      if (!rowsIn.length) { errorEl.textContent = "Add at least one line."; return; }
+      const cust = customers.find(c => c.id === parseInt(document.getElementById("f-customer").value));
+      if (!await shipToCheck(document.getElementById("f-ship-to").value, cust)) return;
+      const lines = rowsIn.map(tr => ({
         item_id: parseInt(tr.querySelector(".l-item").value),
         quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
         unit_price: parseFloat(tr.querySelector(".l-price").value) || 0,
@@ -466,6 +475,7 @@
             customer_po_date: document.getElementById("f-po-date").value || null,
             ship_to_address: document.getElementById("f-ship-to").value || null,
             notes: document.getElementById("f-notes").value,
+            expedited: document.getElementById("f-expedited").checked,
             allow_duplicate: allowDuplicate,
             lines,
           }),
@@ -482,7 +492,8 @@
         }
         toggleForm(false);
         await loadOrders();
-        showDetail(created.id);
+        await showDetail(created.id);
+        autoNutCheck(created.id);  // bolts without their $0 nut line: offered straight away
       } catch (err) {
         if (err.message.startsWith("DUPLICATE_PO|")) {
           const [, id, code, msg] = err.message.split("|");
@@ -769,7 +780,28 @@
           + (expanded ? finished.map(row).join("") : "") : "");
     }
 
+    // Bolts on the order without their $0 nut line: shown (not added) so nobody forgets them.
+    async function autoNutCheck(orderId) {
+      let props = [];
+      try { props = await apiFetch(`/api/ai-orders/missing-nuts/${orderId}`); } catch (e) { return; }
+      if (!props.length || !document.getElementById("nut-panel")) return;
+      await checkMissingNuts(orderId);
+      document.getElementById("nut-panel").scrollIntoView({ behavior: "smooth", block: "center" });
+      toast(`${props.length} bolt${props.length === 1 ? " has" : "s have"} no nut line — check them below`);
+    }
+    async function nutsBeforeConfirming(id) {
+      let props = [];
+      try { props = await apiFetch(`/api/ai-orders/missing-nuts/${id}`); } catch (e) { return true; }
+      if (!props.length) return true;
+      const { value } = await askDialog({ title: `${props.length} Bolt${props.length === 1 ? "" : "s"} Without A Nut Line`, tone: "warn",
+        body: `<p>${props.map(p => `<strong>${escapeHtml(p.bolt_code)}</strong>`).join(", ")} ${props.length === 1 ? "has" : "have"} no $0 nut line. Add ${props.length === 1 ? "it" : "them"} before confirming?</p>`,
+        buttons: [{ label: "Add Nuts First", value: "nuts", cls: "confirm-btn" }, { label: "Confirm Without", value: "go", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value === "nuts") { await showDetail(id); await autoNutCheck(id); return false; }
+      return value === "go";
+    }
+
     async function confirmOrder(id, reopen) {
+      if (!await nutsBeforeConfirming(id)) return false;
       try {
         await apiFetch(`/api/customer-orders/${id}/confirm`, { method: "POST" });
         await loadOrders();
@@ -984,7 +1016,7 @@
 
         <h4>Order details</h4>
         <div class="field-grid">
-          <div class="wide"><label>Customer</label><select id="e-customer" ${editable ? "" : "disabled"}>
+          <div class="wide"><label>Customer ${ContactPop.iconHtml("customer", "parseInt(document.getElementById('e-customer').value)")}</label><select id="e-customer" ${editable ? "" : "disabled"}>
             ${customers.map(c => `<option value="${c.id}" ${c.id === order.customer_id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
           </select></div>
           <div><label>PO #</label><input type="text" id="e-po-number" value="${escapeHtml(order.po_number || '')}" ${editable ? "" : "disabled"}></div>
@@ -994,8 +1026,9 @@
         </div>
         <div class="field-grid">
           <div class="wide"><label>Ship to
-            ${editable ? `<a class="link small" onclick="document.getElementById('e-ship-to').value = customerShipTo(parseInt(document.getElementById('e-customer').value))">use customer's address</a>` : ""}</label>
-            <textarea id="e-ship-to" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.ship_to_address || '')}</textarea></div>
+            ${editable ? `<a class="link small" onclick="pickShipTo('e-ship-to', () => customers.find(c => c.id === parseInt(document.getElementById('e-customer').value)))" title="Pick one of the customer's addresses on file, or add a new one">Addresses On File</a>` : ""}</label>
+            <textarea id="e-ship-to" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.ship_to_address || '')}</textarea>
+            <label class="check-label" style="margin-top:6px;" title="Shipped expedited: its invoices remind you to charge the extra"><input type="checkbox" id="e-expedited" ${order.expedited ? "checked" : ""} ${editable ? "" : "disabled"}> Expedited Shipping (Charge Extra)</label></div>
           <div class="wide"><label>Notes</label><textarea id="e-notes" rows="3" ${editable ? "" : "disabled"}>${escapeHtml(order.notes || '')}</textarea></div>
         </div>
         ${editable ? `<button onclick="saveOrderHeader(${order.id})" style="margin-top:8px;" title="Saves the details above and any line changes below">Save Order Details</button>` : ""}
@@ -1148,10 +1181,12 @@
           customer_po_date: document.getElementById("e-po-date").value || null,
           ship_to_address: document.getElementById("e-ship-to").value || null,
           notes: document.getElementById("e-notes").value,
+          expedited: document.getElementById("e-expedited").checked,
         };
         const before = { customer_id: was.customer_id, delivery_date: day(was.delivery_date), po_number: was.po_number || null, job_number: was.job_number || null,
-          customer_po_date: day(was.customer_po_date), ship_to_address: was.ship_to_address || null, notes: was.notes || "" };
+          customer_po_date: day(was.customer_po_date), ship_to_address: was.ship_to_address || null, notes: was.notes || "", expedited: !!was.expedited };
         const changes = Object.fromEntries(Object.entries(now).filter(([k, v]) => (v ?? "") !== (before[k] ?? "")));
+        if ("ship_to_address" in changes && !await shipToCheck(changes.ship_to_address, customers.find(c => c.id === now.customer_id))) return;
         if (Object.keys(changes).length) await apiFetch(`/api/customer-orders/${orderId}`, { method: "PUT", body: JSON.stringify(changes) });
         // Lines edited in the table are saved too (each line still has its own Save link).
         const failed = [];
@@ -1373,7 +1408,8 @@
           }),
         });
         await loadOrders();
-        showDetail(orderId);
+        await showDetail(orderId);
+        autoNutCheck(orderId);  // a bolt added: its nut line is offered
       } catch (err) {
         errorEl.textContent = err.message;
       }
@@ -1623,7 +1659,7 @@
       const made = await quickCapture("order");
       if (made) { await loadOrders(); showDetail(made.id); }
     }
-    async function onValidated(o) { await loadOrders(); showDetail(o.id); }
+    async function onValidated(o) { await loadOrders(); await showDetail(o.id); autoNutCheck(o.id); }
 
     async function loadOrders() {
       Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);

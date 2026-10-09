@@ -320,6 +320,7 @@ class PartyResponse(BaseModel):
     mtr_email: Optional[str] = None
     po_email: Optional[str] = None  # vendors: where our POs go (a "purchasing" / "orders" email, else the main one)
     payment_terms: Optional[str] = None  # customers: Net 30 etc. -- sets an invoice's due date
+    expedited: Optional[bool] = None     # customers: orders ship expedited by default
 
     class Config:
         from_attributes = True
@@ -346,6 +347,7 @@ class CustomerOrderCreate(BaseModel):
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
+    expedited: Optional[bool] = None  # None = as the customer's card says
     lines: List[CustomerOrderLineCreate]
 
 
@@ -401,6 +403,7 @@ class CustomerOrderLineResponse(BaseModel):
 
 class CustomerOrderResponse(BaseModel):
     id: int
+    expedited: Optional[bool] = None  # expedited shipping: charge extra on its invoices
     ai_source: Optional[str] = None       # made from an AI read of this file -- check it
     ai_pending_lines: List[dict] = []     # lines the read couldn't match to an item yet
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
@@ -436,6 +439,7 @@ class CustomerOrderUpdate(BaseModel):
     job_number: Optional[str] = None
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
+    expedited: Optional[bool] = None
 
 
 class CustomerOrderLineAdd(InputModel):
@@ -805,6 +809,7 @@ class InvoiceResponse(BaseModel):
     split_from_id: Optional[int] = None  # lines split off this invoice (same shipment, same order)
     split_from_code: Optional[str] = None
     split_into: List[str] = []           # invoices split off this one
+    order_expedited: bool = False        # its order ships expedited: charge the extra
     print_zero_lines: bool = False
     print_payments: Optional[bool] = True  # None (older invoices) = yes
     amount_due_printed: float = 0  # the balance the customer's copy shows (total less the payments it lists)

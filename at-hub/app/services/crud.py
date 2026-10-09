@@ -780,6 +780,7 @@ class CustomerOrderService:
             job_number=data.job_number,
             ship_to_address=data.ship_to_address or customer.shipping_address or customer.address,
             notes=data.notes,
+            expedited=data.expedited if getattr(data, "expedited", None) is not None else (customer.expedited or None),
             status="draft",
             created_by=created_by,
             # "create anyway" on the duplicate-PO prompt is the manager's OK

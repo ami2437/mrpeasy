@@ -222,6 +222,11 @@ class Customer(ContactCardMixin, Base):
     __tablename__ = "customers"
 
     @property
+    def expedited(self) -> bool:
+        """This customer's orders ship expedited unless an order says otherwise (contact card)."""
+        return bool((self.details or {}).get("expedited"))
+
+    @property
     def payment_terms(self) -> str:
         """Net 15 / 30 / 45 / 60 or Due on Receipt, from the contact card (app/services/terms.py; none = Net 30)."""
         from app.services.terms import terms_of
@@ -283,6 +288,7 @@ class CustomerOrder(Base):
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
     duplicate_po_ok = Column(String, nullable=True)  # "who, when" a manager OK'd sharing this customer PO # with an earlier order
+    expedited = Column(Boolean, nullable=True)  # expedited shipping: charge extra on its invoices (default from the customer's card)
     ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher): shown as "AI READ"
     ai_pending = Column(Text, nullable=True)   # JSON: lines the read couldn't match to an item yet (app/services/ai_pending.py)
 
@@ -817,6 +823,12 @@ class Invoice(Base):
     payments = relationship("InvoicePayment", backref="invoice", cascade="all, delete-orphan")
     emails = relationship("InvoiceEmail", backref="invoice", cascade="all, delete-orphan", order_by="InvoiceEmail.sent_at")
     split_from = relationship("Invoice", remote_side=[id], backref="split_parts")
+    order = relationship("CustomerOrder", viewonly=True)
+
+    @property
+    def order_expedited(self) -> bool:
+        """Its order ships expedited: the invoice should carry the extra charge."""
+        return bool(self.order and self.order.expedited)
 
     @property
     def split_from_code(self):

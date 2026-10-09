@@ -60,10 +60,13 @@
       loadExtra: async () => { orders = await apiFetch("/api/customer-orders/"); },
       quickExtra: c => `<a href="customer-orders.html?new=${c.id}"><b>＋</b>order</a>`,
       // payment terms set each invoice's due date (invoice date + the terms)
-      headExtra: c => `<div class="muted small" style="margin:-4px 0 6px;" title="Invoices for this customer fall due this long after the invoice date">Terms: <strong>${escapeHtml(c.payment_terms || "Net 30")}</strong></div>`,
+      headExtra: c => `<div class="muted small" style="margin:-4px 0 6px;" title="Invoices for this customer fall due this long after the invoice date">Terms: <strong>${escapeHtml(c.payment_terms || "Net 30")}</strong>${c.expedited ? ` · <span class="tag overdue" title="New orders start as expedited; their invoices remind you to charge the extra">Expedited Shipping</span>` : ""}</div>`,
       editExtra: d => `<div class="grp"><div class="grp-title">Payment Terms <span class="used-for">sets each invoice's due date</span></div>
         <div class="ent" style="grid-template-columns:1fr;"><select onchange="ContactCards.set('payment_terms', null, null, this.value)" style="max-width:220px;">
-          ${["Due on Receipt", "Net 15", "Net 30", "Net 45", "Net 60"].map(t => `<option ${(d.payment_terms || "Net 30") === t ? "selected" : ""}>${t}</option>`).join("")}</select></div></div>`,
+          ${["Due on Receipt", "Net 15", "Net 30", "Net 45", "Net 60"].map(t => `<option ${(d.payment_terms || "Net 30") === t ? "selected" : ""}>${t}</option>`).join("")}</select></div></div>
+        <div class="grp"><div class="grp-title">Shipping <span class="used-for">new orders start with this</span></div>
+        <div class="ent" style="grid-template-columns:1fr;"><label class="check-label" style="margin:0;"><input type="checkbox" ${d.expedited ? "checked" : ""} onchange="ContactCards.set('expedited', null, null, this.checked)" style="width:auto;">
+          Expedited Shipping (Charge Extra) — its invoices remind you to add the expedite charge</label></div></div>`,
       body(c) {
         const mine = orders.filter(o => o.customer_id === c.id).sort((a, b) => b.id - a.id);
         const open = mine.filter(o => !["shipped", "invoiced", "cancelled"].includes(o.status));

@@ -164,7 +164,7 @@ function drawQuote() {
     ${locked ? "" : printAllNotesHtml()}
     <div class="table-scroll"><table class="lines-table fit-table">
       <thead><tr><th class="grow">Item</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Amount</th><th></th></tr></thead>
-      <tbody id="q-lines" oninput="quoteHint(event.target.closest('tr')); quoteTotals()">${x.lines.map(quoteLineRow).join("")}</tbody>
+      <tbody id="q-lines" ${locked ? "" : `data-add-line="addQuoteLine()"`} oninput="quoteHint(event.target.closest('tr')); quoteTotals()">${x.lines.map(quoteLineRow).join("")}</tbody>
       <tfoot><tr><td class="grow">Quote total</td><td></td><td></td><td class="num" id="q-total"></td><td></td></tr></tfoot>
     </table></div>
     ${locked ? "" : `<button class="secondary" onclick="addQuoteLine()" style="margin-top:8px;">+ Add line</button>`}
@@ -273,7 +273,8 @@ function quotePayload() {
     customer_ref: document.getElementById("q-ref").value || null,
     valid_until: document.getElementById("q-valid").value || null,
     notes: document.getElementById("q-notes").value || null,
-    lines: [...document.querySelectorAll("#q-lines tr")].map(tr => ({
+    // a line left blank (Tab adds one) isn't saved
+    lines: [...document.querySelectorAll("#q-lines tr")].filter(tr => tr.querySelector(".q-item").value || tr.querySelector(".q-desc").value.trim()).map(tr => ({
       item_id: parseInt(tr.querySelector(".q-item").value) || null,
       description: tr.querySelector(".q-desc").value.trim() || null,
       quantity: parseFloat(tr.querySelector(".q-qty").value) || 1,

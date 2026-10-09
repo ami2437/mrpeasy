@@ -44,7 +44,7 @@
       <h3 style="display:flex; align-items:center; gap:10px;">New Purchase Order <span id="po-ai-slot"></span></h3>
       <div id="po-ai-note"></div>
       <div class="field-grid">
-        <div class="wide"><label>Vendor</label><select id="f-vendor"></select></div>
+        <div class="wide"><label>Vendor <button type="button" class="contact-ico" data-icon="user" title="Open the vendor's contact card" onclick="ContactPop.open('vendor', parseInt(document.getElementById('f-vendor').value))"></button></label><select id="f-vendor"></select></div>
         <div><label>Vendor SO #</label><input type="text" id="f-vendor-so" placeholder="Their sales order / confirmation #"></div>
         <div><label>Expected date</label><input type="date" id="f-expected"></div>
         <div class="wide"><label>Notes</label><textarea id="f-notes" rows="2"></textarea></div>
@@ -53,7 +53,7 @@
       <label class="check-label ln-print-all-label no-print" title="Tick or untick Print on every line's note at once (saved with the record)"><input type="checkbox" class="ln-print-all"> Print All Line Notes</label>
       <table class="lines-table">
         <thead><tr><th>Our Item</th><th>Vendor Part #</th><th>Vendor Description <span class="muted small">(Optional)</span></th><th>Qty</th><th>Unit Cost</th><th></th></tr></thead>
-        <tbody id="lines-body"></tbody>
+        <tbody id="lines-body" data-add-line="addLine()"></tbody>
       </table>
       <button class="secondary" onclick="addLine()" style="margin-top:8px;">+ Add line</button>
       <div style="margin-top:14px;">
@@ -277,9 +277,13 @@
       }
       const errorEl = document.getElementById("form-error");
       errorEl.textContent = "";
-      const missing = Array.from(document.querySelectorAll("#lines-body tr")).findIndex(tr => !tr.querySelector(".l-item").value);
+      // a line left completely blank (Tab adds one) isn't a PO line
+      const rowsIn = Array.from(document.querySelectorAll("#lines-body tr")).filter(tr => tr.querySelector(".l-item").value
+        || tr.querySelector(".l-vcode").value.trim() || tr.querySelector(".l-vdesc").value.trim() || tr.classList.contains("ai-unmatched"));
+      const missing = rowsIn.findIndex(tr => !tr.querySelector(".l-item").value);
       if (missing >= 0) { errorEl.textContent = `Line ${missing + 1}: pick the item (or remove the line).`; return; }
-      const lines = Array.from(document.querySelectorAll("#lines-body tr")).map(tr => ({
+      if (!rowsIn.length) { errorEl.textContent = "Add at least one line."; return; }
+      const lines = rowsIn.map(tr => ({
         item_id: parseInt(tr.querySelector(".l-item").value),
         quantity: parseFloat(tr.querySelector(".l-qty").value) || 0,
         unit_cost: parseFloat(tr.querySelector(".l-cost").value) || 0,
@@ -570,7 +574,7 @@
 
         <section class="dsec"><h4 class="dsec-title">Order Details</h4>
         <div class="field-grid">
-          <div class="wide"><label>Vendor</label><select id="e-vendor" ${editable ? "" : "disabled"}>
+          <div class="wide"><label>Vendor ${ContactPop.iconHtml("vendor", "parseInt(document.getElementById('e-vendor').value)")}</label><select id="e-vendor" ${editable ? "" : "disabled"}>
             ${vendors.map(v => `<option value="${v.id}" ${v.id === order.vendor_id ? "selected" : ""}>${escapeHtml(v.name)}</option>`).join("")}
           </select></div>
           <div><label>Vendor SO #</label><input type="text" id="e-vendor-so" value="${escapeHtml(order.vendor_so_number || '')}" ${editable ? "" : "disabled"}></div>

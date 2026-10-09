@@ -176,3 +176,28 @@ def test_recent_and_saved_filters(api):
     saved = api.put("/api/auth/filters/invoices", json=[{"name": "Hudson", "state": {"fields": {"search": "Hudson"}}}, {"name": " ", "state": {}}])
     assert [f["name"] for f in saved] == ["Hudson"]
     assert api.get("/api/auth/filters/invoices")[0]["state"]["fields"]["search"] == "Hudson"
+
+
+# ---------------- expedited shipping ----------------
+def test_expedited_from_customer_card_reaches_the_invoice(make, api):
+    cust = make.customer(details={"expedited": True, "phones": [], "emails": [], "addresses": [], "people": []})
+    assert api.get(f"/api/customers/{cust['id']}")["expedited"] is True
+    a = make.item(price=2)
+    make.stock(a, 3)
+    o = make.order(customer=cust, lines=[(a, 3, 2)])
+    assert o["expedited"] is True                                   # new orders start as the card says
+    inv = make.invoice(make.ship(o))
+    assert inv["order_expedited"] is True
+    o2 = api.put(f"/api/customer-orders/{o['id']}", json={"expedited": False})
+    assert o2["expedited"] is False and api.get(f"/api/invoices/{inv['id']}")["order_expedited"] is False
+    plain = make.sold([(make.item(price=1), 1, 1)])
+    assert plain[0]["expedited"] in (None, False) and plain[2]["order_expedited"] is False
+
+
+def test_contact_card_gets_a_new_address(make, api):
+    cust = make.customer(details={"addresses": [{"label": "shipping", "value": "1 Main St"}], "phones": [], "emails": [], "people": []})
+    rec = api.get(f"/api/customers/{cust['id']}")
+    det = rec["details"]
+    det["addresses"].append({"label": "Plant 2", "value": "9 Mill Rd\nTulsa OK"})
+    got = api.put(f"/api/customers/{cust['id']}", json={"details": det})
+    assert [a["label"] for a in got["details"]["addresses"]] == ["shipping", "Plant 2"] and got["shipping_address"] == "1 Main St"

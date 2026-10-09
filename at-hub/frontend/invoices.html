@@ -124,7 +124,8 @@
     function combinedBadge(inv) {
       const split = inv.split_from_code || (inv.split_into || []).length
         ? ` <span class="inv-chip combined" title="${escapeHtml(inv.split_from_code ? `Lines split from ${inv.split_from_code}` : `Lines split onto ${inv.split_into.join(", ")}`)} -- same shipment"><i></i>Split</span>` : "";
-      return (inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "") + split;
+      const exp = inv.order_expedited && inv.status !== "void" ? ` <span class="tag overdue" title="Its order shipped expedited: charge the extra">Expedited</span>` : "";
+      return exp + (inv.is_combined ? ` <span class="inv-chip combined" title="${escapeHtml(combinedTitle(inv))}"><i></i>Combined<b>⧉ ${inv.shipment_codes.length}</b></span>` : "") + split;
     }
 
     // Figures above the list. They follow the search box, so "Hudson" or "C89104" gives that customer's / order's numbers.
@@ -365,7 +366,7 @@
         const delivered = s.status === "delivered" || s.delivered_at;
         return `<tr data-id="${s.id}">
           <td><input type="checkbox" class="ready-tick" value="${s.id}" onchange="readyTicked()"></td>
-          <td class="nowrap">${refLink("shipment", s.id)}</td>
+          <td class="nowrap">${refLink("shipment", s.id)}${(shipOrder(s) || {}).expedited ? ` <span class="tag overdue" title="The order ships expedited: charge the extra on its invoice">Expedited</span>` : ""}</td>
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${refLink("order", s.order_id)}<div class="muted small">${escapeHtml([o.po_number && `PO ${o.po_number}`, o.job_number && `Job ${o.job_number}`].filter(Boolean).join(" · "))}</div></td>
           <td>${fmtDate(s.ship_date)}</td>
@@ -590,6 +591,8 @@
           <button class="secondary" onclick="document.getElementById('detail-card').style.display='none';">Close</button>
         </div>
         <div id="detail-error" class="error"></div>
+        ${invoice.order_expedited && invoice.status !== "void" ? `<div class="exp-alert">${icon("truck")}<div><strong>Expedited shipping.</strong>
+          Order ${escapeHtml(orderField(invoice, "code") || "")} shipped expedited — make sure the expedite charge is on this invoice before it goes out.</div></div>` : ""}
         <div id="email-panel"></div>
         ${["sent", "paid"].includes(invoice.status) ? `<div class="notice">This invoice has already been ${invoice.status === "paid" ? "paid" : "sent"}.
           You can still correct it. After saving, re-send it so the customer has the updated copy${invoice.status === "paid" ? "; if the total changes it goes back to Sent with a balance" : ""}.</div>` : ""}
@@ -622,7 +625,7 @@
           <div class="table-scroll">
           <table class="fit-table ${editable ? "lines-table" : ""}">
             <thead><tr><th>#</th><th>Item #</th><th class="grow">Description</th><th class="num">Qty</th><th class="num" title="What this invoice's shipments delivered on that order line (less what a split-off invoice bills)">Delivered</th><th class="num">Unit Price</th><th class="num">Subtotal</th>${editable ? "<th></th>" : ""}</tr></thead>
-            <tbody id="line-rows" oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
+            <tbody id="line-rows" ${editable ? `data-add-line="addLine()"` : ""} oninput="recalcInvoice()">${lineRowsHtml(invoice, editable)}</tbody>
             <tfoot><tr><td></td><td></td><td class="grow">Invoice Total</td><td></td><td></td><td></td><td class="num" id="invoice-total">${fmtMoney(invoiceTotal(invoice))}</td>${editable ? "<td></td>" : ""}</tr></tfoot>
           </table>
           </div>
@@ -961,7 +964,8 @@
           && !confirm(`${inv.code} has already been ${inv.status}. Save the changes? Remember to re-send the corrected invoice.`)) return;
       const errorEl = document.getElementById("detail-error");
       errorEl.textContent = "";
-      const lines = Array.from(document.querySelectorAll("#line-rows tr")).map(tr => ({
+      // a manual line left blank (Tab adds one) isn't saved
+      const lines = Array.from(document.querySelectorAll("#line-rows tr")).filter(tr => tr.dataset.itemId || tr.dataset.orderLineId || tr.querySelector(".line-desc").value.trim()).map(tr => ({
         description: tr.querySelector(".line-desc").value,
         quantity: parseFloat(tr.querySelector(".line-qty").value) || 0,
         unit_price: parseFloat(tr.querySelector(".line-price").value) || 0,

@@ -4392,3 +4392,155 @@ async function quickAddItem(opts) {
     } catch (e) { error = e.message; }
   }
 }
+
+// ---- Contact pop-up: the round person icon beside a customer / vendor name opens their card (people, phones, emails,
+// addresses) right there, with quick Add Address / Add Person. Saved to the same card as the Customers / Vendors pages. ----
+const ContactPop = {
+  path(kind) { return kind === "vendor" ? "vendors" : "customers"; },
+  canEdit(kind) { return AuthGuard.can(kind === "vendor" ? "vendors" : "customers.edit"); },
+  iconHtml(kind, idExpr, title = "") {
+    return `<button type="button" class="contact-ico no-print" title="${escapeHtml(title || `Open the ${kind}'s contact card`)}" onclick="event.preventDefault(); event.stopPropagation(); ContactPop.open('${kind}', ${idExpr})">${icon("user")}</button>`;
+  },
+  async load(kind, id) { return apiFetch(`/api/${this.path(kind)}/${id}`); },
+  async save(kind, rec, details) {
+    return apiFetch(`/api/${this.path(kind)}/${rec.id}`, { method: "PUT", body: JSON.stringify({ details }) });
+  },
+  // Resolves the (possibly updated) record when closed.
+  async open(kind, id, opts = {}) {
+    if (!id) return toast(`Pick the ${kind} first`);
+    let rec;
+    try { rec = await this.load(kind, id); } catch (e) { return toast(e.message); }
+    let mode = opts.mode || null, error = "", draft = { label: "", value: opts.prefill || "", name: "", role: "", phone: "", email: "" };
+    while (true) {
+      const d = rec.details || {}, edit = this.canEdit(kind);
+      const rows = (list, f) => (list || []).map(f).join("") || `<div class="muted small">None on file.</div>`;
+      const body = mode === "address" ? `<label>Label</label><input type="text" class="cp-label" list="cp-addr-labels" placeholder="e.g. Plant 2, Job site, Tulsa warehouse" value="${escapeHtml(draft.label)}">
+            <datalist id="cp-addr-labels"><option>shipping</option><option>billing</option><option>plant</option><option>job site</option><option>warehouse</option></datalist>
+            <label>Address</label><textarea class="cp-value" rows="4">${escapeHtml(draft.value)}</textarea>
+            ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`
+        : mode === "person" ? `<div class="row"><div><label>Name</label><input type="text" class="cp-name" value="${escapeHtml(draft.name)}"></div>
+              <div><label>Role</label><input type="text" class="cp-role" list="cp-roles" value="${escapeHtml(draft.role)}"></div></div>
+            <datalist id="cp-roles"><option>buyer</option><option>accounts payable</option><option>receiving</option><option>quality</option><option>sales</option></datalist>
+            <div class="row"><div><label>Phone</label><input type="text" class="cp-phone" value="${escapeHtml(draft.phone)}"></div>
+              <div><label>Email</label><input type="text" class="cp-email" value="${escapeHtml(draft.email)}"></div></div>
+            ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`
+        : `<div class="cp-card">
+            ${rec.payment_terms ? `<div class="muted small">Terms: <strong>${escapeHtml(rec.payment_terms)}</strong>${rec.expedited ? ` · <span class="tag overdue">Expedited Shipping</span>` : ""}</div>` : ""}
+            <h4>People</h4>${rows(d.people, p => `<div class="cp-row"><strong>${escapeHtml(p.name || "")}</strong> <span class="muted small">${escapeHtml(p.role || "")}</span>
+              <div class="small">${[p.phone && `<a class="link" href="tel:${escapeHtml(p.phone)}">${escapeHtml(p.phone)}</a>`, p.email && `<a class="link" href="mailto:${escapeHtml(p.email)}">${escapeHtml(p.email)}</a>`].filter(Boolean).join(" · ")}</div></div>`)}
+            <h4>Phones &amp; Emails</h4>${rows([...(d.phones || []).map(x => ({ ...x, t: "tel" })), ...(d.emails || []).map(x => ({ ...x, t: "mailto" }))],
+              x => `<div class="cp-row"><span class="muted small cp-lab">${escapeHtml(x.label || "")}</span> <a class="link" href="${x.t}:${escapeHtml(x.value)}">${escapeHtml(x.value)}</a></div>`)}
+            <h4>Addresses</h4>${rows(d.addresses, a => `<div class="cp-row"><span class="muted small cp-lab">${escapeHtml(a.label || "")}${a.value === rec.shipping_address ? " · default ship-to" : a.value === rec.address ? " · bill to" : ""}</span>
+              <div class="cp-addr">${escapeHtml(a.value)}</div>${opts.onPickAddress ? `<a class="link small" data-pick="${escapeHtml(a.value)}">Use This Address</a>` : ""}</div>`)}
+            ${d.notes ? `<h4>Notes</h4><div class="small">${escapeHtml(d.notes)}</div>` : ""}</div>`;
+      const buttons = mode ? [{ label: mode === "address" ? "Add Address" : "Add Person", value: "save", cls: "confirm-btn" }, { label: "Back", value: "back", cls: "secondary" }]
+        : [...(edit ? [{ label: "+ Address", value: "address", cls: "secondary" }, { label: "+ Person", value: "person", cls: "secondary" }] : []),
+           { label: "Open Full Card", value: "full", cls: "secondary" }, { label: "Close", value: null, cls: "secondary" }];
+      const pending = askDialog({ title: mode === "address" ? `New Address For ${rec.name}` : mode === "person" ? `New Person At ${rec.name}` : rec.name, body, buttons, wide: !mode });
+      // "Use This Address" links close the pop-up with that address
+      setTimeout(() => document.querySelectorAll(".ask-dialog [data-pick]").forEach(a => a.addEventListener("click", () => {
+        opts.onPickAddress(a.dataset.pick);
+        a.closest(".modal-backdrop").querySelector("button[data-i]:last-child").click();
+      })), 0);
+      const { value, el } = await pending;
+      if (!value) return rec;
+      if (value === "full") { window.open(`${kind === "vendor" ? "vendors" : "customers"}.html?id=${rec.id}`, "_blank"); continue; }
+      if (value === "back") { mode = null; error = ""; continue; }
+      if (value === "address" || value === "person") { mode = value; error = ""; continue; }
+      // save
+      const det = JSON.parse(JSON.stringify(d));
+      if (mode === "address") {
+        draft.label = el.querySelector(".cp-label").value.trim(); draft.value = el.querySelector(".cp-value").value.trim();
+        if (!draft.label || !draft.value) { error = "Give the address a label and the address itself."; continue; }
+        det.addresses = [...(det.addresses || []), { label: draft.label, value: draft.value }];
+      } else {
+        ["name", "role", "phone", "email"].forEach(k => { draft[k] = el.querySelector(`.cp-${k}`).value.trim(); });
+        if (!draft.name) { error = "Give the person a name."; continue; }
+        det.people = [...(det.people || []), { name: draft.name, role: draft.role, phone: draft.phone, email: draft.email }];
+      }
+      try {
+        rec = await this.save(kind, rec, det);
+        toast(mode === "address" ? `Address added to ${rec.name}` : `${draft.name} added to ${rec.name}`);
+        if (mode === "address" && opts.onAddressAdded) opts.onAddressAdded(rec, draft.value);
+        if (opts.closeAfterSave) return rec;
+        mode = null; error = ""; draft = { label: "", value: "", name: "", role: "", phone: "", email: "" };
+      } catch (e) { error = e.message; }
+    }
+  },
+};
+
+// ---- Ship-to: pick one of the customer's addresses on file (default first), or type one. A typed address that isn't on
+// the card is offered to the card when the order is saved (shipToCheck), so it's there next time. ----
+const normAddr = v => (v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function customerAddresses(c) {
+  if (!c) return [];
+  const list = ((c.details || {}).addresses || []).filter(a => (a.value || "").trim());
+  const def = c.shipping_address || c.address;
+  return list.slice().sort((a, b) => (b.value === def) - (a.value === def));
+}
+// The little picker under a ship-to box. textareaId: the box; customerFn: () => the customer object.
+async function pickShipTo(textareaId, customerFn) {
+  const c = customerFn(), box = document.getElementById(textareaId);
+  if (!c) return toast("Pick the customer first");
+  const list = customerAddresses(c), def = c.shipping_address || c.address;
+  const { value, el } = await askDialog({ title: `Ship To — ${c.name}`,
+    body: list.length ? `<div class="sp-list">${list.map((a, i) => `<label class="sp-opt"><input type="radio" name="sp" value="${i}" ${normAddr(a.value) === normAddr(box.value) || (!box.value && a.value === def) ? "checked" : ""}>
+        <span><strong>${escapeHtml(a.label || "address")}</strong>${a.value === def ? ` <span class="tag confirmed">Default</span>` : ""}<div class="small sp-addr">${escapeHtml(a.value)}</div></span></label>`).join("")}</div>`
+      : `<p class="muted">No addresses on ${escapeHtml(c.name)}'s card yet.</p>`,
+    buttons: [...(list.length ? [{ label: "Use This Address", value: "use", cls: "confirm-btn" }] : []), { label: "+ New Address", value: "new", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value === "use") {
+    const pick = el.querySelector('input[name="sp"]:checked');
+    if (pick) { box.value = list[+pick.value].value; box.dispatchEvent(new Event("input", { bubbles: true })); }
+  } else if (value === "new") {
+    await ContactPop.open("customer", c.id, { mode: "address", prefill: normAddr(box.value) && !list.some(a => normAddr(a.value) === normAddr(box.value)) ? box.value : "", closeAfterSave: true,
+      onAddressAdded: (rec, v) => { box.value = v; Object.assign(c, rec); box.dispatchEvent(new Event("input", { bubbles: true })); } });
+  }
+}
+// Before saving an order: a typed ship-to that isn't on the customer's card -> add it (with a label), or use it just this once.
+async function shipToCheck(text, customer) {
+  if (!customer || !normAddr(text) || customerAddresses(customer).some(a => normAddr(a.value) === normAddr(text))) return true;
+  if (!AuthGuard.can("customers.edit")) return true;
+  const { value, el } = await askDialog({ title: "New Ship-To Address", tone: "warn",
+    body: `<p>This address isn't on <strong>${escapeHtml(customer.name)}</strong>'s contact card yet:</p><div class="sp-addr qa-said">${escapeHtml(text)}</div>
+      <label>Save it to the card as</label><input type="text" class="ns-label" list="cp-addr-labels2" placeholder="e.g. Plant 2, Job site, Tulsa warehouse">
+      <datalist id="cp-addr-labels2"><option>shipping</option><option>plant</option><option>job site</option><option>warehouse</option></datalist>
+      <p class="muted small">Saved addresses can be picked on the next order.</p>`,
+    buttons: [{ label: "Save To Card & Continue", value: "save", cls: "confirm-btn" }, { label: "Use Once, Don't Save", value: "once", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (!value) return false;
+  if (value === "once") return true;
+  const label = el.querySelector(".ns-label").value.trim() || "shipping";
+  try {
+    const rec = await apiFetch(`/api/customers/${customer.id}`);
+    const det = JSON.parse(JSON.stringify(rec.details || {}));
+    det.addresses = [...(det.addresses || []), { label, value: text.trim() }];
+    Object.assign(customer, await ContactPop.save("customer", rec, det));
+    toast(`Address saved to ${customer.name} as “${label}”`);
+  } catch (e) { toast(`Not saved to the card: ${e.message}`); }
+  return true;
+}
+
+// ---- Tab off the last box of the last line: a new blank line (or the blank one already there), ready to type in.
+// A lines table opts in with <tbody data-add-line="addLine()">. ----
+document.addEventListener("keydown", e => {
+  if (e.key !== "Tab" || e.shiftKey || e.ctrlKey || e.altKey) return;
+  const t = e.target, body = t.closest && t.closest("tbody[data-add-line]");
+  if (!body) return;
+  const row = t.closest("tr");
+  if (!row || row !== body.lastElementChild) return;
+  const visible = el => el.offsetParent !== null && !el.disabled && el.type !== "hidden" && el.type !== "checkbox";
+  const fields = [...row.querySelectorAll("input, select, textarea")].filter(visible).filter(el => !el.closest(".line-note"));
+  if (!fields.length || fields[fields.length - 1] !== t) return;
+  const isBlank = tr => !(tr.querySelector("select") || {}).value && !tr.dataset.itemId && !tr.dataset.orderLineId
+    && ![...tr.querySelectorAll('input[type="text"]')].filter(i => !i.closest(".search-select")).some(i => i.value.trim());
+  if (isBlank(row)) return;  // already on an empty line: Tab just moves on
+  e.preventDefault();
+  const blank = [...body.children].find(tr => tr !== row && isBlank(tr));
+  if (!blank) Function(body.dataset.addLine)();  // the page's own add-line
+  const target = blank || body.lastElementChild;
+  setTimeout(() => {  // after the item box has become its search box
+    const first = [...target.querySelectorAll("input, select, textarea")].filter(visible)[0];
+    if (!first) return;
+    first.focus();
+    if (first.closest(".search-select")) first.select();  // the item search box: type over the placeholder
+  }, 60);
+});
