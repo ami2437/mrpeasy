@@ -289,6 +289,7 @@ class CustomerOrder(Base):
     notes = Column(Text, nullable=True)
     duplicate_po_ok = Column(String, nullable=True)  # "who, when" a manager OK'd sharing this customer PO # with an earlier order
     lookalike_ok = Column(Text, nullable=True)  # JSON: look-alike orders someone checked and OK'd as separate (services/lookalike.py)
+    report_check = Column(Text, nullable=True)  # JSON: last customer open-lines report check of this order (services/open_lines.py)
     expedited = Column(Boolean, nullable=True)  # expedited shipping: charge extra on its invoices (default from the customer's card)
     ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher): shown as "AI READ"
     ai_pending = Column(Text, nullable=True)   # JSON: lines the read couldn't match to an item yet (app/services/ai_pending.py)
@@ -505,6 +506,33 @@ class VendorBill(Base):
     @property
     def balance(self) -> float:
         return round(self.amount - self.amount_paid, 2)
+
+
+class CustomerReport(Base):
+    """A customer's own "open lines" report (their open POs with us, from their system) checked against our orders
+    (services/open_lines.py). The file and the result of each check are kept, so the next upload can say what changed."""
+    __tablename__ = "customer_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    stored_name = Column(String, nullable=False)  # under uploads/reports/
+    mapping = Column(Text, nullable=True)  # JSON: our field -> their column header
+    result = Column(Text, nullable=True)  # JSON: summary + every row with its verdict
+    uploaded_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CustomerReportProfile(Base):
+    """Per customer: which of their columns is which, and what to leave out (their kit headers, our $0 nut lines...)."""
+    __tablename__ = "customer_report_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, unique=True)
+    mapping = Column(Text, nullable=True)  # JSON
+    rules = Column(Text, nullable=True)  # JSON
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class DeskFile(Base):

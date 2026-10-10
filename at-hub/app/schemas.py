@@ -426,6 +426,7 @@ class CustomerOrderResponse(BaseModel):
     duplicate_po_ok: Optional[str] = None  # set once a manager has OK'd sharing the customer PO # with an earlier order
     lookalike_ok: Optional[str] = None  # JSON: who OK'd which look-alike orders as separate
     lookalikes: List[dict] = []  # look-alike orders not OK'd yet (services/lookalike.py)
+    report_check: Optional[str] = None  # JSON: the last customer open-lines report check of this order
     lines: List[CustomerOrderLineResponse] = []
 
     class Config:

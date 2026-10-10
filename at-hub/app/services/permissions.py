@@ -40,6 +40,8 @@ CATALOG = [
     ("invoices.split", "Money", "Split invoice lines onto a new invoice (same shipment, same order)", True, "admin"),
     ("invoices.funding", "Money", "Invoice funding (factoring)", True, "admin"),
     ("payments.import", "Money", "Import PO payment files", True, "admin"),
+    ("reconcile", "Money", "Customer open-lines check: upload a customer's open-PO report, compare it with our orders (quantities, prices, "
+                           "dates), create the orders that are missing", True, "admin"),
     # Purchasing
     ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "admin"),
     ("vendors", "Purchasing", "Vendors", False, "manager"),

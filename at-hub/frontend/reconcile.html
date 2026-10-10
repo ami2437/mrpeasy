@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Open Lines Check</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar rc-toolbar">
+      <h1 class="page-title">Open Lines Check</h1>
+      <span class="muted small rc-sub">Upload a customer's report of the POs they still have open with us — every line is checked against our orders.</span>
+      <label class="rc-cust">Customer <select id="rc-customer" data-searchable onchange="customerChanged()"><option value="">— pick the customer —</option></select></label>
+      <label class="rc-past">Past Checks <select id="rc-past" onchange="if (this.value) openReport(parseInt(this.value))"><option value="">—</option></select></label>
+      <button data-icon="upload" onclick="pickFile()">Upload Report</button>
+      <input type="file" id="rc-file" accept=".xlsx,.xlsm,.csv" style="display:none;" onchange="upload(this.files[0]); this.value='';">
+    </div>
+    <div id="rc-drop" class="desk-drop compact" onclick="pickFile()">
+      <div class="desk-drop-main"><span class="desk-drop-icon"></span><div><strong>Drop the customer's open-lines report here</strong>
+        <span class="muted">(Excel or CSV — e.g. Hudson's "Open Purchase Orders by Request Date")</span></div></div>
+    </div>
+    <div id="rc-body"></div>
+  </main>
+  </div>
+
+  <script>
+    AuthGuard.requirePerm("reconcile");
+    document.getElementById("sidebar").innerHTML = renderSidebar("reconcile.html");
+    document.querySelector(".desk-drop-icon").innerHTML = icon("upload");
+    const canOrders = AuthGuard.can("orders.edit");
+    let customers = [], report = null, view = "problems";
+    const STATUS = {
+      match: ["Matches", "rc-ok"], diff: ["Differs", "rc-warn"], missing_order: ["PO Not In AT-HUB", "rc-bad"],
+      missing_line: ["Line Not On Our Order", "rc-bad"], ignored: ["Left Out", "rc-grey"],
+    };
+    const FLAG = { qty: "Ordered qty", price: "Price", date: "Date", job: "Job #", shipped_open: "Shipped — open on theirs",
+                   open_more: "Open qty differs" };
+
+    // ---- drop anywhere ----
+    const drop = document.getElementById("rc-drop");
+    document.addEventListener("dragover", e => { if ([...(e.dataTransfer.types || [])].includes("Files")) { e.preventDefault(); drop.classList.add("over"); } });
+    document.addEventListener("dragleave", e => { if (!e.relatedTarget) drop.classList.remove("over"); });
+    document.addEventListener("drop", e => { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); } });
+
+    async function init() {
+      customers = await apiFetch("/api/customers/");
+      const sel = document.getElementById("rc-customer");
+      sel.innerHTML = `<option value="">— pick the customer —</option>` + customers.filter(c => c.is_active !== false)
+        .map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      const q = new URLSearchParams(location.search);
+      let last = null;
+      try { last = localStorage.getItem("rc:customer"); } catch (e) { /* nicety */ }
+      if (q.get("report")) { await openReport(parseInt(q.get("report"))); return; }
+      const cid = q.get("customer") || last;
+      if (cid && customers.some(c => String(c.id) === String(cid))) { sel.value = cid; await customerChanged(true); }
+      else render();
+    }
+    async function customerChanged(openLatest = false, keep = false) {
+      const cid = document.getElementById("rc-customer").value;
+      try { localStorage.setItem("rc:customer", cid); } catch (e) { /* nicety */ }
+      const past = cid ? await apiFetch(`/api/reconcile/reports?customer_id=${cid}`) : [];
+      document.getElementById("rc-past").innerHTML = `<option value="">${past.length ? "— pick one —" : "none yet"}</option>` +
+        past.map(p => `<option value="${p.id}">${fmtWhen(p.created_at)} · ${escapeHtml(p.filename)} · ${p.summary.lines || 0} lines</option>`).join("");
+      if (keep) return;  // just the Past Checks list (the report on screen stays)
+      if (openLatest && past.length) await openReport(past[0].id);
+      else { report = null; render(); }
+    }
+    function pickFile() {
+      if (!document.getElementById("rc-customer").value) { alert("Pick the customer first — whose report is it?"); return; }
+      document.getElementById("rc-file").click();
+    }
+    async function upload(file) {
+      if (!file) return;
+      const cid = document.getElementById("rc-customer").value;
+      if (!cid) { alert("Pick the customer first — whose report is it?"); return; }
+      document.getElementById("rc-body").innerHTML = `<div class="card"><span class="spinner"></span> Checking ${escapeHtml(file.name)} against our orders…</div>`;
+      const fd = new FormData();
+      fd.append("customer_id", cid);
+      fd.append("file", file, file.name);
+      try {
+        report = await apiUpload("/api/reconcile/reports", fd);
+        await customerChanged(false, true);
+        document.getElementById("rc-past").value = report.id;
+        view = "problems";
+        render();
+        if (!report.checked) editColumns();
+      } catch (e) { document.getElementById("rc-body").innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; }
+    }
+    async function openReport(id) {
+      try { report = await apiFetch(`/api/reconcile/reports/${id}`); } catch (e) { alert(e.message); return; }
+      if (String(document.getElementById("rc-customer").value) !== String(report.customer_id)) {
+        document.getElementById("rc-customer").value = report.customer_id;
+        await customerChanged(false, true);
+      }
+      document.getElementById("rc-past").value = id;
+      history.replaceState(null, "", `reconcile.html?report=${id}`);
+      render();
+    }
+
+    // ---- the page ----
+    const num = v => v === null || v === undefined || v === "" ? "—" : fmtQty(v);
+    const money = v => v === null || v === undefined || v === "" ? "—" : fmtPrice(v);
+    function tiles(s, rows) {
+      const n = k => s[k] || 0;
+      const t = (key, label, count, cls, hint) => `<button class="rc-tile ${cls} ${view === key ? "on" : ""}" onclick="view='${key}'; render()" title="${escapeHtml(hint)}">
+          <span class="rc-n">${count}</span><span class="rc-l">${label}</span></button>`;
+      return `<div class="rc-tiles">
+          ${t("problems", "Need A Look", rows.filter(r => !["match", "ignored"].includes(r.status)).length + (report.result.ours_only || []).length, "rc-warn", "Everything that isn't a clean match")}
+          ${t("match", "Match", n("match"), "rc-ok", "Same PO, item, quantities, price, date and job #")}
+          ${t("shipped_open", "Shipped, Open On Theirs", n("flag_shipped_open"), "rc-warn", "We shipped it — their system still shows it open (not received there yet, or in transit)")}
+          ${t("missing_order", "POs Not In AT-HUB", n("missing_orders"), "rc-bad", "Orders on their report we haven't entered — create them from the report")}
+          ${t("missing_line", "Lines Missing On Ours", n("missing_line"), "rc-bad", "Their line, our order doesn't have it")}
+          ${t("ours_only", "Ours, Not On Theirs", n("ours_only"), "rc-bad", "Our open lines their report doesn't list — cancelled or received on their side?")}
+          ${t("diff", "Other Differences", rows.filter(r => r.status === "diff" && r.flags.some(f => f !== "shipped_open")).length, "rc-warn", "Ordered qty, price, date or job # differ")}
+          ${t("ignored", "Left Out", n("ignored"), "rc-grey", "Left out by the rules (their kit header lines...)")}
+          ${t("all", "All Lines", n("lines"), "rc-grey", "Every line of their report")}</div>`;
+    }
+    function shipsHtml(o) {
+      return (o.shipments || []).map(s => `<div class="rc-ship"><a class="link" href="shipments.html?id=${s.id}" target="_blank">${escapeHtml(s.code)}</a>
+        <div class="muted">${s.ship_date ? fmtDate(s.ship_date) : escapeHtml(s.status)}${s.delivered_at ? " · delivered" : ""}${s.pod ? " · POD" : ""}</div></div>`).join("");
+    }
+    function actions(r) {
+      if (!canOrders) return "";
+      const b = (field, label) => `<button class="small-btn secondary" onclick="applyTheirs(${r.theirs ? r.idx : -1}, '${field}')">${label}</button>`;
+      const out = [];
+      if (r.status === "missing_line") out.push(b("add_line", "Add To Our Order"));
+      for (const f of r.flags || []) {
+        if (f === "price") out.push(b("price", "Use Their Price"));
+        if (f === "qty") out.push(b("qty", "Use Their Qty"));
+        if (f === "date") out.push(b("date", "Use Their Date"));
+        if (f === "job") out.push(b("job", "Use Their Job #"));
+      }
+      return out.join(" ");
+    }
+    function rowHtml(r) {
+      const t = r.theirs, o = r.ours || {};
+      const [word, cls] = STATUS[r.status] || [r.status, ""];
+      const hl = f => (r.flags || []).includes(f) ? "rc-cell-diff" : "";
+      return `<tr>
+          <td class="nowrap"><strong>${escapeHtml(t.po)}</strong><div class="muted small">line ${escapeHtml(t.line)}</div>${t.job ? `<div class="small ${hl("job")}">job ${escapeHtml(t.job)}</div>` : ""}</td>
+          <td><strong>${escapeHtml(t.item)}</strong><div class="muted small rc-desc">${escapeHtml(t.desc)}</div></td>
+          <td class="num ${hl("qty")}">${num(t.qty_ordered)}</td><td class="num ${hl("shipped_open")} ${hl("open_more")}">${num(t.qty_open)}</td>
+          <td class="num ${hl("price")}">${money(t.price)}</td>
+          <td class="nowrap ${hl("date")}">${t.promised_date ? fmtDate(t.promised_date) : "—"}${t.request_date && t.request_date !== t.promised_date ? `<div class="muted small">asked ${fmtDate(t.request_date)}</div>` : ""}</td>
+          <td class="rc-sep">${o.order_code ? `<a class="link" href="customer-orders.html?id=${o.order_id}" target="_blank">${escapeHtml(o.order_code)}</a>${o.line_no ? `<span class="muted small"> #${o.line_no}</span>` : ""}` : "—"}
+            ${o.job ? `<div class="small ${hl("job")}">job ${escapeHtml(o.job)}</div>` : ""}
+            ${(o.shipments || []).length ? `<div class="rc-ships">${shipsHtml(o)}</div>` : ""}</td>
+          <td class="num ${hl("qty")}">${num(o.qty)}</td><td class="num">${num(o.shipped)}</td><td class="num ${hl("shipped_open")} ${hl("open_more")}">${num(o.open)}</td>
+          <td class="num ${hl("price")}">${money(o.price)}</td><td class="nowrap ${hl("date")}">${o.date ? fmtDate(o.date) : "—"}</td>
+          <td class="rc-res"><span class="rc-badge ${cls}">${word}</span>${(r.flags || []).length ? `<div class="small">${r.flags.map(f => escapeHtml(FLAG[f] || f)).join(" · ")}</div>` : ""}
+            ${(r.notes || []).length ? `<div class="muted small">${r.notes.map(escapeHtml).join("<br>")}</div>` : ""}
+            <div class="rc-acts">${actions(r)}</div></td></tr>`;
+    }
+    function table(list) {
+      if (!list.length) return `<p class="muted">Nothing here.</p>`;
+      return `<div class="table-scroll"><table class="compact-table rc-table"><thead>
+          <tr class="rc-groups"><th colspan="6">Their Report</th><th colspan="6" class="rc-sep">Our Order</th><th></th></tr>
+          <tr><th>PO #</th><th>Item</th><th class="num">Ordered</th><th class="num">Open</th><th class="num">Price</th><th>Date</th>
+            <th class="rc-sep">Order</th><th class="num">Ordered</th><th class="num">Shipped</th><th class="num">Open</th><th class="num">Price</th><th>Date</th>
+            <th>Result</th></tr></thead><tbody>${list.map(rowHtml).join("")}</tbody></table></div>`;
+    }
+    function missingOrdersHtml() {
+      const m = report.result.missing_orders || [];
+      if (!m.length) return `<p class="muted">Every PO on their report is in AT-HUB.</p>`;
+      return `<p class="muted small" style="margin-top:0;">On their report, not in AT-HUB. Create them from the report: customer, PO #, job #, lines,
+          quantities (what's still open), prices and dates. Each one waits in <strong>Validation</strong> for you to check; a line whose item # we don't
+          have waits for you to pick the item.</p>
+        ${canOrders ? `<button onclick="createOrders(${escapeHtml(JSON.stringify(m.map(x => x.po)))})" data-icon="plus">Create All ${m.length} As Draft Orders</button>` : ""}
+        <table class="compact-table" style="margin-top:8px;"><thead><tr><th>Their PO #</th><th>Job</th><th class="num">Lines</th><th class="num">Items We Have</th><th></th></tr></thead><tbody>
+        ${m.map(x => `<tr><td><strong>${escapeHtml(x.po)}</strong></td><td>${escapeHtml(x.job || "")}</td><td class="num">${x.lines}</td>
+          <td class="num">${x.known_items} of ${x.lines}${x.known_items < x.lines ? ` <span class="muted small">(${x.lines - x.known_items} to pick)</span>` : ""}</td>
+          <td>${canOrders ? `<button class="small-btn" onclick="createOrders(['${escapeHtml(x.po)}'])">Create Draft Order</button>` : ""}</td></tr>`).join("")}
+        </tbody></table>`;
+    }
+    function oursOnlyHtml() {
+      const l = report.result.ours_only || [];
+      if (!l.length) return `<p class="muted">Every open line of ours on these POs is on their report.</p>`;
+      return `<p class="muted small" style="margin-top:0;">Open on our order, not on their report — they may have cancelled it, or received it already.</p>
+        <table class="compact-table"><thead><tr><th>Our Order</th><th>Line</th><th>Item</th><th class="num">Ordered</th><th class="num">Shipped</th><th class="num">Open</th><th class="num">Price</th><th>Shipments</th></tr></thead><tbody>
+        ${l.map(o => `<tr><td><a class="link" href="customer-orders.html?id=${o.order_id}" target="_blank">${escapeHtml(o.order_code)}</a></td><td>#${o.line_no}</td>
+          <td><strong>${escapeHtml(o.item)}</strong> <span class="muted small">${escapeHtml(o.title || "")}</span></td><td class="num">${num(o.qty)}</td><td class="num">${num(o.shipped)}</td>
+          <td class="num">${num(o.open)}</td><td class="num">${money(o.price)}</td><td>${shipsHtml(o)}</td></tr>`).join("")}</tbody></table>`;
+    }
+    function render() {
+      const el = document.getElementById("rc-body");
+      if (!report) {
+        el.innerHTML = `<div class="card muted">Pick the customer, then upload their open-lines report (Excel or CSV). Each line is matched by their PO # and item # to our orders,
+          and compared: ordered and open quantities (with what we shipped), price, date and job #.</div>`;
+        return;
+      }
+      if (!report.checked) {
+        el.innerHTML = `<div class="card">Tell AT-HUB which columns hold the PO # and item # — <a class="link" onclick="editColumns()">Columns & Rules</a></div>`;
+        return;
+      }
+      const res = report.result, s = res.summary || {}, rows = res.rows || [];
+      const sl = report.since_last || {};
+      const since = report.previous ? `<span class="muted small">Since the check of ${fmtDate(report.previous.created_at)}:
+          ${sl.gone || 0} off their report · ${sl.new || 0} new · ${sl.fixed || 0} fixed · ${sl.worse || 0} no longer matching</span>` : "";
+      const pick = {
+        problems: rows.filter(r => !["match", "ignored"].includes(r.status)),
+        match: rows.filter(r => r.status === "match"),
+        shipped_open: rows.filter(r => (r.flags || []).includes("shipped_open")),
+        missing_line: rows.filter(r => r.status === "missing_line"),
+        diff: rows.filter(r => r.status === "diff" && r.flags.some(f => f !== "shipped_open")),
+        ignored: rows.filter(r => r.status === "ignored"),
+        all: rows,
+      };
+      let body;
+      if (view === "missing_order") body = missingOrdersHtml();
+      else if (view === "ours_only") body = oursOnlyHtml();
+      else if (view === "problems") body = `${(res.missing_orders || []).length ? `<h4>POs Not In AT-HUB</h4>${missingOrdersHtml()}` : ""}
+          ${(res.ours_only || []).length ? `<h4>Ours, Not On Theirs</h4>${oursOnlyHtml()}` : ""}
+          <h4>Lines</h4>${table(pick.problems.filter(r => r.status !== "missing_order"))}`;
+      else body = table(pick[view] || rows);
+      el.innerHTML = `<div class="card">
+          <div class="rc-head"><div><strong>${escapeHtml(report.customer)}</strong> · ${escapeHtml(report.filename)}
+            <div class="muted small">uploaded ${fmtWhen(report.created_at)} by ${escapeHtml(report.uploaded_by || "")} · checked ${fmtWhen(res.checked_at)} ·
+              ${s.lines || 0} lines on ${s.pos || 0} POs</div>${since}</div>
+            <span style="flex:1;"></span>
+            <button class="secondary small-btn" data-icon="undo" onclick="recheck()" title="After fixing orders: check the same report again">Check Again</button>
+            <button class="secondary small-btn" data-icon="sliders" onclick="editColumns()">Columns &amp; Rules</button>
+            <button class="secondary small-btn" data-icon="download" onclick="downloadExcel()">Download Excel</button>
+            <button class="secondary small-btn" onclick="deleteReport()">${icon("trash")}</button></div>
+          ${tiles(s, rows)}
+          <div class="rc-view">${body}</div></div>`;
+    }
+
+    // ---- actions ----
+    async function recheck(mapping, rules) {
+      try {
+        report = await apiFetch(`/api/reconcile/reports/${report.id}/check`, { method: "POST", body: JSON.stringify({ mapping: mapping || null, rules: rules || null }) });
+        render();
+        toast("Checked again");
+      } catch (e) { alert(e.message); }
+    }
+    async function applyTheirs(idx, field) {
+      try {
+        const r = await apiFetch(`/api/reconcile/reports/${report.id}/apply`, { method: "POST", body: JSON.stringify({ idx, field }) });
+        report = r;
+        render();
+        toast(r.done);
+      } catch (e) { alert(e.message); }
+    }
+    async function createOrders(pos) {
+      if (!confirm(`Create ${pos.length} draft order${pos.length === 1 ? "" : "s"} from the report (in Validation, for you to check)?`)) return;
+      try {
+        const r = await apiFetch(`/api/reconcile/reports/${report.id}/create-orders`, { method: "POST", body: JSON.stringify({ pos }) });
+        report = r;
+        render();
+        await askDialog({ title: "Draft Orders Created", wide: true,
+          body: `<table class="compact-table"><thead><tr><th>Their PO #</th><th>Order</th><th class="num">Lines</th><th class="num">Waiting For An Item</th></tr></thead><tbody>
+            ${r.made.map(m => `<tr><td>${escapeHtml(m.po)}</td><td><a class="link" href="customer-orders.html?id=${m.order_id}" target="_blank">${escapeHtml(m.code)}</a></td>
+              <td class="num">${m.lines}</td><td class="num">${m.waiting}</td></tr>`).join("")}</tbody></table>
+            <p class="muted small">Each is in Validation: open it, pick the items for the waiting lines, check it against their PO and Validate.</p>`,
+          buttons: [{ label: "OK", value: "ok", cls: "confirm-btn" }] });
+      } catch (e) { alert(e.message); }
+    }
+    async function editColumns() {
+      const m = report.mapping || {}, rules = (report.result && report.result.rules) || { skip_their_line_types: ["S"], skip_their_max_price: 0.01, skip_our_zero_price: true };
+      const opts = cur => `<option value="">— not in this report —</option>` + report.headers.filter(Boolean).map(h => `<option ${h === cur ? "selected" : ""}>${escapeHtml(h)}</option>`).join("");
+      const { value, el } = await askDialog({ title: `Columns & Rules — ${report.customer}`, wide: true,
+        body: `<p class="muted small" style="margin-top:0;">Which of their columns is which — remembered for ${escapeHtml(report.customer)}'s next report.</p>
+          <div class="field-grid">${Object.entries(report.labels).map(([k, l]) => `<div><label>${escapeHtml(l)}${["po", "item"].includes(k) ? " *" : ""}</label>
+            <select data-map="${k}">${opts(m[k])}</select></div>`).join("")}</div>
+          <h4 style="margin:12px 0 4px;">Leave Out</h4>
+          <div class="field-grid">
+            <div><label>Their line types (comma separated)</label><input type="text" class="r-types" value="${escapeHtml((rules.skip_their_line_types || []).join(", "))}"></div>
+            <div><label>…priced at or under</label><input type="number" step="0.01" class="r-max" value="${rules.skip_their_max_price ?? 0.01}"></div>
+            <div><label class="check-label"><input type="checkbox" class="r-zero" ${rules.skip_our_zero_price ? "checked" : ""}> Our $0 lines (companion nuts)</label></div>
+          </div>`,
+        buttons: [{ label: "Save And Check", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      const mapping = {};
+      el.querySelectorAll("[data-map]").forEach(s => { if (s.value) mapping[s.dataset.map] = s.value; });
+      if (!mapping.po || !mapping.item) { alert("The PO # and item # columns are needed"); return; }
+      const r2 = { skip_their_line_types: el.querySelector(".r-types").value.split(",").map(x => x.trim()).filter(Boolean),
+                   skip_their_max_price: parseFloat(el.querySelector(".r-max").value) || 0, skip_our_zero_price: el.querySelector(".r-zero").checked };
+      await recheck(mapping, r2);
+    }
+    async function downloadExcel() {
+      const res = await fetch(`/api/reconcile/reports/${report.id}/export`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+      if (!res.ok) { alert("Couldn't make the Excel file"); return; }
+      const cd = res.headers.get("content-disposition") || "";
+      saveBlob(await res.blob(), decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/) || [])[1] || "open-lines-check.xlsx"));
+    }
+    async function deleteReport() {
+      if (!confirm("Delete this check (and its uploaded file)? Our orders aren't touched.")) return;
+      await apiFetch(`/api/reconcile/reports/${report.id}`, { method: "DELETE" });
+      report = null;
+      history.replaceState(null, "", "reconcile.html");
+      customerChanged(false);
+    }
+    init();
+  </script>
+</body>
+</html>

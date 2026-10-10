@@ -1045,6 +1045,7 @@
           ${isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)">Confirm Order</button>` : ""}</div>` : ""}
         ${validationBannerHtml("order", order, isManager)}
         ${LookAlike.banner("customer", order)}
+        ${reportCheckHtml(order)}
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
         <div id="co-sticky" class="sticky-strip"></div>
@@ -1701,6 +1702,18 @@
     async function captureOrder() {
       const made = await quickCapture("order");
       if (made) { await loadOrders(); showDetail(made.id); }
+    }
+    // the last customer open-lines report check of this order (reconcile.html)
+    function reportCheckHtml(o) {
+      let c = null;
+      try { c = JSON.parse(o.report_check || "null"); } catch (e) { c = null; }
+      if (!c) return "";
+      const bad = (c.diffs || 0) + (c.missing || 0), ok = !bad;
+      const link = AuthGuard.can("reconcile") ? ` <a class="link" href="reconcile.html?report=${c.report_id}">Open The Check</a>` : "";
+      return `<div class="rc-order-chip ${ok ? "ok" : "warn"}">${icon(ok ? "checkCircle" : "info")}
+          ${ok ? `Matches ${escapeHtml(c.customer)}'s open-lines report` : `${bad} line${bad === 1 ? "" : "s"} differ${bad === 1 ? "s" : ""} on ${escapeHtml(c.customer)}'s open-lines report`}
+          ${c.shipped_open ? `<span class="muted small">· ${c.shipped_open} shipped, still open on theirs</span>` : ""}
+          <span class="muted small">· checked ${fmtDate(c.at)}</span>${link}</div>`;
     }
     async function afterLookalikeOk(id) { await loadOrders(); await showDetail(id); }
     async function onValidated(o) { await loadOrders(); await showDetail(o.id); autoNutCheck(o.id); }
