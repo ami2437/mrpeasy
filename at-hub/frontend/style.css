@@ -2526,3 +2526,10 @@ html[data-theme="dark"] .rc-badge.rc-ok { background: #14532d; color: #bbf7d0; }
 html[data-theme="dark"] .rc-badge.rc-bad { background: #450a0a; color: #fecaca; }
 html[data-theme="dark"] .rc-order-chip.ok { background: #052e16; border-color: #166534; color: #bbf7d0; }
 html[data-theme="dark"] .rc-order-chip.warn { background: #2a1606; border-color: #9a3412; color: #fed7aa; }
+.ai-filled { display: flex; align-items: center; gap: 6px; margin: 6px 0; padding: 5px 9px; border-radius: 8px; background: #f0fdf4; border: 1px solid #86efac; color: #14532d; font-size: 13px; }
+html[data-theme="dark"] .ai-filled { background: #052e16; border-color: #166534; color: #bbf7d0; }
+.ca-table td { vertical-align: top; }
+/* tick boxes on the order / PO / shipment lists (makeBulkPick) */
+.bp-tick, .bp-all { margin: 0 6px 0 0; vertical-align: -2px; cursor: pointer; }
+.ca-table select.ca-need { border-color: #f59e0b; background: #fffbeb; }
+html[data-theme="dark"] .ca-table select.ca-need { background: #2a1606; }

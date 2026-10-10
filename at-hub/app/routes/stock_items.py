@@ -26,7 +26,14 @@ def list_items(q: str | None = Query(None), low_stock_only: bool = Query(False),
 
 @router.post("/", response_model=StockItemResponse, dependencies=[Depends(require_perm("stock.edit"))])
 def create_item(data: StockItemCreate, db: Session = Depends(get_db)):
-    return StockItemService.create(db, data)
+    item = StockItemService.create(db, data)
+    from app.services import ai_pending
+    try:  # orders / POs in Validation waiting for this item get it now
+        ai_pending.sweep(db)
+    except Exception:
+        db.rollback()
+    db.refresh(item)
+    return item
 
 
 @router.get("/activity/recent", response_model=list[InventoryTransactionResponse])

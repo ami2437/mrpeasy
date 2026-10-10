@@ -34,7 +34,7 @@
       </div>
     </div>
     <div class="card">
-      <table class="list-fit">
+      <table class="list-fit" id="shipments-table">
         <thead><tr><th>Code</th><th>Order</th><th>PO #</th><th>Created</th><th>Ship date</th><th>Delivered</th><th>Picked</th><th>Carrier</th><th>Tracking</th><th>POD</th><th>Status</th></tr></thead>
         <tbody id="shipments-body"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
@@ -83,7 +83,7 @@
       }
       tbody.innerHTML = filtered.map(s => `
         <tr class="${s.invoice_combined ? "row-combined" : ""}">
-          <td><a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
+          <td class="nowrap">${shBulk.box(s)}<a class="link" onclick="showDetail(${s.id})">${s.code}</a></td>
           <td><a class="link" href="customer-orders.html?id=${s.order_id}">${escapeHtml(orderCode(s.order_id))}</a></td>
           <td>${(order(s.order_id) || {}).po_number ? `<a class="link" href="customer-orders.html?id=${s.order_id}" title="Open the order">${escapeHtml(order(s.order_id).po_number)}</a>` : ""}</td>
           <td>${fmtDate(s.created_at)}</td>
@@ -105,6 +105,18 @@
       return `${picked} / ${qty}`;
     }
 
+    // tick several shipments: Cancel / Delete them together (the same rules as one at a time)
+    const shBulk = makeBulkPick({ name: "shBulk", table: "#shipments-table", word: "shipment", records: () => shipments, redraw: () => renderShipments(), reload: () => reloadList(),
+      actions: () => [
+        ...(AuthGuard.can("shipments.work") ? [{ label: n => `Cancel ${n} Shipment${n === 1 ? "" : "s"}`, cls: "danger", verb: "cancelled",
+          pick: l => l.filter(s => ["new", "ready"].includes(s.status)), note: "Only shipments that haven't left can be cancelled; their booked stock is freed.",
+          run: s => apiFetch(`/api/shipments/${s.id}/cancel`, { method: "POST" }) }] : []),
+        ...(AuthGuard.can("shipments.undo") ? [{ label: n => `Delete ${n} Cancelled Shipment${n === 1 ? "" : "s"}`, cls: "danger", verb: "deleted",
+          pick: l => l.filter(s => s.status === "cancelled"), note: "They go to the Recycle Bin, where they can be restored.",
+          run: s => apiFetch(`/api/shipments/${s.id}`, { method: "DELETE" }) }] : []),
+      ] });
+    const renderShipmentsOnly = renderShipments;
+    renderShipments = function () { renderShipmentsOnly(); shBulk.paint(); };
     async function reloadList() {
       shipments = await apiFetch("/api/shipments/");
       renderShipments();

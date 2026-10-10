@@ -20,7 +20,7 @@ def test_customer_pick_is_learned_and_repointed(make, api):
     api.post("/api/customer-orders/", json={"customer_id": c["id"], "lines": [
         {"item_id": b["id"], "quantity": 5, "unit_price": 1, "source_code": "XJ-77", "source_description": desc}]})
     top = matcher_for("customer", c["id"]).rank(["XJ-77"], desc)[0]
-    assert top["item_id"] == b["id"] and top["why"].startswith("learned") and top["score"] == 0.97
+    assert top["item_id"] == b["id"] and top["why"].startswith("learned") and top["score"] == 0.99  # one pick: just under certain, above an exact title
     assert pick(matcher_for("customer", c["id"]).rank([None], desc)) == b["id"]
     # another customer's wording is not shared
     assert not any(x["why"].startswith("learned") for x in matcher_for("customer", make.customer()["id"]).rank(["XJ-77"], desc))

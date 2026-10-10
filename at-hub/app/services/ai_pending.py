@@ -88,6 +88,47 @@ def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: s
     return rec
 
 
+def rematch(db: Session, kind: str, rec, by: str = "auto") -> list:
+    """Waiting lines whose item exists NOW (made since the read -- on this record or another one): filled in by
+    themselves. Only certain matches: our item # / the vendor's linked part # / a pick made before for this
+    customer / vendor. Returns the codes filled in."""
+    rows = pending(rec)
+    if not rows or rec.status != "validation":
+        return []
+    from app.models import StockItem, VendorItem
+    from app.services import item_alias
+    from app.services.item_match import ItemMatcher
+    party = rec.customer_id if kind == "customer" else rec.vendor_id
+    items = db.query(StockItem).filter(StockItem.is_active == True).all()  # noqa: E712
+    xref = {m.vendor_item_code: m.item_id for m in db.query(VendorItem).filter(VendorItem.vendor_id == party).all()} if kind == "vendor" else {}
+    matcher = ItemMatcher(items, xref, item_alias.for_party(db, kind, party))
+    found = []
+    for idx, row in enumerate(rows):
+        cands = matcher.rank([row.get("item_code")], None, top=2)
+        top = cands[0] if cands else None
+        if top and top["score"] >= 0.97 and top["why"].startswith(("our item #", "vendor part #", "learned"))                 and not (len(cands) > 1 and cands[1]["score"] >= top["score"]):
+            found.append((idx, top["item_id"], row.get("item_code")))
+    filled = []
+    for idx, item_id, code in reversed(found):  # from the end, so the other indexes stay right
+        try:
+            match(db, kind, rec.id, idx, item_id, None, None, by)
+            filled.append(code)
+        except Exception:
+            db.rollback()
+    if filled:
+        db.refresh(rec)
+    return list(reversed(filled))
+
+
+def sweep(db: Session) -> int:
+    """After items are made: every record still in Validation with waiting lines gets them filled where it now can."""
+    n = 0
+    for model, kind in ((CustomerOrder, "customer"), (PurchaseOrder, "vendor")):
+        for rec in db.query(model).filter(model.status == "validation", model.ai_pending.isnot(None)).all():
+            n += len(rematch(db, kind, rec))
+    return n
+
+
 def _record(db: Session, kind: str, rec_id: int):
     model = CustomerOrder if kind == "customer" else PurchaseOrder
     rec = db.get(model, rec_id)

@@ -30,10 +30,26 @@ SIZE_RE = re.compile(r"(?<![\d/.-])(\d+(?:-\d+)?/\d+|\d+(?:\.\d+)?)\s*\"?\s*-\s*
 DIA_LEN_RE = re.compile(r"(?<![\d/-])(\d+(?:-\d+)?/\d+|\d*\.\d+|\d+)\s*\"?\s*(?:x|\*)\s*(\d+(?:-\d+)?(?:/\d+)?(?:\.\d+)?)", re.I)
 BARE_DIA_RE = re.compile(r"(?<![\d/-])(\d+-\d+/\d+|\d+/\d+|\d*\.\d+)\s*(?:\"|in\b|inch\b)?")
 WEIGHTS = {"dia": 4.0, "tpi": 2.0, "len": 3.0, "type": 2.5, "grade": 2.0, "finish": 1.5, "word": 0.5}
+# the nut that goes WITH a bolt ("... w/ A194-2H HEX NUT") describes its companion, not what the line is
+NUT_GRADE_RE = re.compile(r"\b(a194|a563|f436|sae\s*j995)[\s-]*(gr(?:ade)?\s*)?(2hm?|dh3?|dh|[a-z]|8|5)(?![a-z0-9])")
+COMPANION_RE = re.compile(r"(?:\bw/|\bw\s|\bwith\b)\s*(?:nutgrade\S*\s*)?(?:(?:heavy|hvy|hex|hh|heavy-hex|finish|fin|jam)\s*)*nuts?\b")
+NO_NUT_RE = re.compile(r"\b(?:no|less|w/o|without)[\s-]*nuts?\b")
+# what an item IS comes from its group, not from words in its title (a "BOLT ... w/ HEX NUT" in group Bolt is a bolt)
+GROUP_TYPES = {"bolt": {"bolt"}, "nut": {"nut"}, "washer": {"washer", "flatwasher"}, "stud": {"stud"}, "clamp": {"clamp"}, "rod": {"rod"},
+               "screw": {"screw"}, "pin": {"pin"}, "anchor": {"anchor"}}
+SPECIFIC_FINISH = {"hdg", "mechgalv", "zinc", "yellowzinc", "plain", "stainless", "304", "316"}
 
 
-def features(text: Optional[str]) -> Dict[str, set]:
+def features(text: Optional[str], group: Optional[str] = None) -> Dict[str, set]:
+    """group: the item's product group -- decides its type (a bolt is a bolt even when its title names its nut)."""
     t = (text or "").lower().replace("_", " ").replace("”", '"').replace("″", '"')
+    t = re.sub(r"(?<=\d) (\d+/\d+)(?![\d/])", r"-\1", t)  # "2 1/4" is 2-1/4, not 2 and a stray 1/4
+    t = re.sub(r"(?<=[a-z0-9])w/", " w/", t)  # "HDGw/A194" -> "HDG w/A194"
+    t = NUT_GRADE_RE.sub(lambda m: f" nutgrade{m.group(1).replace(' ', '')}{m.group(3)} ", t)  # A194-2H: the nut's grade, not a size
+    no_nut = bool(NO_NUT_RE.search(t))
+    t = NO_NUT_RE.sub(" nonut ", t)
+    with_nut = bool(COMPANION_RE.search(t))
+    t = COMPANION_RE.sub(" withnut ", t)
     for pattern, repl in FINISH_PHRASES:
         t = re.sub(pattern, repl, t)
     f = {k: set() for k in WEIGHTS}
@@ -71,6 +87,19 @@ def features(text: Optional[str]) -> Dict[str, set]:
         f["finish"].add("galv")
     if "flatwasher" in f["type"]:
         f["type"].add("washer")
+    if no_nut or with_nut:
+        f["type"].discard("nut")  # "bolt NO NUT" / "bolt w/ hex nut": the line is the bolt
+        if not f["type"]:
+            f["type"].add("bolt")
+    nut_grades = {w[len("nutgrade"):] for w in f["word"] if w.startswith("nutgrade")}
+    f["word"] = {w for w in f["word"] if not w.startswith("nutgrade") and w not in ("withnut", "nonut")}
+    g = (group or "").strip().lower()
+    for key, types in GROUP_TYPES.items():
+        if g == key or g.startswith(key):
+            f["type"] = set(types)
+            break
+    if nut_grades and "nut" in f["type"] and not with_nut:
+        f["grade"] |= nut_grades  # on a NUT, A194-2H is its own grade
     return f
 
 
@@ -81,6 +110,11 @@ def score(a: Dict[str, set], b: Dict[str, set]) -> float:
         if not a[k] and not b[k]:
             continue
         possible += w
+        if k == "finish":
+            fa, fb = a[k] & SPECIFIC_FINISH, b[k] & SPECIFIC_FINISH
+            if fa and fb and not (fa & fb):  # hot-dip vs mechanical galv vs zinc vs plain: a different part
+                got -= w * 1.5
+                continue
         if a[k] & b[k]:
             got += w * len(a[k] & b[k]) / max(len(a[k]), len(b[k]))
         elif a[k] and b[k] and k in ("dia", "len", "type"):
@@ -96,9 +130,15 @@ class ItemMatcher:
     """Build once per request (features of every item are precomputed)."""
 
     def __init__(self, items, vendor_codes: Optional[Dict[str, int]] = None, learned: Optional[Dict[str, dict]] = None):
-        self.items = list(items)
+        # TEST data items (TEST-...) never compete with real ones
+        self.items = [i for i in items if not str(getattr(i, "code", "") or "").upper().startswith("TEST-")]
         self.by_id = {i.id: i for i in self.items}
-        self.feats = {i.id: features(f"{i.title} {i.code}") for i in self.items}
+        self.feats = {i.id: features(f"{i.title} {i.code}", getattr(i, "category", None)) for i in self.items}
+        self.titles = {}  # an item's own description, word for word (only when one item has it)
+        for i in self.items:
+            if len(_norm(i.title)) >= 8:
+                self.titles.setdefault(_norm(i.title), []).append(i.id)
+        self.titles = {k: v[0] for k, v in self.titles.items() if len(v) == 1}
         self.codes = {}
         for i in self.items:
             for c in (i.code, getattr(i, "barcode", None)):
@@ -116,7 +156,7 @@ class ItemMatcher:
             hit = self.learned.get(kind, {}).get(_norm(text)) if text else None
             if hit:  # picked by the user before: certain after 2 saves, near-certain after 1
                 iid, hits = hit
-                out[iid] = max(out.get(iid, (0, "")), (1.0 if hits >= 2 else 0.97, f"learned: you picked this for that {what} before ({hits}x)"))
+                out[iid] = max(out.get(iid, (0, "")), (1.0 if hits >= 2 else 0.99, f"learned: you picked this for that {what} before ({hits}x)"))
         for c in codes:
             remembered("code", c, "part #")
         remembered("desc", description, "description")
@@ -134,14 +174,25 @@ class ItemMatcher:
                     if known.startswith(key) or key.startswith(known):
                         out[iid] = max(out.get(iid, (0, "")), (0.95, f"vendor part # (close: {key.upper()})"))
         if description:
+            # "15440 BOLT_HH_3/4-10x2-3/4..." -- our own item # written in front of the description
+            first = _norm((description.strip().split() or [""])[0])
+            if len(first) >= 4 and any(ch.isdigit() for ch in first) and first in self.codes:
+                iid = self.codes[first]
+                out[iid] = max(out.get(iid, (0, "")), (1.0, "our item # at the start of the description"))
+            same = self.titles.get(_norm(description)) or self.titles.get(_norm(" ".join(description.strip().split()[1:])))
+            if same:
+                out[same] = max(out.get(same, (0, "")), (0.989, "our item's own description, word for word"))  # your own past pick (learned) still wins
             want = features(description)  # part numbers aren't descriptions: "87C225A32G" isn't a size
             text = _norm(description)
             for iid, f in self.feats.items():
                 if only_ids is not None and iid not in only_ids:
                     continue
                 s = score(want, f)
-                s = max(s, 0.9 * difflib.SequenceMatcher(None, text, _norm(self.by_id[iid].title)).ratio()) if s < 0.5 else s
-                if s > out.get(iid, (0, ""))[0]:
+                # plain text likeness only helps when the description gives no size to compare -- it must never
+                # lift a part whose diameter or length is different ("5/8 x 1-3/4" for "5/8 x 2-1/4")
+                if s < 0.5 and not (want["dia"] or want["len"]):
+                    s = max(s, 0.9 * difflib.SequenceMatcher(None, text, _norm(self.by_id[iid].title)).ratio())
+                if s > out.get(iid, (0, ""))[0] and not (out.get(iid, (0, ""))[0] >= 0.97):  # a number / exact match keeps its reason
                     shared = [x for k in ("dia", "tpi", "len", "type", "grade", "finish") for x in sorted(want[k] & f[k])]
                     out[iid] = (s, "matches " + ", ".join(shared) if shared else "similar text")
         ranked = sorted(out.items(), key=lambda kv: -kv[1][0])[:top]
@@ -155,6 +206,10 @@ def pick(candidates: List[dict]) -> Optional[int]:
         return None
     top = candidates[0]
     runner = candidates[1]["score"] if len(candidates) > 1 else 0
-    if top["score"] >= 0.999 or (top["score"] >= 0.8 and top["score"] - runner >= 0.15):
+    # certain = a NUMBER matched (ours, the vendor's linked part #, one picked before) -- a perfect attribute score
+    # isn't proof on its own (two items can share size, grade and finish); then it must be clearly ahead
+    by_number = not str(top.get("why", "")).startswith(("matches", "similar"))
+    if (top["score"] >= 0.97 and by_number and top["score"] - runner > 0.005) or (top["score"] >= 0.98 and top["score"] - runner >= 0.08) \
+            or (top["score"] >= 0.8 and top["score"] - runner >= 0.15):
         return top["item_id"]
     return None

@@ -144,7 +144,11 @@ def validate_order(po_id: int, data: ValidatePoIn, db: Session = Depends(get_db)
 
 @router.get("/{po_id}", response_model=PurchaseOrderResponse)
 def get_order(po_id: int, db: Session = Depends(get_db)):
-    return _la(db, PurchaseOrderService.get(db, po_id))
+    rec = PurchaseOrderService.get(db, po_id)
+    if rec.status == "validation" and rec.ai_pending:  # items made since: their waiting lines fill in now
+        from app.services import ai_pending
+        rec.ai_filled = ai_pending.rematch(db, "vendor", rec)
+    return _la(db, rec)
 
 
 @router.get("/{po_id}/pdf")

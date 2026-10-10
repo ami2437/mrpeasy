@@ -730,7 +730,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(customerName(o.customer_id)))}</td>
+          <td class="nowrap">${coBulk.box(o)}<a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${custPoLink(o.po_number, o.id)}</td><td>${escapeHtml(o.job_number || "")}</td><td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.delivery_date)}</td><td class="num">${fmtMoney(o.lines.reduce((s, l) => s + lineAmount(l.quantity, l.unit_price), 0))}</td>
           <td>${statusIcon("cancelled")}</td><td class="muted notes-cell"><div>${escapeHtml(o.notes || "")}</div></td>
@@ -760,7 +760,7 @@
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
         <tr class="${done ? "order-done" : ""} ${rowUnderlay("order", o, ["orange"])}" data-sort-group="${done ? 1 : 0}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("customer", o)}</td>
+          <td class="nowrap">${coBulk.box(o)}<a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("customer", o)}</td>
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${custPoLink(o.po_number, o.id)}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled dup-tag" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
@@ -1718,6 +1718,18 @@
     async function afterLookalikeOk(id) { await loadOrders(); await showDetail(id); }
     async function onValidated(o) { await loadOrders(); await showDetail(o.id); autoNutCheck(o.id); }
 
+    // tick several orders: Cancel / Delete them together (the same rules as one at a time)
+    const coBulk = makeBulkPick({ name: "coBulk", table: "#orders-table", word: "order", records: () => orders, redraw: () => renderOrders(), reload: () => loadOrders(),
+      actions: () => !AuthGuard.can("orders.edit") ? [] : [
+        { label: n => `Cancel ${n} Order${n === 1 ? "" : "s"}`, cls: "danger", verb: "cancelled", pick: l => l.filter(o => o.status !== "cancelled"),
+          note: "Orders that have shipped, or still have open shipments holding stock, are skipped (and say why).",
+          run: o => apiFetch(`/api/customer-orders/${o.id}/cancel`, { method: "POST" }) },
+        { label: n => `Delete ${n} Cancelled Order${n === 1 ? "" : "s"}`, cls: "danger", verb: "deleted", pick: l => l.filter(o => o.status === "cancelled"),
+          note: "They go to the Recycle Bin, where they can be restored.",
+          run: o => apiFetch(`/api/customer-orders/${o.id}`, { method: "DELETE" }) },
+      ] });
+    const renderOrdersOnly = renderOrders;
+    renderOrders = function () { renderOrdersOnly(); coBulk.paint(); };
     async function loadOrders() {
       Promise.all([loadAttachCounts("customer_order"), loadNoteCounts("customer_order")]).then(renderOrders);
       [orders, shipments, items, invoices] = await Promise.all([

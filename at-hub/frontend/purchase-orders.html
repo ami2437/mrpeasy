@@ -554,7 +554,7 @@
       }
       if (listView === "cancelled") {
         tbody.innerHTML = filtered.sort((a, b) => b.id - a.id).map(o => `<tr class="order-done">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
+          <td class="nowrap">${poBulk.box(o)}<a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td><td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td><td>${fmtDate(o.expected_date)}</td>
           <td class="num">${fmtMoney(o.order_total)}</td><td class="num">${fmtMoney(o.amount_paid)}</td><td class="num">${fmtMoney(o.order_total - o.amount_paid)}</td>
           <td></td><td><span class="tag cancelled">cancelled</span></td>
@@ -577,7 +577,7 @@
         const received = o.lines.reduce((sum, l) => sum + Math.min(l.received_quantity, l.quantity), 0);
         return `
         <tr class="${poDone(o) ? "order-done" : ""} ${rowUnderlay("po", o, ["orange"])}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("vendor", o)}</td>
+          <td class="nowrap">${poBulk.box(o)}<a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("vendor", o)}</td>
           <td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
@@ -605,6 +605,18 @@
     }
 
 
+    // tick several POs: Cancel / Delete them together (the same rules as one at a time)
+    const poBulk = makeBulkPick({ name: "poBulk", table: "#orders-table", word: "PO", records: () => orders, redraw: () => renderOrders(), reload: () => loadOrders(),
+      actions: () => [
+        { label: n => `Cancel ${n} PO${n === 1 ? "" : "s"}`, cls: "danger", verb: "cancelled", pick: l => l.filter(o => o.status !== "cancelled"),
+          note: "POs with stock received, or a landed cost on them, are skipped (and say why).",
+          run: o => apiFetch(`/api/purchase-orders/${o.id}/cancel`, { method: "POST" }) },
+        { label: n => `Delete ${n} Cancelled PO${n === 1 ? "" : "s"}`, cls: "danger", verb: "deleted", pick: l => l.filter(o => o.status === "cancelled"),
+          note: "They go to the Recycle Bin, where they can be restored.",
+          run: o => apiFetch(`/api/purchase-orders/${o.id}`, { method: "DELETE" }) },
+      ] });
+    const renderOrdersOnly = renderOrders;
+    renderOrders = function () { renderOrdersOnly(); poBulk.paint(); };
     async function markOrdered(id) {
       try {
         await apiFetch(`/api/purchase-orders/${id}/mark-ordered`, { method: "POST" });

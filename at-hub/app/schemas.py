@@ -427,6 +427,7 @@ class CustomerOrderResponse(BaseModel):
     lookalike_ok: Optional[str] = None  # JSON: who OK'd which look-alike orders as separate
     lookalikes: List[dict] = []  # look-alike orders not OK'd yet (services/lookalike.py)
     report_check: Optional[str] = None  # JSON: the last customer open-lines report check of this order
+    ai_filled: List[str] = []  # waiting lines filled in just now (their items exist since the read)
     lines: List[CustomerOrderLineResponse] = []
 
     class Config:
@@ -1077,6 +1078,7 @@ class PurchaseOrderResponse(BaseModel):
     duplicate_so_ok: Optional[str] = None
     lookalike_ok: Optional[str] = None
     lookalikes: List[dict] = []  # look-alike POs not OK'd yet (services/lookalike.py)
+    ai_filled: List[str] = []  # waiting lines filled in just now (their items exist since the read)
     expected_date: Optional[datetime] = None
     status: str  # validation (quick-captured) | draft | ordered | ...
     validated_by: Optional[str] = None

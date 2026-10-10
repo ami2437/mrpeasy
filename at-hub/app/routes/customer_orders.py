@@ -82,7 +82,11 @@ def validate_order(order_id: int, data: ValidateIn, db: Session = Depends(get_db
 
 @router.get("/{order_id}", response_model=CustomerOrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db)):
-    return _la(db, CustomerOrderService.get(db, order_id))
+    rec = CustomerOrderService.get(db, order_id)
+    if rec.status == "validation" and rec.ai_pending:  # items made since: their waiting lines fill in now
+        from app.services import ai_pending
+        rec.ai_filled = ai_pending.rematch(db, "customer", rec)
+    return _la(db, rec)
 
 
 @router.get("/{order_id}/removal-plan", dependencies=[Depends(require_perm("orders.edit"))])

@@ -84,3 +84,20 @@ def test_open_lines_check(make, api, client, admin_headers):
 def test_reconcile_is_a_money_permission():
     from app.services import permissions as P
     assert "reconcile" in P.MONEY and dict((k, d) for k, _m, _l, _money, d in P.CATALOG)["reconcile"] == "admin"
+
+
+def test_new_item_fills_waiting_lines_on_every_validation_order(make, api, client, admin_headers):
+    """Two orders made from a report both wait for an item we don't have: creating it once fills in both."""
+    cust, a = make.customer(), make.item()
+    new_code = f"NEWX{uid('')}"
+    p1, p2 = f"77{uid('')}", f"78{uid('')}"
+    report = _xlsx([(p1, 1, "B", a["code"], 5, 5, 1.0, "2026-10-16", "J"), (p1, 2, "B", new_code, 3, 3, 2.0, "2026-10-16", "J"),
+                    (p2, 1, "B", new_code, 7, 7, 2.0, "2026-10-16", "J")])
+    rid = _upload(client, admin_headers, cust["id"], report)["id"]
+    made = client.post(f"/api/reconcile/reports/{rid}/create-orders", headers=admin_headers, json={"pos": [p1, p2]}).json()["made"]
+    ids = [m["order_id"] for m in made]
+    assert all(len(api.get(f"/api/customer-orders/{i}")["ai_pending_lines"]) == 1 for i in ids)
+    api.post("/api/stock-items/", json={"code": new_code, "title": "new thing", "category": "Bolt", "selling_price": 2})
+    for i in ids:  # filled on both, without touching either order
+        o = api.get(f"/api/customer-orders/{i}")
+        assert o["ai_pending_lines"] == [] and any(l["quantity"] in (3, 7) for l in o["lines"])

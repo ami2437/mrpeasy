@@ -1,0 +1,1492 @@
+{
+ "about": "Real descriptions (customer report lines, vendor PO lines, learned picks) and the item they are. Item list = codes, titles, groups only.",
+ "items": [
+  {
+   "code": "0001-Int",
+   "title": "1-3/8-8 HH Nut",
+   "group": "Nut"
+  },
+  {
+   "code": "15343",
+   "title": "BOLT_HH_5/8-11x1-1/4_A307A_HDG _w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15343-NUT",
+   "title": "A563 GR A Hex Nut",
+   "group": "Nut"
+  },
+  {
+   "code": "15380",
+   "title": "BOLT_HH_3/4-10x2-3/4_A307A_HDG _w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15380-NUT",
+   "title": "3/4-10 A563 GR A HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "15385",
+   "title": "BOLT_HH_3/4-10x3-3/4_A307A_HDG_w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15385-NUT",
+   "title": "3/4-10 A563  HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "15388",
+   "title": "BOLT HH 3/4-10 X 4 1/2, A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15388-NUT",
+   "title": "3/4-10 A563 GR A HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "15420",
+   "title": "BOLT_HH_5/8-11x1-1/2_A325_TYPE1_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15420-NUT",
+   "title": "5/8-11 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15421",
+   "title": "BOLT_HH_5/8-11x1-3/4_A325_TYPE1_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15421-NUT",
+   "title": "5/8-11 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15422",
+   "title": "BOLT_HH_5/8-11x2_A325_TYPE1_HDG_w/A194_2H_HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15422-NUT",
+   "title": "5/8-11 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15437",
+   "title": "BOLT_HH_3/4-10x2_A325_TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15437-NUT",
+   "title": "3/4-10 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15438",
+   "title": "BOLT_HH_3/4-10x2-1/4_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15438-NUT",
+   "title": "3/4-10 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15439",
+   "title": "BOLT_HH_3/4-10x2-1/2_A325_TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15439-NUT",
+   "title": "3/4-10 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "15440",
+   "title": "BOLT_HH_3/4-10x2-3/4_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15441",
+   "title": "BOLT_HH_3/4-10x3_A325_TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "15441-NUT",
+   "title": "3/4-10 A194 2H HVY HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "16358",
+   "title": "SCREW_SELF-TPG_HH_3/8-16x1_J78 _CAD-PL_HEX WASHER HEAD TYPE F _THREAD CUTTING_UNSLOTTED",
+   "group": "Bolt"
+  },
+  {
+   "code": "16642",
+   "title": "WASHER_BEV_5/8\"_B18.23.1_HDG_HRDN_TYPE1",
+   "group": "Washer"
+  },
+  {
+   "code": "16644",
+   "title": "WASHER_BEV_3/4\"_B18.23.1_MI_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "16709",
+   "title": "WASHER_FLAT_1/2\"_F844_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "16713",
+   "title": "WASHER_FLAT_5/8\"_F436_HDG_HRDN",
+   "group": "Washer"
+  },
+  {
+   "code": "16716",
+   "title": "WASHER_FLAT_3/4\"_F436_HDG_HRDN",
+   "group": "Washer"
+  },
+  {
+   "code": "16718",
+   "title": "WASHER_FLAT_7/8\"_F436_HDG_HRDN",
+   "group": "Washer"
+  },
+  {
+   "code": "16867",
+   "title": "WASHER_LOCK_1/2\"_B18.21.1_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "30376",
+   "title": "BOLT_HH_3/8-16x2-3/4_A307A_MECH GALV_w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "30376-NUT",
+   "title": "3/8-16 A563 GR A HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "30742",
+   "title": "1 3/8-8 X 9 1/4\" FULLY THREADED STUD ASTM 193 B7",
+   "group": "Stud"
+  },
+  {
+   "code": "30745",
+   "title": "BOLT_HH_1/2-13x2_A325_TYPE1_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "30745-NUT",
+   "title": "1/2-13 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "30747",
+   "title": "BOLT_HH_1-8x3-3/4_A325_TYPE1_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "30747-NUT",
+   "title": "1-8 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "30754",
+   "title": "BOLT_HH_3/8-16x1-1/4_J429GR5_MECH GALV._W/NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "30803",
+   "title": "BOLT_HH_1/2-13x3-1/4_A325_ TYPE1_MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "30803-NUT",
+   "title": "NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "30834",
+   "title": "STUD_1-1/2-8x10-3/4_SA193_B7_PLN",
+   "group": "Stud"
+  },
+  {
+   "code": "30852",
+   "title": "BOLT_HH_7/8-9x3-3/4_A325_TYPE1 MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "30852-NUT",
+   "title": "7/8-9  A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "31177",
+   "title": "WASHER_LOCK_3/8\"_B18.21.1_XYLAN COATED",
+   "group": "Washer"
+  },
+  {
+   "code": "31179",
+   "title": "WASHER_FLAT_3/8\"_F436__XYLAN COATED",
+   "group": "Washer"
+  },
+  {
+   "code": "31181",
+   "title": "BOLT_HH_3/8-16x1_A307A_XYLAN_ w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "31568",
+   "title": "BOLT_HH_7/8-9x3-1/2_A325_TYPE1 HDG_W/A563_GR DH HEX NUT_(FRICTION TYPE CONNECTION)",
+   "group": "Bolt"
+  },
+  {
+   "code": "31568-NUT",
+   "title": "BOLT_HH_7/8-9x3-1/2_A325_TYPE1 HDG_W/A563_GR DH HEX NUT_(FRICTION TYPE CONNECTION)",
+   "group": "Bolt"
+  },
+  {
+   "code": "32084",
+   "title": "BOLT_HH_1/2-13x2-3/4_A307A_ MECH GALV_w/A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "32084-B",
+   "title": "1/2-13 X 2-3/4 PLAIN FINISH HEAVY HEX BOLT A307 GRADE B",
+   "group": "Bolt"
+  },
+  {
+   "code": "32084-NUT",
+   "title": "1/2-13 A563 GR A HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "32085",
+   "title": "WASHER_FLAT_1/2_F436_MECH_GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "32086",
+   "title": "NUT_HEX_1/2\"-13_A563_GR_A_ MECH GALV",
+   "group": "Nut"
+  },
+  {
+   "code": "32169",
+   "title": "COLLAR_SHAFT_2 PIECE_2-7/8\"Idx x4-1/4\"ODx7/8\" WIDTH_DAYTON S2-287-BLA_ W/ 3/8-24 SCREWS",
+   "group": "Collar Shaft"
+  },
+  {
+   "code": "32179",
+   "title": "WASHER_BEV_1/2\"_B18.23.1_MI_ MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "33797",
+   "title": "WASHER_DTI_3/4\"_ASTM_F959M_ MECH GALV_ASTM B695_(SQUIRTER)",
+   "group": "Washer"
+  },
+  {
+   "code": "33806",
+   "title": "WASHER_DTI_7/8\"_ASTM_F959M_ MECH GALV_ASTM B695_(SQUIRTER)",
+   "group": "Washer"
+  },
+  {
+   "code": "34-NUT",
+   "title": "3/4-10 A194 GR 2H HVY HEX NUT DOM. HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "34323",
+   "title": "BOLT_CAR_5/8-11x2_A307A_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "34323-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "37127",
+   "title": "BOLT_HH_5/8-11UNCx2-1/4 FULL_THREAD_A325_HDG_w/A194-2H NUTS",
+   "group": "Bolt"
+  },
+  {
+   "code": "37181",
+   "title": "BOLT_HH_1/2-13x1-3/4x1_A325_HDG_w/A194-2H NUTS",
+   "group": "Bolt"
+  },
+  {
+   "code": "38482",
+   "title": "WASHER_FLAT_3/4\"_F436_HRDN MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "38483",
+   "title": "WASHER_FLAT_3/8\"_F844_MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "38544",
+   "title": "BOLT_HH_5/8-11x2-1/4_A325_ TYPE 1_MECH GALV_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "38544-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "38545",
+   "title": "BOLT_CAR_5/8-11x2_J429GR5 MECH GALV_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "38545-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "38546",
+   "title": "BOLT_HH_5/8-11x1-1/4_A325A_TYPE 1_MECH GALV_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "39165",
+   "title": "BOLT_HH_7/8-9x3-1/4_A325_TYPE1 MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "39165-NUT",
+   "title": "7/8-9 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "39221",
+   "title": "BOLT_HH_5/8-11x2-3/4_A325__TYPE1_MECH GALV w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "39221-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "39222",
+   "title": "BOLT_HH_5/8-11x3_A325_TYPE1_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "39222-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "39280",
+   "title": "BOLT_HH_5/8-11x2_A325_TYPE1_ TEFLON COAT_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "39280-NUT",
+   "title": "5/8-11  A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "39466",
+   "title": "NUT_HVY_HEX_5/8\"-11_SA194_2H_XYLAN 1014",
+   "group": "Nut"
+  },
+  {
+   "code": "39489",
+   "title": "STUD_5/8\"-11x3-1/2_SA193_B7M",
+   "group": "Stud"
+  },
+  {
+   "code": "39567",
+   "title": "WASHER_LOCK_3/8\"_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "39568",
+   "title": "WASHER_LOCK_5/8\"_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "39569",
+   "title": "WASHER_FLT_3/8\"x1\" OD_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "39571",
+   "title": "BOLT_HH_5/8-11x7_DUPLEX 2205",
+   "group": "Bolt"
+  },
+  {
+   "code": "39639",
+   "title": "NUT_HVY_HEX_1-1/2\"-8xSA194_2H_PLN",
+   "group": "Nut"
+  },
+  {
+   "code": "41572",
+   "title": "BOLT_HH_7/8-9x2_A325_TYPE1_HDGw/A194-2H HEX NUT_(NUT SHALL BE WAX DIPPED)",
+   "group": "Bolt"
+  },
+  {
+   "code": "41572-NUT",
+   "title": "7/8-9 A194 2H HVY HEX NUT HDG WAX DIPPED",
+   "group": "Nut"
+  },
+  {
+   "code": "41573-HPC",
+   "title": "BOLT_HH_7/8-9x2-1/4_A325_TYPE1 HDG_w/A194-2H HEX NUT_NUT SHALL BE WAXED DIP",
+   "group": "Bolt"
+  },
+  {
+   "code": "41573-HPC-NUT",
+   "title": "7/8-9x2 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "41574",
+   "title": "BOLT_HH_7/8-9x2-1/2_A325_TYPE1 HDG_w/A194-2H HEX NUT_NUT SHALL BE WAXED DIP",
+   "group": "Bolt"
+  },
+  {
+   "code": "41574-NUT",
+   "title": "7/8-9 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "41575",
+   "title": "BOLT_HH_7/8-9x3_A325_TYPE1_HDG_w/A194-2H HEX NUT_(NUT SHALL BE WAX DIPPED)",
+   "group": "Bolt"
+  },
+  {
+   "code": "41575-NUT",
+   "title": "7/8 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "41575-NUTS",
+   "title": "7/8-9 A194 2H HVY HEX NUT HDG WAX DIPPED",
+   "group": "Nut"
+  },
+  {
+   "code": "50CN2HG/D - Birmingham",
+   "title": "1/2-13 A194 GR 2H HVY HEX NUT HDG DOM",
+   "group": "Nut"
+  },
+  {
+   "code": "50NLOC0H/OS",
+   "title": "1/2\" LOCK WASHER **** HDG **** IMPORT O/S",
+   "group": "Washer"
+  },
+  {
+   "code": "51712",
+   "title": "SCREW_CAP_HH_1-8x3-3/4_DUPLEX 2205_PARTIAL THREAD",
+   "group": "Bolt"
+  },
+  {
+   "code": "51714",
+   "title": "WASHER_FLT_1\"_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "51715",
+   "title": "NUT_HH_1\"_DUPLEX 2205",
+   "group": "Nut"
+  },
+  {
+   "code": "51753",
+   "title": "BOLT_HH_3/4-10x10_GR8_MECH GALV_MINIMUM THREAD LENGTH OF 2.5\"",
+   "group": "Bolt"
+  },
+  {
+   "code": "51754",
+   "title": "NUT_HEX_3/4\"-10_GR8_GALV",
+   "group": "Nut"
+  },
+  {
+   "code": "53048-HPC",
+   "title": "NUT_HVY_HEX_1\"-8_316_SS_",
+   "group": "Nut"
+  },
+  {
+   "code": "53482",
+   "title": "BOLT_HH_1/2-13x1-1/2_A325__TYPE 1_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "54345",
+   "title": "BOLT_HH_1/2-13x1-3/4_A325_ TYPE 1_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "54859-HPC",
+   "title": "STUD_3/4-10x3-1/2_SA193_B7_PLN CERT. MILL TEST REPORTS REQ'D_MELT AND MADE IN USA",
+   "group": "Stud"
+  },
+  {
+   "code": "55411",
+   "title": "BOLT_HH_5/8-11x4-1/2_J429GR5_ BOLT_HH_5/8-11x4-1/2_J429GR5_GALV_LENGTH UNDER HEAD",
+   "group": "Bolt"
+  },
+  {
+   "code": "55659",
+   "title": "STUD_1-8x14-1/2_316_SS_W/(2) HVY HEX SS NUTS",
+   "group": "Stud"
+  },
+  {
+   "code": "55659-NUT",
+   "title": "HVY HEX SS NUTS",
+   "group": "Nut"
+  },
+  {
+   "code": "55660",
+   "title": "WASHER_LOCK_1\"_316_SS DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "55750",
+   "title": "SCREW_CAP_HH_5/8-11x1-1/2_K500_MONEL",
+   "group": "Bolt"
+  },
+  {
+   "code": "55753",
+   "title": "NUT_HEX_3/8\"-16_K500_MONEL",
+   "group": "Nut"
+  },
+  {
+   "code": "55755",
+   "title": "WASHER_FLT_3/8\"_MONEL 400 1\" O.D.",
+   "group": "Washer"
+  },
+  {
+   "code": "55757",
+   "title": "WASHER_FLT_3/8\"x1-1/2\"OD_K400 Monel",
+   "group": "Washer"
+  },
+  {
+   "code": "55868",
+   "title": "WASHER_LOCK_5/8\"_K500_MONEL",
+   "group": "Washer"
+  },
+  {
+   "code": "55869",
+   "title": "NUT_HEX_5/8\"-11_K500_MONEL",
+   "group": "Nut"
+  },
+  {
+   "code": "56014-HPC",
+   "title": "BOLT_HH_7/8-9x3-1/4_A325_TYPE1 _HDG",
+   "group": "Bolt"
+  },
+  {
+   "code": "56014-HPC-NUT",
+   "title": "7/8-9 2H A194 HVY HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "56222",
+   "title": "NUT_HVY_HEX_1.3/8\"-8_SA194_2H_ PLN",
+   "group": "Nut"
+  },
+  {
+   "code": "56816",
+   "title": "WASHER_LOCK_3/8\"_K500_MONEL",
+   "group": "Washer"
+  },
+  {
+   "code": "56914",
+   "title": "BOLT_HH_7/8-9x2_A325_TYPE1_HDG w/A194-2H HEX NUT_NUT SHALL BE WAXED DIP",
+   "group": "Bolt"
+  },
+  {
+   "code": "56914-NUT",
+   "title": "7/8-9 A194 2H HVY HEX NUT HDG WAX DIPPED",
+   "group": "Nut"
+  },
+  {
+   "code": "57225",
+   "title": "BOLT_EYE_1.1/4-7x6_A489_PLN_ ALL THREAD_PLAIN PATTERN_STRAIGHT SHANK",
+   "group": "Bolt"
+  },
+  {
+   "code": "57438-HPC",
+   "title": "STUD_3/4-10x4-3/4_SA193_B7_PLN CERT. MILL TEST REPORTS REQ'D_MELT AND MADE IN USA",
+   "group": "Stud"
+  },
+  {
+   "code": "57699",
+   "title": "STUD_ALL_THRD_3/4-10x7_A193_B7\nHDG_",
+   "group": "Stud"
+  },
+  {
+   "code": "58-NUT",
+   "title": "5/8-11 A194 GR 2H HVY HEX NUT DOM. HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "58031",
+   "title": "WASHER_FLT_3/4\"_K400_MONEL 1-3/4\" O.D.",
+   "group": "Washer"
+  },
+  {
+   "code": "58068",
+   "title": "BOLT_HH_3/4-10x3-1/2_A325_  TYPE1_HDG_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "58228",
+   "title": "WASHER_FLAT_1/2\"_F436_HDG_HRDN",
+   "group": "Washer"
+  },
+  {
+   "code": "58268",
+   "title": "BOLT_CAR_5/8-11x2_A307_HDG_RND H_SQ NECK",
+   "group": "Bolt"
+  },
+  {
+   "code": "58268-NUT",
+   "title": "A563 HEX NUT HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "59547",
+   "title": "BOLT_EYE_3/4-10x2_A489_HDG_SHOULDER PATTERN_W/NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "59547-NUT",
+   "title": "BOLT_EYE_3/4-10x2_A489_HDG_SHOULDER PATTERN_W/NUT **Nut**",
+   "group": "Bolt"
+  },
+  {
+   "code": "59815",
+   "title": "BOLT_HH_1-8x3_A193_B7_HDG_P-0197_(WAS 72442)",
+   "group": "Bolt"
+  },
+  {
+   "code": "60084",
+   "title": "STUD_5/8-11x3_SA193_B7_PLN_ CERT. MILL TEST REPORTS REQ'D_MELT AND MADE IN USA",
+   "group": "Stud"
+  },
+  {
+   "code": "60830",
+   "title": "BOLT_HH_3/8-16x1-1/2_J429GR5_ MECH GALV._W/ NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "60830-NUT",
+   "title": "3/8-16 J429GR5 NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "65407",
+   "title": "SCREW_CAP_HH_3/8-16x1-1/4_ DUPLEX 2205_FULL THREAD",
+   "group": "Bolt"
+  },
+  {
+   "code": "65690",
+   "title": "BOLT_HH_5/8-11x2_316_SS_FULL THREAD",
+   "group": "Bolt"
+  },
+  {
+   "code": "66248",
+   "title": "BOLT_HH_5/8-11x2-1/2_A320_L7_HDG_W/194_4/7 HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "66248-NUT",
+   "title": "5/8-11x2-1/2_A320_L7_HDG_W/194_4/7 HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "66488",
+   "title": "BOLT_HH_5/8-11x2_K500_MONEL_FULL THREAD",
+   "group": "Bolt"
+  },
+  {
+   "code": "69470",
+   "title": "WASHER_FLAT_5/8\"_F436_HRDN_ MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "69472",
+   "title": "BOLT_HH_5/8-11x1-3/4_A325_ TYPE 1_MECH GALV _W/A 194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "69472-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "69473",
+   "title": "BOLT_HH_3/4-10x2_A325_TYPE1_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "69473-NUT",
+   "title": "3/4-10 A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "69474",
+   "title": "BOLT_HH_3/4-10x2-3/4_A325_W/A194-2H HEX NUT.",
+   "group": "Bolt"
+  },
+  {
+   "code": "69474-NUT",
+   "title": "3/4-10 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "69637",
+   "title": "BOLT_HH_3/4-10x2-1/4_A325_TYPE 1_MECH GALV_ W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "69637-NUT",
+   "title": "3/4-10 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "69638",
+   "title": "BOLT_HH_3/4-10x2-1/2_A325_TYPE 1_MECH GALV_ W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "69638-NUT",
+   "title": "3/4-10 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "69927-HPC",
+   "title": "BOLT_HH_1-8x2-1/2_A193_B7_HDG.",
+   "group": "Bolt"
+  },
+  {
+   "code": "70212",
+   "title": "BOLT_EYE_3/4-10x2_316 SS_w/NUT_SHOULDER PATTERN.",
+   "group": "Bolt"
+  },
+  {
+   "code": "70212-NUT",
+   "title": "BOLT_EYE_3/4-10x2_316 SS_w/NUT_SHOULDER PATTERN **Nut**",
+   "group": "Nut"
+  },
+  {
+   "code": "70595-HPC",
+   "title": "BOLT_EYE_3/4-10x2-1/2_K400 MONEL_BENT_W/NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "70643",
+   "title": "STUD_1-8x14-1/2_SA193_B7_ HDG_w/(2) 2H HVY HEX NUTS_P-0198",
+   "group": "Stud"
+  },
+  {
+   "code": "70643-NUT",
+   "title": "1-8 HDG 2H HVY HEX NUTS",
+   "group": "Nut"
+  },
+  {
+   "code": "70701",
+   "title": "BOLT_HH_5/8-11x7_J429GR5_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "70701-NUT",
+   "title": "5/8-11 MG NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "72120",
+   "title": "NUT_HVY_HEX_1\"-8_A194_2H_GALV_P-0227",
+   "group": "Nut"
+  },
+  {
+   "code": "72160",
+   "title": "BOLT_HH_3/4-10x5-1/2_A325_TYPE1_HDG_w/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "72338",
+   "title": "SCREW_CAP_HH_3/8-16x1-3/8_ F593_CHAMFER_DWG 0135_REV 0_316 SS_P-0138_FULL THREAD",
+   "group": "Stud"
+  },
+  {
+   "code": "72427M",
+   "title": "BOLT_HH_3/4-10x4-1/2_K500_MONEL",
+   "group": "Bolt"
+  },
+  {
+   "code": "72974",
+   "title": "WASHER_FLAT_3/8\"x1-1/2\"x0.078_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "73216",
+   "title": "NUT_HVY_HEX_3/4\"-10_SA194_2H_\nHDG",
+   "group": "Nut"
+  },
+  {
+   "code": "73640",
+   "title": "WASHER_FLAT_3/4\"_F844_STL_HDG_(2\"OD)_P-0305",
+   "group": "Washer"
+  },
+  {
+   "code": "73723",
+   "title": "WASHER_LOCK_3/8\"_B18.21.1_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "73730-HPC",
+   "title": "WASHER_LOCK_5/8\"_B18.21.1_HDG",
+   "group": "Washer"
+  },
+  {
+   "code": "73738-HPC",
+   "title": "WASHER_LOCK_3/4\"_B18.21.1_HDG_P-0303",
+   "group": "Washer"
+  },
+  {
+   "code": "73738M",
+   "title": "WASHER_LOCK_3/4\"_K500_MONEL",
+   "group": "Washer"
+  },
+  {
+   "code": "76003",
+   "title": "BOLT_HH_3/4-10x6_A320_L7_MECH GALV_THREAD_FULL LENGTH_W/(2)HEX NUTS_SA194_GR4/7_",
+   "group": "Bolt"
+  },
+  {
+   "code": "76003-NUT",
+   "title": "3/4 - A320_L7_HEX NUTS_SA194_GR4/7_",
+   "group": "Nut"
+  },
+  {
+   "code": "76031",
+   "title": "STUD_3/4-10x10-1/2_DUPLEX 2205",
+   "group": "Stud"
+  },
+  {
+   "code": "76032",
+   "title": "NUT_HEX_3/4\"-10_DUPLEX 2205",
+   "group": "Nut"
+  },
+  {
+   "code": "76033",
+   "title": "WASHER_FLT_3/4\"_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "76034",
+   "title": "SCREW_CAP_HH_5/8-11x1-1/2_DUPLEX 2205",
+   "group": "Bolt"
+  },
+  {
+   "code": "76035",
+   "title": "SCREW_CAP_HH_3/8-16x2_DUPLEX 2205",
+   "group": "Bolt"
+  },
+  {
+   "code": "76036",
+   "title": "NUT_HEX_3/8\"-16_DUPLEX 2205",
+   "group": "Nut"
+  },
+  {
+   "code": "76039",
+   "title": "WASHER_FLT_3/8\"x1-1/2\"OD_DUPLEX 2205",
+   "group": "Washer"
+  },
+  {
+   "code": "76042-HPC",
+   "title": "NUT_HEX_5/8\"-11_DUPLEX 2205",
+   "group": "Nut"
+  },
+  {
+   "code": "77029",
+   "title": "BOLT_EYE_5/16x1-1/8_A489_HDG_ SHOULDER PATTERN_W/NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "77029-NUT",
+   "title": "5/16-18 A563A FINISHED HEX NUT DOMESTIC GALVANIZED",
+   "group": "Nut"
+  },
+  {
+   "code": "77030",
+   "title": "SNAP_BOLT_DOUBLE-ENDED_3/8\"EYE 7/16\" OPENING",
+   "group": "Bolt"
+  },
+  {
+   "code": "77183-HPC",
+   "title": "BOLT_HH_7/8-9x2-3/4_A325_TYPE1 HDG_w/A194-2H HEX NUT_(NUT SHALL BE WAX DIPPED)",
+   "group": "Bolt"
+  },
+  {
+   "code": "77183-HPC-NUT",
+   "title": "7/8-9 A194 2H HVY HEX NUT HDG WAX DIPPED",
+   "group": "Nut"
+  },
+  {
+   "code": "77605-HPC",
+   "title": "SCREW_CAP_HH_3/8-16x1-1/2_DUPLEX 2205",
+   "group": "Bolt"
+  },
+  {
+   "code": "77782",
+   "title": "BOLT_HH_7/8-9x2-1/2_A325_TYPE1 MECH GALV_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "77782-NUT",
+   "title": "7/8-9 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "77783",
+   "title": "WASHER_FLAT_7/8_F436_MECH_GALV HRDN",
+   "group": "Washer"
+  },
+  {
+   "code": "77977",
+   "title": "WASHER_BEV_3/4\"_B18.23.1_MI_MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "78-NUT",
+   "title": "7/8-10 A194 GR 2H HVY HEX NUT DOM. HDG",
+   "group": "Nut"
+  },
+  {
+   "code": "79299-HPC",
+   "title": "BOLT_HH_3/4-10x10_J429GR5_W/ASSEMBLED HVY HEX NUT(57884)",
+   "group": "Bolt"
+  },
+  {
+   "code": "79299-HPC-NUT",
+   "title": "A194-2H HEAVY HEX NUTS - MECH GALV",
+   "group": "Nut"
+  },
+  {
+   "code": "79300-HPC",
+   "title": "BOLT_HH_3/4-10x10_316/316L_F593_SS316/316L-CW HVY HEX NUT MINIMUM THREAD LENGTH OF 2.5\"",
+   "group": "Bolt"
+  },
+  {
+   "code": "79300-HPC-NUT",
+   "title": "F593_SS316/316L-CW HVY HEX NUT MINIMUM THREAD LENGTH OF 2.5\"",
+   "group": "Nut"
+  },
+  {
+   "code": "79301-HPC",
+   "title": "BOLT_HH_3/4-10x10_K500_MONEL_ W/ASSEMBLED HVY HEX NUT K500 MONEL_THD 2B PLUS 0.010 IN_ MINIMUM THREA",
+   "group": "Bolt"
+  },
+  {
+   "code": "79639-HPC",
+   "title": "BOLT_HH_1/4-20x1-3/4_A307A_ MECH GALV",
+   "group": "Bolt"
+  },
+  {
+   "code": "79639-HPC-NUT",
+   "title": "1/4-20 A563 GR A HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "79647",
+   "title": "BOLT_HH_5/8-11x2_A325_TYPE1_ MECH GALV_W/A194_2H_HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "79647-NUT",
+   "title": "5/8-11 A194 2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "79648",
+   "title": "BOLT_HH_5/8-11x1-1/2_A325_TYPE 1_MECH GALV_W/A194-2H HEX NUT",
+   "group": "Bolt"
+  },
+  {
+   "code": "79648-NUT",
+   "title": "5/8-11 A194-2H HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "79652",
+   "title": "WASHER_LOCK_1/2\"_B18.21.1_MECH GALV.",
+   "group": "Washer"
+  },
+  {
+   "code": "79657",
+   "title": "WASHER_BEV_5/8\"_B18.23.1_MI_MECH GALV",
+   "group": "Washer"
+  },
+  {
+   "code": "A00031",
+   "title": "Shipping",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A00071",
+   "title": "Mechanical Galvanizing - Commercial clear",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A00073",
+   "title": "Service - Do not sell",
+   "group": "Service"
+  },
+  {
+   "code": "A00100",
+   "title": "Coating Service",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A00101",
+   "title": "Freight Inbound **Shipping in - charge**",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A00102",
+   "title": "Packaging BOX 12x6x6",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A00109-Int",
+   "title": "MONEL K 500 HVY HEX NUT 3/4 “-10 UNC",
+   "group": "Nut"
+  },
+  {
+   "code": "A00110",
+   "title": "Adjustment to close",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "A194 3/4-NUT",
+   "title": "3/4\"-10 A194-2H HEX NUTS - Over tapped",
+   "group": "Nut"
+  },
+  {
+   "code": "A194 5/8-NUT",
+   "title": "5/8\"-11 A194-2H HEX NUTS - Over tapped",
+   "group": "Nut"
+  },
+  {
+   "code": "A563 1/2-NUT",
+   "title": "1/2-13 A563 DH HVY HEX NUT",
+   "group": "Nut"
+  },
+  {
+   "code": "Carriage Bolt",
+   "title": "3/8-16 X 1-1/4 Low Carbon Carriage Bolt HDG MISAEL - ASSEMBLY",
+   "group": "Bolt"
+  },
+  {
+   "code": "Clamp 1 Line",
+   "title": "1/4\" O.D. SINGLE LINE TUBING CLAMP, 316\nTUBING CLAMP, 316",
+   "group": "Clamp"
+  },
+  {
+   "code": "Clamp 2 Line",
+   "title": "1/4\" - 2 LINE SS - GANG CLAMP WITH BACK PLATE",
+   "group": "Clamp"
+  },
+  {
+   "code": "Clamp 3 Line",
+   "title": "1/4\" - 3 LINE SS - GANG CLAMP WITH BACK PLATE",
+   "group": "Clamp"
+  },
+  {
+   "code": "Clamp 4 Line",
+   "title": "1/4\" - 4 LINE - SS - GANG CLAM WITH BACK PLATE",
+   "group": "Clamp"
+  },
+  {
+   "code": "Insurance",
+   "title": "Liability Insurance",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "Labor Freelance",
+   "title": "Labor & Delivery hiring per diem",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "NoSell - 1",
+   "title": "Part Die",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "Shipping",
+   "title": "Shipping Charge",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "Shipping TranspoTrade",
+   "title": "Shipping from Airport to Transpotrade or to our warehouse",
+   "group": "Do Not Sell"
+  },
+  {
+   "code": "test_1_bolt",
+   "title": "test-bolt",
+   "group": "Type"
+  },
+  {
+   "code": "test_2",
+   "title": "test nut",
+   "group": "Type"
+  },
+  {
+   "code": "Warehouse Rent",
+   "title": "Cubework",
+   "group": "Monthly Recurring Fixed Charges"
+  }
+ ],
+ "cases": [
+  {
+   "kind": "hudson",
+   "text": "BOLT_CAR_5/8-11x2_A307A_HDG_ W/A194-2H HEX NUT",
+   "code": "34323"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_CAR_5/8-11x2_A307_HDG_ RND H_SQ NECK_W/A563 NUT",
+   "code": "58268"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_EYE_5/16x1-1/8_A489_HDG_ SHOULDER PATTERN_W/NUT",
+   "code": "77029"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_1/2-13x1-3/4_A325_ TYPE 1_HDG_W/A194-2H HEX NUT",
+   "code": "54345"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_3/4-10x2-1/2_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "code": "15439"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_3/4-10x2-1/4_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "code": "15438"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_3/4-10x2-3/4_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "code": "15440"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_3/4-10x2_A325_TYPE1_ HDG_w/A194-2H HEX NUT",
+   "code": "15437"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_3/4-10x3_A325_TYPE1_ HDG_w/A194-2H HEX NUT",
+   "code": "15441"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_5/8-11x1-1/2_A325_ TYPE1_HDG_W/A194-2H HEX NUT",
+   "code": "15420"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_5/8-11x1-1/4_A307A_HDG _w/A563 GR A HEX NUT",
+   "code": "15343"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_5/8-11x1-3/4_A325_ TYPE1_HDG_W/A194-2H HEX NUT",
+   "code": "15421"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_5/8-11x2_A325_TYPE1_ HDG_w/A194_2H_HEX NUT",
+   "code": "15422"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_7/8-9x2-1/2_A325_TYPE1 HDG_w/A194-2H HEX NUT_",
+   "code": "41574"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_7/8-9x2-3/4_A325_TYPE1 HDG_w/A194-2H HEX NUT_",
+   "code": "77183-HPC"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_7/8-9x2_A325_TYPE1_HDG w/A194-2H HEX NUT_",
+   "code": "41572"
+  },
+  {
+   "kind": "hudson",
+   "text": "BOLT_HH_7/8-9x3_A325_TYPE1_HDG _w/A194-2H HEX NUT_",
+   "code": "41575"
+  },
+  {
+   "kind": "hudson",
+   "text": "SNAP_BOLT_DOUBLE-ENDED_3/8\"EYE 7/16\" OPENING",
+   "code": "77030"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_BEV_3/4\"_B18.23.1_MI_ HDG",
+   "code": "16644"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_BEV_5/8\"_B18.23.1_HDG_ HRDN_TYPE1",
+   "code": "16642"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_DTI_3/4\"_ASTM_F959M_ MECH GALV_ASTM B695_(SQUIRTER)",
+   "code": "33797"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_DTI_7/8\"_ASTM_F959M_ MECH GALV_ASTM B695_(SQUIRTER)",
+   "code": "33806"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_FLAT_1/2\"_F436_HDG_HRDN",
+   "code": "58228"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_FLAT_3/4\"_F436_HRDN_HDG",
+   "code": "16716"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_FLAT_5/8\"_F436_HDG_HRDN",
+   "code": "16713"
+  },
+  {
+   "kind": "hudson",
+   "text": "WASHER_FLAT_7/8\"_F436_HDG_HRDN",
+   "code": "16718"
+  },
+  {
+   "kind": "learned",
+   "text": "15440 BOLT_HH_3/4-10x2-3/4_A325_",
+   "code": "15440"
+  },
+  {
+   "kind": "learned",
+   "text": "15440 BOLT_HH_3/4-10x2-3/4_A325_TYPE1_HDG_w/A194-2H HEX NUT",
+   "code": "15440"
+  },
+  {
+   "kind": "learned",
+   "text": "16642 WASHER_BEV_5/8\"_B18.23.1_HDG_",
+   "code": "16642"
+  },
+  {
+   "kind": "learned",
+   "text": "16642 WASHER_BEV_5/8\"_B18.23.1_HDG_HRDN_TYPE1",
+   "code": "16642"
+  },
+  {
+   "kind": "learned",
+   "text": "16713 WASHER_FLAT_5/8\"_F436_HDG_HRDN",
+   "code": "16713"
+  },
+  {
+   "kind": "learned",
+   "text": "16716 WASHER_FLAT_3/4\"_F436_HRDN_HDG",
+   "code": "16716"
+  },
+  {
+   "kind": "learned",
+   "text": "16718 WASHER_FLAT_7/8\"_F436_HDG_HRDN",
+   "code": "16718"
+  },
+  {
+   "kind": "learned",
+   "text": "5/16-18 A563A FINISHED HEX NUT DOMESTIC GALVANIZED",
+   "code": "77029-NUT"
+  },
+  {
+   "kind": "learned",
+   "text": "54345 BOLT_HH_1/2-13x1-3/4_A325_",
+   "code": "54345"
+  },
+  {
+   "kind": "learned",
+   "text": "54345 BOLT_HH_1/2-13x1-3/4_A325_TYPE 1_HDG_W/A194-2H HEX NUT",
+   "code": "54345"
+  },
+  {
+   "kind": "learned",
+   "text": "58228 WASHER_FLAT_1/2\"_F436_HDG_HRDN",
+   "code": "58228"
+  },
+  {
+   "kind": "learned",
+   "text": "7/8-9 X 3 1/4 A325 HVY BOLT DOM. HDG",
+   "code": "56014-HPC"
+  },
+  {
+   "kind": "learned",
+   "text": "77029 BOLT_EYE_5/16x1-1/8_A489_HDG_",
+   "code": "77029"
+  },
+  {
+   "kind": "learned",
+   "text": "77029 BOLT_EYE_5/16x1-1/8_A489_HDG_SHOULDER PATTERN_W/NUT",
+   "code": "77029"
+  },
+  {
+   "kind": "learned",
+   "text": "77030 SNAP_BOLT_DOUBLE-ENDED_3/8\"EYE",
+   "code": "77030"
+  },
+  {
+   "kind": "learned",
+   "text": "77030 SNAP_BOLT_DOUBLE-ENDED_3/8\"EYE 7/16\" OPENING",
+   "code": "77030"
+  },
+  {
+   "kind": "learned",
+   "text": "BOLT_EYE_5/16x1-1/8_A489_HDG_ SHOULDER PATTERN_W/NUT",
+   "code": "77029"
+  },
+  {
+   "kind": "learned",
+   "text": "BOLT_HH_1/2-13x1-3/4_A325_ TYPE 1_HDG_W/A194-2H HEX NUT",
+   "code": "54345"
+  },
+  {
+   "kind": "learned",
+   "text": "BOLT_HH_3/4-10x2-3/4_A325_ TYPE1_HDG_w/A194-2H HEX NUT",
+   "code": "15440"
+  },
+  {
+   "kind": "learned",
+   "text": "SNAP_BOLT_DOUBLE-ENDED_3/8\"EYE 7/16\" OPENING",
+   "code": "77030"
+  },
+  {
+   "kind": "learned",
+   "text": "WASHER_BEV_5/8\"_B18.23.1_HDG_ HRDN_TYPE1",
+   "code": "16642"
+  },
+  {
+   "kind": "learned",
+   "text": "WASHER_FLAT_1/2\"_F436_HDG_HRDN",
+   "code": "58228"
+  },
+  {
+   "kind": "learned",
+   "text": "WASHER_FLAT_3/4\"_F436_HRDN_HDG",
+   "code": "16716"
+  },
+  {
+   "kind": "learned",
+   "text": "WASHER_FLAT_5/8\"_F436_HDG_HRDN",
+   "code": "16713"
+  },
+  {
+   "kind": "learned",
+   "text": "WASHER_FLAT_7/8\"_F436_HDG_HRDN",
+   "code": "16718"
+  },
+  {
+   "kind": "vendor",
+   "text": "$1000 Sent advance on 02/08/2025",
+   "code": "79301-HPC"
+  },
+  {
+   "kind": "vendor",
+   "text": "100 To ship 07/11/2025",
+   "code": "70643"
+  },
+  {
+   "kind": "vendor",
+   "text": "3 pallets on 07/10/2025\r\nPallet 1 \r\n6 Kegs (Qty: 6300) 5/8x11 Nuts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "3 pallets on 07/10/2025\r\nPallet 2 \r\n6 Kegs (Qty: 6300) 5/8x11 Nuts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "3 pallets on 07/10/2025\r\nPallet 3 \r\n2 Box (424 Qty) 7/8x9 Nuts\r\n\r\n8 Kegs + 1 Bucket  (Qty 1000 x 8 Kegs + 1 Bucket x 80 = Total 8080)  - 3/4x10 Nuts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "4 pallets on 07/07/2025\r\nPallet 1/4 \r\nQty 1800 x 9 = 16,200 - 5/8x11 Nuts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "4 pallets on 07/07/2025\r\nPallet 2/4 \r\n1000 x 6  + 28 x 1 = 6028 Total  - 3/4x10 Nuts\r\n242 x 1 = 242 Total - 5/8x11  x 1  1/2 Bolts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "4 pallets on 07/07/2025\r\nPallet 3/4\r\n900 x 8 + 376 x1 = 7576 Total - 5/8x11x 1 3/4 Bolts",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "4 pallets on 07/07/2025\r\nPallet 4/4 \r\n1800 x 6  + 1228 x 1 = 12,028 Total - 5/8x11 Nuts\r\nDropped of 4 pallets on 07/07/2025",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "5/8-11 2” A325 HH Bolts - Fluorokote #1 Blue (PTFE) (QTY 18000)",
+   "code": "A00100"
+  },
+  {
+   "kind": "vendor",
+   "text": "Associated with Order IF12/26-26",
+   "code": "A00101"
+  },
+  {
+   "kind": "vendor",
+   "text": "BOLT DIE COST ¾,5/8,3/8",
+   "code": "NoSell - 1"
+  },
+  {
+   "kind": "vendor",
+   "text": "IF/46/25-26 & IF/47/25-26",
+   "code": "A00101"
+  },
+  {
+   "kind": "vendor",
+   "text": "Pallet 1:\r\n- 5/8 – 11 – 2” Carr Bolts – QTY 3740 [18 x 200 + 1 x 96 + 1 x 44]",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "Pallet 2 :\r\n- 5/8-11 1-3/4” HH Bolts – QTY 3878 [1 x 445 + 3 x 900 + 1 x 733] \r\n- 5/8-11 1-1/2” HH Bolts – QTY 1040 [1 x 1040]\r\n- 5/8-11 Nuts QTY – 948 [1 x 948]",
+   "code": "A00071"
+  },
+  {
+   "kind": "vendor",
+   "text": "Shipment charges for AE/81/25-26, AE/87/25-26",
+   "code": "A00101"
+  }
+ ]
+}

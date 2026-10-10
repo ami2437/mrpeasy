@@ -1482,6 +1482,9 @@ function validationBannerHtml(kind, rec, canEdit) {
            Check it against the ${isOrder ? "customer's PO" : "vendor's document"}${noLines ? ", add the lines" : ""}, then Validate.
            <a class="link" onclick="openCapturedDoc('${isOrder ? "customer_order" : "purchase_order"}', ${rec.id})">Open the document</a>`}
       ${isOrder ? "It can't be confirmed, booked or shipped before that." : "It can't be ordered, emailed or received before that."}
+      ${(rec.ai_filled || []).length ? `<div class="ai-filled">${icon("check")} ${rec.ai_filled.length} waiting line${rec.ai_filled.length === 1 ? "" : "s"} filled in — ${rec.ai_filled.length === 1 ? "that item exists" : "those items exist"} now (${rec.ai_filled.map(escapeHtml).join(", ")})</div>` : ""}
+      ${waiting.length && canEdit && AuthGuard.can("stock.edit") && waiting.some(w => !(w.candidates || []).some(c => c.score >= 0.85))
+        ? `<div style="margin:6px 0;"><button class="small-btn" data-icon="plus" onclick="aiWaitCreateAll('${kind}', ${rec.id})" title="Make every item these lines need in one go -- they're filled in on this ${isOrder ? "order" : "PO"} and on every other one waiting for them">Create All New Items</button></div>` : ""}
       ${waiting.length ? `<table class="compact-table no-table-tools ai-wait-table"><thead><tr><th class="grow">The ${isOrder ? "PO" : "Document"} Says</th><th class="num">Qty</th><th class="num">Price</th><th>Our Item</th><th></th></tr></thead><tbody>
         ${waiting.map((w, n) => `<tr><td class="grow"><strong>${escapeHtml(w.item_code || "")}</strong> <span class="small">${escapeHtml(w.description || "")}</span>
             ${w.new_item ? `<div class="small muted">Not in Stock Items yet${w.new_item.looks_like ? ` — closest we have: ${escapeHtml(w.new_item.looks_like.code)}` : ""}</div>` : ""}</td>
@@ -1521,6 +1524,56 @@ async function aiWaitQuick(kind, id, n) {
   if (!got) return;
   if (!all.some(i => i.id === got.item.id)) all.push(got.item);
   aiWaitSend(kind, id, n, { item_id: got.item.id });
+}
+// One pop-up for every waiting line's item: tick, edit, Create Ticked -- the items are made, then every record in
+// Validation waiting for them is filled in (server: ai_pending.sweep after each item is created).
+async function aiWaitCreateAll(kind, id) {
+  const isOrder = kind === "order";
+  const rec = await apiFetch(`/api/${isOrder ? "customer-orders" : "purchase-orders"}/${id}`);
+  const rows = rec.ai_pending_lines || [];
+  if (!rows.length) { if (typeof showDetail === "function") showDetail(id); return; }
+  let groups = [];
+  try { groups = (await apiFetch("/api/stock-items/groups/list")).map(g => g.name); } catch {}
+  const guess = w => (w.new_item && w.new_item.category) || (() => {
+    const t = `${w.item_code || ""} ${w.description || ""}`.toUpperCase();
+    // the type named FIRST ("BOLT_HH_... w/ HEX NUT" is a bolt)
+    const hits = [["NUT", "Nut"], ["WASHER", "Washer"], ["STUD", "Stud"], ["BOLT", "Bolt"], ["CLAMP", "Clamp"], ["SCREW", "Screw"]]
+      .map(([k, g]) => [t.search(new RegExp(`(^|[^A-Z])${k}`)), g]).filter(([at]) => at >= 0).sort((x, y) => x[0] - y[0]);
+    if (!hits.length) return "";
+    const g = hits[0][1];
+    return groups.includes(g) ? g : g === "Screw" && groups.includes("Bolt") ? "Bolt" : "";  // no Screw group: cap screws sit with bolts
+  })();
+  const priceKey = isOrder ? "Selling Price" : "Our Cost";
+  const { value, el } = await askDialog({ title: `Create The New Items — ${rec.code}`, wide: true,
+    body: `<p class="muted small" style="margin-top:0;">One item for each waiting line. Edit anything first; untick the ones you'll pick from existing items instead.
+        Once made, these lines fill in here <strong>and on every other ${isOrder ? "order" : "PO"} in Validation waiting for the same item</strong>.</p>
+      <div class="table-scroll"><table class="compact-table no-table-tools ca-table"><thead><tr><th></th><th>The ${isOrder ? "PO" : "Document"} Says</th><th>Our Item #</th><th>Title</th><th>Group</th><th class="num">${priceKey}</th></tr></thead><tbody>
+      ${rows.map((w, n) => `<tr data-n="${n}"><td><input type="checkbox" class="ca-on" checked></td>
+          <td class="small"><strong>${escapeHtml(w.item_code || "")}</strong><div class="muted">${escapeHtml(w.description || "")}</div></td>
+          <td><input type="text" class="ca-code" value="${escapeHtml((w.new_item && w.new_item.code) || (isOrder ? w.item_code || "" : ""))}" style="width:100px;"></td>
+          <td><input type="text" class="ca-title" value="${escapeHtml((w.new_item && w.new_item.title) || w.description || "")}" style="width:200px;"></td>
+          <td><select class="ca-group ${guess(w) ? "" : "ca-need"}" style="width:110px;" title="Every item needs a product group"><option value="">— pick —</option>${groups.map(g => `<option ${g === guess(w) ? "selected" : ""}>${escapeHtml(g)}</option>`).join("")}</select></td>
+          <td class="num"><input type="number" step="any" min="0" class="ca-price" value="${w.unit_price || 0}" style="width:80px;"></td></tr>`).join("")}
+      </tbody></table></div>`,
+    buttons: [{ label: "Create Ticked", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value !== "go") return;
+  const made = [], failed = [];
+  for (const tr of el.querySelectorAll("tr[data-n]")) {
+    if (!tr.querySelector(".ca-on").checked) continue;
+    const code = tr.querySelector(".ca-code").value.trim(), title = tr.querySelector(".ca-title").value.trim();
+    if (!code || !title) { failed.push(`${code || "(no #)"}: the item # and title are needed`); continue; }
+    if (!tr.querySelector(".ca-group").value) { failed.push(`${code}: pick its product group (then Create All New Items again)`); continue; }
+    const price = parseFloat(tr.querySelector(".ca-price").value) || 0;
+    try {
+      const it = await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({ code, title, category: tr.querySelector(".ca-group").value || null,
+        [isOrder ? "selling_price" : "cost_price"]: price, created_via: "ai-scan" }) });
+      made.push(it.code);
+      if (typeof items !== "undefined" && Array.isArray(items) && !items.some(i => i.id === it.id)) items.push(it);
+    } catch (e) { failed.push(`${code}: ${e.message}`); }
+  }
+  toast(`${made.length} item${made.length === 1 ? "" : "s"} created${failed.length ? ` · ${failed.length} not` : ""}`);
+  if (failed.length) alert(`Not created:\n${failed.join("\n")}`);
+  if (typeof showDetail === "function") await showDetail(id);
 }
 function aiWaitDrop(kind, id, n) {
   if (confirm("Drop this line? It won't be on the record (the document still shows it).")) aiWaitSend(kind, id, n, null, "discard");
@@ -4984,3 +5037,63 @@ function markIconOnly(root) {
   document.addEventListener("DOMContentLoaded", run);
   new MutationObserver(later).observe(document.documentElement, { childList: true, subtree: true });
 })();
+
+// ---- Tick several records on a list, then act on them together (Customer Orders, Purchase Orders, Shipments; Invoices
+// has its own). makeBulkPick({ name, table, records, shown, redraw, word, actions }) -- actions(list) -> [{ label, cls,
+// title, pick: list -> the ones it applies to, run: rec -> promise, verb }]. Each record goes through the same rules as
+// doing it one at a time; the ones that can't are skipped and explained, never all-or-nothing. ----
+function makeBulkPick(o) {
+  const self = { ticked: new Set() };
+  self.box = rec => `<input type="checkbox" class="bp-tick" data-id="${rec.id}" ${self.ticked.has(rec.id) ? "checked" : ""} onclick="event.stopPropagation()" onchange="${o.name}.tick(${rec.id}, this.checked)" title="Tick to act on several ${o.word}s at once"> `;
+  self.tick = (id, on) => { on ? self.ticked.add(id) : self.ticked.delete(id); o.redraw(); };
+  // the rows on screen right now (after search / filters / collapsed groups)
+  self.shownIds = () => [...document.querySelectorAll(`${o.table} tbody .bp-tick[data-id]`)].map(c => parseInt(c.dataset.id));
+  self.tickAll = on => { self.shownIds().forEach(id => on ? self.ticked.add(id) : self.ticked.delete(id)); o.redraw(); };
+  self.list = () => o.records().filter(r => self.ticked.has(r.id));
+  self.mount = () => {  // the "tick all shown" box in the first header cell, and the bar above the table
+    const table = document.querySelector(o.table);
+    if (!table || table.dataset.bulk) return;
+    table.dataset.bulk = "1";
+    const th = table.querySelector("thead tr th");
+    if (th) th.insertAdjacentHTML("afterbegin", `<input type="checkbox" class="bp-all" id="${o.name}-all" onchange="${o.name}.tickAll(this.checked)" title="Tick every ${o.word} shown"> `);
+    table.insertAdjacentHTML("beforebegin", `<div class="inv-bulk-bar" id="${o.name}-bar" hidden></div>`);
+  };
+  self.paint = () => {
+    self.mount();
+    [...self.ticked].forEach(id => { if (!o.records().some(r => r.id === id)) self.ticked.delete(id); });
+    const bar = document.getElementById(`${o.name}-bar`), all = document.getElementById(`${o.name}-all`), list = self.list(), shown = self.shownIds();
+    if (all) { const on = shown.filter(id => self.ticked.has(id)).length; all.checked = !!shown.length && on === shown.length; all.indeterminate = on > 0 && on < shown.length; }
+    if (!bar) return;
+    const table = document.querySelector(o.table);
+    if (table && table.offsetParent === null) { bar.hidden = true; return; }  // another tab is showing
+    bar.hidden = !list.length;
+    if (!list.length) { bar.innerHTML = ""; return; }
+    self.acts = o.actions(list).filter(a => a.pick(list).length);
+    bar.innerHTML = `<strong>${list.length} ${o.word}${list.length === 1 ? "" : "s"} selected</strong>
+      <span class="inv-bulk-actions">${self.acts.map((a, i) => `<button class="${a.cls || "secondary"} small-btn" title="${escapeHtml(a.title || "")}" onclick="${o.name}.go(${i})">${escapeHtml(a.label(a.pick(list).length))}</button>`).join("")
+        || `<span class="muted small">Nothing to do with these together</span>`}</span>
+      <a class="link small" onclick="${o.name}.ticked.clear(); ${o.name}.redraw()">Clear</a>`;
+  };
+  self.redraw = () => o.redraw();
+  self.go = async i => {
+    const a = self.acts[i], list = a.pick(self.list());
+    if (!list.length) return;
+    const { value } = await askDialog({ title: a.label(list.length) + "?", tone: "warn",
+      body: `<p style="margin-top:0;">${list.map(r => `<strong>${escapeHtml(r.code)}</strong>`).join(", ")}</p>${a.note ? `<p class="muted small">${a.note}</p>` : ""}`,
+      buttons: [{ label: a.label(list.length), value: "go", cls: a.cls || "confirm-btn" }, { label: "Keep Them", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
+    const done = [], skipped = [];
+    for (const r of list) {
+      try { await a.run(r); done.push(r.code); } catch (e) { skipped.push(`${r.code}: ${e.message}`); }
+    }
+    self.ticked.clear();
+    if (o.reload) await o.reload(); else o.redraw();
+    if (skipped.length) askDialog({ title: `${done.length} ${a.verb}, ${skipped.length} Skipped`, tone: "warn",
+      body: `${done.length ? `<p style="margin-top:0;">${a.verb[0].toUpperCase() + a.verb.slice(1)}: ${done.map(escapeHtml).join(", ")}</p>` : ""}
+        <p><strong>Skipped</strong> — they can't be ${a.verb} yet:</p><ul>${skipped.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`,
+      buttons: [{ label: "OK", value: null, cls: "secondary" }] });
+    else toast(`${done.length} ${o.word}${done.length === 1 ? "" : "s"} ${a.verb}`);
+  };
+  window[o.name] = self;
+  return self;
+}
