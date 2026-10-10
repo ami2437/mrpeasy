@@ -36,6 +36,17 @@ def _keep(l: dict, kind: str) -> dict:
             "new_item": l.get("new_item")}
 
 
+def _day(v):
+    """A read date ("2026-05-08" text, from a saved read) as a date the database takes."""
+    if not v or not isinstance(v, str):
+        return v
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(v[:10])
+    except ValueError:
+        return None
+
+
 def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: str, allow_duplicate: bool = False):
     """The read as a Validation record: header + every line it matched; the others wait in ai_pending."""
     from app import schemas
@@ -55,7 +66,7 @@ def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: s
             rec.status = "validation"
         else:
             rec = CustomerOrderService.capture(db, cid, d.get("po_number"), by)
-            rec.customer_po_date, rec.delivery_date, rec.job_number = d.get("order_date"), d.get("delivery_date"), d.get("job_number")
+            rec.customer_po_date, rec.delivery_date, rec.job_number = _day(d.get("order_date")), _day(d.get("delivery_date")), d.get("job_number")
             rec.notes = d.get("notes")
             if d.get("ship_to_address"):
                 rec.ship_to_address = d["ship_to_address"]
@@ -70,7 +81,7 @@ def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: s
             rec.status = "validation"
         else:
             rec = PurchaseOrderService.capture(db, vid, d.get("document_number"), by, allow_duplicate=allow_duplicate)
-            rec.expected_date, rec.notes = d.get("expected_date"), d.get("notes")
+            rec.expected_date, rec.notes = _day(d.get("expected_date")), d.get("notes")
     rec.ai_source = file_name
     _set(rec, unsure)
     db.flush()

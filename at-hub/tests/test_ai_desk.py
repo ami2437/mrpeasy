@@ -146,3 +146,26 @@ def test_pdf_customer_po_we_already_have_goes_on_its_order(client, admin_headers
                 json={"action": "attach", "record_type": "customer_order", "record_id": o["id"]}).raise_for_status()
     att = api.get(f"/api/attachments/?entity_type=customer_order&entity_id={o['id']}")
     assert [x["category"] for x in att] == ["customer_po"]
+
+
+def test_vendor_known_by_part_numbers_and_file_name_with_page_number_misread(client, admin_headers, api, make, fake_reads):
+    """Ziegler's quote: their name only in the logo (not in the text), our name as 'Sold To', the AI reads the page # as
+    the quote #, the ship date comes back as text and no line matches an item -- the draft PO is still made, right."""
+    v, it = make.vendor(name=f"Ziegglor Bolt {uid()}"), make.item()
+    code = f"62C{uid()}BTA3"
+    api.post("/api/purchase-orders/", json={"vendor_id": v["id"], "lines": [{"item_id": it["id"], "quantity": 1, "unit_cost": 1, "vendor_item_code": code}]})
+    text = f"Item No. Description Qty\n{code} 5/8-11 X 7 HEX TAP BOLT 200\nQuote No.\nSold To: American Traders LLC\n1\n"
+    # their name only in the file name (words joined by "_") -> still them
+    named = _drop(client, admin_headers, f"{v['name'].replace(' ', '_')}_Sales_Order_77.txt", "SALES ORDER\nSold To: American Traders LLC\n")
+    assert named["quick"]["party"]["id"] == v["id"]
+    # no name anywhere: their part # on it -> them
+    row = _drop(client, admin_headers, "Sales_-_Quote_1515258.txt", text)
+    assert row["quick"]["side"] == "vendor" and row["quick"]["party"]["id"] == v["id"]
+    fake_reads["vendor"] = {"vendor": {"vendor_id": None}, "vendor_name": "American Traders LLC", "document_number": "1", "expected_date": "2026-05-08",
+                            "lines": [{"vendor_item_code": "ZZ-NEW", "description": "new thing", "quantity": 5, "unit_price": 2, "item_id": None}]}
+    plan = client.post(f"/api/ai-desk/files/{row['id']}/read", headers=admin_headers, data={}).json()["plan"]
+    assert plan["party"]["id"] == v["id"] and "part #" in plan["party"]["why"] and "SO 1515258" in plan["facts"]
+    done = client.post(f"/api/ai-desk/files/{row['id']}/act", headers=admin_headers, json={"action": "create_po"})
+    assert done.status_code == 200, done.text
+    po = api.get(f"/api/purchase-orders/{done.json()['record_id']}")
+    assert po["vendor_so_number"] == "1515258" and po["expected_date"][:10] == "2026-05-08" and len(po["ai_pending_lines"]) == 1

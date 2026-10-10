@@ -104,13 +104,33 @@ def _party_score(p, flat: str, low: str, digits: str):
     return s, why
 
 
+def _part_hits(db: Session, text: str) -> dict:
+    """vendor id -> their own part #s printed on the document (learned from past POs). A vendor whose name is only in
+    its logo (a picture -- Ziegler's sales orders and quotes) is still known by its part #s."""
+    from app.models import VendorItem
+    tokens = {t.upper() for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9/.\-]{4,}", text or "")}
+    hits = {}
+    for vi in db.query(VendorItem).all():
+        code = (vi.vendor_item_code or "").strip().upper()
+        if len(code) >= 5 and not code.isdigit() and code in tokens:
+            hits.setdefault(vi.vendor_id, set()).add(code)
+    return hits
+
+
 def _rank(db: Session, model, text: str, name: str, ours: set):
-    low, flat, digits = f"{text} {name}".lower(), _norm(f"{text} {name}"), re.sub(r"\D", "", text or "")
+    fname = re.sub(r"[_\-.]+", " ", name or "")  # "Ziegler_Sales_Order" -> "Ziegler Sales Order": words, not one blob
+    low, flat, digits = f"{text} {fname}".lower(), _norm(f"{text} {fname}"), re.sub(r"\D", "", text or "")
+    parts = _part_hits(db, text) if model is Vendor else {}
     ranked = []
     for p in db.query(model).filter(model.is_active == True).all():  # noqa: E712
         if _norm(p.name) in ours:
             continue  # ourselves
         s, why = _party_score(p, flat, low, digits)
+        if parts.get(p.id):
+            hits = sorted(parts[p.id])
+            s2 = 0.9 if len(hits) == 1 else 0.95
+            if s2 > s:
+                s, why = s2, f"its part # {', '.join(hits[:3])} {'is' if len(hits) == 1 else 'are'} on the document"
         if s >= 0.85:
             ranked.append({"id": p.id, "name": p.name, "score": round(s, 2), "why": why})
     ranked.sort(key=lambda r: -r["score"])
@@ -304,6 +324,14 @@ def read(db: Session, row: DeskFile, data: bytes, instruction: str = "", kind: s
         for k in ("document_number", "invoice_number", "po_number"):
             if result["draft"].get(k):
                 result["draft"][k] = clean_number(result["draft"][k])
+        # the number in the file name ("Ziegler_Sales_Order_1980403.pdf") beats a read that's missing, a page # ("1")
+        # or the same number with letters stuck on ("ZD1980403")
+        key = "invoice_number" if kind == "vendor_invoice" else "po_number" if kind in ("customer_po", "rfq") else "document_number"
+        m = re.findall(r"(?<!\d)(\d{5,})(?!\d)", re.sub(r"[_\-.]+", " ", name))
+        if m and kind != "pod":
+            fn, got = m[-1], str(result["draft"].get(key) or "")
+            if not got or len(re.sub(r"\W", "", got)) < 4 or (fn in got and got != fn and not re.search(rf"\b{fn}\b", got)):
+                result["draft"][key] = fn
     return _jsonable(result)
 
 
