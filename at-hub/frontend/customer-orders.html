@@ -189,7 +189,7 @@
     function scanOrderPdf(engine = null) {
       if (engine === "claude" && !confirm("Read this PO with Claude (Anthropic's cloud)?\n\nNames, addresses and contact details are removed on this PC first; "
           + "only that text is sent, never the PDF. Scans and photos are not sent.")) return;
-      const picker = Object.assign(document.createElement("input"), { type: "file", accept: "application/pdf" });
+      const picker = Object.assign(document.createElement("input"), { type: "file", accept: ".pdf,.xlsx,.csv,.docx,.txt,.eml" });
       picker.onchange = () => { if (picker.files[0]) readOrderPdf(picker.files[0], engine); };
       picker.click();
     }
@@ -500,6 +500,7 @@
         toggleForm(false);
         await loadOrders();
         await showDetail(created.id);
+        if ((created.lookalikes || []).length && await LookAlike.afterCreate("customer", created)) await afterLookalikeOk(created.id);
         autoNutCheck(created.id);  // bolts without their $0 nut line: offered straight away
       } catch (err) {
         if (err.message.startsWith("DUPLICATE_PO|")) {
@@ -759,7 +760,7 @@
         const pct = ordered ? shippedQty / ordered * 100 : 0;
         return `
         <tr class="${done ? "order-done" : ""} ${rowUnderlay("order", o, ["orange"])}" data-sort-group="${done ? 1 : 0}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("customer", o)}</td>
           <td>${escapeHtml(String(customerName(o.customer_id)))}</td>
           <td>${custPoLink(o.po_number, o.id)}${earlierSamePo(o) && !o.duplicate_po_ok ? ` <span class="tag cancelled dup-tag" title="Customer PO # is also on ${escapeHtml(earlierSamePo(o).code)} -- open the order to check it">possible duplicate</span>` : ""}</td>
           <td>${escapeHtml(o.job_number || "")}</td>
@@ -1043,6 +1044,7 @@
         ${isDraft ? `<div class="draft-banner">${icon("pencil")}<div><strong>Draft — not confirmed.</strong> Confirm the order before creating shipments.</div>
           ${isManager ? `<button class="small-btn confirm-btn" onclick="confirmOrder(${order.id}, true)">Confirm Order</button>` : ""}</div>` : ""}
         ${validationBannerHtml("order", order, isManager)}
+        ${LookAlike.banner("customer", order)}
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
         <div id="co-sticky" class="sticky-strip"></div>
@@ -1700,6 +1702,7 @@
       const made = await quickCapture("order");
       if (made) { await loadOrders(); showDetail(made.id); }
     }
+    async function afterLookalikeOk(id) { await loadOrders(); await showDetail(id); }
     async function onValidated(o) { await loadOrders(); await showDetail(o.id); autoNutCheck(o.id); }
 
     async function loadOrders() {

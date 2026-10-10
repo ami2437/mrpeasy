@@ -424,6 +424,8 @@ class CustomerOrderResponse(BaseModel):
     ship_to_address: Optional[str] = None
     notes: Optional[str] = None
     duplicate_po_ok: Optional[str] = None  # set once a manager has OK'd sharing the customer PO # with an earlier order
+    lookalike_ok: Optional[str] = None  # JSON: who OK'd which look-alike orders as separate
+    lookalikes: List[dict] = []  # look-alike orders not OK'd yet (services/lookalike.py)
     lines: List[CustomerOrderLineResponse] = []
 
     class Config:
@@ -863,6 +865,7 @@ class PurchaseOrderLineCreate(InputModel):
 
 
 class PurchaseOrderCreate(BaseModel):
+    allow_duplicate: bool = False  # create even though this vendor SO # is already on another PO of the vendor
     vendor_id: int
     expected_date: Optional[datetime] = None
     vendor_so_number: Optional[str] = None  # the vendor's sales order / confirmation #
@@ -1070,6 +1073,9 @@ class PurchaseOrderResponse(BaseModel):
     created_at: Optional[datetime] = None  # when the PO was entered (MRPeasy's "created" for imported ones)
     created_by: Optional[str] = None
     vendor_so_number: Optional[str] = None
+    duplicate_so_ok: Optional[str] = None
+    lookalike_ok: Optional[str] = None
+    lookalikes: List[dict] = []  # look-alike POs not OK'd yet (services/lookalike.py)
     expected_date: Optional[datetime] = None
     status: str  # validation (quick-captured) | draft | ordered | ...
     validated_by: Optional[str] = None
@@ -1094,6 +1100,7 @@ class PurchaseOrderResponse(BaseModel):
 
 
 class PurchaseOrderUpdate(BaseModel):
+    allow_duplicate: bool = False  # the new vendor SO # is already on another PO of the vendor, and that's right
     vendor_id: Optional[int] = None
     expected_date: Optional[datetime] = None
     vendor_so_number: Optional[str] = None
@@ -1349,3 +1356,7 @@ class FundingImportResponse(BaseModel):
     created_at: Optional[datetime] = None
     summary: Optional[dict] = None
 ShipmentResponse.model_rebuild()
+
+
+class LookalikeOkIn(BaseModel):
+    codes: List[str] = []  # the look-alike orders checked (empty: all of them)

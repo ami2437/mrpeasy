@@ -10,124 +10,378 @@
   <div class="app-shell">
   <div id="sidebar"></div>
   <main>
-    <div class="card page-toolbar">
+    <div class="card page-toolbar desk-toolbar">
       <h1 class="page-title">AI Desk</h1>
-      <span class="muted small">Drop in any documents — customer POs, vendor invoices, vendor SOs, MTRs, signed delivery receipts — and say what to do.</span>
+      <span class="muted small desk-sub">Drop in any documents — customer POs, vendor sales orders and invoices, MTRs, delivery receipts. Each one gets a next step; drafts wait in Validation for you to check.</span>
+      <label class="check-label" title="Show only the files you dropped"><input type="checkbox" id="only-mine" onchange="savePref(); load()"> Only Mine</label>
+      <button id="clear-done" class="secondary" onclick="clearDone()" style="display:none;">Clear Done</button>
+      <button id="do-all" onclick="doAllReady()" data-icon="check" style="display:none;">Do All Ready</button>
     </div>
 
-    <div class="card">
-      <div id="drop" class="ai-drop" onclick="document.getElementById('files').click()">
-        <strong>Drop PDFs or photos here</strong> <span class="muted">or click to choose — one or many</span>
-        <input type="file" id="files" multiple accept=".pdf,image/*" style="display:none;" onchange="addFiles(this.files); this.value='';">
-      </div>
-      <div class="row" style="margin-top:10px;">
-        <div style="flex:4;"><label>What should I do? <span class="muted small">(optional — e.g. "these are vendor invoices, add them to their POs" or "create sales orders from these")</span></label>
-          <input type="text" id="instruction" placeholder="Leave blank and AT-HUB works out what each document is"></div>
-        <div style="flex:0 0 auto;"><button class="ai-btn" data-icon="sparkles" onclick="analyzeAll()">Read Documents</button></div>
-      </div>
-      <p class="muted small" style="margin:6px 0 0;">Read by the AI model on this PC (private). Nothing is saved until you click an action; each one is checked again before it's done.</p>
+    <div id="drop" class="desk-drop" onclick="document.getElementById('files').click()" tabindex="0">
+      <div class="desk-drop-main"><span class="desk-drop-icon"></span>
+        <div><strong>Drop files here</strong> <span class="muted">or click to choose — one or many</span>
+          <div class="muted small">PDFs, photos, Excel, CSV, Word, text and emails (.eml). Files stay on the desk until you act on them or remove them.</div></div></div>
+      <input type="file" id="files" multiple accept=".pdf,image/*,.heic,.heif,.xlsx,.xls,.csv,.doc,.docx,.txt,.eml,.msg" style="display:none;" onchange="upload(this.files); this.value='';">
     </div>
+    <details class="desk-hint" id="hint-box">
+      <summary class="muted small">Tell the AI what these are (optional)</summary>
+      <input type="text" id="instruction" placeholder='e.g. "these are vendor invoices" or "customer POs" — blank: AT-HUB works it out' onchange="savePref()">
+    </details>
 
-    <div id="bar" class="btn-row" style="display:none; margin:0 0 10px;">
-      <button onclick="applyAllReady()" data-icon="check">Apply All Ready</button>
-      <button class="secondary" onclick="clearAll()">Clear</button>
-      <span id="bar-msg" class="small muted" style="align-self:center;"></span>
-    </div>
-    <div id="cards"></div>
+    <div id="progress" class="desk-progress" style="display:none;"></div>
+    <div id="tiles"></div>
+    <div id="empty" class="card muted desk-empty" style="display:none;">Nothing on the desk. Drop files above — or anywhere on this page.</div>
   </main>
+  </div>
 
   <script>
     AuthGuard.requirePerm("ai");
     document.getElementById("sidebar").innerHTML = renderSidebar("ai-desk.html");
-    const KINDS = { customer_po: "Customer PO", vendor_invoice: "Vendor invoice", vendor_order: "Vendor SO / quote", mtr: "MTR / test report", pod: "Proof of delivery", other: "Other" };
-    const TARGET_FOR = { customer_po: "customer_order", vendor_invoice: "purchase_order", vendor_order: "purchase_order", mtr: "purchase_order", pod: "shipment", other: "purchase_order" };
-    const PAGE = { customer_order: "customer-orders", purchase_order: "purchase-orders", shipment: "shipments" };
-    let docs = [];  // {file, state: queued|reading|read|done|error, r: analyze result, done}
+    document.querySelector(".desk-drop-icon").innerHTML = icon("upload");
+    const PAGE = { customer_order: "customer-orders", purchase_order: "purchase-orders", shipment: "shipments", quote: "quotes" };
+    const WORD = { customer_order: "Order", purchase_order: "PO", shipment: "Shipment", quote: "Quote" };
+    const KIND_SHORT = { customer_po: "Customer PO", rfq: "Customer RFQ", vendor_order: "Vendor SO / Quote", vendor_invoice: "Vendor Invoice",
+                         mtr: "MTR", pod: "Proof Of Delivery", other: "Document" };
+    const FAMILY_BADGE = { sheet: ["XLSX", "sheet"], csv: ["CSV", "sheet"], word: ["DOC", "word"], text: ["TXT", "text"], email: ["EMAIL", "email"], other: ["FILE", "other"] };
+    let rows = [];          // the desk, as the server has it
+    const ui = {};          // per file: { open: "menu" | "pick" | "bill", pick: action, busy, msg, lookalikes }
+    let lists = null;       // pickers: customers, vendors, orders, pos, shipments
+    let readQueue = [], reading = false;
 
+    // ---- preferences ----
+    function prefKey(k) { return `desk:${k}:${(AuthGuard.getUser() || {}).username || ""}`; }
+    function savePref() {
+      try { localStorage.setItem(prefKey("mine"), document.getElementById("only-mine").checked ? "1" : "");
+            localStorage.setItem(prefKey("hint"), document.getElementById("instruction").value); } catch (e) { /* a nicety */ }
+    }
+    try {
+      document.getElementById("only-mine").checked = localStorage.getItem(prefKey("mine")) === "1";
+      const h = localStorage.getItem(prefKey("hint")) || "";
+      document.getElementById("instruction").value = h;
+      if (h) document.getElementById("hint-box").open = true;
+    } catch (e) { /* defaults */ }
+
+    // ---- drop anywhere on the page ----
     const drop = document.getElementById("drop");
-    ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
-    ["dragleave", "drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
-    drop.addEventListener("drop", ev => addFiles(ev.dataTransfer.files));
+    let dragDepth = 0;
+    document.addEventListener("dragenter", e => { if ([...(e.dataTransfer.types || [])].includes("Files")) { dragDepth++; drop.classList.add("over"); } });
+    document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; drop.classList.remove("over"); } });
+    document.addEventListener("dragover", e => { if ([...(e.dataTransfer.types || [])].includes("Files")) e.preventDefault(); });
+    document.addEventListener("drop", e => {
+      if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+      e.preventDefault(); dragDepth = 0; drop.classList.remove("over");
+      upload(e.dataTransfer.files);
+    });
 
-    function addFiles(list) {
-      [...list].forEach(f => docs.push({ file: f, state: "queued" }));
-      render();
+    // ---- server ----
+    async function load() {
+      try { rows = await apiFetch(`/api/ai-desk/files${document.getElementById("only-mine").checked ? "?mine=1" : ""}`); }
+      catch (e) { document.getElementById("tiles").innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; return; }
+      renderAll();
+      const me = (AuthGuard.getUser() || {}).username;
+      rows.filter(r => r.status === "new" && r.uploaded_by === me).forEach(r => queueRead(r.id));
     }
-    function clearAll() { docs = []; render(); }
-
-    function card(d, i) {
-      const r = d.r || {}, t = r.target;
-      const kindSel = `<select class="d-kind" onchange="reread(${i}, this.value)" ${d.state === "reading" ? "disabled" : ""}>
-        ${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${r.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
-      const tType = t ? t.type : TARGET_FOR[r.kind] || "purchase_order";
-      const actions = (r.actions || []).map(a => `<button class="${a.ready ? "" : "secondary"} small-btn" onclick="applyOne(${i}, '${a.id}')"
-          ${d.state === "done" ? "disabled" : ""} title="${a.ready ? "Ready" : "Check the record / fields first"}">${escapeHtml(a.label)}</button>`).join(" ");
-      const bill = r.bill ? `<div class="d-bill">Invoice # <input class="b-num" value="${escapeHtml(r.bill.bill_number || "")}" style="width:120px;">
-          Total $<input class="b-amt" type="number" step="0.01" value="${r.bill.amount ?? ""}" style="width:110px;">
-          Date <input class="b-date" type="date" value="${(r.bill.bill_date || "").substring(0, 10)}" style="width:140px;">
-          Due <input class="b-due" type="date" value="${(r.bill.due_date || "").substring(0, 10)}" style="width:140px;"></div>` : "";
-      return `<div class="card ai-doc ${d.state}" data-i="${i}">
-        <div class="ai-doc-head"><strong>${escapeHtml(d.file.name)}</strong>
-          <span class="tag ${{ queued: "draft", reading: "confirmed", read: "draft", done: "shipped", error: "overdue" }[d.state]}">${d.state === "reading" ? "reading…" : d.state}</span>
-          ${d.r ? `${kindSel} <span class="muted small">${escapeHtml(r.kind_why ? `(${r.kind_why})` : "")}</span>` : ""}
-          <span style="margin-left:auto;">${trashBtn(`docs.splice(${i}, 1); render()`, "Remove from the list")}</span></div>
-        ${r.summary ? `<div class="small">${escapeHtml(r.summary)}</div>` : ""}
-        ${d.r && d.state !== "done" ? `<div class="ai-doc-target small">Goes to
-            <select class="d-ttype" style="width:auto;">${Object.keys(PAGE).map(k => `<option value="${k}" ${k === tType ? "selected" : ""}>${k.replace("_", " ")}</option>`).join("")}</select>
-            <input class="d-tcode" value="${escapeHtml(t ? t.code : "")}" placeholder="e.g. PO325370 / C89121 / SH215760" style="width:170px;">
-            ${t ? `<span class="muted">${escapeHtml(t.why)}</span>` : ""}</div>${bill}` : ""}
-        ${(r.problems || []).length ? `<div class="small neg">${r.problems.map(escapeHtml).join(" · ")}</div>` : ""}
-        ${d.state === "done" ? `<div class="small pos">${d.done}</div>` : d.r ? `<div class="btn-row" style="margin-top:6px;">${actions}</div>` : ""}
-        ${d.err ? `<div class="small neg">${escapeHtml(d.err)}</div>` : ""}</div>`;
-    }
-    function render() {
-      document.getElementById("cards").innerHTML = docs.map(card).join("");
-      document.getElementById("bar").style.display = docs.length ? "" : "none";
-      const ready = docs.filter(d => d.state === "read" && (d.r.actions || []).some(a => a.ready)).length;
-      document.getElementById("bar-msg").textContent = `${docs.length} document${docs.length === 1 ? "" : "s"} · ${ready} ready · ${docs.filter(d => d.state === "done").length} done`;
-    }
-
-    async function analyzeOne(i, kind = "") {
-      const d = docs[i];
-      d.state = "reading"; d.err = ""; render();
+    async function upload(fileList) {
+      const files = [...fileList];
+      if (!files.length) return;
       const fd = new FormData();
-      fd.append("file", d.file, d.file.name);
-      fd.append("instruction", document.getElementById("instruction").value);
-      fd.append("kind", kind);
-      try { d.r = await apiUpload("/api/ai-desk/analyze", fd); d.state = "read"; }
-      catch (e) { d.state = "error"; d.err = e.message; }
-      render();
-    }
-    async function analyzeAll() {  // one at a time: the local model reads one document well
-      for (let i = 0; i < docs.length; i++) if (["queued", "error"].includes(docs[i].state)) await analyzeOne(i);
-    }
-    function reread(i, kind) { analyzeOne(i, kind); }
-
-    async function applyOne(i, action) {
-      const d = docs[i], el = document.querySelector(`.ai-doc[data-i="${i}"]`);
-      const fd = new FormData();
-      fd.append("file", d.file, d.file.name);
-      fd.append("action", action);
-      fd.append("kind", el.querySelector(".d-kind")?.value || d.r.kind);
-      fd.append("target_type", el.querySelector(".d-ttype")?.value || "");
-      fd.append("target_code", el.querySelector(".d-tcode")?.value || "");
-      if (el.querySelector(".b-num")) fd.append("bill", JSON.stringify({ bill_number: el.querySelector(".b-num").value.trim(), amount: parseFloat(el.querySelector(".b-amt").value) || 0,
-        bill_date: el.querySelector(".b-date").value || null, due_date: el.querySelector(".b-due").value || null }));
+      files.forEach(f => fd.append("files", f, f.name));
+      progress(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
       try {
-        const r = await apiUpload("/api/ai-desk/apply", fd);
-        const type = r.record_id && (fd.get("target_type") || (action === "create_order" ? "customer_order" : "purchase_order"));
-        const link = r.record_id ? `<a class="link" href="${PAGE[type] || "customer-orders"}.html?id=${r.record_id}" target="_blank">${escapeHtml(r.record)}</a>` : "";
-        d.state = "done";
-        d.done = { attached: `Attached to ${link}`, bill: `Vendor invoice added to ${link}, PDF attached`, created: `Created draft ${link} with the PDF attached — check and confirm it` }[r.done] || "Done";
-      } catch (e) { d.err = e.message; }
-      render();
+        const added = await apiUpload("/api/ai-desk/files", fd);
+        rows = [...added, ...rows.filter(r => !added.some(a => a.id === r.id))];
+        renderAll();
+        added.forEach(r => queueRead(r.id));
+      } catch (e) { progress(""); alert(e.message); }
     }
-    async function applyAllReady() {
-      for (let i = 0; i < docs.length; i++) {
-        const d = docs[i], a = d.state === "read" && (d.r.actions || []).find(a => a.ready);
-        if (a) await applyOne(i, a.id);
+    function queueRead(id, kind = "") {
+      readQueue = readQueue.filter(q => q.id !== id).concat([{ id, kind }]);
+      runReads();
+    }
+    async function runReads() {  // one at a time: the AI on this PC reads one document well
+      if (reading) return;
+      reading = true;
+      while (readQueue.length) {
+        const { id, kind } = readQueue.shift();
+        const r = rows.find(x => x.id === id);
+        if (!r || r.status === "done") continue;
+        r.status = "reading"; renderTile(id);
+        progress(`Reading ${escapeHtml(r.filename)}…${readQueue.length ? ` (${readQueue.length} more after this)` : ""}`);
+        const fd = new FormData();
+        fd.append("kind", kind);
+        fd.append("instruction", document.getElementById("instruction").value);
+        try { replaceRow(await apiUpload(`/api/ai-desk/files/${id}/read`, fd)); }
+        catch (e) { r.status = "error"; r.error = e.message; renderTile(id); }
+      }
+      reading = false;
+      progress("");
+    }
+    function replaceRow(r) {
+      const i = rows.findIndex(x => x.id === r.id);
+      if (i >= 0) rows[i] = r; else rows.unshift(r);
+      renderTile(r.id);
+      renderBar();
+    }
+    function progress(html) {
+      const el = document.getElementById("progress");
+      el.style.display = html ? "" : "none";
+      el.innerHTML = html ? `<span class="spinner"></span> ${html}` : "";
+    }
+
+    // ---- tiles ----
+    function ago(t) {
+      const s = (Date.now() - utcTime(t).getTime()) / 1000;
+      return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : fmtDate(t);
+    }
+    function size(n) { return n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; }
+    function thumbHtml(r) {
+      if (["pdf", "image"].includes(r.family)) return `<img alt="" data-thumb="${r.id}">`;
+      const [word, cls] = FAMILY_BADGE[r.family] || FAMILY_BADGE.other;
+      return `<span class="desk-badge ${cls}">${word}</span>`;
+    }
+    function partyLine(p, side) {
+      if (!p) return "";
+      return `<div class="desk-party">${icon(side === "vendor" ? "factory" : "users")}<strong>${escapeHtml(p.name)}</strong>
+        <span class="muted small">${side === "vendor" ? "vendor" : "customer"}${p.why ? ` · ${escapeHtml(p.why)}` : ""}</span></div>`;
+    }
+    function tileBody(r) {
+      const st = ui[r.id] || {};
+      if (r.status === "done") {
+        const page = PAGE[r.record_type];
+        const la = st.lookalikes || [];
+        return `<div class="desk-done">${icon("checkCircle")}<div><strong>${escapeHtml(r.done_label || "Done")}</strong>
+            <div class="muted small">by ${escapeHtml(r.done_by || "")} · ${ago(r.done_at)}</div></div>
+            ${page ? `<a class="btn-link" href="${page}.html?id=${r.record_id}" target="_blank">Open ${escapeHtml(r.record_code || "")} ↗</a>` : ""}</div>
+          ${la.length ? `<div class="la-banner">${icon("layers")}<div><strong>Looks like ${la.map(x => escapeHtml(x.code)).join(", ")}</strong> — ${escapeHtml(la[0].what)}.</div>
+            <button class="small-btn" onclick="reviewLookalike(${r.id})">Review</button></div>` : ""}`;
+      }
+      if (r.status === "new" || r.status === "reading") {
+        const q = r.quick;
+        return `<div class="desk-reading"><span class="spinner"></span> ${r.status === "reading" ? "Reading it with AI…" : "Waiting to be read…"}
+            ${q && q.party ? `<span class="muted small"> — looks like ${q.kind_short ? `a ${escapeHtml(q.kind_short)} ` : ""}from <strong>${escapeHtml(q.party.name)}</strong></span>` : ""}</div>
+          ${q ? "" : ""}${optionsHtml(r)}`;
+      }
+      const p = r.plan || { options: [], todo: [], facts: [], warnings: [] };
+      const prim = p.primary;
+      const ready = prim && !prim.needs;
+      return `<div class="desk-what"><span class="desk-kind" title="${escapeHtml(p.how ? `Why: ${p.how}` : "")}">${escapeHtml(p.kind_short || "Document")}</span>
+          <span class="desk-sentence">${escapeHtml(p.sentence || "")}</span></div>
+        ${partyLine(p.party, p.side)}
+        ${p.facts && p.facts.length ? `<div class="desk-facts">${p.facts.map(f => `<span>${escapeHtml(f)}</span>`).join("")}</div>` : ""}
+        ${(p.warnings || []).map(w => `<div class="desk-warn">${icon("info")} ${escapeHtml(w)}</div>`).join("")}
+        ${(p.todo || []).length ? `<ul class="desk-todo">${p.todo.map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>` : ""}
+        ${p.bill && st.open === "bill" ? billForm(r) : ""}
+        <div class="desk-actions">
+          ${prim ? (ready ? `<button class="desk-primary" onclick="doAct(${r.id}, -1)">${escapeHtml(prim.label)}</button>`
+                          : `<button class="desk-primary" onclick="openPick(${r.id}, -1)">${escapeHtml(prim.label)}</button>`) : ""}
+          ${p.bill ? `<button class="secondary small-btn" onclick="toggleUi(${r.id}, 'bill')">${st.open === "bill" ? "Hide Details" : "Edit Details"}</button>` : ""}
+          ${moreButton(r)}
+        </div>
+        ${st.open === "pick" ? pickerHtml(r) : ""}
+        ${st.open === "menu" ? menuHtml(r) : ""}
+        ${st.msg ? `<div class="error small" style="margin-top:6px;">${escapeHtml(st.msg)}</div>` : ""}`;
+    }
+    function moreButton(r) {
+      const p = r.plan || {};
+      const open = (ui[r.id] || {}).open === "menu";
+      return `<button class="secondary small-btn" onclick="toggleUi(${r.id}, 'menu')">${p.primary ? "Something Else" : "What Should I Do?"} ${open ? "▴" : "▾"}</button>`;
+    }
+    // before the read is done, the hand-made choices are there already
+    function optionsHtml(r) {
+      return `<div class="desk-actions">${moreButton(r)}</div>${(ui[r.id] || {}).open === "menu" ? menuHtml(r) : ""}${(ui[r.id] || {}).open === "pick" ? pickerHtml(r) : ""}`;
+    }
+    function allOptions(r) {
+      const p = r.plan;
+      if (p) return p.options || [];
+      const can = k => AuthGuard.can(k);
+      return [{ action: "create_order", label: "Create Draft Customer Order…", needs: "customer", ok: can("orders.edit") },
+              { action: "create_po", label: "Create Draft Purchase Order…", needs: "vendor", ok: can("purchasing") },
+              { action: "create_quote", label: "Create Draft Quote…", needs: "customer", ok: can("quotes") },
+              { action: "attach", label: "Attach To A Customer Order…", needs: "order", ok: can("orders.edit") },
+              { action: "attach", label: "Attach To A PO…", needs: "po", ok: can("purchasing") },
+              { action: "attach", label: "Attach To A Shipment…", needs: "shipment", ok: can("shipments.work") }].filter(o => o.ok);
+    }
+    function menuHtml(r) {
+      const opts = allOptions(r);
+      const kinds = Object.entries(KIND_SHORT).filter(([k]) => k !== "other");
+      return `<div class="desk-menu">
+          ${opts.map((o, i) => `<button class="desk-menu-item" onclick="${o.needs ? `openPick(${r.id}, ${i})` : `doAct(${r.id}, ${i})`}">${escapeHtml(o.label)}</button>`).join("")}
+          ${r.status !== "reading" ? `<div class="desk-menu-sep">Read it again as…</div>
+            <div class="desk-menu-kinds">${kinds.map(([k, l]) => `<button class="link-btn" onclick="rereadAs(${r.id}, '${k}')">${escapeHtml(l)}</button>`).join("")}</div>` : ""}
+        </div>`;
+    }
+    function billForm(r) {
+      const b = (ui[r.id] || {}).bill || r.plan.bill || {};
+      return `<div class="desk-bill">
+          <label>Invoice #<input class="b-num" value="${escapeHtml(b.bill_number || "")}"></label>
+          <label>Total<span class="price-input"><span>$</span><input class="b-amt" type="number" step="0.01" value="${b.amount ?? ""}"></span></label>
+          <label>Invoice Date<input class="b-date" type="date" value="${(b.bill_date || "").substring(0, 10)}"></label>
+          <label>Due Date<input class="b-due" type="date" value="${(b.due_date || "").substring(0, 10)}"></label></div>`;
+    }
+    // the one picker an action may need: who it's from, or which record
+    function pickerHtml(r) {
+      const st = ui[r.id] || {};
+      const o = st.opt;
+      if (!o || !lists) return `<div class="desk-pick muted small">Loading…</div>`;
+      const party = o.party || (r.plan && r.plan.party);
+      let label, opts;
+      if (o.needs === "customer" || o.needs === "vendor") {
+        const list = o.needs === "customer" ? lists.customers : lists.vendors;
+        const guess = (r.plan && r.plan.side === o.needs && r.plan.party) || (r.quick && r.quick.side === o.needs && r.quick.party);
+        label = o.needs === "customer" ? "Customer" : "Vendor";
+        opts = list.map(x => `<option value="${x.id}" ${guess && guess.id === x.id ? "selected" : ""}>${escapeHtml(x.name)}</option>`).join("");
+      } else {
+        const list = o.needs === "order" ? lists.orders : o.needs === "po" ? lists.pos : lists.shipments;
+        label = WORD[{ order: "customer_order", po: "purchase_order", shipment: "shipment" }[o.needs]];
+        const mine = party && o.needs !== "shipment" ? list.filter(x => x.party_id === party.id) : [];
+        const rest = list.filter(x => !mine.includes(x));
+        const opt = x => `<option value="${x.id}">${escapeHtml(x.code)} · ${escapeHtml(x.party)}${x.ref ? ` · ${escapeHtml(x.ref)}` : ""} · ${escapeHtml(x.status.replace("_", " "))}</option>`;
+        opts = (mine.length ? `<optgroup label="${escapeHtml(party.name)}">${mine.map(opt).join("")}</optgroup><optgroup label="Everyone">${rest.map(opt).join("")}</optgroup>` : list.map(opt).join(""));
+      }
+      return `<div class="desk-pick"><span class="muted small">${escapeHtml(o.label.replace(/…$/, ""))}:</span>
+          <select class="d-pick" data-searchable><option value="">— pick the ${label.toLowerCase()} —</option>${opts}</select>
+          <button class="small-btn" onclick="doAct(${r.id}, ${st.pick})">Go</button>
+          <button class="secondary small-btn" onclick="toggleUi(${r.id}, null)">Cancel</button></div>`;
+    }
+    function tileHtml(r) {
+      return `<div class="desk-tile st-${r.status}" data-id="${r.id}">
+          <div class="desk-thumb" onclick="viewFile(${r.id})" title="Open it big (‹ › steps through the desk)">${thumbHtml(r)}<span class="desk-zoom">${icon("eye")}</span></div>
+          <div class="desk-main">
+            <div class="desk-head"><strong class="desk-name" title="${escapeHtml(r.filename)}">${escapeHtml(r.filename)}</strong>
+              <span class="muted small">${size(r.size || 0)} · ${escapeHtml(r.uploaded_by || "")} · ${ago(r.created_at)}</span>
+              <span style="flex:1;"></span>
+              ${trashBtn(`removeFile(${r.id})`, r.status === "done" ? "Remove from the desk" : "Remove from the desk (the file isn't kept anywhere else)")}</div>
+            ${tileBody(r)}
+          </div></div>`;
+    }
+    const thumbUrls = {};
+    async function paintThumbs(root) {
+      root.querySelectorAll("img[data-thumb]").forEach(async img => {
+        const id = img.dataset.thumb;
+        try {
+          if (!thumbUrls[id]) {
+            const res = await fetch(`/api/ai-desk/files/${id}/thumb`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+            if (!res.ok) throw new Error();
+            thumbUrls[id] = URL.createObjectURL(await res.blob());
+          }
+          img.src = thumbUrls[id];
+        } catch (e) { img.replaceWith(Object.assign(document.createElement("span"), { className: "desk-badge other", textContent: "PDF" })); }
+      });
+    }
+    function renderAll() {
+      const el = document.getElementById("tiles");
+      el.innerHTML = rows.map(tileHtml).join("");
+      paintThumbs(el);
+      renderBar();
+    }
+    function renderTile(id) {
+      const r = rows.find(x => x.id === id), el = document.querySelector(`.desk-tile[data-id="${id}"]`);
+      if (!r) { if (el) el.remove(); renderBar(); return; }
+      if (!el) { renderAll(); return; }
+      const keep = el.querySelector(".d-pick") ? el.querySelector(".d-pick").value : null;  // a pick in progress survives a redraw
+      const tmp = document.createElement("div");
+      tmp.innerHTML = tileHtml(r);
+      const fresh = tmp.firstElementChild;
+      el.replaceWith(fresh);
+      if (keep && fresh.querySelector(".d-pick")) fresh.querySelector(".d-pick").value = keep;
+      paintThumbs(fresh);
+    }
+    function readyRows() { return rows.filter(r => r.status === "read" && r.plan && r.plan.primary && !r.plan.primary.needs); }
+    function renderBar() {
+      document.getElementById("empty").style.display = rows.length ? "none" : "";
+      drop.classList.toggle("compact", rows.length > 0);
+      const n = readyRows().length, done = rows.filter(r => r.status === "done").length;
+      const all = document.getElementById("do-all");
+      all.style.display = n > 1 ? "" : "none";
+      all.textContent = `Do All Ready (${n})`;
+      document.getElementById("clear-done").style.display = done ? "" : "none";
+    }
+
+    // ---- actions ----
+    function toggleUi(id, what) {
+      ui[id] = ui[id] || {};
+      ui[id].open = ui[id].open === what ? null : what;
+      ui[id].msg = "";
+      renderTile(id);
+    }
+    async function openPick(id, idx) {
+      const r = rows.find(x => x.id === id);
+      ui[id] = Object.assign(ui[id] || {}, { open: "pick", pick: idx, opt: idx === -1 ? r.plan.primary : allOptions(r)[idx], msg: "" });
+      if (!lists) { renderTile(id); lists = await apiFetch("/api/ai-desk/pick-lists"); }
+      renderTile(id);
+      const sel = document.querySelector(`.desk-tile[data-id="${id}"] .d-pick`);
+      if (sel) setTimeout(() => (sel.closest(".desk-pick").querySelector("input") || sel).focus(), 30);
+    }
+    async function doAct(id, idx, allowDuplicate = false) {
+      const r = rows.find(x => x.id === id), st = ui[id] = ui[id] || {};
+      const o = st.open === "pick" && st.opt ? st.opt : idx === -1 ? r.plan.primary : allOptions(r)[idx];
+      if (!o) return;
+      const body = { action: o.action, allow_duplicate: allowDuplicate || !!o.allow_duplicate };
+      const tile = document.querySelector(`.desk-tile[data-id="${id}"]`);
+      const picked = tile && tile.querySelector(".d-pick") && st.open === "pick" ? parseInt(tile.querySelector(".d-pick").value) : null;
+      if (o.needs && !picked) { st.msg = "Pick one first"; renderTile(id); return; }
+      if (o.needs === "customer" || o.needs === "vendor") body.party_id = picked;
+      else if (o.needs) { body.record_type = { order: "customer_order", po: "purchase_order", shipment: "shipment" }[o.needs]; body.record_id = picked; }
+      else if (o.record) { body.record_type = o.record.type; body.record_id = o.record.id; }
+      if (!o.needs && o.party) body.party_id = o.party.id;
+      if (o.action === "add_bill" && tile && tile.querySelector(".b-num")) {
+        body.bill = { bill_number: tile.querySelector(".b-num").value.trim(), amount: parseFloat(tile.querySelector(".b-amt").value) || null,
+                      bill_date: tile.querySelector(".b-date").value || null, due_date: tile.querySelector(".b-due").value || null };
+      }
+      tile && tile.querySelectorAll("button").forEach(b => b.disabled = true);
+      try {
+        const res = await apiFetch(`/api/ai-desk/files/${id}/act`, { method: "POST", body: JSON.stringify(body) });
+        ui[id] = { lookalikes: res.lookalikes || [] };
+        replaceRow(res);
+        if ((res.lookalikes || []).length) reviewLookalike(id);
+      } catch (e) {
+        if (/already recorded on/.test(e.message) && confirm(`${e.message}\n\nAdd it here too?`)) return doAct(id, idx, true);
+        if (/^DUPLICATE_PO\|/.test(e.message)) {
+          const [, , code, msg] = e.message.split("|");
+          if (confirm(`${msg}.\n\nCreate another order with the same PO # anyway?`)) return doAct(id, idx, true);
+          st.msg = `${msg} — attach it to ${code} instead?`;
+        } else st.msg = e.message;
+        renderTile(id);
       }
     }
+    async function reviewLookalike(id) {
+      const r = rows.find(x => x.id === id);
+      if (!r || !r.record_id) return;
+      const ok = await LookAlike.review(r.record_type === "customer_order" ? "customer" : "vendor", r.record_id);
+      if (ok) { ui[id] = Object.assign(ui[id] || {}, { lookalikes: [] }); renderTile(id); }
+    }
+    function rereadAs(id, kind) {
+      ui[id] = {};
+      const r = rows.find(x => x.id === id);
+      r.status = "new"; renderTile(id);
+      queueRead(id, kind);
+    }
+    async function removeFile(id) {
+      const r = rows.find(x => x.id === id);
+      if (r && r.status !== "done" && !confirm(`Remove ${r.filename} from the desk?\n\nNothing was done with it yet, and it isn't kept anywhere else.`)) return;
+      try { await apiFetch(`/api/ai-desk/files/${id}`, { method: "DELETE" }); } catch (e) { alert(e.message); return; }
+      rows = rows.filter(x => x.id !== id);
+      readQueue = readQueue.filter(q => q.id !== id);
+      renderTile(id);
+    }
+    async function clearDone() {
+      for (const r of rows.filter(x => x.status === "done")) {
+        try { await apiFetch(`/api/ai-desk/files/${r.id}`, { method: "DELETE" }); rows = rows.filter(x => x.id !== r.id); } catch (e) { /* next */ }
+      }
+      renderAll();
+    }
+    async function doAllReady() {
+      const list = readyRows();
+      if (!list.length || !confirm(`Do the main step for ${list.length} file${list.length === 1 ? "" : "s"}?\n\n${list.map(r => `• ${r.filename}: ${r.plan.primary.label}`).join("\n")}`)) return;
+      for (const r of list) await doAct(r.id, -1);
+    }
+    function viewFile(id) {
+      const ids = rows.map(r => `desk-${r.id}`);
+      fileViewer.show(`desk-${id}`, ids);
+    }
+
+    load();
   </script>
 </body>
 </html>

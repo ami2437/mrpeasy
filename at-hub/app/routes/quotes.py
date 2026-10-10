@@ -141,10 +141,12 @@ def ai_read(file: UploadFile = File(...), customer_id: Optional[int] = Form(None
     """The customer's RFQ / PO as a PDF -> suggested quote lines (nothing saved), read like a customer PO.
     Also says which customer it looks like, for a quote not filled in yet."""
     from app.services import ai_orders
+    from app.services import doc_text
     data = file.file.read()
-    if not (file.filename or "").lower().endswith(".pdf") or not data:
-        raise HTTPException(status_code=400, detail="Upload the customer's request as a PDF")
-    d = ai_orders.extract_order(db, data, engine=engine)
+    fam = doc_text.family(file.filename or "")
+    if fam not in ("pdf", "sheet", "csv", "word", "text", "email") or not data:
+        raise HTTPException(status_code=400, detail="Upload the customer's request as a PDF, Excel, CSV, Word, text or email file")
+    d = ai_orders.extract_order(db, data, engine=engine, text=None if fam == "pdf" else doc_text.text_of(data, file.filename))
     cid = customer_id or (d.get("customer") or {}).get("customer_id")
     by_id = {i.id: i for i in db.query(StockItem).filter(StockItem.id.in_({l["item_id"] for l in d["lines"] if l.get("item_id")})).all()}
     rows = []

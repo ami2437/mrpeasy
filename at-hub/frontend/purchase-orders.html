@@ -323,7 +323,8 @@
         }
         toggleForm(false);
         await loadOrders();
-        if (created && created.id) showDetail(created.id);  // shows any unapplied vendor payment right away
+        if (created && created.id) await showDetail(created.id);  // shows any unapplied vendor payment right away
+        if (created && (created.lookalikes || []).length && await LookAlike.afterCreate("vendor", created)) await afterLookalikeOk(created.id);
       } catch (err) {
         errorEl.textContent = err.message;
       }
@@ -502,7 +503,7 @@
         const received = o.lines.reduce((sum, l) => sum + Math.min(l.received_quantity, l.quantity), 0);
         return `
         <tr class="${poDone(o) ? "order-done" : ""} ${rowUnderlay("po", o, ["orange"])}">
-          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}</td>
+          <td class="nowrap"><a class="link" onclick="showDetail(${o.id})">${o.code}</a>${clip(o.id)}${noteMark(o.id)}${LookAlike.chip("vendor", o)}</td>
           <td>${escapeHtml(String(vendorName(o.vendor_id)))}${soLine(o)}</td>
           <td>${fmtDate(o.created_at || o.order_date)}</td>
           <td>${fmtDate(o.expected_date)}</td>
@@ -561,6 +562,7 @@
           ${order.status !== "cancelled" ? aiValidateButton("po", order.id) : ""}
           <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this PO (internal view)">Print</button></h3>
         ${validationBannerHtml("po", order, true)}
+        ${LookAlike.banner("vendor", order)}
         <div id="ai-validate-panel"></div>
         <div id="po-sticky" class="sticky-strip"></div>
         <div id="po-timeline">${poTimeline(order, null)}</div>
@@ -982,7 +984,7 @@ Thank you.</textarea>
               <td class="num" title="Goods on this invoice (pre-filled with what isn't billed yet)">${priceInput("bill-goods-input", unbilledGoods(order).toFixed(2), 'id="bill-goods" oninput="checkBillSum()"')}</td>
               <td class="num" title="Shipping &amp; handling on this invoice, added to the PO lines and linked to this invoice">${priceInput("bill-ship-input", "", 'id="bill-shipping" oninput="checkBillSum()"')}</td>
               <td class="num" id="bill-sum">—</td>
-              <td colspan="3"><input type="file" id="bill-file" accept="application/pdf,image/*" style="width:100%;"></td>
+              <td colspan="3"><input type="file" id="bill-file" accept=".pdf,image/*,.heic,.xlsx,.xls,.csv,.doc,.docx,.txt,.eml,.msg" style="width:100%;"></td>
               <td colspan="2"><button class="secondary small-btn" onclick="addBill(${order.id})">+ Add invoice</button></td>
             </tr>
           </tbody>
@@ -1588,6 +1590,7 @@ Thank you.</textarea>
       const made = await quickCapture("po");
       if (made) { await loadOrders(); showDetail(made.id); }
     }
+    async function afterLookalikeOk(id) { await loadOrders(); showDetail(id); }
     async function onValidated(o) { await loadOrders(); showDetail(o.id); }
 
     async function loadOrders() {

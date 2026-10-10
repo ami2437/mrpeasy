@@ -358,10 +358,15 @@ def suggest_new_items(lines: List[Dict[str, Any]], items: List[StockItem], codes
                                "per_bolt": nut["per_bolt"], "confidence": nut["confidence"], "why": nut["why"]}
 
 
-def extract_order(db: Session, file_bytes: bytes, engine: Optional[str] = None) -> Dict[str, Any]:
+def extract_order(db: Session, file_bytes: bytes, engine: Optional[str] = None, text: Optional[str] = None) -> Dict[str, Any]:
+    """text: the document's words when it isn't a PDF (Excel / CSV / Word / email -- services/doc_text.py)."""
     from app.services import customer_po_templates
     from app.services.item_match import ItemMatcher
-    text = pdf_text(file_bytes)
+    if text is None:
+        text = pdf_text(file_bytes)
+    elif not text.strip():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No text in this file to read")
     # A known layout is read exactly; anything else goes to the local AI model.
     data = customer_po_templates.parse(text)
     source = data["template"] if data else settings.ai_model

@@ -41,6 +41,13 @@ try:
     tz_v2(db)  # once: dates to the per-user time zone rules (app/services/clock.py)
     from app.services.crud import renumber_all_once
     renumber_all_once(db)  # once: line # = place on the order
+    try:  # file pictures used to be cached by row id (wrong after a re-import renumbers rows): drop those
+        from app.routes.attachments import upload_root as _ur
+        for _old in (_ur() / ".thumbs").glob("[0-9]*.png"):
+            if _old.stem.isdigit():
+                _old.unlink(missing_ok=True)
+    except OSError:
+        pass
     from app.services.terms import backfill_due_dates
     backfill_due_dates(db)  # an invoice without a due date gets invoice date + the customer's payment terms
     # Never seed TEST records into a database built by the MRPeasy import (it carries number series).

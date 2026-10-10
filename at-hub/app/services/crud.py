@@ -871,6 +871,8 @@ class CustomerOrderService:
                         if (o.po_number or "").strip().lower() == po), None)
             if dup and not order.duplicate_po_ok:
                 raise HTTPException(status_code=409, detail=f"DUPLICATE_PO|{dup.id}|{dup.code}|Customer PO {order.po_number} is already on order {dup.code}")
+        from app.services import lookalike
+        lookalike.require_ok(db, "customer", order)
         order.status = "confirmed" if confirm else "draft"
         order.validated_by, order.validated_at = by, datetime.utcnow()
         db.commit()
@@ -886,6 +888,8 @@ class CustomerOrderService:
             raise HTTPException(status_code=400, detail=f"{order.code} was quick-captured -- check it and Validate it first")
         if order.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {order.status}")
+        from app.services import lookalike
+        lookalike.require_ok(db, "customer", order)
         order.status = "confirmed"
         db.commit()
         db.refresh(order)
@@ -2420,11 +2424,31 @@ class PurchaseOrderService:
         return po
 
     @staticmethod
+    def duplicate_so(db: Session, vendor_id: int, so: Optional[str], skip_id: Optional[int] = None):
+        """Another live PO of this vendor with the same vendor SO # (case / spaces ignored)."""
+        key = (so or "").strip().lower()
+        if not key:
+            return None
+        q = db.query(PurchaseOrder).filter(PurchaseOrder.vendor_id == vendor_id, PurchaseOrder.status != "cancelled")
+        if skip_id:
+            q = q.filter(PurchaseOrder.id != skip_id)
+        return next((p for p in q.all() if (p.vendor_so_number or "").strip().lower() == key), None)
+
+    @staticmethod
+    def check_duplicate_so(db: Session, vendor_id: int, so: Optional[str], skip_id: Optional[int] = None) -> None:
+        dup = PurchaseOrderService.duplicate_so(db, vendor_id, so, skip_id)
+        if dup:
+            raise HTTPException(status_code=409, detail=f"DUPLICATE_SO|{dup.id}|{dup.code}|Vendor SO {so.strip()} is already on {dup.code}")
+
+    @staticmethod
     def create(db: Session, data, created_by: str) -> PurchaseOrder:
         if not db.query(Vendor).filter(Vendor.id == data.vendor_id).first():
             raise HTTPException(status_code=400, detail="Vendor not found")
         if not data.lines:
             raise HTTPException(status_code=400, detail="Order must have at least one line")
+        allow = getattr(data, "allow_duplicate", False)
+        if not allow:
+            PurchaseOrderService.check_duplicate_so(db, data.vendor_id, data.vendor_so_number)
 
         po = PurchaseOrder(
             code=generate_code(db, PurchaseOrder, "PO"),
@@ -2434,6 +2458,8 @@ class PurchaseOrderService:
             notes=data.notes,
             status="draft",
             created_by=created_by,
+            duplicate_so_ok=f"{created_by}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC (at creation)"
+            if allow and PurchaseOrderService.duplicate_so(db, data.vendor_id, data.vendor_so_number) else None,
         )
         db.add(po)
         db.flush()
@@ -2458,11 +2484,13 @@ class PurchaseOrderService:
         return po
 
     @staticmethod
-    def capture(db: Session, vendor_id: int, vendor_so_number: Optional[str], created_by: str) -> PurchaseOrder:
+    def capture(db: Session, vendor_id: int, vendor_so_number: Optional[str], created_by: str, allow_duplicate: bool = False) -> PurchaseOrder:
         """Quick capture: a vendor's document kept as a PO with no lines yet, status "validation". It can't be marked
         ordered, emailed or received until someone checks it, fills the lines in and validates it."""
         if not db.query(Vendor).filter(Vendor.id == vendor_id).first():
             raise HTTPException(status_code=400, detail="Vendor not found")
+        if not allow_duplicate:
+            PurchaseOrderService.check_duplicate_so(db, vendor_id, vendor_so_number)
         po = PurchaseOrder(code=generate_code(db, PurchaseOrder, "PO"), vendor_id=vendor_id,
                            vendor_so_number=(vendor_so_number or "").strip() or None, status="validation", created_by=created_by)
         db.add(po)
@@ -2470,7 +2498,7 @@ class PurchaseOrderService:
         return po
 
     @staticmethod
-    def validate(db: Session, po_id: int, by: str, ordered: bool = False) -> PurchaseOrder:
+    def validate(db: Session, po_id: int, by: str, ordered: bool = False, allow_duplicate: bool = False) -> PurchaseOrder:
         """A captured PO checked: on to Draft (or straight to Ordered). Needs its lines."""
         po = PurchaseOrderService.get(db, po_id)
         if po.status != "validation":
@@ -2480,6 +2508,12 @@ class PurchaseOrderService:
                                                         "pick one for each (or drop it) first")
         if not po.lines:
             raise HTTPException(status_code=400, detail="Add the PO's lines from the vendor's document first")
+        if allow_duplicate and not po.duplicate_so_ok and PurchaseOrderService.duplicate_so(db, po.vendor_id, po.vendor_so_number, po.id):
+            po.duplicate_so_ok = f"{by}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC (at validation)"
+        if not po.duplicate_so_ok:
+            PurchaseOrderService.check_duplicate_so(db, po.vendor_id, po.vendor_so_number, po.id)
+        from app.services import lookalike
+        lookalike.require_ok(db, "vendor", po)
         po.status = "ordered" if ordered else "draft"
         po.validated_by, po.validated_at = by, datetime.utcnow()
         db.commit()
@@ -2493,13 +2527,15 @@ class PurchaseOrderService:
             raise HTTPException(status_code=400, detail=f"{po.code} was quick-captured -- check it and Validate it first")
         if po.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        from app.services import lookalike
+        lookalike.require_ok(db, "vendor", po)
         po.status = "ordered"
         db.commit()
         db.refresh(po)
         return po
 
     @staticmethod
-    def update(db: Session, po_id: int, data) -> PurchaseOrder:
+    def update(db: Session, po_id: int, data, by: Optional[str] = None) -> PurchaseOrder:
         po = PurchaseOrderService.get(db, po_id)
         if po.status == "cancelled":
             raise HTTPException(status_code=400, detail="Cannot edit a cancelled order")
@@ -2507,6 +2543,16 @@ class PurchaseOrderService:
         if "vendor_id" in updates and updates["vendor_id"] is not None:
             if not db.query(Vendor).filter(Vendor.id == updates["vendor_id"]).first():
                 raise HTTPException(status_code=400, detail="Vendor not found")
+        allow = updates.pop("allow_duplicate", False)
+        so_changed = "vendor_so_number" in updates and (updates["vendor_so_number"] or "").strip().lower() != (po.vendor_so_number or "").strip().lower()
+        if so_changed or ("vendor_id" in updates and updates["vendor_id"] not in (None, po.vendor_id)):
+            vid, so = updates.get("vendor_id") or po.vendor_id, updates.get("vendor_so_number", po.vendor_so_number)
+            if allow:
+                po.duplicate_so_ok = f"{by or 'user'}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC" \
+                    if PurchaseOrderService.duplicate_so(db, vid, so, po.id) else None
+            else:
+                PurchaseOrderService.check_duplicate_so(db, vid, so, po.id)
+                po.duplicate_so_ok = None
         set_fields(po, updates)
         db.commit()
         db.refresh(po)

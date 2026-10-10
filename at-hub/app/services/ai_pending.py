@@ -36,7 +36,7 @@ def _keep(l: dict, kind: str) -> dict:
             "new_item": l.get("new_item")}
 
 
-def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: str):
+def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: str, allow_duplicate: bool = False):
     """The read as a Validation record: header + every line it matched; the others wait in ai_pending."""
     from app import schemas
     from app.services.crud import CustomerOrderService, PurchaseOrderService
@@ -46,7 +46,7 @@ def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: s
         cid = d["customer"]["customer_id"]
         if sure:
             rec = CustomerOrderService.create(db, schemas.CustomerOrderCreate(
-                customer_id=cid, po_number=d.get("po_number"), customer_po_date=d.get("order_date"), delivery_date=d.get("delivery_date"),
+                allow_duplicate=allow_duplicate, customer_id=cid, po_number=d.get("po_number"), customer_po_date=d.get("order_date"), delivery_date=d.get("delivery_date"),
                 job_number=d.get("job_number"), notes=d.get("notes"), ship_to_address=d.get("ship_to_address"),
                 lines=[schemas.CustomerOrderLineCreate(item_id=l["item_id"], quantity=l.get("quantity") or 1, unit_price=l.get("unit_price") or 0,
                                                        delivery_date=l.get("delivery_date"), notes=l.get("line_note"),
@@ -63,13 +63,13 @@ def create_for_validation(db: Session, kind: str, d: dict, file_name: str, by: s
         vid = d["vendor"]["vendor_id"]
         if sure:
             rec = PurchaseOrderService.create(db, schemas.PurchaseOrderCreate(
-                vendor_id=vid, vendor_so_number=d.get("document_number"), expected_date=d.get("expected_date"), notes=d.get("notes"),
+                allow_duplicate=allow_duplicate, vendor_id=vid, vendor_so_number=d.get("document_number"), expected_date=d.get("expected_date"), notes=d.get("notes"),
                 lines=[schemas.PurchaseOrderLineCreate(item_id=l["item_id"], quantity=l.get("quantity") or 1, unit_cost=l.get("unit_price") or 0,
                                                        vendor_item_code=l.get("vendor_item_code"), vendor_description=l.get("description"))
                        for l in sure]), by)
             rec.status = "validation"
         else:
-            rec = PurchaseOrderService.capture(db, vid, d.get("document_number"), by)
+            rec = PurchaseOrderService.capture(db, vid, d.get("document_number"), by, allow_duplicate=allow_duplicate)
             rec.expected_date, rec.notes = d.get("expected_date"), d.get("notes")
     rec.ai_source = file_name
     _set(rec, unsure)

@@ -26,7 +26,10 @@ def extract(kind: str = Form(...), po_id: Optional[int] = Form(None), engine: st
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(data) > MAX_BYTES:
         raise HTTPException(status_code=400, detail="File is larger than 15 MB")
-    return ai_docs.extract(db, kind, data, file.filename or "", po_id, engine="claude" if engine == "claude" else "local")
+    from app.services import doc_text
+    fam = doc_text.family(file.filename or "")
+    text = doc_text.text_of(data, file.filename or "") if fam in ("sheet", "csv", "word", "text", "email") else None
+    return ai_docs.extract(db, kind, data, file.filename or "", po_id, engine="claude" if engine == "claude" else "local", text=text)
 
 
 @router.post("/validate-po/{po_id}")

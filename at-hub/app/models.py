@@ -288,6 +288,7 @@ class CustomerOrder(Base):
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     notes = Column(Text, nullable=True)
     duplicate_po_ok = Column(String, nullable=True)  # "who, when" a manager OK'd sharing this customer PO # with an earlier order
+    lookalike_ok = Column(Text, nullable=True)  # JSON: look-alike orders someone checked and OK'd as separate (services/lookalike.py)
     expedited = Column(Boolean, nullable=True)  # expedited shipping: charge extra on its invoices (default from the customer's card)
     ai_source = Column(String, nullable=True)  # created from an AI read of this file (File Matcher): shown as "AI READ"
     ai_pending = Column(Text, nullable=True)   # JSON: lines the read couldn't match to an item yet (app/services/ai_pending.py)
@@ -421,6 +422,8 @@ class PurchaseOrder(Base):
     mrp_id = Column(Integer, nullable=True, index=True)  # id in MRPeasy, for records imported from it
     custom_fields = Column(Text, nullable=True)  # JSON: MRPeasy custom fields kept as imported ({"label": value})
     vendor_so_number = Column(String, nullable=True, index=True)  # the vendor's sales order / confirmation # (MRPeasy "order_number")
+    duplicate_so_ok = Column(String, nullable=True)  # "who, when" someone OK'd this vendor SO # also being on another PO of the vendor
+    lookalike_ok = Column(Text, nullable=True)  # JSON: look-alike POs someone checked and OK'd as separate (services/lookalike.py)
     notes = Column(Text, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -502,6 +505,31 @@ class VendorBill(Base):
     @property
     def balance(self) -> float:
         return round(self.amount - self.amount_paid, 2)
+
+
+class DeskFile(Base):
+    """A file dropped on the AI Desk: kept on the server until someone acts on it or removes it, so nothing dropped
+    is ever lost (leave the page, come back later). result = what AT-HUB worked out (JSON: who it's from, what it
+    is, the read, what it offers to do) -- read once, used for every action (routes/ai_desk.py, services/desk.py)."""
+    __tablename__ = "desk_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, nullable=False)
+    stored_name = Column(String, nullable=False)  # under uploads/desk/
+    content_type = Column(String, nullable=True)
+    size = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, default="new")  # new | reading | read | error | done
+    kind = Column(String, nullable=True)  # customer_po | rfq | vendor_order | vendor_invoice | mtr | pod | other
+    result = Column(Text, nullable=True)  # JSON
+    error = Column(Text, nullable=True)
+    record_type = Column(String, nullable=True)  # what it became / went on: customer_order | purchase_order | shipment | quote
+    record_id = Column(Integer, nullable=True)
+    record_code = Column(String, nullable=True)
+    done_label = Column(String, nullable=True)  # "Created PO325380 (Validation Needed)"
+    done_by = Column(String, nullable=True)
+    done_at = Column(DateTime, nullable=True)
+    uploaded_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class VendorShipment(Base):

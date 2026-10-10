@@ -41,6 +41,13 @@ def _hides_money(user: User) -> bool:
     return not has(user, "money.view")
 
 
+def thumb_path(stored_name: str) -> Path:
+    """The page-1 picture of a stored file, named after the FILE (not the row id: ids are renumbered by a fresh
+    import, and a picture cached under an old id would show on a different file)."""
+    import hashlib
+    return upload_root() / ".thumbs" / f"{hashlib.sha1(stored_name.encode()).hexdigest()[:20]}.png"
+
+
 def upload_root() -> Path:
     root = Path(settings.upload_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -210,7 +217,7 @@ def thumbnail(attachment_id: int, db: Session = Depends(get_db), user: User = De
     path = (upload_root() / att.stored_name).resolve()
     if upload_root() not in path.parents or not path.exists():
         raise HTTPException(status_code=404, detail="The file is missing from the server")
-    cache = upload_root() / ".thumbs" / f"{att.id}.png"
+    cache = thumb_path(att.stored_name)
     if not cache.exists():
         from PIL import Image
         try:
@@ -234,6 +241,22 @@ def thumbnail(attachment_id: int, db: Session = Depends(get_db), user: User = De
     return FileResponse(cache, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
+@router.get("/{attachment_id}/preview")
+def preview(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """A spreadsheet as a table, a Word / text / email file as text (services/doc_text.py) -- for the file viewer."""
+    att = _get(db, attachment_id)
+    if att.category in _money(db) and _hides_money(user):
+        raise HTTPException(status_code=403, detail="This document needs the manager role")
+    path = (upload_root() / att.stored_name).resolve()
+    if upload_root() not in path.parents or not path.exists():
+        raise HTTPException(status_code=404, detail="The file is missing from the server")
+    from app.services import doc_text
+    p = doc_text.preview(path.read_bytes(), att.filename)
+    if not p:
+        raise HTTPException(status_code=404, detail="No preview for this kind of file")
+    return p
+
+
 @router.delete("/{attachment_id}", status_code=204)
 def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Uploaders can remove their own files; managers and above can remove any."""
@@ -242,7 +265,7 @@ def delete(attachment_id: int, db: Session = Depends(get_db), user: User = Depen
         raise HTTPException(status_code=403, detail="Only the uploader or a manager can delete this file")
     from app.services.recycle_bin import move_to_trash
     move_to_trash(att.stored_name)  # kept until the recycle bin entry is emptied
-    (upload_root() / ".thumbs" / f"{att.id}.png").unlink(missing_ok=True)
+    thumb_path(att.stored_name).unlink(missing_ok=True)
     for link in db.query(MtrLink).filter(MtrLink.attachment_id == att.id).all():
         db.delete(link)
     db.delete(att)

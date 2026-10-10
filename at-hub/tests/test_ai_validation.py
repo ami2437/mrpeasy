@@ -14,7 +14,7 @@ def _draft(cust, lines, po=None):
 @pytest.fixture
 def fake_reader(monkeypatch):
     box = {}
-    monkeypatch.setattr(ai_orders, "extract_order", lambda db, data, engine=None: {**box["draft"], "engine_seen": engine})
+    monkeypatch.setattr(ai_orders, "extract_order", lambda db, data, engine=None, text=None: {**box["draft"], "engine_seen": engine})
     return box
 
 

@@ -21,14 +21,16 @@ def ai_status():
 def extract(file: UploadFile = File(...), engine: Optional[str] = Form(None), db: Session = Depends(get_db)):
     """Read a customer PO PDF with the local model and return a draft order to review.
     Nothing is saved -- the order is created only when the user confirms the draft."""
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Upload a PDF")
+    from app.services import doc_text
+    fam = doc_text.family(file.filename or "")
+    if fam not in ("pdf", "sheet", "csv", "word", "text", "email"):
+        raise HTTPException(status_code=400, detail="Upload a PDF, Excel, CSV, Word, text or email (.eml) file")
     data = file.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(data) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=400, detail="PDF is larger than 15 MB")
-    return ai_orders.extract_order(db, data, engine=engine)
+        raise HTTPException(status_code=400, detail="File is larger than 15 MB")
+    return ai_orders.extract_order(db, data, engine=engine, text=None if fam == "pdf" else doc_text.text_of(data, file.filename))
 
 
 @router.post("/validate/{order_id}")

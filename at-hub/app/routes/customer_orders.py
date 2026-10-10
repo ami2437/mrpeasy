@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas import (
     CustomerOrderCreate, CustomerOrderResponse, CreateShipmentRequest, ShipmentResponse,
-    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse, LineOrderRequest,
+    CustomerOrderUpdate, CustomerOrderLineAdd, CustomerOrderLineUpdate, OrderProfitResponse, LineOrderRequest, LookalikeOkIn,
 )
 from app.services.crud import CustomerOrderService, OrderProfitService
 from app.dependencies import get_current_active_user, require_perm, require_any
@@ -13,17 +13,27 @@ from app.dependencies import get_current_active_user, require_perm, require_any
 manager = [Depends(require_perm("orders.edit"))]  # creating/editing/pricing orders
 from app.models import User
 
+def _la(db, rec):
+    """The order with its look-alikes not OK'd yet (services/lookalike.py), for the screens to show / ask about."""
+    from app.services import lookalike
+    rec.lookalikes = lookalike.pending(db, "customer", rec)
+    return rec
+
+
 router = APIRouter(prefix="/api/customer-orders", tags=["customer-orders"], dependencies=[Depends(require_any("orders.view", "shipments.view", "invoices", "quotes"))])  # drivers: /api/pod only
 
 
 @router.get("/", response_model=list[CustomerOrderResponse])
 def list_orders(status: str | None = Query(None), db: Session = Depends(get_db)):
-    return CustomerOrderService.list(db, status=status)
+    from app.services import lookalike
+    orders = CustomerOrderService.list(db, status=status)
+    lookalike.annotate(db, "customer", orders)
+    return orders
 
 
 @router.post("/", response_model=CustomerOrderResponse, dependencies=manager)
 def create_order(data: CustomerOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    return CustomerOrderService.create(db, data, created_by=current_user.username)
+    return _la(db, CustomerOrderService.create(db, data, created_by=current_user.username))
 
 
 @router.post("/capture", response_model=CustomerOrderResponse, dependencies=manager)
@@ -72,7 +82,7 @@ def validate_order(order_id: int, data: ValidateIn, db: Session = Depends(get_db
 
 @router.get("/{order_id}", response_model=CustomerOrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db)):
-    return CustomerOrderService.get(db, order_id)
+    return _la(db, CustomerOrderService.get(db, order_id))
 
 
 @router.get("/{order_id}/removal-plan", dependencies=[Depends(require_perm("orders.edit"))])
@@ -104,7 +114,14 @@ def order_profit(order_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{order_id}", response_model=CustomerOrderResponse, dependencies=manager)
 def update_order(order_id: int, data: CustomerOrderUpdate, db: Session = Depends(get_db)):
-    return CustomerOrderService.update(db, order_id, data)
+    return _la(db, CustomerOrderService.update(db, order_id, data))
+
+
+@router.post("/{order_id}/lookalike-ok", response_model=CustomerOrderResponse, dependencies=manager)
+def lookalike_ok(order_id: int, data: LookalikeOkIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Someone looked: this order is separate from the look-alike order(s), not a duplicate (kept with who and when)."""
+    from app.services import lookalike
+    return _la(db, lookalike.acknowledge(db, "customer", CustomerOrderService.get(db, order_id), data.codes, current_user.username))
 
 
 @router.post("/{order_id}/duplicate-po-ok", response_model=CustomerOrderResponse, dependencies=manager)
@@ -125,17 +142,17 @@ def reorder_lines(order_id: int, data: LineOrderRequest, db: Session = Depends(g
 
 @router.post("/{order_id}/lines", response_model=CustomerOrderResponse, dependencies=manager)
 def add_line(order_id: int, data: CustomerOrderLineAdd, db: Session = Depends(get_db)):
-    return CustomerOrderService.add_line(db, order_id, data)
+    return _la(db, CustomerOrderService.add_line(db, order_id, data))
 
 
 @router.put("/{order_id}/lines/{line_id}", response_model=CustomerOrderResponse, dependencies=manager)
 def update_line(order_id: int, line_id: int, data: CustomerOrderLineUpdate, db: Session = Depends(get_db)):
-    return CustomerOrderService.update_line(db, order_id, line_id, data)
+    return _la(db, CustomerOrderService.update_line(db, order_id, line_id, data))
 
 
 @router.delete("/{order_id}/lines/{line_id}", response_model=CustomerOrderResponse, dependencies=manager)
 def remove_line(order_id: int, line_id: int, db: Session = Depends(get_db)):
-    return CustomerOrderService.remove_line(db, order_id, line_id)
+    return _la(db, CustomerOrderService.remove_line(db, order_id, line_id))
 
 
 @router.post("/{order_id}/confirm", response_model=CustomerOrderResponse, dependencies=manager)

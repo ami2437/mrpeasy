@@ -279,10 +279,16 @@ def _invoice_out(db: Session, po, doc: Dict[str, Any], data: Dict[str, Any]) -> 
 
 
 def extract(db: Session, kind: str, file_bytes: bytes, filename: str, po_id: Optional[int] = None,
-            engine: str = "local") -> Dict[str, Any]:
+            engine: str = "local", text: Optional[str] = None) -> Dict[str, Any]:
+    """text: the document's words when it isn't a PDF or photo (Excel / CSV / Word / email -- services/doc_text.py)."""
     if kind not in PROMPTS:
         raise HTTPException(status_code=400, detail=f"Unknown document kind: {kind}")
-    doc = _read(file_bytes, filename)
+    if text is not None and not (filename or "").lower().endswith((".pdf",) + IMAGE_TYPES):
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="No text in this file to read")
+        doc = {"text": text, "images": None}
+    else:
+        doc = _read(file_bytes, filename)
     out: Dict[str, Any] = {"kind": kind, "scanned_image": bool(doc["images"]), "text_preview": doc["text"][:3000]}
     from app.services import ai_cloud as _cloud
     if _cloud.claude_engine():

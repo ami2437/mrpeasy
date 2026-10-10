@@ -115,7 +115,12 @@ async function apiFetch(path, options = {}) {
   if ((options.method || "GET").toUpperCase() === "GET") return apiFetchRaw(path, options);
   const h = SaveIndicator.start(path);
   try { const r = await apiFetchRaw(path, options); SaveIndicator.end(h, true); return r; }
-  catch (e) { SaveIndicator.end(h, false); throw e; }
+  catch (e) {
+    SaveIndicator.end(h, false);
+    // a look-alike to check / a vendor SO # already used: ask, then the same action again
+    if (/^(LOOKALIKE|DUPLICATE_SO)\|/.test(e.message || "")) return handleCheckRefusal(e, () => apiFetch(path, options), () => apiFetch(path, withAllowDuplicate(options)));
+    throw e;
+  }
 }
 async function apiFetchRaw(path, options = {}) {
   const token = AuthGuard.getToken();
@@ -213,6 +218,13 @@ async function conflictDialog(c) {
 
 // POST a FormData (file upload). apiFetch forces JSON; the browser must set the multipart boundary.
 async function apiUpload(path, form) {
+  try { return await apiUploadRaw(path, form); }
+  catch (e) {
+    if (/^(LOOKALIKE|DUPLICATE_SO)\|/.test(e.message || "")) return handleCheckRefusal(e, () => apiUploadRaw(path, form), () => { form.set("allow_duplicate", "true"); return apiUploadRaw(path, form); });
+    throw e;
+  }
+}
+async function apiUploadRaw(path, form) {
   const response = await fetch(`${API_BASE}${path}`, { method: "POST", body: form, headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
   if (response.status === 401) {
     AuthGuard.clearSession();
@@ -881,10 +893,23 @@ async function renderFileStrip(container, entityType, entityId) {
   let files = [];
   try { files = await apiFetch(`/api/attachments/?entity_type=${entityType}&entity_id=${entityId}`); await TypeLists.load("attachment"); } catch (e) { if (!files.length) return; }
   files.sort((a, b) => b.id - a.id);
-  el.innerHTML = files.map(f => `<a class="file-thumb" title="${escapeHtml(`${attachmentLabel(f.category)}: ${f.filename}`)}" onclick="openAttachment(${f.id})">
+  const me = (AuthGuard.getUser() || {}).username;
+  const canDel = f => f.uploaded_by === me || AuthGuard.can("money.view");  // same rule as the server
+  el.innerHTML = files.map(f => `<span class="file-thumb-wrap"><a class="file-thumb" title="${escapeHtml(`${attachmentLabel(f.category)}: ${f.filename}`)}" onclick="openAttachment(${f.id})">
       <span class="file-thumb-img" data-thumb="${f.id}">${escapeHtml((f.filename.split(".").pop() || "file").slice(0, 4).toUpperCase())}</span>
-      ${attachmentTag(f.category)}</a>`).join("")
-    + (files.length ? "" : "");
+      ${attachmentTag(f.category)}</a>${canDel(f) ? `<button type="button" class="file-thumb-del" data-del="${f.id}" title="Delete this file">${icon("trash")}</button>` : ""}</span>`).join("");
+  el.querySelectorAll(".file-thumb-del").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    const f = files.find(x => x.id === parseInt(b.dataset.del));
+    if (await deleteAttachmentAsk(f, entityType)) {
+      renderFileStrip(el, entityType, entityId);
+      document.dispatchEvent(new CustomEvent("files-changed", { detail: { entityType, entityId, from: el } }));
+    }
+  });
+  if (!el._filesListener) {  // a file deleted / added elsewhere on the screen: redraw the strip
+    el._filesListener = e => { if (document.body.contains(el) && e.detail.entityType === entityType && e.detail.entityId === entityId && e.detail.from !== el) renderFileStrip(el, entityType, entityId); };
+    document.addEventListener("files-changed", el._filesListener);
+  }
   el.querySelectorAll("[data-thumb]").forEach(async box => {
     const id = box.dataset.thumb;
     try {
@@ -906,7 +931,8 @@ function fmtFileSize(n) {
 const attachmentBlobUrls = {}, attachmentTypes = {}, attachmentNames = {};
 async function attachmentUrl(id) {
   if (!attachmentBlobUrls[id]) {
-    const r = await fetch(`/api/attachments/${id}/file`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
+    const desk = String(id).startsWith("desk-");  // a file on the AI Desk (not attached to anything yet)
+    const r = await fetch(desk ? `/api/ai-desk/files/${String(id).slice(5)}/raw` : `/api/attachments/${id}/file`, { headers: { Authorization: `Bearer ${AuthGuard.getToken()}` } });
     if (!r.ok) throw new Error(`Could not open the file (${r.status})`);
     const blob = await r.blob();
     attachmentTypes[id] = blob.type || "";
@@ -917,6 +943,18 @@ async function attachmentUrl(id) {
   return attachmentBlobUrls[id];
 }
 
+// Spreadsheets as a table, Word / text / email as text (server: services/doc_text.py); null when there's no preview.
+async function attachmentPreview(id) {
+  const sid = String(id);
+  const url = sid.startsWith("desk-") ? `/api/ai-desk/files/${sid.slice(5)}/preview` : /^\d+$/.test(sid) ? `/api/attachments/${sid}/preview` : null;
+  if (!url) return null;
+  try { return await apiFetchRaw(url); } catch (e) { return null; }
+}
+function previewHtml(pv) {
+  if (pv.type === "text") return `<pre class="fv-text">${escapeHtml(pv.text || "")}</pre>`;
+  return `<div class="fv-sheets">${(pv.sheets || []).map(sh => `<div class="fv-sheet">${(pv.sheets.length > 1) ? `<h4>${escapeHtml(sh.name)}</h4>` : ""}
+    <table class="compact-table no-table-tools fv-table"><tbody>${sh.rows.map((r, i) => `<tr>${r.map(c => i === 0 ? `<th>${escapeHtml(c)}</th>` : `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join("")}</div>`;
+}
 // Files open in a floating viewer (not a new tab): it sits over the page without blocking it, so you can check
 // the document against what's on screen. Drag it by its bar, resize from the corner (both remembered); images
 // zoom (wheel / + -), pan (drag) and rotate; PDFs show inside; ‹ › steps through the other files on the screen.
@@ -997,9 +1035,12 @@ const fileViewer = {
       this.el.querySelector(".fv-name").title = attachmentNames[id];
       const isImg = type.startsWith("image/"), isPdf = type === "application/pdf" || /\.pdf$/i.test(attachmentNames[id]);
       this.el.querySelector(".fv-img-tools").style.display = isImg ? "" : "none";
+      const pv = isImg || isPdf ? null : await attachmentPreview(id);
+      if (this.ids[this.at] !== id) return;
       body.innerHTML = isImg ? `<img src="${url}" alt="" draggable="false">`
         : isPdf ? `<iframe src="${url}#toolbar=1&view=FitH" title="${escapeHtml(attachmentNames[id])}"></iframe>`
-        : `<div class="fv-msg">This file type can't be shown here.<br><a class="link" onclick="fileViewer.act('tab')">Open it in a new tab</a></div>`;
+        : pv ? previewHtml(pv)
+        : `<div class="fv-msg">This file type can't be shown here.<br><a class="link" onclick="fileViewer.act('dl')">Download it</a> · <a class="link" onclick="fileViewer.act('tab')">open it in a new tab</a></div>`;
       this.paint();
     } catch (e) { body.innerHTML = `<div class="fv-msg error">${escapeHtml(e.message)}</div>`; }
   },
@@ -1142,6 +1183,32 @@ async function renderAttachments(container, entityType, entityId, categories, op
       errorEl.textContent = err.message;
     }
   });
+  if (el._filesListener) document.removeEventListener("files-changed", el._filesListener);
+  el._filesListener = e => {  // deleted from the thumbnail strip at the top: redraw this list too
+    if (document.body.contains(el) && e.detail.entityType === entityType && e.detail.entityId === entityId && e.detail.from !== el) {
+      renderAttachments(el, entityType, entityId, categories, Object.assign({}, opts, { onChange: null }));
+      if (opts.onChange) opts.onChange();
+    }
+  };
+  document.addEventListener("files-changed", el._filesListener);
+}
+// The trash on a file thumbnail: say exactly what goes (and what stays), then delete -- Undo puts it back.
+async function deleteAttachmentAsk(f, entityType) {
+  if (!f) return false;
+  const what = { customer_order: "this order", purchase_order: "this PO", shipment: "this shipment", invoice: "this invoice", quote: "this quote" }[entityType] || "this record";
+  const extra = f.category === "mtr" ? "<p>Its links to the PO's lines (MTR Library) go with it.</p>"
+    : f.category === "vendor_invoice" ? "<p>The vendor invoice entry (number, amount, payments) stays — only the file goes.</p>"
+    : f.category === "pod" ? "<p>The shipment stays delivered — only the file goes.</p>" : "";
+  const { value } = await askDialog({ title: "Delete This File?", tone: "warn",
+    body: `<p style="margin-top:0;"><strong>${escapeHtml(f.filename)}</strong> (${escapeHtml(attachmentLabel(f.category))}) comes off ${what}.</p>${extra}
+      <p class="muted small">It goes to the Recycle Bin — Undo (or Ctrl+Z) brings it back.</p>`,
+    buttons: [{ label: "Delete File", value: "del", cls: "danger" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value !== "del") return false;
+  try {
+    await apiFetch(`/api/attachments/${f.id}`, { method: "DELETE" });
+    undoableDelete(`Deleted ${f.filename}`, async () => document.dispatchEvent(new CustomEvent("files-changed", { detail: { entityType, entityId: f.entity_id, from: null } })));
+    return true;
+  } catch (e) { alert(e.message); return false; }
 }
 
 // ---- Types & tags people can add to (app/services/type_lists.py): document types, S&H types, landed cost types,
@@ -2780,7 +2847,7 @@ function aiScan(btn, kind, callback, poId, engine = "local") {
       + "Only that text is sent, never the PDF. Scanned images are not sent.")) return;
   const picker = document.createElement("input");
   picker.type = "file";
-  picker.accept = "application/pdf,image/*";
+  picker.accept = "application/pdf,image/*,.xlsx,.csv,.docx,.txt,.eml";  // spreadsheets / Word / emails are read as text
   picker.onchange = async () => {
     const file = picker.files[0];
     if (!file) return;
@@ -3807,7 +3874,7 @@ async function stickyNotes(container, entityType, entityId) {
         <div class="sticky-text">${escapeHtml(n.text)}</div>
         <div class="sticky-foot">${remind(n)}<span class="muted">${escapeHtml(n.updated_by || n.created_by || "")} · ${fmtDate(n.updated_at || n.created_at, { month: "short", day: "numeric" })}</span>
           <span class="sticky-acts"><a title="Done" data-act="done">${icon("check")}</a><a title="Edit" data-act="edit">${icon("pencil")}</a></span></div></div>`).join("")}
-      <button type="button" class="sticky-add" title="Stick a note on this record, with a reminder date if you like">${icon("sticky")}${open.length ? "" : " Add Sticky Note"}</button>
+      <button type="button" class="sticky-add" title="Stick a note on this record, with a reminder date if you like">${icon("sticky")}${open.length ? "" : "Add Note"}</button>
     </div>
     ${done.length ? `<details class="sticky-done"><summary class="muted small">${done.length} done note${done.length === 1 ? "" : "s"}</summary>
       ${done.map(n => `<div class="small muted" data-id="${n.id}" style="margin:3px 0;">✓ ${escapeHtml(n.text)} <span>· ${escapeHtml(n.done_by || "")} ${fmtDate(n.done_at)}</span>
@@ -4402,7 +4469,8 @@ function scannedDocHtml(file, attachNote = "") {
   const isPdf = attachmentTypes[id] === "application/pdf";
   return `<div class="scan-doc" title="Open it beside the form — drag or resize the window, or Enlarge it">
       <div class="scan-doc-thumb" onclick="viewScannedDoc('${id}')">${isPdf ? `<iframe src="${attachmentBlobUrls[id]}#toolbar=0&navpanes=0&view=FitH" tabindex="-1" title="Preview"></iframe>`
-        : `<img src="${attachmentBlobUrls[id]}" alt="">`}<span class="scan-doc-cover"></span></div>
+        : (attachmentTypes[id] || "").startsWith("image/") ? `<img src="${attachmentBlobUrls[id]}" alt="">`
+        : `<span class="desk-badge other">${escapeHtml((file.name.split(".").pop() || "file").slice(0, 4).toUpperCase())}</span>`}<span class="scan-doc-cover"></span></div>
       <div class="scan-doc-info"><strong title="${escapeHtml(file.name)}">${icon("paperclip")} ${escapeHtml(file.name)}</strong>
         ${attachNote ? `<span class="muted small">${escapeHtml(attachNote)}</span>` : ""}
         <button type="button" class="small-btn secondary" onclick="viewScannedDoc('${id}')">${icon("eye")} View Beside</button></div></div>`;
@@ -4796,3 +4864,103 @@ const PeriodFilters = {
     return PeriodPicker.test(`${prefix}-period`, dates[by]);
   },
 };
+
+// ---- Look-alike orders / POs (server: services/lookalike.py): the same customer (vendor) with the same items and
+// quantities as another live one. Never refused -- but someone must look and tick "this is separate, not a duplicate"
+// before it can be confirmed / validated / ordered. LookAlike.review() is that check; apiFetch calls it by itself when
+// the server says LOOKALIKE and retries the action once it's OK'd. ----
+const LookAlike = {
+  conf(kind) {
+    return kind === "vendor" || kind === "po"
+      ? { api: "purchase-orders", page: "purchase-orders", word: "PO", Word: "PO", ref: "Vendor SO #", kind: "vendor" }
+      : { api: "customer-orders", page: "customer-orders", word: "order", Word: "Order", ref: "Customer PO #", kind: "customer" };
+  },
+  codes(rec) { return (rec.lookalikes || []).map(x => x.code); },
+  // list chip beside the code
+  chip(kind, rec) {
+    const l = rec.lookalikes || [];
+    if (!l.length) return "";
+    return ` <span class="la-chip" title="${escapeHtml(`${l.map(x => `${x.code}: ${x.what}`).join("\n")}\nOpen it and click Review to check it isn't a duplicate`)}">${icon("layers")}Looks like ${escapeHtml(l.map(x => x.code).join(", "))}</span>`;
+  },
+  // banner on the record
+  banner(kind, rec) {
+    const l = rec.lookalikes || [], c = this.conf(kind);
+    if (!l.length) return "";
+    return `<div class="la-banner">${icon("layers")}<div><strong>Looks like ${l.map(x => `<a class="link" href="${c.page}.html?id=${x.id}" target="_blank">${escapeHtml(x.code)}</a>`).join(", ")}</strong>
+        — ${escapeHtml(l[0].what)}. Check it isn't the same ${c.word} entered twice before it goes on.</div>
+      <button class="small-btn" onclick="LookAlike.review('${c.kind}', ${rec.id}).then(ok => ok && typeof afterLookalikeOk === 'function' && afterLookalikeOk(${rec.id}))">Review</button></div>`;
+  },
+  side(title, sub, lines, money) {
+    return `<div class="la-col"><div class="la-col-head"><strong>${title}</strong>${sub ? `<div class="muted small">${sub}</div>` : ""}</div>
+      <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">Qty</th>${money ? `<th class="num">Price</th>` : ""}</tr></thead><tbody>
+      ${lines.map(l => `<tr class="${l.match ? "la-same" : "la-diff"}"><td>${escapeHtml(l.item_code)}</td><td class="num">${fmtQty(l.quantity)}</td>${money ? `<td class="num">${fmtPrice(l.price)}</td>` : ""}</tr>`).join("")}
+      </tbody></table></div>`;
+  },
+  // The check: side by side, and an explicit tick. Resolves true once OK'd (the server keeps who and when).
+  async review(kind, id) {
+    const c = this.conf(kind);
+    let rec;
+    try { rec = await apiFetchRaw(`/api/${c.api}/${id}`); } catch (e) { alert(e.message); return false; }
+    const l = rec.lookalikes || [];
+    if (!l.length) { toast("Nothing to check — no look-alike left"); return true; }
+    const money = !hidesMoney();
+    const mineRef = (c.kind === "customer" ? rec.po_number : rec.vendor_so_number) || "";
+    const body = `<p style="margin-top:0;">${escapeHtml(rec.code)} has the same ${l[0].exact ? "items and quantities" : "lines, mostly,"} as
+        ${l.length === 1 ? "another" : `${l.length} other`} ${c.word}${l.length === 1 ? "" : "s"}. That's sometimes right (the same things ordered again) —
+        but check it isn't the same ${c.word} entered twice.</p>
+      ${l.map(x => `<div class="la-pair">
+        <div class="la-what">${icon("layers")} <strong>${escapeHtml(x.what)}</strong></div>
+        <div class="la-cols">
+          ${this.side(`This ${c.word}: ${escapeHtml(rec.code)}`, `${mineRef ? `${c.ref} ${escapeHtml(mineRef)} · ` : ""}${escapeHtml(rec.status)}`, x.mine, money)}
+          ${this.side(`<a class="link" href="${c.page}.html?id=${x.id}" target="_blank">${escapeHtml(x.code)} ↗</a>`,
+            `${x.ref ? `${c.ref} ${escapeHtml(x.ref)} · ` : `no ${c.ref} · `}${escapeHtml(x.status)} · entered ${fmtDate(x.date)}${x.created_by ? ` by ${escapeHtml(x.created_by)}` : ""}`, x.lines, money)}
+        </div></div>`).join("")}
+      <p class="muted small" style="margin:8px 0 4px;">Green rows are the same on both; amber rows differ.</p>
+      <label class="check-label la-tick"><input type="checkbox" class="la-ok-box"> I checked — <strong>${escapeHtml(rec.code)} is a separate ${c.word}</strong>, not a duplicate of ${escapeHtml(l.map(x => x.code).join(", "))}</label>`;
+    const p = askDialog({ title: `Possible Duplicate — ${rec.code}`, wide: true, tone: "warn", body,
+      buttons: [{ label: "OK — It's Separate", value: "ok", cls: "confirm-btn la-ok-btn" }, { label: "Not Now", value: null, cls: "secondary" }] });
+    // the OK button works only once the box is ticked
+    setTimeout(() => {
+      const dlg = document.querySelector(".la-ok-box") && document.querySelector(".la-ok-box").closest(".ask-dialog, .modal, div[role=dialog]") || document;
+      const box = dlg.querySelector(".la-ok-box"), btn = [...dlg.querySelectorAll("button")].find(b => b.classList.contains("la-ok-btn"));
+      if (box && btn) { btn.disabled = true; box.onchange = () => { btn.disabled = !box.checked; }; }
+    }, 0);
+    const { value, el } = await p;
+    if (value !== "ok" || !el.querySelector(".la-ok-box").checked) return false;
+    try {
+      await apiFetchRaw(`/api/${c.api}/${id}/lookalike-ok`, { method: "POST", body: JSON.stringify({ codes: l.map(x => x.code) }) });
+      toast(`${rec.code}: checked — separate from ${l.map(x => x.code).join(", ")}`);
+      return true;
+    } catch (e) { alert(e.message); return false; }
+  },
+  // After creating: ask straight away (resolves whether it was OK'd; not OK'd = it stays flagged)
+  async afterCreate(kind, rec) {
+    if (rec && (rec.lookalikes || []).length) return this.review(kind, rec.id);
+    return true;
+  },
+};
+// The server refused something because of a look-alike / a vendor SO # already used: ask, then do it again.
+async function handleCheckRefusal(e, retry, retryAllowDuplicate) {
+  const msg = e && e.message || "";
+  if (msg.startsWith("LOOKALIKE|")) {
+    let d = {};
+    try { d = JSON.parse(msg.slice("LOOKALIKE|".length)); } catch (x) { /* fall through */ }
+    if (d.id && await LookAlike.review(d.kind, d.id)) return retry();
+    throw new Error(`Not done yet — ${(d.message || "it looks like another one").split(" -- ")[0]}. Check it (Review on the record) first.`);
+  }
+  if (msg.startsWith("DUPLICATE_SO|") && retryAllowDuplicate) {
+    const [, id, code, text] = msg.split("|");
+    const { value } = await askDialog({ title: "Vendor SO # Already Used", tone: "warn",
+      body: `<p style="margin-top:0;">${escapeHtml(text)}.</p><p>Is this really a separate purchase order with the same vendor SO #?
+        <a class="link" href="purchase-orders.html?id=${parseInt(id)}" target="_blank">Open ${escapeHtml(code)} ↗</a></p>`,
+      buttons: [{ label: "Yes, Save It Anyway", value: "go", cls: "confirm-btn" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (value === "go") return retryAllowDuplicate();
+    throw new Error(`Not saved — vendor SO # is already on ${code}`);
+  }
+  throw e;
+}
+function withAllowDuplicate(options) {
+  if (options.body instanceof FormData) { options.body.set("allow_duplicate", "true"); return options; }
+  try { return Object.assign({}, options, { body: JSON.stringify(Object.assign(JSON.parse(options.body || "{}"), { allow_duplicate: true })) }); }
+  catch (x) { return options; }
+}

@@ -220,7 +220,7 @@ function pickQuoteCandidate(a, id) {
 let quoteRfqFile = null;
 function scanQuotePdf(engine = null) {
   if (engine === "claude" && !confirm("Read this RFQ with Claude (Anthropic's cloud)?\n\nNames, addresses and contact details are removed on this PC first; only that text is sent, never the PDF.")) return;
-  const picker = Object.assign(document.createElement("input"), { type: "file", accept: "application/pdf" });
+  const picker = Object.assign(document.createElement("input"), { type: "file", accept: ".pdf,.xlsx,.csv,.docx,.txt,.eml" });
   picker.onchange = async () => {
     const file = picker.files[0];
     if (!file) return;

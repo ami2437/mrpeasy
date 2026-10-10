@@ -92,7 +92,8 @@ def test_split_off_a_combined_invoice_moves_only_that_shipment(make, api):
 
 # ---------------- delivery dates ----------------
 def _day(days_ago):
-    return (datetime.utcnow() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    from app.services import clock  # the company's calendar day, as the server checks it (not UTC: after 7 pm Central that's tomorrow)
+    return (clock.today() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
 
 
 def test_delivery_date_and_a_line_on_another_day(make, api):

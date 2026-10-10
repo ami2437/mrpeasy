@@ -7,7 +7,7 @@ from app.schemas import (
     LineOrderRequest,
     PurchaseOrderCreate, PurchaseOrderResponse, ReceiveOrderRequest,
     PurchaseOrderUpdate, PurchaseOrderLineAdd, PurchaseOrderLineUpdate, PurchaseOrderPaymentInput,
-    PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput, VendorShipmentInput,
+    PurchaseOrderEmailRequest, VendorBillInput, PurchaseOrderChargeInput, VendorShipmentInput, LookalikeOkIn,
 )
 from app.dependencies import require_perm, require_any
 from app.services.pdf import purchase_order_pdf
@@ -15,6 +15,13 @@ from app.services import email as email_service
 from app.services.crud import PurchaseOrderService, PurchaseOrderPaymentService, VendorBillService, PurchaseOrderChargeService
 from app.dependencies import get_current_active_user
 from app.models import User
+
+def _la(db, rec):
+    """The PO with its look-alikes not OK'd yet (services/lookalike.py)."""
+    from app.services import lookalike
+    rec.lookalikes = lookalike.pending(db, "vendor", rec)
+    return rec
+
 
 router = APIRouter(prefix="/api/purchase-orders", tags=["purchase-orders"], dependencies=[Depends(require_perm("purchasing"))])  # no dollar work for employees
 
@@ -58,9 +65,11 @@ def payments_import_apply(file: UploadFile = File(...), db: Session = Depends(ge
 @router.get("/", response_model=list[PurchaseOrderResponse])
 def list_orders(status: str | None = Query(None), db: Session = Depends(get_db)):
     from app.services.jobs import jobs_by_po
+    from app.services import lookalike
     pos, jobs = PurchaseOrderService.list(db, status=status), jobs_by_po(db)
     for po in pos:
         po.jobs = sorted(jobs.get(po.id, ()))
+    lookalike.annotate(db, "vendor", pos)
     return pos
 
 
@@ -81,12 +90,12 @@ def po_receipts(po_id: int, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=PurchaseOrderResponse)
 def create_order(data: PurchaseOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    return PurchaseOrderService.create(db, data, created_by=current_user.username)
+    return _la(db, PurchaseOrderService.create(db, data, created_by=current_user.username))
 
 
 @router.post("/capture", response_model=PurchaseOrderResponse)
 def capture_order(vendor_id: int = Form(...), vendor_so_number: str | None = Form(None), category: str = Form("vendor_quote"),
-                  note: str | None = Form(None), files: list[UploadFile] = File(...), db: Session = Depends(get_db),
+                  note: str | None = Form(None), files: list[UploadFile] = File(...), allow_duplicate: bool = Form(False), db: Session = Depends(get_db),
                   current_user: User = Depends(get_current_active_user)):
     """Quick capture: the vendor's document + who it's from. The PO waits as "Validation needed" (no lines; it can't be
     ordered, emailed or received) until someone fills it in and validates it."""
@@ -95,7 +104,7 @@ def capture_order(vendor_id: int = Form(...), vendor_so_number: str | None = For
     if category not in type_lists.keys(db, "attachment", "purchase_order"):
         raise HTTPException(status_code=400, detail=f"'{category}' isn't a document type for purchase orders")
     blobs = read_uploads(files)
-    po = PurchaseOrderService.capture(db, vendor_id, vendor_so_number, current_user.username)
+    po = PurchaseOrderService.capture(db, vendor_id, vendor_so_number, current_user.username, allow_duplicate=allow_duplicate)
     for name, ctype, data in blobs:
         store_file(db, "purchase_order", po.id, category, name, ctype, data, note or "Quick capture", current_user.username)
     db.commit()
@@ -105,6 +114,7 @@ def capture_order(vendor_id: int = Form(...), vendor_so_number: str | None = For
 
 class ValidatePoIn(BaseModel):
     ordered: bool = False  # validate and mark ordered in one go
+    allow_duplicate: bool = False  # its vendor SO # is also on another PO of the vendor, and that's right
 
 
 class PendingMatchIn(BaseModel):
@@ -129,12 +139,12 @@ def discard_pending(po_id: int, idx: int, db: Session = Depends(get_db)):
 @router.post("/{po_id}/validate", response_model=PurchaseOrderResponse)
 def validate_order(po_id: int, data: ValidatePoIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """A quick-captured PO checked against the vendor's document: on to Draft (or Ordered)."""
-    return PurchaseOrderService.validate(db, po_id, current_user.username, ordered=data.ordered)
+    return PurchaseOrderService.validate(db, po_id, current_user.username, ordered=data.ordered, allow_duplicate=data.allow_duplicate)
 
 
 @router.get("/{po_id}", response_model=PurchaseOrderResponse)
 def get_order(po_id: int, db: Session = Depends(get_db)):
-    return PurchaseOrderService.get(db, po_id)
+    return _la(db, PurchaseOrderService.get(db, po_id))
 
 
 @router.get("/{po_id}/pdf")
@@ -157,23 +167,30 @@ def email_po(po_id: int, data: PurchaseOrderEmailRequest, db: Session = Depends(
 
 
 @router.put("/{po_id}", response_model=PurchaseOrderResponse)
-def update_order(po_id: int, data: PurchaseOrderUpdate, db: Session = Depends(get_db)):
-    return PurchaseOrderService.update(db, po_id, data)
+def update_order(po_id: int, data: PurchaseOrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    return _la(db, PurchaseOrderService.update(db, po_id, data, by=current_user.username))
+
+
+@router.post("/{po_id}/lookalike-ok", response_model=PurchaseOrderResponse)
+def lookalike_ok(po_id: int, data: LookalikeOkIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Someone looked: this PO is separate from the look-alike PO(s), not a duplicate (kept with who and when)."""
+    from app.services import lookalike
+    return _la(db, lookalike.acknowledge(db, "vendor", PurchaseOrderService.get(db, po_id), data.codes, current_user.username))
 
 
 @router.post("/{po_id}/lines", response_model=PurchaseOrderResponse)
 def add_line(po_id: int, data: PurchaseOrderLineAdd, db: Session = Depends(get_db)):
-    return PurchaseOrderService.add_line(db, po_id, data)
+    return _la(db, PurchaseOrderService.add_line(db, po_id, data))
 
 
 @router.put("/{po_id}/lines/{line_id}", response_model=PurchaseOrderResponse)
 def update_line(po_id: int, line_id: int, data: PurchaseOrderLineUpdate, db: Session = Depends(get_db)):
-    return PurchaseOrderService.update_line(db, po_id, line_id, data)
+    return _la(db, PurchaseOrderService.update_line(db, po_id, line_id, data))
 
 
 @router.delete("/{po_id}/lines/{line_id}", response_model=PurchaseOrderResponse)
 def remove_line(po_id: int, line_id: int, db: Session = Depends(get_db)):
-    return PurchaseOrderService.remove_line(db, po_id, line_id)
+    return _la(db, PurchaseOrderService.remove_line(db, po_id, line_id))
 
 
 @router.post("/{po_id}/mark-ordered", response_model=PurchaseOrderResponse)
