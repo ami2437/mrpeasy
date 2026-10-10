@@ -152,6 +152,7 @@ class ContactCardMixin:
     addresses, websites and people, plus tags and notes. The single fields (phone, email, contact_name,
     address, shipping_address) stay as the card's "main" values, since documents and emails read them."""
     details_json = Column(Text, nullable=True)  # JSON: tags, labelled phones/emails/addresses/websites, people, notes
+    email_from_id = Column(Integer, nullable=True)  # our address their emails go out from (EmailSender), else the default per kind
 
     DETAIL_LISTS = ("phones", "emails", "addresses", "websites", "people")
 
@@ -506,6 +507,87 @@ class VendorBill(Base):
     @property
     def balance(self) -> float:
         return round(self.amount - self.amount_paid, 2)
+
+
+class EmailSender(Base):
+    """An address AT-HUB sends from (robert.jones@, accounting@...). Logs in with its own mailbox password, or uses the
+    server's shared login (a sending service with the domain verified). The password is kept encrypted
+    (services/mail_secret.py) and never sent back to a screen. status: ok | failing | unknown -- checked daily."""
+    __tablename__ = "email_senders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    address = Column(String, nullable=False, unique=True)
+    display_name = Column(String, nullable=True)
+    reply_to = Column(String, nullable=True)
+    signature = Column(Text, nullable=True)
+    bcc_me = Column(Boolean, nullable=False, default=False)
+    login = Column(String, nullable=False, default="server")  # server (shared login, .env SMTP_*) | own (this mailbox)
+    smtp_host = Column(String, nullable=True)
+    smtp_port = Column(Integer, nullable=True)
+    smtp_security = Column(String, nullable=True)  # starttls | ssl | none
+    smtp_username = Column(String, nullable=True)
+    password_enc = Column(Text, nullable=True)
+    imap_host = Column(String, nullable=True)
+    imap_port = Column(Integer, nullable=True)
+    save_sent = Column(Boolean, nullable=False, default=True)  # a copy in this mailbox's Sent folder (own login)
+    sent_folder = Column(String, nullable=True)
+    read_inbox = Column(Boolean, nullable=False, default=False)  # replies onto records, attachments to the AI Desk
+    inbox_folder = Column(String, nullable=True, default="INBOX")
+    attachments_to_desk = Column(Boolean, nullable=False, default=True)
+    imap_uidvalidity = Column(String, nullable=True)
+    imap_last_uid = Column(Integer, nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+    status = Column(String, nullable=False, default="unknown")
+    last_error = Column(Text, nullable=True)
+    failing_since = Column(DateTime, nullable=True)
+    last_ok_at = Column(DateTime, nullable=True)
+    last_check_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EmailLog(Base):
+    """Every email AT-HUB sent (or tried to): the Emails page, and the record's email history. A failed one keeps
+    its message (raw_path) so it can be sent again once the address works."""
+    __tablename__ = "email_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String, nullable=True, index=True)  # invoice | statement | purchase_order | quote | pod | mtr | test
+    record_type = Column(String, nullable=True, index=True)
+    record_id = Column(Integer, nullable=True, index=True)
+    record_code = Column(String, nullable=True)
+    party = Column(String, nullable=True)
+    sender_id = Column(Integer, ForeignKey("email_senders.id"), nullable=True)
+    from_address = Column(String, nullable=True)
+    to_address = Column(Text, nullable=True)
+    cc_address = Column(Text, nullable=True)
+    subject = Column(Text, nullable=True)
+    attachments = Column(Text, nullable=True)
+    message_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="sent")  # sent | failed | resent
+    error = Column(Text, nullable=True)
+    raw_path = Column(String, nullable=True)  # failed ones: the message as it was, to send again
+    sent_by = Column(String, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class EmailReply(Base):
+    """A reply that came into a mailbox AT-HUB reads, matched to the record it's about (by the thread, or the
+    record's number in the subject)."""
+    __tablename__ = "email_replies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sender_id = Column(Integer, ForeignKey("email_senders.id"), nullable=True)
+    email_log_id = Column(Integer, ForeignKey("email_log.id"), nullable=True)
+    record_type = Column(String, nullable=True, index=True)
+    record_id = Column(Integer, nullable=True, index=True)
+    record_code = Column(String, nullable=True)
+    from_address = Column(String, nullable=True)
+    subject = Column(Text, nullable=True)
+    snippet = Column(Text, nullable=True)
+    message_id = Column(String, nullable=True, index=True)
+    attachments = Column(Text, nullable=True)  # names; the files went to the AI Desk
+    received_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class CustomerReport(Base):

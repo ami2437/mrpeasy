@@ -289,6 +289,7 @@ class PartyUpdate(BaseModel):
     address: Optional[str] = None
     shipping_address: Optional[str] = None
     is_active: Optional[bool] = None
+    email_from_id: Optional[int] = None  # our address their emails go out from (Company Settings -> Email); none = the default
 
 
 class CustomerCreate(PartyCreate):
@@ -303,6 +304,7 @@ VendorCreate, VendorUpdate = CustomerCreate, CustomerUpdate  # same contact card
 
 
 class PartyResponse(BaseModel):
+    email_from_id: Optional[int] = None
     id: int
     row_version: int = 1  # optimistic locking: send it back as X-Row-Version when changing the record
     row_updated_at: Optional[datetime] = None
@@ -680,6 +682,7 @@ class PodFile(BaseModel):
 
 
 class PodEmailRequest(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     to: str
     cc: Optional[str] = None
     subject: str
@@ -830,6 +833,7 @@ class InvoiceResponse(BaseModel):
 
 
 class InvoiceEmailRequest(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     to: str  # one or more addresses, comma/semicolon separated
     cc: Optional[str] = None
     subject: str
@@ -1161,6 +1165,7 @@ class VendorItemResponse(BaseModel):
 
 
 class PurchaseOrderEmailRequest(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     to: str
     cc: Optional[str] = None
     subject: str

@@ -316,6 +316,7 @@ function toggleQuoteEmail() {
   el.style.display = "block";
   el.innerHTML = `<div class="panel" style="max-width:640px; margin:8px 0;">
       <div class="row">
+        <div id="q-from-slot"></div>
         <div><label>To</label><input type="text" id="q-email-to" value="${escapeHtml(x.customer_email || "")}" placeholder="buyer@customer.com"></div>
         <div><label>CC</label><input type="text" id="q-email-cc"></div>
       </div>
@@ -333,10 +334,11 @@ Thank you.</textarea>
       <div id="q-email-error" class="error"></div>
     </div>`;
   decorateIcons(el);
+  EmailFrom.mount("q-from-slot", "quote", "customer", x.customer_id);
 }
 async function sendQuoteEmail() {
   const err = document.getElementById("q-email-error"), btn = document.getElementById("q-email-send");
-  const msg = { to: document.getElementById("q-email-to").value, cc: document.getElementById("q-email-cc").value || null,
+  const msg = { to: document.getElementById("q-email-to").value, from_id: EmailFrom.value("q-from-slot"), cc: document.getElementById("q-email-cc").value || null,
     subject: document.getElementById("q-email-subject").value, body: document.getElementById("q-email-body").value,
     attach_pdf: document.getElementById("q-email-pdf").checked };
   err.textContent = ""; btn.disabled = true; btn.textContent = "Sending…";

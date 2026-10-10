@@ -51,6 +51,7 @@ OPEN = {
         ("PUT", "/api/attachments/{attachment_id}"), ("DELETE", "/api/attachments/{attachment_id}"),
         ("GET", "/api/attachments/{attachment_id}/file"), ("GET", "/api/attachments/{attachment_id}/thumb"),
         ("GET", "/api/attachments/{attachment_id}/preview")]},
+    ("GET", "/api/email/health"): "a signed-in user's own top-bar check; returns nothing without the Company Settings permission",
     ("POST", "/api/ai-docs/extract"): "checks 'ai' inside (POD reading is for drivers)",
     ("POST", "/api/ai-docs/validate-po/{po_id}"): "checks 'ai' inside",
     # checked inside main.py (recycle_bin permission; history scrubbed without 'See prices')

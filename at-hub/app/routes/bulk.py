@@ -23,7 +23,8 @@ class DocsIn(BaseModel):
 
 
 class SendIn(DocsIn):
-    edits: Dict[str, dict] = {}  # group key -> {to, cc, subject, body, skip}
+    edits: Dict[str, dict] = {}  # group key -> {to, cc, subject, body, skip, from_id}
+    from_id: Optional[int] = None  # From address for every email (a group's own from_id wins)
 
 
 def _check(user, data: DocsIn):
@@ -39,14 +40,14 @@ def plan(data: DocsIn, db: Session = Depends(get_db), user: User = Depends(get_c
     _check(user, data)
     groups = bulk_docs.plan(db, data.shipment_ids, data.invoice_ids, data.kinds, data.group_by, has(user, "invoices"), data.attach)
     from app.services import email as email_service
-    return {"groups": groups, "email_ready": email_service.is_configured()}
+    return {"groups": groups, "email_ready": email_service.is_configured(db)}
 
 
 @router.post("/documents/send")
 def send(data: SendIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     _check(user, data)
     groups = bulk_docs.plan(db, data.shipment_ids, data.invoice_ids, data.kinds, data.group_by, has(user, "invoices"), data.attach)
-    return {"results": bulk_docs.send(db, groups, data.edits, user.username)}
+    return {"results": bulk_docs.send(db, groups, data.edits, user.username, from_id=data.from_id)}
 
 
 from app.services.filenames import disposition  # noqa: E402

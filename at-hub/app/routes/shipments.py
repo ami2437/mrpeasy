@@ -183,7 +183,7 @@ def email_pod(shipment_id: int, data: PodEmailRequest, db: Session = Depends(get
         path = (upload_root() / att.stored_name).resolve()
         if path.exists():
             files.append((path.read_bytes(), att.filename, att.content_type or "application/octet-stream"))
-    return email_service.send_pods(db, shipment, files, data.to, data.cc, data.subject, data.body, current_user.username)
+    return email_service.send_pods(db, shipment, files, data.to, data.cc, data.subject, data.body, current_user.username, sender_id=data.from_id)
 
 
 @router.get("/{shipment_id}/packing-list.pdf")

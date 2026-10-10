@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, emails: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -1835,7 +1835,8 @@ const NAV_GROUPS = [
     ["landed-costs.html", "Landed Costs", "landed_costs"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items", "stock.view"], ["lots.html", "Lots", "stock.view"], ["mtrs.html", "MTR Library", "stock.view"]] },
-  { label: null, links: [["reports.html", "Reports", "reports"], ["simulate.html", "Simulate", "simulate"], ["company.html", "Company Settings", "company"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
+  { label: null, links: [["reports.html", "Reports", "reports"], ["simulate.html", "Simulate", "simulate"], ["company.html", "Company Settings", "company"],
+    ["emails.html", "Emails", "emails"], ["designer.html", "Template Designer", "templates"], ["recycle-bin.html", "Recycle Bin", "recycle_bin"]] },
   { label: "MRP Migrate", links: [["golive.html", "Go-Live Cleanup", "golive"], ["mrp-payments.html", "PO Payments Import", "payments.import"], ["file-matcher.html", "File Matcher", "file_matcher"]] },
   { label: "Admin", links: [["activity.html", "Activity Log", "recycle_bin"], ["users.html", "Users & Roles", "users"], ["backups.html", "Backups", "backups"]] },
 ];
@@ -2595,6 +2596,7 @@ async function renderOrderMtrs(container, orderId) {
     ${any ? `
       <div class="panel" style="margin-top:10px;max-width:640px;">
         <div class="row">
+          <div class="om-from-slot"></div>
           <div><label>To</label><input type="text" id="om-to" value="${escapeHtml(d.customer_email || "")}" placeholder="customer@example.com"></div>
           <div><label>CC</label><input type="text" id="om-cc"></div>
         </div>
@@ -2611,6 +2613,7 @@ Thank you.</textarea>
       `Sent ${escapeHtml(e.files || "")} to ${escapeHtml(e.to)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : ""}`;
   const btn = el.querySelector("#om-send");
   if (!btn) return;
+  if (el.querySelector(".om-from-slot")) EmailFrom.mount(el.querySelector(".om-from-slot"), "mtr", "customer", d.customer_id);
   btn.onclick = async () => {
     const err = el.querySelector("#om-error");
     err.textContent = "";
@@ -2619,7 +2622,7 @@ Thank you.</textarea>
     btn.disabled = true; btn.textContent = "Sending…";
     try {
       await apiFetch("/api/mtrs/email", { method: "POST", body: JSON.stringify({
-        attachment_ids: ids, order_id: orderId, to: el.querySelector("#om-to").value, cc: el.querySelector("#om-cc").value || null,
+        attachment_ids: ids, order_id: orderId, to: el.querySelector("#om-to").value, from_id: EmailFrom.value(el.querySelector(".om-from-slot")), cc: el.querySelector("#om-cc").value || null,
         subject: el.querySelector("#om-subject").value, body: el.querySelector("#om-body").value }) });
       renderOrderMtrs(el, orderId);
     } catch (e) { err.textContent = e.message; btn.disabled = false; btn.textContent = "Email Selected MTRs"; }
@@ -2783,7 +2786,7 @@ const NAV_ICONS = {
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
   "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
-  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "notes.html": "sticky", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette", "reconcile.html": "list",
+  "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "notes.html": "sticky", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette", "reconcile.html": "list", "emails.html": "mail",
 };
 // First matching keyword wins. Buttons are matched on their text, section titles likewise.
 const BUTTON_ICONS = [
@@ -5096,4 +5099,74 @@ function makeBulkPick(o) {
   };
   window[o.name] = self;
   return self;
+}
+
+// ---- The From picker every email form gets: preset to the address for this kind / customer / vendor ----
+// EmailFrom.mount(slotEl, kind, partyType, partyId) fills the slot; EmailFrom.value(slotEl) -> the picked id (or null).
+const EmailFrom = {
+  async mount(slot, kind, partyType, partyId) {
+    const el = typeof slot === "string" ? document.getElementById(slot) : slot;
+    if (!el) return;
+    let c;
+    try { c = await apiFetch(`/api/email/choices?kind=${encodeURIComponent(kind)}${partyType ? `&party_type=${partyType}&party_id=${partyId || ""}` : ""}`); }
+    catch (e) { el.innerHTML = ""; return; }
+    if (!c.senders.length) { el.innerHTML = c.server_from ? `<label>From</label><div class="muted small">${escapeHtml(c.server_from)}</div>` : ""; return; }
+    el.innerHTML = `<label>From</label><select class="email-from">
+        ${c.server_from ? `<option value="">${escapeHtml(c.server_from)}</option>` : ""}
+        ${c.senders.map(s => `<option value="${s.id}" ${s.id === c.default_id ? "selected" : ""}>${escapeHtml(s.display_name ? `${s.display_name} <${s.address}>` : s.address)}${s.status === "failing" ? " — not working!" : ""}</option>`).join("")}</select>`;
+  },
+  value(slot) {
+    const el = typeof slot === "string" ? document.getElementById(slot) : slot;
+    const sel = el && el.querySelector(".email-from");
+    return sel && sel.value ? parseInt(sel.value) : null;
+  },
+};
+
+// ---- A record's emails: what went out (from which address, delivered or failed) and the replies that came back ----
+async function renderEmailThread(slot, recordType, recordId) {
+  const el = typeof slot === "string" ? document.getElementById(slot) : slot;
+  if (!el) return;
+  let t;
+  try { t = await apiFetch(`/api/email/thread?record_type=${recordType}&record_id=${recordId}`); } catch (e) { el.innerHTML = ""; return; }
+  if (!t.sent.length && !t.replies.length) { el.innerHTML = ""; return; }
+  const items = [...t.sent.map(x => ({ ...x, kind: "sent" })), ...t.replies.map(x => ({ ...x, kind: "reply" }))].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  el.innerHTML = `<div class="em-thread">${items.map(x => x.kind === "sent"
+    ? `<div class="em-msg sent"><span class="em-dir">${icon("mail")} Sent</span> <strong>${escapeHtml(x.subject || "")}</strong>
+        <span class="muted small">from ${escapeHtml(x.from || "")} to ${escapeHtml(x.to || "")} · ${fmtWhen(x.at)}${x.by ? ` · by ${escapeHtml(x.by)}` : ""}</span>
+        ${x.status === "failed" ? `<span class="tag overdue" title="${escapeHtml(x.error || "")}">not sent</span>` : ""}</div>`
+    : `<div class="em-msg reply"><span class="em-dir">${icon("undo")} Reply</span> <strong>${escapeHtml(x.from || "")}</strong>
+        <span class="muted small">${fmtWhen(x.at)}</span><div class="em-snip">${escapeHtml((x.snippet || "").slice(0, 600))}</div>
+        ${x.attachments ? `<div class="muted small">${icon("paperclip")} ${escapeHtml(x.attachments)} — on the AI Desk</div>` : ""}</div>`).join("")}</div>`;
+}
+
+// ---- Top bar: an address that stopped working, for the people who can fix it ----
+(async () => {
+  if (!AuthGuard.getToken() || !AuthGuard.can || !AuthGuard.can("company")) return;
+  let h = null;
+  try { const c = JSON.parse(sessionStorage.getItem("em-health") || "null"); if (c && Date.now() - c.at < 5 * 60 * 1000) h = c.h; } catch (e) { /* none */ }
+  if (!h) {
+    try { h = await apiFetchRaw("/api/email/health"); sessionStorage.setItem("em-health", JSON.stringify({ at: Date.now(), h })); } catch (e) { return; }
+  }
+  if (!h.failing.length) return;
+  const show = () => {
+    const bar = document.querySelector("#topbar .tb-right, #topbar");
+    if (!bar || bar.querySelector(".em-alert")) return !!bar;
+    bar.insertAdjacentHTML("afterbegin", `<a class="em-alert" href="company.html#email" title="${escapeHtml(h.failing.map(f => `${f.address}: ${f.error || ""}`).join("\n"))}">${icon("mail")} Email not working: ${escapeHtml(h.failing.map(f => f.address).join(", "))}</a>`);
+    return true;
+  };
+  if (!show()) setTimeout(show, 1500);
+})();
+
+// ---- a contact card's "Send From": which of our addresses emails to this customer / vendor go out from ----
+let cardSenders = null;
+async function loadCardSenders() {
+  try { cardSenders = (await apiFetch("/api/email/choices")).senders; } catch (e) { cardSenders = []; }
+}
+function cardSendFromHtml(d) {
+  if (!cardSenders || !cardSenders.length) return "";
+  const cur = parseInt(d.email_from_id) || "";
+  return `<div class="grp"><div class="grp-title">Send From <span class="used-for">our address their emails go out from</span></div>
+    <div class="ent" style="grid-template-columns:1fr;"><select onchange="ContactCards.set('email_from_id', null, null, this.value ? parseInt(this.value) : null)" style="max-width:320px;">
+      <option value="">The default for each kind of email</option>
+      ${cardSenders.map(s => `<option value="${s.id}" ${s.id === cur ? "selected" : ""}>${escapeHtml(s.address)}</option>`).join("")}</select></div></div>`;
 }

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Emails</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar">
+      <h1 class="page-title">Emails</h1>
+      <input type="search" id="q" placeholder="Search record #, customer / vendor, address, subject..." style="flex:1; min-width:240px;" oninput="render()">
+      <select id="kind" onchange="load()" style="width:auto;"><option value="">Every kind</option></select>
+      <select id="status" onchange="load()" style="width:auto;"><option value="">Sent and failed</option><option value="failed">Failed only</option><option value="sent">Sent only</option></select>
+      <span id="period-slot"></span>
+    </div>
+    <div class="card">
+      <p class="muted small" style="margin-top:0;">Every email AT-HUB sent — from which address, to whom, about which record — and the replies that came back to a
+        mailbox AT-HUB reads. One that failed (e.g. a password changed on the mail server) is kept: fix the address in
+        <a class="link" href="company.html#email">Company Settings → Email</a>, then <strong>Send Again</strong>.</p>
+      <div class="table-scroll"><table class="compact-table" id="em-table"><thead><tr><th>Sent</th><th>Kind</th><th>Record</th><th>From</th><th>To</th><th>Subject</th><th>Status</th><th></th></tr></thead>
+        <tbody id="em-body"><tr><td colspan="8">Loading…</td></tr></tbody></table></div>
+      <h4 style="margin:18px 0 6px;">Other Mail Read</h4>
+      <p class="muted small" style="margin-top:0;">Mail that came in without being a reply to something AT-HUB sent — matched to a record by the number in its subject, or
+        bringing documents to the AI Desk.</p>
+      <div id="other"></div>
+    </div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requirePerm("emails");
+    document.getElementById("sidebar").innerHTML = renderSidebar("emails.html");
+    const KIND = { invoice: "Invoice", statement: "Statement", credit_memo: "Credit Memo", purchase_order: "PO", quote: "Quote", pod: "Proof Of Delivery", mtr: "MTRs", test: "Test" };
+    document.getElementById("kind").innerHTML += Object.entries(KIND).map(([k, l]) => `<option value="${k}">${l}</option>`).join("");
+    document.getElementById("period-slot").innerHTML = PeriodPicker.html("em-days", { def: "90", onchange: "load()" });
+    let data = { emails: [], other_mail: [] };
+    async function load() {
+      const q = new URLSearchParams(PeriodPicker.query("em-days"));
+      if (document.getElementById("status").value) q.set("status", document.getElementById("status").value);
+      if (document.getElementById("kind").value) q.set("kind", document.getElementById("kind").value);
+      try { data = await apiFetch(`/api/email/log?${q}`); } catch (e) { document.getElementById("em-body").innerHTML = `<tr><td colspan="8" class="error">${escapeHtml(e.message)}</td></tr>`; return; }
+      render();
+    }
+    const rec = r => r.record_code ? (r.page ? `<a class="link" href="${r.page}.html?id=${r.record_id}" target="_blank">${escapeHtml(r.record_code)}</a>` : escapeHtml(r.record_code)) : "";
+    function render() {
+      const ql = document.getElementById("q").value.trim().toLowerCase();
+      const rows = data.emails.filter(r => !ql || [r.record_code, r.party, r.to, r.cc, r.subject, r.from, r.sent_by].join(" ").toLowerCase().includes(ql));
+      document.getElementById("em-body").innerHTML = rows.map(r => `<tr>
+          <td class="nowrap">${fmtWhen(r.sent_at)}<div class="muted small">${escapeHtml(r.sent_by || "")}</div></td>
+          <td>${escapeHtml(KIND[r.kind] || r.kind || "")}</td>
+          <td>${rec(r)}<div class="muted small">${escapeHtml(r.party || "")}</div></td>
+          <td>${escapeHtml(r.from || "")}</td>
+          <td>${escapeHtml(r.to || "")}${r.cc ? `<div class="muted small">cc ${escapeHtml(r.cc)}</div>` : ""}</td>
+          <td>${escapeHtml(r.subject || "")}${r.attachments ? `<div class="muted small">${icon("paperclip")} ${escapeHtml(r.attachments)}</div>` : ""}
+            ${r.replies.map(x => `<div class="em-msg reply" style="margin-top:4px;"><span class="em-dir">${icon("undo")} Reply</span> <strong>${escapeHtml(x.from)}</strong>
+              <span class="muted small">${fmtWhen(x.at)}</span><div class="em-snip">${escapeHtml(x.snippet)}</div></div>`).join("")}</td>
+          <td>${r.status === "sent" ? `<span class="tag shipped">sent</span>` : r.status === "resent" ? `<span class="tag confirmed">sent again</span>`
+              : `<span class="tag overdue" title="${escapeHtml(r.error || "")}">not sent</span><div class="muted small">${escapeHtml((r.error || "").slice(0, 90))}</div>`}</td>
+          <td>${r.status === "failed" ? `<button class="small-btn" onclick="resend(${r.id})">Send Again</button>` : ""}</td></tr>`).join("")
+        || `<tr><td colspan="8" class="muted">No emails${ql ? " match" : " in this period"}.</td></tr>`;
+      document.getElementById("other").innerHTML = data.other_mail.length ? `<table class="compact-table"><thead><tr><th>Received</th><th>From</th><th>Subject</th><th>About</th><th>Documents</th></tr></thead><tbody>
+        ${data.other_mail.map(x => `<tr><td class="nowrap">${fmtWhen(x.at)}</td><td>${escapeHtml(x.from || "")}</td><td>${escapeHtml(x.subject || "")}<div class="muted small">${escapeHtml(x.snippet || "")}</div></td>
+          <td>${rec(x)}</td><td>${x.attachments ? `${escapeHtml(x.attachments)} — <a class="link" href="ai-desk.html">AI Desk</a>` : ""}</td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted small">None yet.</p>`;
+    }
+    async function resend(id) {
+      try { await apiFetch(`/api/email/log/${id}/resend`, { method: "POST" }); toast("Sent"); load(); }
+      catch (e) { alert(e.message); }
+    }
+    load();
+  </script>
+</body>
+</html>

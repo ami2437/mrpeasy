@@ -165,7 +165,7 @@ def email_po(po_id: int, data: PurchaseOrderEmailRequest, db: Session = Depends(
              current_user: User = Depends(get_current_active_user)):
     po = PurchaseOrderService.get(db, po_id)
     email_service.send_purchase_order(db, po, data.to, data.cc, data.subject, data.body, data.attach_pdf,
-                                      sent_by=current_user.username)
+                                      sent_by=current_user.username, sender_id=data.from_id)
     db.refresh(po)
     return po
 

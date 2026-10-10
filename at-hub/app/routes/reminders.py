@@ -70,6 +70,7 @@ def draft(customer_id: int, db: Session = Depends(get_db)):
 
 
 class SendIn(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     to: str
     cc: Optional[str] = None
     subject: str
@@ -86,7 +87,11 @@ def send(customer_id: int, data: SendIn, db: Session = Depends(get_db), user: Us
         raise HTTPException(status_code=400, detail="This customer has nothing overdue")
     pdf, name = build_statement(db, customer_id)
     rows = [("Overdue invoices", ", ".join(i["code"] for i in row["invoices"])), ("Total overdue", f"${row['amount']:,.2f}")]
-    to_list, _ = email_service._send(db, data.to, data.cc or "", data.subject, data.body, rows, (pdf, name))
+    from app.models import Customer
+    cust = db.get(Customer, customer_id)
+    to_list, _ = email_service._send(db, data.to, data.cc or "", data.subject, data.body, rows, (pdf, name), kind="statement",
+                                     sender_id=data.from_id, party=cust, record=("customer", customer_id, cust.name if cust else ""),
+                                     sent_by=user.username)
     db.add(ReminderLog(customer_id=customer_id, invoice_codes=", ".join(i["code"] for i in row["invoices"]), amount=row["amount"],
                        to_address=", ".join(to_list), sent_by=user.username))
     db.commit()

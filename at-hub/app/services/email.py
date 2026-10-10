@@ -22,7 +22,10 @@ def from_address() -> str:
     return settings.smtp_from or settings.smtp_username
 
 
-def is_configured() -> bool:
+def is_configured(db: Session = None) -> bool:
+    if db is not None:
+        from app.services import mailer
+        return mailer.ready(db)
     return bool(settings.smtp_host and from_address())
 
 
@@ -67,15 +70,18 @@ def _html_body(body: str, rows: list, company) -> str:
 </body></html>"""
 
 
-def _send(db: Session, to: str, cc: str, subject: str, body: str, summary_rows: list, attachment=None):
+def _send(db: Session, to: str, cc: str, subject: str, body: str, summary_rows: list, attachment=None, *, kind: str = None,
+          sender_id: int = None, party=None, record=None, sent_by: str = None):
     """Validate, build and send one message; attachment is (bytes, filename) of a PDF.
+    kind / sender_id / party pick the From address (services/mailer.py: your pick -> the customer's / vendor's -> the
+    default for this kind -> the server's own); record = (type, id, code) for the Emails page.
     Returns the (to_list, cc_list) actually used."""
-    if not is_configured():
-        raise HTTPException(
-            status_code=400,
-            detail="Email isn't set up yet. Add SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD (and SMTP_FROM) to the "
-                   "AT-HUB .env file and restart the server.",
-        )
+    from app.models import EmailLog
+    from app.services import mailer
+    sender = mailer.choose(db, kind, sender_id, party)
+    from_addr = mailer.from_of(sender)
+    if not from_addr:
+        raise HTTPException(status_code=400, detail="Email isn't set up yet -- add a sending address in Company Settings -> Email")
     to_list = parse_addresses(to, "To")
     cc_list = parse_addresses(cc, "CC") if cc else []
     if not to_list:
@@ -85,14 +91,17 @@ def _send(db: Session, to: str, cc: str, subject: str, body: str, summary_rows: 
 
     company = get_company_profile(db)
     msg = EmailMessage()
-    msg["From"] = formataddr((company.name, from_address()))
+    msg["From"] = formataddr(((sender.display_name if sender and sender.display_name else company.name), from_addr))
     msg["To"] = ", ".join(to_list)
     if cc_list:
         msg["Cc"] = ", ".join(cc_list)
-    if company.email and company.email.lower() != from_address().lower():
-        msg["Reply-To"] = company.email
+    reply_to = (sender.reply_to if sender else None) or (company.email if not sender else None)
+    if reply_to and reply_to.lower() != from_addr.lower():
+        msg["Reply-To"] = reply_to
     msg["Subject"] = subject.strip()
-    msg["Message-ID"] = make_msgid(domain=from_address().split("@")[-1])
+    msg["Message-ID"] = make_msgid(domain=from_addr.split("@")[-1])
+    if sender and sender.signature and sender.signature.strip():
+        body = f"{(body or '').rstrip()}\n\n{sender.signature.strip()}"
     msg.set_content(body or "")
     msg.add_alternative(_html_body(body or "", summary_rows, company), subtype="html")
     for att in (attachment if isinstance(attachment, list) else [attachment] if attachment else []):
@@ -100,31 +109,25 @@ def _send(db: Session, to: str, cc: str, subject: str, body: str, summary_rows: 
         maintype, subtype = (att[2] if len(att) > 2 and att[2] else "application/pdf").split("/", 1)
         msg.add_attachment(att[0], maintype=maintype, subtype=subtype, filename=att[1])
 
-    try:
-        if settings.smtp_security == "ssl":
-            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30, context=ssl.create_default_context())
-        else:
-            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30)
-        with server:
-            if settings.smtp_security == "starttls":
-                server.starttls(context=ssl.create_default_context())
-            if settings.smtp_username:
-                server.login(settings.smtp_username, settings.smtp_password)
-            server.send_message(msg, to_addrs=to_list + cc_list)
-    except smtplib.SMTPAuthenticationError:
-        raise HTTPException(status_code=502, detail="The mail server rejected the SMTP username/password (for Gmail, use an App Password)")
-    except (smtplib.SMTPException, OSError) as e:
-        raise HTTPException(status_code=502, detail=f"Could not send email: {e}")
+    names = [att[1] for att in (attachment if isinstance(attachment, list) else [attachment] if attachment else [])]
+    rt, rid, rcode = (record or (None, None, None))
+    log = EmailLog(kind=kind, record_type=rt, record_id=rid, record_code=rcode, party=getattr(party, "name", None),
+                   sender_id=sender.id if sender else None, from_address=from_addr, to_address=", ".join(to_list),
+                   cc_address=", ".join(cc_list) or None, subject=subject.strip(), attachments=", ".join(names) or None,
+                   message_id=msg["Message-ID"], sent_by=sent_by)
+    mailer.deliver(db, msg, to_list + cc_list, sender, log, bcc_me=bool(sender and sender.bcc_me))
     return to_list, cc_list
 
 
 def send_invoice(db: Session, invoice: Invoice, to: str, cc: str, subject: str, body: str,
-                 attach_pdf: bool, sent_by: str) -> InvoiceEmail:
+                 attach_pdf: bool, sent_by: str, sender_id: int = None) -> InvoiceEmail:
     if invoice.status == "void":
         raise HTTPException(status_code=400, detail="This invoice is void -- it can't be emailed")
     from app.services.filenames import invoice_name
     attachment = (invoice_pdf(db, invoice), invoice_name(db, invoice)) if attach_pdf else None
-    to_list, cc_list = _send(db, to, cc, subject, body, _invoice_rows(invoice), attachment)
+    from app.models import Customer
+    to_list, cc_list = _send(db, to, cc, subject, body, _invoice_rows(invoice), attachment, kind="invoice", sender_id=sender_id,
+                             party=db.get(Customer, invoice.customer_id), record=("invoice", invoice.id, invoice.code), sent_by=sent_by)
     log = InvoiceEmail(
         invoice_id=invoice.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
         subject=subject.strip(), body=body, sent_by=sent_by,
@@ -138,7 +141,7 @@ def send_invoice(db: Session, invoice: Invoice, to: str, cc: str, subject: str, 
 
 
 def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subject: str, body: str,
-                        attach_pdf: bool, sent_by: str) -> PurchaseOrderEmail:
+                        attach_pdf: bool, sent_by: str, sender_id: int = None) -> PurchaseOrderEmail:
     """Emails the vendor copy of the PO (vendor part #s only -- never our item numbers).
     A draft PO becomes "ordered" once it has gone out."""
     if po.status == "cancelled":
@@ -153,7 +156,9 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
         from app.services import lookalike
         lookalike.require_ok(db, "vendor", po)
     attachment = (purchase_order_pdf(db, po, for_vendor=True), f"{po.code}.pdf") if attach_pdf else None
-    to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment)
+    from app.models import Vendor
+    to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment, kind="purchase_order", sender_id=sender_id,
+                             party=db.get(Vendor, po.vendor_id), record=("purchase_order", po.id, po.code), sent_by=sent_by)
     log = PurchaseOrderEmail(po_id=po.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
                              subject=subject.strip(), body=body, sent_by=sent_by)
     db.add(log)
@@ -165,7 +170,7 @@ def send_purchase_order(db: Session, po: PurchaseOrder, to: str, cc: str, subjec
 
 
 def send_quote(db: Session, q: Quote, to: str, cc: str, subject: str, body: str,
-               attach_pdf: bool, sent_by: str) -> QuoteEmail:
+               attach_pdf: bool, sent_by: str, sender_id: int = None) -> QuoteEmail:
     """Emails the quote to the customer. A draft quote becomes "sent" once it has gone out."""
     rows = [("Quote", q.code), ("Quote date", q.quote_date.strftime("%b %d, %Y") if q.quote_date else "")]
     if q.valid_until:
@@ -174,7 +179,9 @@ def send_quote(db: Session, q: Quote, to: str, cc: str, subject: str, body: str,
         rows.append(("Your reference", q.customer_ref))
     rows.append(("Total", money(round(sum(line_amount(l.quantity, l.unit_price) for l in q.lines), 2))))
     attachment = (quote_pdf(db, q), f"Quote-{q.code}.pdf") if attach_pdf else None
-    to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment)
+    from app.models import Customer
+    to_list, cc_list = _send(db, to, cc, subject, body, rows, attachment, kind="quote", sender_id=sender_id,
+                             party=db.get(Customer, q.customer_id), record=("quote", q.id, q.code), sent_by=sent_by)
     log = QuoteEmail(quote_id=q.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
                      subject=subject.strip(), body=body, sent_by=sent_by)
     db.add(log)
@@ -185,7 +192,7 @@ def send_quote(db: Session, q: Quote, to: str, cc: str, subject: str, body: str,
     return log
 
 
-def send_pods(db: Session, shipment, files: list, to: str, cc: str, subject: str, body: str, sent_by: str):
+def send_pods(db: Session, shipment, files: list, to: str, cc: str, subject: str, body: str, sent_by: str, sender_id: int = None):
     """Email proof-of-delivery files to the customer. files = [(bytes, filename, content_type)]."""
     from app.models import ShipmentEmail
     if not files:
@@ -198,7 +205,10 @@ def send_pods(db: Session, shipment, files: list, to: str, cc: str, subject: str
     order = db.get(CustomerOrder, shipment.order_id)
     if order and order.po_number:
         rows.append(("Your PO #", order.po_number))
-    to_list, cc_list = _send(db, to, cc, subject, body, rows, files)
+    from app.models import Customer
+    to_list, cc_list = _send(db, to, cc, subject, body, rows, files, kind="pod", sender_id=sender_id,
+                             party=db.get(Customer, order.customer_id) if order else None, record=("shipment", shipment.id, shipment.code),
+                             sent_by=sent_by)
     log = ShipmentEmail(shipment_id=shipment.id, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
                         subject=subject.strip(), files=", ".join(f[1] for f in files), sent_by=sent_by)
     db.add(log)

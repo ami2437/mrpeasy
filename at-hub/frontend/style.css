@@ -2533,3 +2533,16 @@ html[data-theme="dark"] .ai-filled { background: #052e16; border-color: #166534;
 .bp-tick, .bp-all { margin: 0 6px 0 0; vertical-align: -2px; cursor: pointer; }
 .ca-table select.ca-need { border-color: #f59e0b; background: #fffbeb; }
 html[data-theme="dark"] .ca-table select.ca-need { background: #2a1606; }
+/* email: settings table, a record's thread, the top-bar alert */
+.em-table td { vertical-align: top; }
+.em-thread { display: flex; flex-direction: column; gap: 6px; }
+.em-msg { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; }
+.em-msg.reply { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.em-dir { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.em-dir .ico { width: 12px; height: 12px; }
+.em-snip { white-space: pre-wrap; margin-top: 4px; }
+.em-alert { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 8px; background: #fee2e2; color: #991b1b;
+  font-size: 12.5px; font-weight: 600; text-decoration: none; border: 1px solid #fca5a5; white-space: nowrap; }
+html[data-theme="dark"] .em-alert { background: #450a0a; color: #fecaca; border-color: #7f1d1d; }
+.dd-from { display: inline-flex; align-items: center; gap: 6px; }
+.dd-from label { margin: 0; }

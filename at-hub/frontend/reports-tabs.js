@@ -125,19 +125,23 @@ async function sendReminder(customerId) {
   try { d = await apiFetch(`/api/reminders/draft/${customerId}`); } catch (e) { return toast(e.message); }
   let error = "";
   while (true) {
-    const { value, el } = await askDialog({ title: `Payment Reminder — ${d.customer}`,
+    const dlg = askDialog({ title: `Payment Reminder — ${d.customer}`,
       body: `<p class="muted small" style="margin-top:0;">${d.invoices.length} overdue · ${rpMoney(d.amount)} · oldest ${d.oldest_days} days late${d.last_reminder ? ` · last reminder ${fmtDate(d.last_reminder)}` : ""}. Their statement is attached.</p>
+        <div class="rm-from"></div>
         <label>To</label><input type="text" class="rm-to" value="${escapeHtml(d.to)}">
         <label>CC</label><input type="text" class="rm-cc" value="${escapeHtml(d.cc || "")}">
         <label>Subject</label><input type="text" class="rm-subject" value="${escapeHtml(d.subject)}">
         <label>Message</label><textarea class="rm-body" rows="10">${escapeHtml(d.body)}</textarea>
         ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}`,
       buttons: [{ label: "Send Reminder", value: "send", cls: "confirm-btn" }, { label: "Statement PDF", value: "pdf", cls: "secondary" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    EmailFrom.mount(document.querySelector(".ask-dialog .rm-from"), "statement", "customer", customerId);
+    const { value, el } = await dlg;
     if (!value) return;
+    d.from_id = EmailFrom.value(el.querySelector(".rm-from"));
     d = { ...d, to: el.querySelector(".rm-to").value, cc: el.querySelector(".rm-cc").value, subject: el.querySelector(".rm-subject").value, body: el.querySelector(".rm-body").value };
     if (value === "pdf") { openPdf(`/api/analytics/statement/${customerId}.pdf`); continue; }
     try {
-      const r = await apiFetch(`/api/reminders/send/${customerId}`, { method: "POST", body: JSON.stringify({ to: d.to, cc: d.cc, subject: d.subject, body: d.body }) });
+      const r = await apiFetch(`/api/reminders/send/${customerId}`, { method: "POST", body: JSON.stringify({ to: d.to, cc: d.cc, subject: d.subject, body: d.body, from_id: d.from_id || null }) });
       toast(`Reminder sent to ${r.to.join(", ")}`);
       return;
     } catch (e) { error = e.message; }

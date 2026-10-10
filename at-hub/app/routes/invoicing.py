@@ -27,10 +27,10 @@ def list_invoices(db: Session = Depends(get_db)):
 
 
 @router.get("/email/config", response_model=EmailConfigResponse)
-def email_config():
-    """Whether SMTP is set up, so the UI can explain instead of failing on Send."""
+def email_config(db: Session = Depends(get_db)):
+    """Whether email is set up, so the UI can explain instead of failing on Send."""
     return {
-        "configured": email_service.is_configured(),
+        "configured": email_service.is_configured(db),
         "from_address": email_service.from_address() or None,
         "host": settings.smtp_host or None,
     }
@@ -69,7 +69,7 @@ def email_invoice(invoice_id: int, data: InvoiceEmailRequest, db: Session = Depe
     """Email the invoice (PDF attached) with the user's own message. A draft becomes sent."""
     invoice = InvoiceService.get(db, invoice_id)
     email_service.send_invoice(db, invoice, data.to, data.cc, data.subject, data.body, data.attach_pdf,
-                               sent_by=current_user.username)
+                               sent_by=current_user.username, sender_id=data.from_id)
     db.refresh(invoice)
     return invoice
 

@@ -260,12 +260,11 @@ def _files_for(db: Session, g: dict) -> List[tuple]:
     return files
 
 
-def send(db: Session, groups: List[dict], edits: Dict[str, dict], sent_by: str) -> List[dict]:
+def send(db: Session, groups: List[dict], edits: Dict[str, dict], sent_by: str, from_id: int = None) -> List[dict]:
     """Send every planned email (with the screen's edits by group key). One failing doesn't stop the others."""
     from app.services import email as email_service
-    if not email_service.is_configured():
-        raise HTTPException(status_code=400, detail="Email isn't set up yet. Add SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD (and SMTP_FROM) "
-                                                    "to the AT-HUB .env file and restart the server.")
+    if not email_service.is_configured(db):
+        raise HTTPException(status_code=400, detail="Email isn't set up yet -- add a sending address in Company Settings -> Email")
     results = []
     for g in groups:
         e = edits.get(g["key"], {})
@@ -281,7 +280,12 @@ def send(db: Session, groups: List[dict], edits: Dict[str, dict], sent_by: str) 
             rows = [("Customer PO #", g["po"])] if g["po"] else []
             rows += [("Shipment", ", ".join(s["code"] for s in g["shipments"]))] if g["shipments"] else []
             rows += [("Invoice", ", ".join(i["code"] for i in g["invoices"]))] if g["invoices"] else []
-            to_list, cc_list = email_service._send(db, to, cc, subject, body, rows, files)
+            from app.models import Customer
+            to_list, cc_list = email_service._send(
+                db, to, cc, subject, body, rows, files, kind="invoice" if g["invoices"] else "pod", sender_id=e.get("from_id") or from_id,
+                party=db.get(Customer, g["customer_id"]) if g.get("customer_id") else None,
+                record=("invoice", g["invoices"][0]["id"], g["invoices"][0]["code"]) if g["invoices"] else
+                ("shipment", g["shipments"][0]["id"], g["shipments"][0]["code"]) if g["shipments"] else None, sent_by=sent_by)
             names = ", ".join(f[1] for f in files)
             for i in g["invoices"]:
                 inv = InvoiceService.get(db, i["id"])

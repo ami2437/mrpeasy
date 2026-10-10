@@ -762,6 +762,7 @@
         <p class="muted small" style="margin-top:0;">The vendor copy shows only the vendor's item # and description — our item numbers stay internal.</p>
         ${order.emails.length ? `<div class="muted small">${order.emails.map(e =>
           `Emailed to ${escapeHtml(e.to_address)} by ${escapeHtml(e.sent_by || "")} · ${fmtWhen(e.sent_at)}`).join("<br>")}</div>` : `<p class="muted small">Not Emailed Yet.</p>`}
+        <div id="po-email-thread" style="margin-top:8px;"></div>
         </section>
 
         <section class="dsec"><h4 class="dsec-title">Attachments</h4>
@@ -792,6 +793,7 @@
         });
       }
       stickyNotes("po-sticky", "purchase_order", order.id);
+      renderEmailThread("po-email-thread", "purchase_order", order.id);
       loadPoReceipts(order);
       renderAttachments("po-attachments", "purchase_order", order.id, ["purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"],
         { notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => { renderPoMtrs(order); renderFileStrip("po-file-strip", "purchase_order", order.id); } });
@@ -943,9 +945,11 @@
       const order = orders.find(o => o.id === poId);
       const vendor = vendors.find(v => v.id === order.vendor_id) || {};
       el.style.display = "block";
+      setTimeout(() => EmailFrom.mount("po-from-slot", "purchase_order", "vendor", order.vendor_id), 0);
       el.innerHTML = `
         <div class="panel" style="max-width:640px;">
           <div class="row">
+            <div id="po-from-slot"></div>
             <div><label>To</label><input type="text" id="po-email-to" value="${escapeHtml(vendor.po_email || vendor.email || "")}" placeholder="vendor@example.com"></div>
             <div><label>CC</label><input type="text" id="po-email-cc"></div>
           </div>
@@ -973,6 +977,7 @@ Thank you.</textarea>
           method: "POST",
           body: JSON.stringify({
             to: document.getElementById("po-email-to").value,
+            from_id: EmailFrom.value("po-from-slot"),
             cc: document.getElementById("po-email-cc").value || null,
             subject: document.getElementById("po-email-subject").value,
             body: document.getElementById("po-email-body").value,

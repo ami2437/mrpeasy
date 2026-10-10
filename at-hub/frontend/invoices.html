@@ -659,7 +659,9 @@
             `).join("")}</tbody>
           </table></section>
         ` : ""}
+        <section class="dsec em-thread-sec"><h4 class="dsec-title">Emails &amp; Replies</h4><div id="inv-email-thread"><p class="muted small">Nothing sent from AT-HUB yet.</p></div></section>
       `;
+      renderEmailThread("inv-email-thread", "invoice", invoice.id);
       flagQtyDifferences();
       const { order } = await invoiceContext(invoice);
       const invShipments = (invoice.shipment_ids || []).map(id => shipments.find(s => s.id === id)).filter(Boolean);
@@ -1080,8 +1082,9 @@
             <div class="notice"><strong>Email isn't set up yet.</strong> Add your mail server to the AT-HUB <code>.env</code> file
               (<code>SMTP_HOST</code>, <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code>, <code>SMTP_FROM</code>) and restart the server.
               For Gmail use <code>smtp.gmail.com</code>, port 587, and an App Password.</div>`}
-          ${emailConfig.configured ? `<p class="muted" style="margin:0;">Sends from <strong>${escapeHtml(emailConfig.from_address)}</strong>${company.email ? ` · replies go to ${escapeHtml(company.email)}` : ""}</p>` : ""}
+          ${emailConfig.configured ? "" : `<p class="warn-text small" style="margin:0;">Email isn't set up yet — add a sending address in <a class="link" href="company.html#email">Company Settings → Email</a>.</p>`}
           <div class="row">
+            <div id="em-from-slot"></div>
             <div><label>To <span class="muted">(separate several with commas)</span></label><input type="text" id="em-to" value="${escapeHtml(customer.invoice_email || customer.email || "")}" placeholder="customer@example.com"></div>
             <div><label>CC</label><input type="text" id="em-cc" placeholder="Optional"></div>
           </div>
@@ -1098,6 +1101,7 @@
         </div>
       `;
       panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      EmailFrom.mount("em-from-slot", "invoice", "customer", invoice.customer_id);
       document.getElementById(customer.invoice_email || customer.email ? "em-body" : "em-to").focus();
     }
 
@@ -1117,6 +1121,7 @@
           method: "POST",
           body: JSON.stringify({
             to,
+            from_id: EmailFrom.value("em-from-slot"),
             cc: document.getElementById("em-cc").value.trim() || null,
             subject: document.getElementById("em-subject").value,
             body: document.getElementById("em-body").value,

@@ -1614,9 +1614,11 @@ async function openPodEmail(shipmentId) {
   const cust = customers.find(c => c.id === ord.customer_id) || {};
   const when = s.delivered_at ? fmtDate(s.delivered_at) : s.ship_date ? fmtDate(s.ship_date) : "";
   const ref = [ord.po_number ? `PO ${ord.po_number}` : "", s.code].filter(Boolean).join(" / ");
+  setTimeout(() => EmailFrom.mount("pod-from-slot", "pod", "customer", ord.customer_id), 0);
   modal.innerHTML = `<div class="modal" style="max-width:640px;">
     <h3 style="margin-top:0;">Email proof of delivery — ${escapeHtml(s.code)}</h3>
     ${s.pods.length ? "" : `<p class="error">No POD on this shipment yet. Upload one first.</p>`}
+    <div id="pod-from-slot"></div>
     <label>To</label><input type="text" id="pod-to" value="${escapeHtml(cust.email || "")}" placeholder="customer@example.com">
     <label>CC</label><input type="text" id="pod-cc">
     <label>Subject</label><input type="text" id="pod-subject" value="${escapeHtml(`Proof of delivery — ${ref}`)}">
@@ -1647,7 +1649,7 @@ async function sendPodEmail(shipmentId) {
   btn.disabled = true; btn.textContent = "Sending…";
   try {
     await apiFetch(`/api/shipments/${shipmentId}/email-pod`, { method: "POST", body: JSON.stringify({
-      to: document.getElementById("pod-to").value, cc: document.getElementById("pod-cc").value || null,
+      to: document.getElementById("pod-to").value, from_id: EmailFrom.value("pod-from-slot"), cc: document.getElementById("pod-cc").value || null,
       subject: document.getElementById("pod-subject").value, body: document.getElementById("pod-body").value, attachment_ids: ids,
     }) });
     document.getElementById("pod-email-modal").remove();

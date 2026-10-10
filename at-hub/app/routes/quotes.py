@@ -189,6 +189,7 @@ def item_history(item_id: int, customer_id: Optional[int] = None, exclude_quote_
 
 
 class EmailIn(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     to: str  # one or more addresses, comma/semicolon separated
     cc: Optional[str] = None
     subject: str
@@ -200,7 +201,7 @@ class EmailIn(BaseModel):
 def email(quote_id: int, data: EmailIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     from app.services import email as email_service
     q = _get(db, quote_id)
-    email_service.send_quote(db, q, data.to, data.cc, data.subject, data.body, data.attach_pdf, user.username)
+    email_service.send_quote(db, q, data.to, data.cc, data.subject, data.body, data.attach_pdf, user.username, sender_id=data.from_id)
     return _out(db, q)
 
 

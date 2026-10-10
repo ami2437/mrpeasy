@@ -404,6 +404,39 @@ from app.routes import ai_desk  # noqa: E402
 app.include_router(ai_desk.router)
 from app.routes import reconcile  # noqa: E402
 app.include_router(reconcile.router)
+from app.routes import email_settings  # noqa: E402
+app.include_router(email_settings.router)
+
+
+def _mail_loop():
+    """In the background: every 5 minutes read new mail in the mailboxes AT-HUB reads; once a day check every
+    sending address still logs in (so a password changed on the mail server shows up before the next invoice)."""
+    import time as _t
+    from app.services import mailer
+    last_check = 0.0
+    while True:
+        _t.sleep(60)
+        db = SessionLocal()
+        try:
+            if _t.time() - last_check > 24 * 3600:
+                last_check = _t.time()
+                mailer.check_all(db)
+            mailer.poll_inboxes(db)
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+        _t.sleep(240)
+
+
+@app.on_event("startup")
+def _start_mail_loop():
+    import os as _os
+    import sys as _sys
+    import threading
+    if "pytest" in _sys.modules or _os.environ.get("AT_HUB_NO_BACKGROUND"):
+        return
+    threading.Thread(target=_mail_loop, name="mail-loop", daemon=True).start()
 from app.routes import quotes as quotes_routes  # noqa: E402
 app.include_router(quotes_routes.router)
 from app.routes import tasks as tasks_routes  # noqa: E402

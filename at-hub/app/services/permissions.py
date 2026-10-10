@@ -60,6 +60,7 @@ CATALOG = [
     ("simulate", "Tools", "Simulate", False, "admin"),
     # Admin
     ("company", "Admin", "Company settings and logo", False, "admin"),
+    ("emails", "Admin", "Emails page: every email AT-HUB sent (invoices, statements, POs...) and the replies that came back", True, "admin"),
     ("types.manage", "Admin", "Add and rename document types, S&H types, landed cost types and payment methods", False, "manager"),
     ("templates", "Admin", "Template Designer", False, "admin"),
     ("tasks", "Admin", "Task list", False, "admin"),

@@ -35,6 +35,7 @@
       <h3 style="margin-top:0;">Email Selected MTRs</h3>
       <p class="muted small" style="margin-top:0;">To send MTRs for a specific order, open the order (Shipped On column) — its MTR section picks the traced reports for you and logs the email on the order.</p>
       <div class="row">
+        <div id="e-from-slot"></div>
         <div><label>To</label><input type="text" id="e-to" placeholder="customer@example.com"></div>
         <div><label>CC</label><input type="text" id="e-cc"></div>
       </div>
@@ -127,7 +128,7 @@ Thank you.</textarea>
       btn.disabled = true; btn.textContent = "Sending…";
       try {
         await apiFetch("/api/mtrs/email", { method: "POST", body: JSON.stringify({
-          attachment_ids: ids, to: document.getElementById("e-to").value, cc: document.getElementById("e-cc").value || null,
+          attachment_ids: ids, to: document.getElementById("e-to").value, from_id: EmailFrom.value("e-from-slot"), cc: document.getElementById("e-cc").value || null,
           subject: document.getElementById("e-subject").value, body: document.getElementById("e-body").value }) });
         document.querySelectorAll(".sel-mtr:checked").forEach(c => c.checked = false);
         updateEmail();

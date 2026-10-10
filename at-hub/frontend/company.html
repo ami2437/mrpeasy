@@ -5,6 +5,7 @@
   <title>AT-HUB — Company Settings</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="email-settings.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -55,9 +56,9 @@
       <span id="generic-saved" class="muted small"></span>
     </div>
 
-    <div class="card" style="max-width:720px;">
-      <h3 style="margin-top:0;">Invoice email</h3>
-      <div id="email-status" class="muted">Checking…</div>
+    <div class="card" id="email" style="max-width:900px;">
+      <h3 style="margin-top:0;">Email</h3>
+      <div id="email-settings" class="muted">Loading…</div>
     </div>
 
     <div class="card" style="max-width:720px;">
@@ -196,7 +197,8 @@ SMTP_SECURITY=starttls</pre>
     }
 
     load();
-    loadEmailStatus();
+    EmailSettings.load();
+    if (location.hash === "#email") setTimeout(() => document.getElementById("email").scrollIntoView(), 600);
     TypeLists.renderManager(document.getElementById("types-manager"))
       .then(() => { if (location.hash === "#types") document.getElementById("types").scrollIntoView({ behavior: "smooth" }); })
       .catch(err => { document.getElementById("types-manager").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; });

@@ -87,7 +87,7 @@ def refresh(db: Session) -> dict:
         elif t.status == "open":
             t.detail, t.title = detail, title  # keep amounts current
     for key, t in have.items():
-        if t.status == "open" and key not in want:
+        if t.status == "open" and key not in want and not key.startswith("email-failing:"):  # email alerts close when the address works again
             t.status, t.done_by, t.done_at, closed = "done", AUTO + " (data shows it's done)", datetime.utcnow(), closed + 1
     db.commit()
     return {"added": added, "closed": closed}

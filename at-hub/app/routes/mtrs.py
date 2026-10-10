@@ -24,6 +24,7 @@ class LinkRequest(BaseModel):
 
 
 class MtrEmailRequest(BaseModel):
+    from_id: Optional[int] = None  # the From address picked (Company Settings -> Email); none = the default for this kind
     attachment_ids: List[int]
     order_id: Optional[int] = None
     to: str
@@ -210,7 +211,10 @@ def email_mtrs(data: MtrEmailRequest, db: Session = Depends(get_db), user: User 
         rows.insert(0, ("Order", order.code))
         if order.po_number:
             rows.insert(1, ("Your PO #", order.po_number))
-    to_list, cc_list = email_service._send(db, data.to, data.cc, data.subject, data.body, rows, files)
+    from app.models import Customer
+    to_list, cc_list = email_service._send(db, data.to, data.cc, data.subject, data.body, rows, files, kind="mtr", sender_id=data.from_id,
+                                           party=db.get(Customer, order.customer_id) if order else None,
+                                           record=("customer_order", order.id, order.code) if order else None, sent_by=user.username)
     log = MtrEmail(order_id=order.id if order else None, to_address=", ".join(to_list), cc_address=", ".join(cc_list) or None,
                    subject=data.subject.strip(), files=", ".join(f[1] for f in files), sent_by=user.username)
     db.add(log)

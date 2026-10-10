@@ -1291,10 +1291,12 @@
         <div class="sm-foot">
           <div class="sm-box" id="dd-box" aria-hidden="true">${icon("mail")}<span class="sm-count" id="dd-count">0</span></div>
           <span class="muted small" style="flex:1;" id="dd-summary"></span>
+          <span id="dd-from-slot" class="dd-from"></span>
           <button type="button" class="secondary" onclick="docsPrint(false)">${icon("printer")} Print Instead</button>
           <button type="button" class="ship-now" id="dd-send" onclick="docsSend()" ${res.email_ready ? "" : "disabled"}>Send</button>
         </div>`;
       document.querySelectorAll("#docs-dialog .de-send").forEach(c => c.addEventListener("change", docsCount));
+      EmailFrom.mount("dd-from-slot", (docsReq.body.invoice_ids || []).length || (docsReq.body.kinds || []).includes("invoice") ? "invoice" : "pod");
       document.querySelectorAll("#docs-dialog .de-to").forEach(inp => inp.addEventListener("input", () => {  // typing an address ticks that email
         const box = inp.closest(".docs-email").querySelector(".de-send");
         if (!box.disabled) { box.checked = !!inp.value.trim(); docsCount(); }
@@ -1318,7 +1320,7 @@
       go.disabled = true;
       go.textContent = "Sending…";
       let res;
-      try { res = await apiFetch("/api/bulk/documents/send", { method: "POST", body: JSON.stringify({ ...docsReq.body, edits }) }); }
+      try { res = await apiFetch("/api/bulk/documents/send", { method: "POST", body: JSON.stringify({ ...docsReq.body, edits, from_id: EmailFrom.value("dd-from-slot") }) }); }
       catch (e) { document.getElementById("dd-error").textContent = e.message; go.disabled = false; docsCount(); return; }
       const ok = [];
       res.results.forEach(r => {
