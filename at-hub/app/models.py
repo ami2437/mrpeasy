@@ -1613,3 +1613,137 @@ class Simulation(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ---- Accounting (app/services/accounting.py): the company's own books, kept beside the operations data. Bank / card
+# statements come in, every line goes into an account (learned from the descriptions), reports show where the money went.
+# Shaped like QuickBooks (account types, external_id on everything) so the books can be synced to it later.
+
+class AcctAccount(Base):
+    """An account a bank line can go in: a customer that pays us (income), a vendor (COGS), an expense, a lender
+    (loan), a partner's draws (owner), a transfer between our own accounts (wash), or a year-end AP / AR figure."""
+    __tablename__ = "acct_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, nullable=False, default="expense")  # income | cogs | expense | loan | owner | transfer | pending | other
+    partner = Column(String, nullable=True)  # owner accounts: whose draws
+    qb_type = Column(String, nullable=True)  # QuickBooks account type when synced (Income, Cost of Goods Sold, Expense ...)
+    external_id = Column(String, nullable=True)  # id in QuickBooks (later)
+    note = Column(Text, nullable=True)
+    opening_balance = Column(Float, nullable=False, default=0.0)  # loans: what was owed before the first line here
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctSource(Base):
+    """Where lines come from: a bank account, a credit card, or "Book Entries" (typed in, not on a statement)."""
+    __tablename__ = "acct_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, nullable=False, default="bank")  # bank | card | book
+    last4 = Column(String, nullable=True)
+    layout = Column(Text, nullable=True)  # JSON: which statement column is which (learned on the first import)
+    opening_balance = Column(Float, nullable=False, default=0.0)
+    opening_date = Column(DateTime, nullable=True)  # calendar date the opening balance is for
+    external_id = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctImport(Base):
+    """One statement file brought in -- kept so it can be undone in one go."""
+    __tablename__ = "acct_imports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(Integer, ForeignKey("acct_sources.id"), nullable=True)
+    filename = Column(String, nullable=True)
+    kind = Column(String, nullable=False, default="statement")  # statement | workbook
+    rows = Column(Integer, nullable=False, default=0)
+    added = Column(Integer, nullable=False, default=0)
+    skipped = Column(Integer, nullable=False, default=0)  # already in (same date, amount, description)
+    matched = Column(Integer, nullable=False, default=0)  # typed in earlier, now found on the statement
+    auto = Column(Integer, nullable=False, default=0)  # put in an account by AT-HUB
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctTxn(Base):
+    """One line: money in (+) or out (-) on a calendar date, in an account (or split over several, AcctSplit)."""
+    __tablename__ = "acct_txns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(Integer, ForeignKey("acct_sources.id"), nullable=False, index=True)
+    date = Column(DateTime, nullable=False, index=True)  # calendar date
+    amount = Column(Float, nullable=False)
+    description = Column(Text, nullable=False, default="")
+    payee = Column(String, nullable=True)  # who, read from the description (acct_mapper.payee_label) or typed
+    account_id = Column(Integer, ForeignKey("acct_accounts.id"), nullable=True, index=True)  # None = not in an account yet (or split)
+    how = Column(String, nullable=True)  # person | auto | rule | workbook -- how it got its account
+    reviewed = Column(Boolean, nullable=False, default=True)  # False: AT-HUB picked it, nobody has looked yet
+    note = Column(Text, nullable=True)
+    origin = Column(String, nullable=False, default="import")  # import | manual | workbook
+    expected = Column(Boolean, nullable=False, default=False)  # typed in ahead of the statement; matched when it shows up
+    import_id = Column(Integer, ForeignKey("acct_imports.id"), nullable=True, index=True)
+    dedupe = Column(String, nullable=True, index=True)  # date|amount|description|n -- the same line isn't brought in twice
+    bank_description = Column(Text, nullable=True)  # a typed-in line's statement wording once matched
+    external_id = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    splits = relationship("AcctSplit", cascade="all, delete-orphan", order_by="AcctSplit.id")
+
+
+class AcctSplit(Base):
+    """Part of a line in an account (a Zelle that was half salary, half supplies)."""
+    __tablename__ = "acct_splits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    txn_id = Column(Integer, ForeignKey("acct_txns.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("acct_accounts.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    note = Column(String, nullable=True)
+
+
+class AcctRule(Base):
+    """A person's rule: a description containing these words (in / out, amount range) goes in this account. Rules
+    come before what AT-HUB learned from earlier lines."""
+    __tablename__ = "acct_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    contains = Column(String, nullable=False)
+    sign = Column(String, nullable=True)  # in | out | None
+    min_amount = Column(Float, nullable=True)
+    max_amount = Column(Float, nullable=True)
+    account_id = Column(Integer, ForeignKey("acct_accounts.id"), nullable=False)
+    hits = Column(Integer, nullable=False, default=0)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctOpenItem(Base):
+    """Accounts payable / receivable. Two kinds of row: one typed in (source "manual"), or a person's change to a
+    figure AT-HUB works out live from its invoices / purchase orders (source "invoice" / "po" + source_id) -- e.g.
+    "we already paid this" before the payment is recorded in AT-HUB. AT-HUB's own figure is never changed here."""
+    __tablename__ = "acct_open_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    side = Column(String, nullable=False)  # ap | ar
+    source = Column(String, nullable=False, default="manual")  # manual | invoice | po
+    source_id = Column(Integer, nullable=True, index=True)
+    party = Column(String, nullable=True)
+    ref = Column(String, nullable=True)
+    amount = Column(Float, nullable=True)  # manual: what's owed; AT-HUB rows: a changed amount (None = AT-HUB's)
+    item_date = Column(DateTime, nullable=True)  # calendar date
+    due_date = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="open")  # open | paid | left_out
+    paid_date = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
+    external_id = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

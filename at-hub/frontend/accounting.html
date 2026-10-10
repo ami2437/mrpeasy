@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Accounting</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+  <style>
+    .ac-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .ac-top .tabs { margin: 0; flex-wrap: wrap; order: 3; flex-basis: 100%; width: auto; max-width: 100%; box-sizing: border-box; }
+    .ac-top .tabs .tab { padding: 5px 11px; font-size: 13.5px; }
+    .ac-period { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }
+    .ac-period select, .ac-period input { width: auto; }
+    .ac-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 14px; }
+    .ac-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; cursor: default; }
+    .ac-tile.click { cursor: pointer; } .ac-tile.click:hover { border-color: var(--accent); }
+    .ac-tile .l { font-size: 11.5px; color: var(--muted); font-weight: 600; text-transform: capitalize; }
+    .ac-tile .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+    .ac-tile .s { font-size: 12px; color: var(--muted); }
+    .pos { color: #16a34a; } .neg { color: #dc2626; }
+    .ac-amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .ac-desc { font-size: 12px; color: var(--muted); word-break: break-word; }
+    .ac-who { font-weight: 600; }
+    .ac-chip { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--surface-3); color: var(--text-2); margin-left: 4px; white-space: nowrap; }
+    .ac-chip.auto { background: #fef3c7; color: #92400e; } .ac-chip.typed { background: #dbeafe; color: #1e40af; } .ac-chip.exp { background: #ede9fe; color: #5b21b6; }
+    :root[data-theme="dark"] .ac-chip.auto { background: #4a3a10; color: #fcd34d; } :root[data-theme="dark"] .ac-chip.typed { background: #1e3a5f; color: #93c5fd; }
+    :root[data-theme="dark"] .ac-chip.exp { background: #3b2a5f; color: #c4b5fd; }
+    .ac-sugg { white-space: nowrap; }
+    .ac-pnl { width: 100%; font-size: 12px; table-layout: auto; }
+    .ac-pnl td, .ac-pnl th { padding: 4px 5px; }
+    .ac-pnl th.num, .ac-pnl td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .ac-pnl tr.sec td { font-weight: 700; background: var(--surface-2); }
+    .ac-pnl tr.tot td { font-weight: 700; border-top: 1px solid var(--border); }
+    .ac-pnl tr.profit td { font-weight: 700; font-size: 13.5px; border-top: 2px solid var(--border); }
+    .ac-pnl tr.drill { cursor: pointer; } .ac-pnl tr.drill:hover td { background: var(--surface-2); }
+    .ac-pnl td.name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ac-bars { display: flex; align-items: flex-end; gap: 4px; height: 150px; padding: 8px 0 0; border-bottom: 1px solid var(--border); }
+    .ac-bars .m { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; position: relative; }
+    .ac-bars .b { width: 42%; min-height: 1px; border-radius: 3px 3px 0 0; }
+    .ac-bars .pair { display: flex; gap: 2px; align-items: flex-end; width: 100%; justify-content: center; height: 100%; }
+    .ac-bars .in { background: #2f6fed; } .ac-bars .out { background: #eb6834; }
+    .ac-bars-lab { display: flex; gap: 4px; } .ac-bars-lab span { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+    .ac-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 1100px) { .ac-grid2 { grid-template-columns: 1fr; } }
+    .ac-steps td { padding: 5px 8px; } .ac-steps tr.total td { font-weight: 700; border-top: 2px solid var(--border); }
+    .ac-form { display: grid; grid-template-columns: 130px 1fr; gap: 8px 10px; align-items: center; }
+    .ac-form label { font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+    .ac-split { display: grid; grid-template-columns: 1fr 110px 1fr 28px; gap: 6px; margin-bottom: 6px; }
+    .ac-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+    .ac-map label { font-size: 12px; font-weight: 600; color: var(--text-2); display: block; }
+    .ac-sample { font-size: 11.5px; } .ac-sample td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ac-bulk { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+    .ac-bulk select { width: auto; max-width: 260px; }
+    table.ac-list td { vertical-align: top; }
+    table.ac-list td.tick { width: 22px; }
+    .ac-list select.ac-pick { width: 100%; max-width: 230px; font-size: 12.5px; padding: 3px 6px; }
+    .ac-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .ac-filters select, .ac-filters input { width: auto; }
+    .ac-filters input[type=search] { flex: 1; min-width: 200px; }
+    .ac-help { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+    .ac-status-paid { text-decoration: line-through; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card page-toolbar ac-top">
+      <h1 class="page-title">Accounting</h1>
+      <div class="tabs" id="ac-tabs"></div>
+      <span class="ac-period" id="ac-period"></span>
+    </div>
+    <div id="ac-view"><div class="card"><p class="muted">Loading…</p></div></div>
+  </main>
+  </div>
+  <script>
+    AuthGuard.requirePerm("accounting");
+    document.getElementById("sidebar").innerHTML = renderSidebar("accounting.html");
+    const TABS = [["overview", "Overview"], ["inbox", "To File"], ["txns", "Transactions"], ["pnl", "P&L"], ["accounts", "Accounts & Rules"],
+      ["loans", "Loans"], ["partners", "Partners"], ["apar", "AP / AR"], ["cash", "Cash Flow"], ["statements", "Statements"]];
+    let META = null, TAB = "overview", PERIOD = { start: null, end: null, key: null };
+    const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("ac." + k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("ac." + k, JSON.stringify(v)); } catch {} } };
+    const $ = id => document.getElementById(id);
+    const view = () => $("ac-view");
+    const money = v => `<span class="${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${fmtMoney(v)}</span>`;
+    const money0 = v => { const r = Math.round(v || 0); return r === 0 ? `<span class="muted">–</span>` : `<span class="${r < 0 ? "neg" : ""}" title="${fmtMoney(v)}">${r < 0 ? "-" : ""}$${Math.abs(r).toLocaleString("en-US")}</span>`; };
+    const day = s => s ? new Date(s + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+    const monthLabel = k => { const [y, m] = k.split("-"); return new Date(+y, +m - 1, 1).toLocaleDateString(undefined, { month: "short", year: "2-digit" }); };
+    const colLabel = k => /^\d{4}-\d\d$/.test(k) ? monthLabel(k) : k;
+    const qs = extra => new URLSearchParams({ start: PERIOD.start, end: PERIOD.end, ...(extra || {}) }).toString();
+    const KIND_LABEL = () => Object.fromEntries(META.kinds.map(k => [k.key, k.label]));
+    const acc = id => META.accounts.find(a => a.id === id);
+
+    // ---- account picker: grouped by type, active ones only (plus the current one) ----
+    function accountOptions(selected, { blank = "— Pick an account —", sign = 0 } = {}) {
+      const order = sign > 0 ? ["income", "loan", "transfer", "owner", "other", "pending", "cogs", "expense"] : ["cogs", "expense", "owner", "loan", "transfer", "income", "other", "pending"];
+      const kl = KIND_LABEL();
+      return `<option value="">${blank}</option>` + order.map(k => {
+        const list = META.accounts.filter(a => a.kind === k && (a.is_active || a.id === selected)).sort((a, b) => a.name.localeCompare(b.name));
+        return list.length ? `<optgroup label="${escapeHtml(kl[k])}">${list.map(a => `<option value="${a.id}" ${a.id === selected ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("")}</optgroup>` : "";
+      }).join("") + `<option value="new">+ New account…</option>`;
+    }
+    async function pickNew(sel, sign) {  // "+ New account…" in any picker
+      const a = await accountDialog(null, sign > 0 ? "income" : "expense");
+      if (!a) { sel.value = ""; return null; }
+      await loadMeta();
+      sel.innerHTML = accountOptions(a.id, { sign });
+      return a.id;
+    }
+
+    // ---- period: a fiscal year or any range ----
+    function drawPeriod() {
+      const yrs = META.years;
+      const saved = store.get("period", null);
+      if (!PERIOD.start) {
+        if (saved && saved.start) PERIOD = saved;
+        else { const y = yrs.find(y => META.today >= y.start && META.today <= y.end) || yrs[0]; PERIOD = { start: y.start, end: y.end, key: y.label }; }
+      }
+      const custom = !yrs.some(y => y.start === PERIOD.start && y.end === PERIOD.end);
+      $("ac-period").innerHTML = `<select id="ac-fy" onchange="pickFy(this.value)" title="Fiscal year (${["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][META.settings.fy_start_month]} – )">
+          ${yrs.map(y => `<option value="${y.label}" ${!custom && y.start === PERIOD.start ? "selected" : ""}>${y.label}</option>`).join("")}
+          <option value="custom" ${custom ? "selected" : ""}>Dates…</option></select>
+        ${custom ? `<input type="date" id="ac-s" value="${PERIOD.start}" onchange="pickDates()"><span class="muted">to</span><input type="date" id="ac-e" value="${PERIOD.end}" onchange="pickDates()">` : ""}`;
+    }
+    function pickFy(v) {
+      if (v === "custom") { PERIOD = { ...PERIOD, key: "custom" }; drawPeriodCustom(); return; }
+      const y = META.years.find(y => y.label === v); PERIOD = { start: y.start, end: y.end, key: y.label }; store.set("period", PERIOD); drawPeriod(); show(TAB);
+    }
+    function drawPeriodCustom() {
+      $("ac-period").innerHTML = `<select id="ac-fy" onchange="pickFy(this.value)">${META.years.map(y => `<option value="${y.label}">${y.label}</option>`).join("")}<option value="custom" selected>Dates…</option></select>
+        <input type="date" id="ac-s" value="${PERIOD.start}" onchange="pickDates()"><span class="muted">to</span><input type="date" id="ac-e" value="${PERIOD.end}" onchange="pickDates()">`;
+    }
+    function pickDates() { const s = $("ac-s").value, e = $("ac-e").value; if (s && e) { PERIOD = { start: s, end: e, key: "custom" }; store.set("period", PERIOD); show(TAB); } }
+
+    async function loadMeta() { META = await apiFetch("/api/accounting/meta"); }
+    function drawTabs() {
+      $("ac-tabs").innerHTML = TABS.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "inbox" && META.unfiled ? ` <span class="ac-chip auto">${META.unfiled}</span>` : ""}</div>`).join("");
+    }
+    async function show(tab) {
+      TAB = tab; store.set("tab", tab); history.replaceState(null, "", "#" + tab); drawTabs();
+      view().innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
+      try { await LOADERS[tab](); } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; }
+    }
+    async function refreshCount() {
+      try { const r = await apiFetch(`/api/accounting/txns?status=unfiled&all_dates=true&limit=1`); META.unfiled = r.total; drawTabs(); } catch {}
+    }
+
+    // ================================================================ Overview
+    async function tabOverview() {
+      const d = await apiFetch(`/api/accounting/overview?${qs()}`);
+      const max = Math.max(1, ...d.months.map(m => Math.max(m.in, -m.out)));
+      const noData = !d.lines;
+      view().innerHTML = `
+        ${noData ? `<div class="card"><h3 style="margin-top:0;">Start Here</h3><p class="ac-help">No lines in ${escapeHtml(PERIOD.key || "this period")} yet. Bring in a bank
+          statement (CSV or Excel) on <a class="link" href="#" onclick="show('statements');return false;">Statements</a> — or your categorized workbook
+          (Date, Amount, Description, Account, Category) to bring the history in and teach AT-HUB how you file things.</p></div>` : ""}
+        <div class="ac-tiles">
+          <div class="ac-tile"><div class="l">Money In</div><div class="v pos">${fmtMoney(d.money_in)}</div><div class="s">${d.lines} lines</div></div>
+          <div class="ac-tile"><div class="l">Money Out</div><div class="v neg">${fmtMoney(d.money_out)}</div><div class="s">net ${fmtMoney(d.money_in + d.money_out)}</div></div>
+          <div class="ac-tile click" onclick="show('pnl')"><div class="l">Profit</div><div class="v ${d.profit < 0 ? "neg" : "pos"}">${fmtMoney(d.profit)}</div><div class="s">income − cost of goods − expenses</div></div>
+          <div class="ac-tile click" onclick="show('inbox')"><div class="l">To File</div><div class="v ${d.unfiled ? "neg" : ""}">${d.unfiled}</div><div class="s">lines with no account (all dates)</div></div>
+          <div class="ac-tile click" onclick="TXF={status:'auto'};show('txns')"><div class="l">Filed By AT-HUB</div><div class="v">${d.unreviewed}</div><div class="s">not looked at yet</div></div>
+        </div>
+        <div class="ac-grid2">
+          <div class="card"><h3 style="margin-top:0;">In And Out By Month</h3>
+            <div class="ac-bars">${d.months.map(m => `<div class="m" title="${monthLabel(m.month)}: in ${fmtMoney(m.in)}, out ${fmtMoney(m.out)}"><div class="pair">
+              <div class="b in" style="height:${(m.in / max * 100).toFixed(1)}%"></div><div class="b out" style="height:${(-m.out / max * 100).toFixed(1)}%"></div></div></div>`).join("")}</div>
+            <div class="ac-bars-lab">${d.months.map(m => `<span>${monthLabel(m.month).split(" ")[0]}</span>`).join("")}</div>
+            <div class="rp-legend"><span><b style="background:#2f6fed"></b>Money In</span><span><b style="background:#eb6834"></b>Money Out</span></div>
+          </div>
+          <div class="card"><h3 style="margin-top:0;">Where The Money Went</h3>
+            <table class="compact-table"><thead><tr><th>Account</th><th>Type</th><th class="num">Amount</th></tr></thead><tbody>
+            ${d.top_spend.map(r => `<tr class="drill" style="cursor:pointer" onclick="drill(${r.account_id})"><td>${escapeHtml(r.name)}</td><td class="muted">${escapeHtml(KIND_LABEL()[r.kind] || "")}</td><td class="ac-amt">${money(r.amount)}</td></tr>`).join("")
+              || `<tr><td colspan="3" class="muted">Nothing filed under cost of goods or expenses yet.</td></tr>`}</tbody></table>
+            <h4 style="margin:14px 0 6px;">By Type</h4>
+            <table class="compact-table"><tbody>${Object.entries(d.kinds).sort((a, b) => a[1] - b[1]).map(([k, v]) => `<tr><td>${escapeHtml(KIND_LABEL()[k] || "Not filed")}</td><td class="ac-amt">${money(v)}</td></tr>`).join("")}</tbody></table>
+          </div>
+        </div>
+        <div class="card"><h3 style="margin-top:0;">Bank Accounts &amp; Cards</h3>
+          <table class="compact-table"><thead><tr><th>Name</th><th>Type</th><th class="num">Lines</th><th>Last Line</th><th class="num">Balance</th></tr></thead><tbody>
+          ${d.sources.map(s => `<tr><td>${escapeHtml(s.name)}${s.last4 ? ` <span class="muted">…${escapeHtml(s.last4)}</span>` : ""}</td><td>${s.kind === "book" ? "Book entries" : s.kind === "card" ? "Credit card" : "Bank"}</td>
+            <td class="num">${s.lines}</td><td>${day(s.last_date)}</td><td class="ac-amt">${s.kind === "book" ? `<span class="muted">–</span>` : s.opening_date ? money(s.balance) : `<span class="muted" title="Set the opening balance on Statements to see a balance">set opening balance</span>`}</td></tr>`).join("")}</tbody></table>
+        </div>`;
+    }
+
+    // ================================================================ lines (inbox + explorer)
+    let TXF = {}, TXDATA = null, TICKED = new Set();
+    function lineRow(t, { inbox = false } = {}) {
+      const chips = [!t.reviewed && t.account_id ? `<span class="ac-chip auto" title="${t.how === "rule" ? "Filed by your rule" : "AT-HUB filed it from earlier lines"} -- nobody has looked yet">Auto</span>` : "",
+        t.origin === "manual" ? `<span class="ac-chip typed">Typed In</span>` : "", t.expected ? `<span class="ac-chip exp" title="Not on a statement yet -- matched when it comes in">Expected</span>` : "",
+        t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : ""].join("");
+      const filed = t.splits.length ? t.splits.map(s => `<div>${escapeHtml(s.account)} <span class="muted">${fmtMoney(s.amount)}</span></div>`).join("")
+        : `<select class="ac-pick" onchange="fileOne(${t.id}, this, ${t.amount})">${accountOptions(t.account_id, { blank: t.account_id ? "— None —" : "— Pick an account —", sign: t.amount })}</select>`;
+      const sugg = !t.account_id && !t.splits.length && t.suggest ? `<div style="margin-top:4px;"><button class="small-btn ac-sugg" onclick="fileTo(${t.id}, ${t.suggest.account_id})" title="${escapeHtml(t.suggest.why)}">${icon("check")} ${escapeHtml(t.suggest.account)}</button>
+        <span class="muted small">${escapeHtml(t.suggest.why)}</span></div>` : "";
+      return `<tr data-id="${t.id}"><td class="tick"><input type="checkbox" ${TICKED.has(t.id) ? "checked" : ""} onchange="tick(${t.id}, this.checked)"></td>
+        <td class="nowrap">${day(t.date)}<div class="muted small">${escapeHtml(t.source)}</div></td>
+        <td><span class="ac-who">${escapeHtml(t.payee || "")}</span>${chips}<div class="ac-desc">${escapeHtml(t.description)}</div>
+          ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
+          ${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
+        <td style="min-width:200px;">${filed}${sugg}</td>
+        <td class="ac-amt">${money(t.amount)}</td>
+        <td class="nowrap"><button class="small-btn icon-only" title="Open: split, note${t.origin === "manual" ? ", change, delete" : ""}" onclick="editLine(${t.id})">${icon("pencil")}</button></td></tr>`;
+    }
+    function tick(id, on) { on ? TICKED.add(id) : TICKED.delete(id); drawBulk(); }
+    function tickAll(on) { (TXDATA?.rows || []).forEach(t => on ? TICKED.add(t.id) : TICKED.delete(t.id)); drawLines(); }
+    function drawBulk() {
+      const el = $("ac-bulk"); if (!el) return;
+      el.style.display = TICKED.size ? "" : "none";
+      el.innerHTML = `<strong>${TICKED.size} ticked</strong>
+        <select id="bulk-acc">${accountOptions(null, { blank: "— Put in account —" })}</select><button class="small-btn" onclick="bulkDo('file')">File</button>
+        <button class="small-btn" onclick="bulkDo('review')" title="Keep the account AT-HUB picked">Looks Right</button>
+        <button class="small-btn" onclick="bulkDo('unfile')">Take Out Of Account</button>
+        <button class="small-btn danger" onclick="bulkDo('delete')" title="Typed-in lines only">Delete</button>
+        <button class="small-btn" onclick="TICKED.clear();drawLines()">Clear</button>`;
+    }
+    async function bulkDo(action) {
+      const body = { ids: [...TICKED], action };
+      if (action === "file") { const v = $("bulk-acc").value; if (!v || v === "new") { toast("Pick the account"); return; } body.account_id = +v; }
+      if (action === "delete" && !(await askDialog({ title: `Delete ${TICKED.size} line(s)?`, body: `<p>Only typed-in lines are deleted; statement lines are skipped (undo their import on Statements).</p>`, buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: false }] })).value) return;
+      try {
+        const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify(body) });
+        toast(`${r.done} done${r.skipped ? `, ${r.skipped} skipped (from a statement)` : ""}${r.filed_more ? ` · ${r.filed_more} more filed like them` : ""}`);
+        TICKED.clear(); await reloadLines(); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+    async function fileTo(id, accountId) {
+      try {
+        const r = await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify({ account_id: accountId }) });
+        toast(`Filed in ${r.account}${r.filed_more ? ` · ${r.filed_more} more like it filed too` : ""}`);
+        await reloadLines(); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+    async function fileOne(id, sel, amount) {
+      let v = sel.value;
+      if (v === "new") { v = await pickNew(sel, amount); if (!v) return; }
+      fileTo(id, v ? +v : null);
+    }
+    let LINES_MODE = "txns";
+    async function reloadLines() {
+      const p = { limit: 300, offset: TXF.offset || 0 };
+      if (LINES_MODE === "inbox") Object.assign(p, { status: "unfiled", all_dates: true });
+      else { Object.assign(p, { start: PERIOD.start, end: PERIOD.end }); for (const k of ["source_id", "account_id", "kind", "status", "q"]) if (TXF[k]) p[k] = TXF[k]; }
+      TXDATA = await apiFetch(`/api/accounting/txns?${new URLSearchParams(p)}`);
+      drawLines();
+    }
+    function drawLines() {
+      const d = TXDATA, el = $("ac-lines"); if (!el) return;
+      el.innerHTML = `<div id="ac-bulk" class="ac-bulk" style="display:none"></div>
+        <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th><th>Date</th><th>Payee / Description</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="muted">${LINES_MODE === "inbox" ? "Nothing to file — every line is in an account." : "No lines match."}</td></tr>`}</tbody></table>
+        <div class="muted small" style="margin-top:8px;">${d.rows.length} of ${d.total} shown · in ${fmtMoney(d.money_in)} · out ${fmtMoney(d.money_out)}
+          ${d.total > (TXF.offset || 0) + d.rows.length ? ` · <a class="link" href="#" onclick="TXF.offset=(TXF.offset||0)+300;reloadLines();return false;">Next 300</a>` : ""}
+          ${TXF.offset ? ` · <a class="link" href="#" onclick="TXF.offset=Math.max(0,TXF.offset-300);reloadLines();return false;">Previous</a>` : ""}</div>`;
+      drawBulk();
+    }
+    async function tabInbox() {
+      LINES_MODE = "inbox"; TICKED.clear(); TXF = {};
+      view().innerHTML = `<div class="card"><h3 style="margin-top:0;">To File</h3>
+        <p class="ac-help">Lines with no account yet (every date). Click a suggestion to accept it, or pick an account — each one you file teaches AT-HUB, and the
+          look-alikes it's now sure about are filed for you. Lines AT-HUB filed by itself are marked <span class="ac-chip auto">Auto</span> on Transactions until someone looks.</p>
+        <div class="btn-row" style="margin-bottom:10px;"><button onclick="acceptAll()">${icon("check")} Accept All Suggestions Shown</button>
+          <button onclick="addLine()">${icon("plus")} Type In A Line</button><button onclick="TXF={status:'auto'};show('txns')">Review AT-HUB's Picks</button></div>
+        <div id="ac-lines"><p class="muted">Loading…</p></div></div>`;
+      await reloadLines();
+    }
+    async function acceptAll() {
+      const rows = (TXDATA?.rows || []).filter(t => t.suggest);
+      if (!rows.length) { toast("No suggestions shown"); return; }
+      if (!(await askDialog({ title: `Accept ${rows.length} suggestion(s)?`, body: `<p>Each line goes in the account shown on its green button.</p>`, buttons: [{ label: "Accept", value: true, cls: "primary" }, { label: "Cancel", value: false }] })).value) return;
+      const by = {};
+      rows.forEach(t => (by[t.suggest.account_id] = by[t.suggest.account_id] || []).push(t.id));
+      let n = 0;
+      for (const [a, ids] of Object.entries(by)) { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: +a }) }); n += r.done + r.filed_more; }
+      toast(`${n} line(s) filed`); await reloadLines(); refreshCount();
+    }
+    async function tabTxns() {
+      LINES_MODE = "txns"; TICKED.clear();
+      const srcs = META.sources, kl = KIND_LABEL();
+      view().innerHTML = `<div class="card">
+        <div class="ac-filters">
+          <input type="search" id="tf-q" placeholder="Search description, payee, note…" value="${escapeHtml(TXF.q || "")}" onkeydown="if(event.key==='Enter')setTxf()">
+          <select id="tf-src" onchange="setTxf()"><option value="">Every account</option>${srcs.map(s => `<option value="${s.id}" ${TXF.source_id == s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
+          <select id="tf-kind" onchange="setTxf()"><option value="">Every type</option>${META.kinds.map(k => `<option value="${k.key}" ${TXF.kind === k.key ? "selected" : ""}>${escapeHtml(k.label)}</option>`).join("")}</select>
+          <select id="tf-acc" onchange="setTxf()" style="max-width:220px;">${accountOptions(TXF.account_id ? +TXF.account_id : null, { blank: "Every account" }).replace(`<option value="new">+ New account…</option>`, "")}</select>
+          <select id="tf-status" onchange="setTxf()"><option value="">Everything</option>
+            ${[["unfiled", "Not filed"], ["auto", "Filed by AT-HUB, not looked at"], ["typed", "Typed in"], ["expected", "Expected (not on a statement yet)"], ["split", "Split"]].map(([k, l]) => `<option value="${k}" ${TXF.status === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <button onclick="addLine()">${icon("plus")} Type In A Line</button>
+        </div>
+        <div id="ac-lines"><p class="muted">Loading…</p></div></div>`;
+      await reloadLines();
+    }
+    function setTxf() { TXF = { q: $("tf-q").value.trim(), source_id: $("tf-src").value, kind: $("tf-kind").value, account_id: $("tf-acc").value, status: $("tf-status").value }; TICKED.clear(); reloadLines(); }
+    function drill(accountId) { TXF = { account_id: accountId }; show("txns"); }
+
+    // ---- one line: account / split / note; typed-in ones: everything ----
+    async function editLine(id) {
+      const t = TXDATA.rows.find(r => r.id === id);
+      const manual = t.origin === "manual" || META.sources.find(s => s.id === t.source_id)?.kind === "book";  // typed in, or a book entry: everything can change
+      const splitRow = (s = {}) => `<div class="ac-split"><select class="sp-acc">${accountOptions(s.account_id || null, { sign: t.amount })}</select>
+        <input type="number" step="0.01" class="sp-amt" value="${s.amount ?? ""}" placeholder="Amount"><input class="sp-note" value="${escapeHtml(s.note || "")}" placeholder="Note"><button type="button" class="small-btn icon-only" onclick="this.parentNode.remove()">${icon("x")}</button></div>`;
+      const body = `<div class="ac-form">
+          ${manual ? `<label>Date</label><input type="date" id="el-date" value="${t.date}">
+            <label>Amount</label><input type="number" step="0.01" id="el-amt" value="${t.amount}" title="+ money in, − money out">
+            <label>Description</label><input id="el-desc" value="${escapeHtml(t.description)}">
+            <label>Account</label><select id="el-src">${META.sources.filter(s => s.is_active || s.id === t.source_id).map(s => `<option value="${s.id}" ${s.id === t.source_id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
+            <label></label><label class="inline-check"><input type="checkbox" id="el-exp" ${t.expected ? "checked" : ""}> Expected on the statement (matched when it comes in)</label>`
+            : `<label>Line</label><div><strong>${fmtMoney(t.amount)}</strong> on ${day(t.date)} · ${escapeHtml(t.source)}<div class="ac-desc">${escapeHtml(t.description)}</div></div>`}
+          <label>Payee</label><input id="el-payee" value="${escapeHtml(t.payee || "")}">
+          <label>Filed In</label><select id="el-acc" ${t.splits.length ? "disabled" : ""}>${accountOptions(t.account_id, { blank: "— None —", sign: t.amount })}</select>
+          <label>Note</label><textarea id="el-note" rows="2">${escapeHtml(t.note || "")}</textarea>
+        </div>
+        <h4 style="margin:12px 0 6px;">Split Over Several Accounts</h4>
+        <p class="ac-help">The parts must add up to ${fmtMoney(t.amount)}. Leave empty to keep it in one account.</p>
+        <div id="el-splits">${t.splits.map(splitRow).join("")}</div>
+        <button type="button" class="small-btn" id="el-addsplit">${icon("plus")} Add A Part</button>
+        ${t.created_by ? `<p class="muted small" style="margin-top:10px;">${manual ? "Typed in" : "Brought in"} by ${escapeHtml(t.created_by)}${t.updated_by ? ` · last changed by ${escapeHtml(t.updated_by)}` : ""}</p>` : ""}`;
+      const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
+      if (manual) buttons.push({ label: "Delete Line", value: "delete", cls: "danger" });
+      const dlgP = askDialog({ title: manual ? "Typed-In Line" : "Statement Line", body, buttons, wide: true });
+      setTimeout(() => {
+        const add = document.getElementById("el-addsplit");
+        if (add) add.onclick = () => { document.getElementById("el-splits").insertAdjacentHTML("beforeend", splitRow()); document.getElementById("el-acc").disabled = true; };
+        document.querySelectorAll("#el-acc").forEach(s => s.onchange = async () => { if (s.value === "new") await pickNew(s, t.amount); });
+      }, 0);
+      const { value, el } = await dlgP;
+      if (!value) return;
+      try {
+        if (value === "delete") { await apiFetch(`/api/accounting/txns/${id}`, { method: "DELETE" }); toast("Deleted"); }
+        else {
+          const q = s => el.querySelector(s);
+          const splits = [...el.querySelectorAll(".ac-split")].map(r => ({ account_id: r.querySelector(".sp-acc").value, amount: parseFloat(r.querySelector(".sp-amt").value), note: r.querySelector(".sp-note").value })).filter(s => s.account_id && s.account_id !== "new" && !isNaN(s.amount));
+          const body = { payee: q("#el-payee").value, note: q("#el-note").value };
+          if (splits.length) body.splits = splits; else { const a = q("#el-acc").value; body.account_id = a && a !== "new" ? +a : null; body.splits = []; }
+          if (manual) Object.assign(body, { date: q("#el-date").value, amount: parseFloat(q("#el-amt").value), description: q("#el-desc").value, source_id: +q("#el-src").value, expected: q("#el-exp").checked });
+          const r = await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify(body) });
+          toast(`Saved${r.filed_more ? ` · ${r.filed_more} more like it filed too` : ""}`);
+        }
+        await reloadLines(); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+    async function addLine() {
+      const banks = META.sources.filter(s => s.is_active);
+      const book = banks.find(s => s.kind === "book");
+      const body = `<p class="ac-help">For money AT-HUB can't see yet: a payment made but not on a statement (pick the bank account — it's matched, not doubled, when the
+          statement brings it), or a book entry that never will be (interest to add, a year-end figure, an adjustment).</p>
+        <div class="ac-form">
+          <label>Where</label><select id="al-src">${banks.map(s => `<option value="${s.id}" ${book && s.id === book.id ? "selected" : ""}>${escapeHtml(s.name)}${s.kind === "book" ? " (not on a statement)" : ""}</option>`).join("")}</select>
+          <label>Date</label><input type="date" id="al-date" value="${META.today}">
+          <label>Money</label><div style="display:flex;gap:6px;"><select id="al-dir" style="width:auto;"><option value="-1">Out (paid)</option><option value="1">In (received)</option></select><input type="number" step="0.01" min="0" id="al-amt" placeholder="0.00"></div>
+          <label>What</label><input id="al-desc" placeholder="e.g. Paid Ziegler by check 1043">
+          <label>Account</label><select id="al-acc">${accountOptions(null)}</select>
+          <label>Note</label><input id="al-note">
+        </div>`;
+      const p = askDialog({ title: "Type In A Line", body, buttons: [{ label: "Add", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+      setTimeout(() => { const s = document.getElementById("al-acc"); if (s) s.onchange = async () => { if (s.value === "new") await pickNew(s, +document.getElementById("al-dir").value); }; }, 0);
+      const { value, el } = await p;
+      if (!value) return;
+      const q = s => el.querySelector(s);
+      const src = META.sources.find(s => s.id === +q("#al-src").value);
+      const a = q("#al-acc").value;
+      try {
+        await apiFetch("/api/accounting/txns", { method: "POST", body: JSON.stringify({ source_id: src.id, date: q("#al-date").value, amount: +q("#al-dir").value * Math.abs(parseFloat(q("#al-amt").value || 0)),
+          description: q("#al-desc").value, account_id: a && a !== "new" ? +a : null, note: q("#al-note").value, expected: src.kind !== "book" }) });
+        toast(src.kind === "book" ? "Added" : "Added — it's matched when the statement brings it");
+        if (TAB === "inbox" || TAB === "txns") await reloadLines(); else show(TAB);
+        refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+
+    // ================================================================ P&L
+    let PNL_BY = store.get("pnlby", "month");
+    async function tabPnl() {
+      const d = await apiFetch(`/api/accounting/pnl?${qs({ by: PNL_BY })}`);
+      const cols = d.columns;
+      const sec = (s, opts = {}) => !s.rows.length ? "" : `<tr class="sec"><td colspan="${cols.length + 2}">${escapeHtml(s.label)}</td></tr>
+        ${s.rows.map(r => `<tr class="drill" onclick="drill(${r.account_id})" title="Open its lines"><td class="name">${escapeHtml(r.name)}</td>${r.cells.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num"><strong>${money0(r.total)}</strong></td></tr>`).join("")}
+        <tr class="tot"><td>Total ${escapeHtml(s.label)}</td>${s.totals.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(s.total)}</td></tr>`;
+      const by = Object.fromEntries(d.sections.map(s => [s.kind, s]));
+      const below = d.sections.filter(s => !s.in_pnl && s.rows.length);
+      view().innerHTML = `<div class="card">
+        <div class="ac-filters"><h3 style="margin:0;">Profit &amp; Loss</h3><span style="flex:1"></span>
+          <div class="tabs" style="margin:0;">${[["month", "By Month"], ["quarter", "By Quarter"], ["fy", "By Year"]].map(([k, l]) => `<div class="tab ${PNL_BY === k ? "active" : ""}" onclick="PNL_BY='${k}';store.set('pnlby','${k}');show('pnl')">${l}</div>`).join("")}</div>
+          <button onclick="exportXlsx()">${icon("download")} Excel For The CPA</button></div>
+        <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}</p>
+        <table class="ac-pnl no-table-tools"><thead><tr><th>Account</th>${cols.map(c => `<th class="num">${escapeHtml(colLabel(c))}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
+          ${sec(by.income)}${sec(by.cogs)}
+          <tr class="tot"><td>Gross Profit</td>${d.gross.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.gross_total)}</td></tr>
+          ${sec(by.expense)}
+          <tr class="profit"><td>Profit</td>${d.profit.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.profit_total)}</td></tr>
+          ${below.length ? `<tr><td colspan="${cols.length + 2}" style="padding-top:16px;" class="muted small">Below the line — money that moved but isn't profit or loss:</td></tr>` + below.map(s => sec(s)).join("") : ""}
+          ${d.unfiled_total ? `<tr class="tot"><td>Not Filed</td>${d.unfiled.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.unfiled_total)}</td></tr>` : ""}
+        </tbody></table></div>`;
+    }
+    async function exportXlsx() {
+      try { await downloadFile(`/api/accounting/export.xlsx?${qs()}`, `Accounting ${PERIOD.key && PERIOD.key !== "custom" ? PERIOD.key : PERIOD.start + " to " + PERIOD.end}.xlsx`); }
+      catch (e) { alert(e.message); }
+    }
+
+    // ================================================================ Accounts & rules
+    async function accountDialog(a, kind = "expense") {
+      const k = a ? a.kind : kind;
+      const body = `<div class="ac-form">
+        <label>Name</label><input id="ad-name" value="${escapeHtml(a?.name || "")}" placeholder="e.g. Superior Bolts, Rent, Sandy Spring loan">
+        <label>Type</label><select id="ad-kind">${META.kinds.map(x => `<option value="${x.key}" ${x.key === k ? "selected" : ""}>${escapeHtml(x.label)}</option>`).join("")}</select>
+        <label>Partner</label><select id="ad-partner"><option value="">—</option>${META.settings.partners.map(p => `<option ${a?.partner === p.name ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>
+        <label>Owed At Start</label><input type="number" step="0.01" id="ad-open" value="${a?.opening_balance || ""}" placeholder="Loans: owed before the first line here">
+        <label>QuickBooks Type</label><input id="ad-qb" value="${escapeHtml(a?.qb_type || "")}" placeholder="filled from the type">
+        <label>Note</label><input id="ad-note" value="${escapeHtml(a?.note || "")}">
+        ${a ? `<label></label><label class="inline-check"><input type="checkbox" id="ad-active" ${a.is_active ? "checked" : ""}> In use (switched off: hidden from the pickers)</label>` : ""}
+      </div><p class="ac-help" style="margin-top:10px;">Partner Draws accounts need a partner — that's how the Partners tab knows whose draws they are.</p>`;
+      const { value, el } = await askDialog({ title: a ? "Account" : "New Account", body, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return null;
+      const q = s => el.querySelector(s);
+      const data = { name: q("#ad-name").value, kind: q("#ad-kind").value, partner: q("#ad-partner").value, opening_balance: parseFloat(q("#ad-open").value || 0),
+        qb_type: q("#ad-qb").value, note: q("#ad-note").value };
+      if (a) data.is_active = q("#ad-active").checked;
+      try { const r = await apiFetch(`/api/accounting/accounts${a ? "/" + a.id : ""}`, { method: a ? "PUT" : "POST", body: JSON.stringify(data) }); toast("Saved"); return r; }
+      catch (e) { alert(e.message); return null; }
+    }
+    async function tabAccounts() {
+      const [rows, rules] = await Promise.all([apiFetch(`/api/accounting/accounts-summary?${qs()}`), apiFetch("/api/accounting/rules")]);
+      const kl = KIND_LABEL();
+      const groups = META.kinds.map(k => ({ ...k, rows: rows.filter(r => r.kind === k.key) })).filter(g => g.rows.length);
+      view().innerHTML = `<div class="card">
+        <div class="ac-filters"><h3 style="margin:0;">Accounts</h3><span style="flex:1"></span><button onclick="newAccount()">${icon("plus")} New Account</button></div>
+        <p class="ac-help">Every place money goes or comes from. Figures are for ${escapeHtml(PERIOD.key === "custom" ? "the dates picked" : PERIOD.key || "")}. Click a name to see its lines.
+          Two accounts that are one thing? Merge them — every line moves over.</p>
+        <table class="compact-table no-table-tools"><thead><tr><th>Account</th><th class="num">Lines</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th><th>Last</th><th></th></tr></thead><tbody>
+        ${groups.map(g => `<tr class="sec"><td colspan="7"><strong>${escapeHtml(g.label)}</strong> <span class="muted small">QuickBooks: ${escapeHtml(g.qb_type)}</span></td></tr>` + g.rows.map(r => `<tr ${r.is_active ? "" : 'style="opacity:.55"'}>
+          <td><a class="link" href="#" onclick="drill(${r.id});return false;">${escapeHtml(r.name)}</a>${r.partner ? ` <span class="ac-chip">${escapeHtml(r.partner)}</span>` : ""}${r.is_active ? "" : ` <span class="ac-chip">Off</span>`}${r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : ""}</td>
+          <td class="num">${r.count}</td><td class="ac-amt">${r.in ? money(r.in) : ""}</td><td class="ac-amt">${r.out ? money(r.out) : ""}</td><td class="ac-amt"><strong>${money(r.net)}</strong></td>
+          <td class="nowrap">${day(r.last)}</td>
+          <td class="nowrap"><button class="small-btn icon-only" title="Change" onclick="editAccount(${r.id})">${icon("pencil")}</button>
+            <button class="small-btn" onclick="mergeAccount(${r.id})" title="Move its lines into another account">Merge</button>
+            <button class="small-btn icon-only" title="Delete (only when it has no lines)" onclick="deleteAccount(${r.id})">${icon("trash")}</button></td></tr>`).join("")).join("")
+          || `<tr><td colspan="7" class="muted">No accounts yet — they're made as you file lines (or from your workbook).</td></tr>`}</tbody></table></div>
+      <div class="card">
+        <div class="ac-filters"><h3 style="margin:0;">Rules</h3><span style="flex:1"></span><button onclick="newRule()">${icon("plus")} New Rule</button></div>
+        <p class="ac-help">AT-HUB learns from every line you file, so rules are only for what it can't learn — e.g. "CARDMEMBER SERV 2738" is always the US Bank card.
+          A rule comes before what AT-HUB learned. All the words must be in the description.</p>
+        <table class="compact-table"><thead><tr><th>Description Contains</th><th>Money</th><th>Amount</th><th>Goes In</th><th class="num">Used</th><th></th></tr></thead><tbody>
+        ${rules.map(r => `<tr><td><code>${escapeHtml(r.contains)}</code></td><td>${r.sign === "in" ? "In" : r.sign === "out" ? "Out" : "Either"}</td>
+          <td>${r.min_amount != null || r.max_amount != null ? `${r.min_amount != null ? fmtMoney(r.min_amount) : "any"} – ${r.max_amount != null ? fmtMoney(r.max_amount) : "any"}` : "Any"}</td>
+          <td>${escapeHtml(r.account)}</td><td class="num">${r.hits}</td><td><button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${r.id})">${icon("trash")}</button></td></tr>`).join("")
+          || `<tr><td colspan="6" class="muted">No rules — AT-HUB is going on what it learned.</td></tr>`}</tbody></table></div>`;
+    }
+    async function newAccount() { if (await accountDialog(null)) { await loadMeta(); show("accounts"); } }
+    async function editAccount(id) { if (await accountDialog(acc(id))) { await loadMeta(); show("accounts"); } }
+    async function mergeAccount(id) {
+      const a = acc(id);
+      const { value, el } = await askDialog({ title: `Merge ${a.name} Into…`, body: `<p>Every line, part and rule of <strong>${escapeHtml(a.name)}</strong> moves to the account you pick, then ${escapeHtml(a.name)} is removed.</p>
+        <select id="mg-into">${accountOptions(null).replace(`<option value="new">+ New account…</option>`, "").replace(`<option value="${id}">`, `<option value="${id}" disabled>`)}</select>`,
+        buttons: [{ label: "Merge", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      const into = el.querySelector("#mg-into").value;
+      if (!into) return;
+      try { const r = await apiFetch(`/api/accounting/accounts/${id}/merge?into_id=${into}`, { method: "POST" }); toast(`${r.moved} line(s) moved`); await loadMeta(); show("accounts"); }
+      catch (e) { alert(e.message); }
+    }
+    async function deleteAccount(id) {
+      if (!(await askDialog({ title: `Delete ${acc(id).name}?`, body: "", buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
+      try { await apiFetch(`/api/accounting/accounts/${id}`, { method: "DELETE" }); await loadMeta(); show("accounts"); } catch (e) { alert(e.message); }
+    }
+    async function newRule() {
+      const body = `<div class="ac-form">
+        <label>Description Has</label><input id="nr-words" placeholder="e.g. CARDMEMBER SERV 2738">
+        <label>Money</label><select id="nr-sign"><option value="">In or out</option><option value="out">Out only</option><option value="in">In only</option></select>
+        <label>Amount From</label><input type="number" step="0.01" id="nr-min" placeholder="any">
+        <label>Amount To</label><input type="number" step="0.01" id="nr-max" placeholder="any">
+        <label>Goes In</label><select id="nr-acc">${accountOptions(null).replace(`<option value="new">+ New account…</option>`, "")}</select>
+        <label></label><label class="inline-check"><input type="checkbox" id="nr-refile" checked> Also move lines AT-HUB filed elsewhere (not ones a person filed)</label></div>`;
+      const { value, el } = await askDialog({ title: "New Rule", body, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+      if (!value) return;
+      const q = s => el.querySelector(s), n = s => q(s).value === "" ? null : parseFloat(q(s).value);
+      try {
+        const r = await apiFetch("/api/accounting/rules", { method: "POST", body: JSON.stringify({ contains: q("#nr-words").value, sign: q("#nr-sign").value || null, min_amount: n("#nr-min"), max_amount: n("#nr-max"), account_id: +q("#nr-acc").value, refile: q("#nr-refile").checked }) });
+        toast(`Rule saved${r.filed ? ` · ${r.filed} line(s) filed by it` : ""}`); show("accounts"); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+    async function deleteRule(id) { await apiFetch(`/api/accounting/rules/${id}`, { method: "DELETE" }); show("accounts"); }
+
+    // ================================================================ Loans
+    async function tabLoans() {
+      const rows = await apiFetch(`/api/accounting/loans?end=${PERIOD.end}`);
+      view().innerHTML = `<div class="card"><h3 style="margin-top:0;">Loans</h3>
+        <p class="ac-help">Every lender (accounts of type Loans), all time up to ${day(PERIOD.end)}: money borrowed in, repaid out, what's still owed. Set "Owed At Start" on the
+          account for a loan taken before the first line here. Interest not on a statement? <a class="link" href="#" onclick="addLine();return false;">Type it in</a> as a book entry.</p>
+        <table class="compact-table"><thead><tr><th>Lender</th><th class="num">Owed At Start</th><th class="num">Borrowed</th><th class="num">Repaid</th><th class="num">Still Owed</th><th class="num">Lines</th><th>Last</th></tr></thead><tbody>
+        ${rows.map(r => `<tr><td><a class="link" href="#" onclick="drill(${r.account_id});return false;">${escapeHtml(r.name)}</a></td><td class="ac-amt">${fmtMoney(r.opening)}</td>
+          <td class="ac-amt">${money(r.borrowed)}</td><td class="ac-amt">${money(r.repaid)}</td><td class="ac-amt"><strong class="${r.owed > 0.004 ? "neg" : ""}">${fmtMoney(r.owed)}</strong></td>
+          <td class="num">${r.count}</td><td>${day(r.last)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No loan accounts.</td></tr>`}
+        ${rows.length ? `<tr class="tot"><td><strong>Total</strong></td><td></td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.borrowed, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.repaid, 0))}</td>
+          <td class="ac-amt"><strong>${fmtMoney(rows.reduce((a, r) => a + r.owed, 0))}</strong></td><td colspan="2"></td></tr>` : ""}</tbody></table></div>`;
+    }
+
+    // ================================================================ Partners
+    async function tabPartners() {
+      const d = await apiFetch(`/api/accounting/partners?${qs()}`);
+      view().innerHTML = `<div class="ac-grid2">
+        <div class="card"><h3 style="margin-top:0;">To Share — ${escapeHtml(d.year)}</h3>
+          <p class="ac-help">Worked out the way your year-end summary does it: borrowed money in the bank isn't profit, so loans (borrowed − repaid) are taken off.
+            Operating profit (income − cost of goods − expenses) was <strong>${fmtMoney(d.operating_profit)}</strong>.</p>
+          <table class="ac-steps" style="width:100%;"><tbody>
+            ${d.steps.map(s => `<tr><td>${escapeHtml(s.label)}</td><td class="ac-amt">${money(s.amount)}</td></tr>`).join("")}
+            <tr class="total"><td>To Share</td><td class="ac-amt">${money(d.total)}</td></tr></tbody></table>
+          ${d.apar ? `<p class="muted small">This year is still open, so AR − AP is today's: AR ${fmtMoney(d.apar.ar)} − AP ${fmtMoney(d.apar.ap)} (<a class="link" href="#" onclick="show('apar');return false;">AP / AR</a>).
+            For a closed year, type in year-end AP / AR entries (account type Year-End AP / AR) and they're used instead.</p>` : ""}
+          <div class="ac-form" style="margin-top:12px;">
+            <label>Bank Balance Counted</label><div style="display:flex;gap:6px;"><input type="number" step="0.01" id="pt-bank" value="${d.bank_balance || ""}" placeholder="0.00"><button class="small-btn" style="flex:none;white-space:nowrap;" onclick="saveYear('${escapeHtml(d.year)}')">Save</button></div>
+            <label>Notes</label><textarea id="pt-notes" rows="4" placeholder="e.g. Includes payments made to the 401K from a personal account">${escapeHtml(d.notes || "")}</textarea>
+          </div></div>
+        <div class="card"><h3 style="margin-top:0;">Partners</h3>
+          <table class="compact-table"><thead><tr><th>Partner</th><th class="num">Share</th><th class="num">Already Taken</th><th class="num">Adjust</th><th class="num">Remaining</th></tr></thead><tbody>
+          ${d.partners.map(p => `<tr><td><strong>${escapeHtml(p.name)}</strong><div class="muted small">${(p.share_pct * 100).toFixed(1)}%</div></td><td class="ac-amt">${fmtMoney(p.share)}</td>
+            <td class="ac-amt">${money(p.taken)}</td><td class="ac-amt"><input type="number" step="0.01" class="pt-adj" data-name="${escapeHtml(p.name)}" value="${p.adjust || ""}" style="width:100px;text-align:right;" title="+ owed to them, − they owe (e.g. paid a company bill personally)"></td>
+            <td class="ac-amt"><strong>${money(p.remaining)}</strong></td></tr>`).join("")}</tbody></table>
+          ${d.others.length ? `<p class="muted small">Draws not matched to a partner: ${d.others.map(o => `${escapeHtml(o.name)} ${fmtMoney(o.taken)}`).join(", ")} — set the partner on those accounts.</p>` : ""}
+          <p class="ac-help" style="margin-top:8px;">"Already taken" = lines in Partner Draws accounts this year. Adjust: + owed to them, − they owe. <button class="small-btn" onclick="saveYear('${escapeHtml(d.year)}')">Save Adjustments</button></p>
+          <h4 style="margin:16px 0 6px;">Split</h4>
+          <div id="pt-split">${META.settings.partners.map(p => `<div style="display:flex;gap:6px;margin-bottom:6px;"><input class="ps-name" value="${escapeHtml(p.name)}"><input type="number" step="0.01" class="ps-share" value="${+(p.share * 100).toFixed(4)}" style="width:100px;"><span class="muted" style="align-self:center;">%</span></div>`).join("")}</div>
+          <button class="small-btn" onclick="document.getElementById('pt-split').insertAdjacentHTML('beforeend','<div style=&quot;display:flex;gap:6px;margin-bottom:6px;&quot;><input class=&quot;ps-name&quot; placeholder=&quot;Name&quot;><input type=&quot;number&quot; class=&quot;ps-share&quot; style=&quot;width:100px;&quot;><span class=&quot;muted&quot;>%</span></div>')">${icon("plus")} Partner</button>
+          <button class="small-btn" onclick="saveSplit()">Save Split</button>
+        </div></div>`;
+    }
+    async function saveYear(year) {
+      const adjust = {}; document.querySelectorAll(".pt-adj").forEach(i => adjust[i.dataset.name] = parseFloat(i.value || 0));
+      try { await apiFetch("/api/accounting/settings", { method: "PUT", body: JSON.stringify({ year, bank_balance: parseFloat($("pt-bank").value || 0), notes: $("pt-notes").value, adjust }) }); await loadMeta(); toast("Saved"); show("partners"); }
+      catch (e) { alert(e.message); }
+    }
+    async function saveSplit() {
+      const names = [...document.querySelectorAll(".ps-name")], shares = [...document.querySelectorAll(".ps-share")];
+      const partners = names.map((n, i) => ({ name: n.value.trim(), share: parseFloat(shares[i].value || 0) / 100 })).filter(p => p.name);
+      try { await apiFetch("/api/accounting/settings", { method: "PUT", body: JSON.stringify({ partners }) }); await loadMeta(); toast("Saved"); show("partners"); }
+      catch (e) { alert(e.message); }
+    }
+
+    // ================================================================ AP / AR
+    let APAR = null, APAR_SHOW = store.get("aparshow", "open");
+    async function tabApar() {
+      APAR = await apiFetch("/api/accounting/open-items");
+      drawApar();
+    }
+    function drawApar() {
+      const d = APAR;
+      const shown = r => APAR_SHOW === "all" || r.status === "open";
+      const side = s => {
+        const rows = d.items.filter(r => r.side === s && shown(r));
+        const groups = [...new Set(rows.map(r => r.group))];
+        return groups.map(g => {
+          const gr = rows.filter(r => r.group === g);
+          const off = g === "Open Customer Orders" && !d.open_orders_counted;
+          return `<tr class="sec"><td colspan="6"><strong>${escapeHtml(g)}</strong> <span class="muted small">${gr.length} · ${fmtMoney(gr.filter(r => r.status === "open").reduce((a, r) => a + r.amount, 0))}${off ? " · not counted in the total" : ""}</span></td></tr>` +
+            gr.map(r => `<tr class="${r.status !== "open" ? "ac-status-paid" : ""}">
+              <td>${escapeHtml(r.party || "")}<div class="muted small">${r.link ? `<a class="link" href="${r.link}" target="_blank">${escapeHtml(r.ref || "")}</a>` : escapeHtml(r.ref || "")}</div></td>
+              <td class="nowrap">${day(r.date)}${r.due_date ? `<div class="small ${r.overdue && r.status === "open" ? "neg" : "muted"}">due ${day(r.due_date)}</div>` : ""}</td>
+              <td class="ac-amt">${fmtMoney(r.amount)}${r.athub_amount != null && Math.abs(r.athub_amount - r.amount) > 0.004 ? `<div class="muted small" title="AT-HUB's figure">AT-HUB ${fmtMoney(r.athub_amount)}</div>` : ""}</td>
+              <td>${r.status === "paid" ? `<span class="tag shipped">Paid${r.paid_date ? " " + day(r.paid_date) : ""}</span>` : r.status === "left_out" ? `<span class="tag">Left Out</span>` : ""}
+                ${r.note ? `<div class="small">${escapeHtml(r.note)}</div>` : ""}${r.changed_by ? `<div class="muted small">by ${escapeHtml(r.changed_by)}</div>` : ""}</td>
+              <td class="nowrap"><button class="small-btn icon-only" title="Change: paid, amount, note" onclick="editItem('${r.key}')">${icon("pencil")}</button></td></tr>`).join("");
+        }).join("") || `<tr><td colspan="6" class="muted">Nothing.</td></tr>`;
+      };
+      view().innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">AP / AR Today</h3><span style="flex:1"></span>
+          <label class="inline-check"><input type="checkbox" ${d.open_orders_counted ? "checked" : ""} onchange="countOrders(this.checked)"> Count open customer orders in AR</label>
+          <select onchange="APAR_SHOW=this.value;store.set('aparshow',this.value);drawApar()" style="width:auto;"><option value="open" ${APAR_SHOW === "open" ? "selected" : ""}>Open only</option><option value="all" ${APAR_SHOW === "all" ? "selected" : ""}>With paid / left out</option></select>
+          <button onclick="editItem(null)">${icon("plus")} Type In An Item</button></div>
+        <p class="ac-help">Straight from AT-HUB (unpaid invoices, invoices not sent, open customer orders, purchase orders not paid) plus anything typed in.
+          AT-HUB lagging behind? Mark an item paid or change its amount here — that's this page's view only; AT-HUB's invoice / PO isn't changed.</p>
+        <div class="ac-tiles"><div class="ac-tile"><div class="l">Owed To Us (AR)</div><div class="v pos">${fmtMoney(d.ar)}</div></div>
+          <div class="ac-tile"><div class="l">We Owe (AP)</div><div class="v neg">${fmtMoney(d.ap)}</div></div>
+          <div class="ac-tile"><div class="l">AR − AP</div><div class="v">${fmtMoney(d.ar - d.ap)}</div></div></div>
+        <div class="ac-grid2">
+          <div><h4 style="margin:0 0 6px;">Receivable — Owed To Us</h4><table class="compact-table no-table-tools"><thead><tr><th>Who</th><th>Date</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${side("ar")}</tbody></table></div>
+          <div><h4 style="margin:0 0 6px;">Payable — We Owe</h4><table class="compact-table no-table-tools"><thead><tr><th>Who</th><th>Date</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${side("ap")}</tbody></table></div>
+        </div></div>`;
+    }
+    async function countOrders(on) { await apiFetch("/api/accounting/settings", { method: "PUT", body: JSON.stringify({ open_orders_counted: on }) }); await loadMeta(); tabApar(); }
+    async function editItem(key) {
+      const r = key ? APAR.items.find(x => x.key === key) : null;
+      const manual = !r || r.source === "manual";
+      const body = `<div class="ac-form">
+        ${manual ? `<label>Side</label><select id="it-side"><option value="ap" ${r?.side === "ap" ? "selected" : ""}>Payable — we owe</option><option value="ar" ${r?.side === "ar" ? "selected" : ""}>Receivable — owed to us</option></select>
+          <label>Who</label><input id="it-party" value="${escapeHtml(r?.party || "")}" placeholder="e.g. Capital One, Jill">
+          <label>Ref</label><input id="it-ref" value="${escapeHtml(r?.ref || "")}" placeholder="invoice #, what for">
+          <label>Date</label><input type="date" id="it-date" value="${r?.date || META.today}">
+          <label>Due</label><input type="date" id="it-due" value="${r?.due_date || ""}">`
+          : `<label>From AT-HUB</label><div><strong>${escapeHtml(r.party || "")}</strong> · ${escapeHtml(r.ref || "")}<div class="muted small">AT-HUB says ${fmtMoney(r.athub_amount)}</div></div>`}
+        <label>Amount</label><input type="number" step="0.01" id="it-amt" value="${r ? r.amount : ""}" placeholder="${manual ? "0.00" : "AT-HUB's figure"}">
+        <label>Status</label><select id="it-status">${[["open", "Open"], ["paid", "Paid already"], ["left_out", "Leave out"]].map(([k, l]) => `<option value="${k}" ${(r?.status || "open") === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <label>Paid On</label><input type="date" id="it-paid" value="${r?.paid_date || ""}">
+        <label>Note</label><input id="it-note" value="${escapeHtml(r?.note || "")}" placeholder="${manual ? "" : "e.g. paid by wire 10/3, not in AT-HUB yet"}">
+      </div>`;
+      const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
+      if (r && r.override_id) buttons.push({ label: manual ? "Delete" : "Back To AT-HUB's Figure", value: "drop", cls: manual ? "danger" : "" });
+      const { value, el } = await askDialog({ title: manual ? (r ? "Typed-In Item" : "Type In An AP / AR Item") : "AT-HUB Item", body, buttons, wide: true });
+      if (!value) return;
+      try {
+        if (value === "drop") await apiFetch(`/api/accounting/open-items/${r.override_id}`, { method: "DELETE" });
+        else {
+          const q = s => el.querySelector(s);
+          const data = { status: q("#it-status").value, paid_date: q("#it-paid").value || null, note: q("#it-note").value };
+          const amt = q("#it-amt").value;
+          if (manual) Object.assign(data, { id: r?.id, source: "manual", side: q("#it-side").value, party: q("#it-party").value, ref: q("#it-ref").value, item_date: q("#it-date").value, due_date: q("#it-due").value || null, amount: amt === "" ? null : parseFloat(amt) });
+          else Object.assign(data, { source: r.source, source_id: r.source_id, side: r.side, amount: amt === "" || Math.abs(parseFloat(amt) - r.athub_amount) < 0.005 ? null : parseFloat(amt) });
+          await apiFetch("/api/accounting/open-items", { method: "POST", body: JSON.stringify(data) });
+        }
+        toast("Saved"); tabApar();
+      } catch (e) { alert(e.message); }
+    }
+
+    // ================================================================ Cash flow
+    async function tabCash() {
+      const src = store.get("cashsrc", "");
+      const d = await apiFetch(`/api/accounting/cashflow?${qs(src ? { source_id: src } : {})}`);
+      const kl = KIND_LABEL(), kinds = [...new Set(d.rows.flatMap(r => Object.keys(r.by_kind)))];
+      const order = ["income", "cogs", "expense", "loan", "owner", "transfer", "pending", "other", "unfiled"].filter(k => kinds.includes(k));
+      view().innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">Cash Flow</h3><span style="flex:1"></span>
+          <select onchange="store.set('cashsrc',this.value);show('cash')" style="width:auto;"><option value="">Every bank account</option>${META.sources.filter(s => s.kind !== "book").map(s => `<option value="${s.id}" ${String(s.id) === String(src) ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select></div>
+        <p class="ac-help">Money in and out by month and type, and the balance after each month${d.opening ? "" : " (set an opening balance on Statements for a true balance)"}. Starting balance ${fmtMoney(d.opening)}.</p>
+        <table class="ac-pnl no-table-tools"><thead><tr><th>Month</th>${order.map(k => `<th class="num">${escapeHtml(kl[k] || "Not filed")}</th>`).join("")}<th class="num">Net</th><th class="num">Balance</th></tr></thead><tbody>
+        ${d.rows.map(r => `<tr><td>${monthLabel(r.month)}</td>${order.map(k => `<td class="num">${money0(r.by_kind[k] || 0)}</td>`).join("")}<td class="num"><strong>${money0(r.net)}</strong></td><td class="num">${money0(r.balance)}</td></tr>`).join("")}
+        <tr class="tot"><td>Total</td>${order.map(k => `<td class="num">${money0(d.rows.reduce((a, r) => a + (r.by_kind[k] || 0), 0))}</td>`).join("")}<td class="num">${money0(d.rows.reduce((a, r) => a + r.net, 0))}</td><td></td></tr>
+        </tbody></table></div>`;
+    }
+
+    // ================================================================ Statements
+    async function tabStatements() {
+      const imps = await apiFetch("/api/accounting/imports");
+      view().innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">Bank Accounts &amp; Cards</h3><span style="flex:1"></span>
+          <button onclick="sourceDialog(null)">${icon("plus")} Add Bank Account / Card</button></div>
+        <p class="ac-help">Card payments from the bank are filed as cost of goods for now. When a card's own statements are brought in later, file the bank's card
+          payments as Transfers / Wash and the card's lines carry the detail — nothing is counted twice.</p>
+        <table class="compact-table"><thead><tr><th>Name</th><th>Type</th><th class="num">Lines</th><th>Last Line</th><th>Opening Balance</th><th class="num">Balance</th><th></th></tr></thead><tbody>
+        ${META.sources.map(s => `<tr ${s.is_active ? "" : 'style="opacity:.55"'}><td><strong>${escapeHtml(s.name)}</strong>${s.last4 ? ` <span class="muted">…${escapeHtml(s.last4)}</span>` : ""}</td>
+          <td>${s.kind === "book" ? "Book entries" : s.kind === "card" ? "Credit card" : "Bank"}</td><td class="num">${s.lines}</td><td>${day(s.last_date)}</td>
+          <td>${s.kind === "book" ? "" : s.opening_date ? `${fmtMoney(s.opening_balance)} on ${day(s.opening_date)}` : `<span class="muted">not set</span>`}</td>
+          <td class="ac-amt">${s.kind !== "book" && s.opening_date ? money(s.balance) : ""}</td>
+          <td class="nowrap">${s.kind === "book" ? "" : `<button class="small-btn" onclick="importDialog(${s.id})">${icon("upload")} Bring In Statement</button>
+            <button class="small-btn icon-only" title="Change" onclick="sourceDialog(${s.id})">${icon("pencil")}</button>
+            <button class="small-btn icon-only" title="QuickBooks bank file (CSV) for the period" onclick="qbExport(${s.id})">${icon("download")}</button>`}</td></tr>`).join("")}</tbody></table></div>
+      <div class="card"><h3 style="margin-top:0;">Files Brought In</h3>
+        <table class="compact-table"><thead><tr><th>When</th><th>Account</th><th>File</th><th class="num">Lines</th><th class="num">New</th><th class="num">Already In</th><th class="num">Matched</th><th class="num">Auto-Filed</th><th></th></tr></thead><tbody>
+        ${imps.map(i => `<tr><td class="nowrap">${fmtWhen(i.created_at)}<div class="muted small">${escapeHtml(i.created_by || "")}</div></td><td>${escapeHtml(i.source)}</td>
+          <td>${escapeHtml(i.filename || "")}${i.kind === "workbook" ? ` <span class="ac-chip">Workbook</span>` : ""}</td><td class="num">${i.rows}</td><td class="num">${i.added}</td>
+          <td class="num">${i.skipped}</td><td class="num" title="Typed in earlier, found on the statement">${i.matched}</td><td class="num">${i.auto}</td>
+          <td>${i.still_there ? `<button class="small-btn" onclick="undoImport(${i.id}, ${i.still_there})">Undo</button>` : `<span class="muted small">undone</span>`}</td></tr>`).join("")
+          || `<tr><td colspan="9" class="muted">Nothing brought in yet.</td></tr>`}</tbody></table>
+        <p class="ac-help" style="margin-top:8px;">Bringing in the same statement twice is safe: lines already in are skipped. A line you typed in ahead (same amount, within 7 days) is matched, not doubled.</p></div>`;
+    }
+    async function sourceDialog(id) {
+      const s = id ? META.sources.find(x => x.id === id) : null;
+      const body = `<div class="ac-form">
+        <label>Name</label><input id="sd-name" value="${escapeHtml(s?.name || "")}" placeholder="e.g. Wells Fargo Checking">
+        <label>Type</label><select id="sd-kind"><option value="bank" ${s?.kind !== "card" ? "selected" : ""}>Bank account</option><option value="card" ${s?.kind === "card" ? "selected" : ""}>Credit card</option></select>
+        <label>Last 4</label><input id="sd-last4" value="${escapeHtml(s?.last4 || "")}" maxlength="4">
+        <label>Opening Balance</label><input type="number" step="0.01" id="sd-open" value="${s?.opening_balance || ""}">
+        <label>On Date</label><input type="date" id="sd-date" value="${s?.opening_date || ""}">
+        ${s ? `<label></label><label class="inline-check"><input type="checkbox" id="sd-active" ${s.is_active ? "checked" : ""}> In use</label>` : ""}
+      </div><p class="ac-help" style="margin-top:8px;">Opening balance = the balance at the start of that day; lines from that day on are added to it.</p>`;
+      const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
+      if (s && !s.lines) buttons.push({ label: "Delete", value: "delete", cls: "danger" });
+      const { value, el } = await askDialog({ title: s ? s.name : "Add Bank Account / Card", body, buttons });
+      if (!value) return;
+      const q = x => el.querySelector(x);
+      try {
+        if (value === "delete") await apiFetch(`/api/accounting/sources/${id}`, { method: "DELETE" });
+        else await apiFetch(`/api/accounting/sources${s ? "/" + id : ""}`, { method: s ? "PUT" : "POST", body: JSON.stringify({ name: q("#sd-name").value, kind: q("#sd-kind").value, last4: q("#sd-last4").value,
+          opening_balance: parseFloat(q("#sd-open").value || 0), opening_date: q("#sd-date").value || "", ...(s ? { is_active: q("#sd-active").checked } : {}) }) });
+        await loadMeta(); show("statements");
+      } catch (e) { alert(e.message); }
+    }
+    async function qbExport(id) {
+      const s = META.sources.find(x => x.id === id);
+      try { await downloadFile(`/api/accounting/export/quickbooks.csv?${qs({ source_id: id })}`, `${s.name} QuickBooks.csv`); } catch (e) { alert(e.message); }
+    }
+    async function undoImport(id, n) {
+      if (!(await askDialog({ title: "Undo this import?", body: `<p>${n} line(s) from this file are removed (typed-in lines it matched stay).</p>`, buttons: [{ label: "Undo Import", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
+      try { const r = await apiFetch(`/api/accounting/imports/${id}`, { method: "DELETE" }); toast(`${r.removed} line(s) removed`); await loadMeta(); show("statements"); refreshCount(); } catch (e) { alert(e.message); }
+    }
+    // pick a file -> AT-HUB reads it and shows which column it thinks is which -> change any -> bring it in
+    let IMP = null;
+    async function importDialog(sourceId) {
+      const pick = Object.assign(document.createElement("input"), { type: "file", accept: ".csv,.xlsx,.xlsm,.txt" });
+      pick.onchange = async () => {
+        const file = pick.files[0]; if (!file) return;
+        IMP = { file, sourceId, layout: null };
+        await previewImport();
+      };
+      pick.click();
+    }
+    async function previewImport() {
+      const fd = new FormData(); fd.append("source_id", IMP.sourceId); fd.append("file", IMP.file);
+      if (IMP.layout) fd.append("layout", JSON.stringify(IMP.layout));
+      let p;
+      try { p = await apiUpload("/api/accounting/import/preview", fd); } catch (e) { alert(e.message); return; }
+      IMP.layout = p.layout;
+      const col = (key, label, optional) => `<div><label>${label}</label><select class="mp" data-k="${key}">${optional ? `<option value="">—</option>` : `<option value="">— pick —</option>`}${p.headers.map((h, i) => `<option value="${i}" ${p.layout[key] === i ? "selected" : ""}>${escapeHtml(h)}</option>`).join("")}</select></div>`;
+      const src = META.sources.find(s => s.id === IMP.sourceId);
+      const body = `<p class="ac-help">${escapeHtml(IMP.file.name)} → <strong>${escapeHtml(src.name)}</strong>. Check AT-HUB read the columns right (it remembers them for this account).</p>
+        <label class="inline-check"><input type="checkbox" id="mp-head" ${p.layout.has_header ? "checked" : ""}> The first row is column names</label>
+        <div class="ac-map">${col("date", "Date")}${col("description", "Description")}${col("amount", "Amount (+ in, − out)", true)}${col("debit", "Or: Debit (out)", true)}${col("credit", "And: Credit (in)", true)}
+          ${col("account", "Account (your workbook)", true)}${col("category", "Category (your workbook)", true)}</div>
+        <div class="table-scroll"><table class="compact-table ac-sample"><tbody>${p.sample.map(r => `<tr>${r.map(c => `<td title="${escapeHtml(c)}">${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        <div class="ac-tiles" style="margin-top:10px;"><div class="ac-tile"><div class="l">Lines Read</div><div class="v">${p.rows}</div><div class="s">${day(p.first)} – ${day(p.last)}</div></div>
+          <div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">skipped</div></div>
+          <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;">${fmtMoney(p.money_in)}<br>${fmtMoney(p.money_out)}</div></div></div>
+        ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account (accounts made from your names, typed by Category: Payments → Income,
+          COGS, Expense, Loans, Shares → Partner Draws, Wash → Transfers, Pending → Year-End AP / AR). This also teaches AT-HUB how you file.</p>` : ""}
+        ${p.bad_count ? `<p class="muted small">${p.bad_count} row(s) without a date or amount are left out: ${p.bad.slice(0, 3).map(escapeHtml).join(" · ")}</p>` : ""}
+        <div class="table-scroll" style="max-height:220px;"><table class="compact-table ac-sample"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th>${p.workbook ? "<th>Account</th><th>Category</th>" : ""}</tr></thead>
+          <tbody>${p.parsed.map(r => `<tr><td>${r.date}</td><td class="ac-amt">${fmtMoney(r.amount)}</td><td>${escapeHtml(r.description)}</td>${p.workbook ? `<td>${escapeHtml(r.account || "")}</td><td>${escapeHtml(r.category || "")}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+      const dlg = askDialog({ title: "Bring In Statement", body, buttons: [{ label: `Bring In ${p.rows - p.already} Line(s)`, value: "go", cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+      setTimeout(() => {
+        document.querySelectorAll(".mp, #mp-head").forEach(s => s.onchange = () => {
+          const lay = { has_header: document.getElementById("mp-head").checked };
+          document.querySelectorAll(".mp").forEach(x => { if (x.value !== "") lay[x.dataset.k] = +x.value; });
+          if (lay.amount != null) { delete lay.debit; delete lay.credit; }
+          IMP.layout = lay;
+          IMP.again = true;
+          [...document.querySelectorAll(".ask-dialog button")].find(b => b.textContent === "Cancel")?.click();
+        });
+      }, 0);
+      const { value } = await dlg;
+      if (IMP.again) { IMP.again = false; return previewImport(); }
+      if (value !== "go") return;
+      const fd2 = new FormData(); fd2.append("source_id", IMP.sourceId); fd2.append("file", IMP.file); fd2.append("layout", JSON.stringify(IMP.layout));
+      try {
+        const r = await apiUpload("/api/accounting/import", fd2);
+        await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.skipped ? `, ${r.skipped} already in (skipped)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}.</p>
+          ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}`,
+          buttons: r.left ? [{ label: "File Them Now", value: true, cls: "primary" }, { label: "Later", value: null }] : [{ label: "OK", value: null }] }).then(x => { if (x.value) show("inbox"); else show("statements"); });
+        await loadMeta(); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
+
+    const LOADERS = { overview: tabOverview, inbox: tabInbox, txns: tabTxns, pnl: tabPnl, accounts: tabAccounts, loans: tabLoans, partners: tabPartners, apar: tabApar, cash: tabCash, statements: tabStatements };
+    (async () => {
+      try { await loadMeta(); } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; return; }
+      drawPeriod();
+      const h = location.hash.slice(1);
+      TAB = LOADERS[h] ? h : store.get("tab", "overview");
+      if (!LOADERS[TAB]) TAB = "overview";
+      await refreshCount();
+      show(TAB);
+    })();
+  </script>
+</body>
+</html>

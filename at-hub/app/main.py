@@ -406,6 +406,8 @@ from app.routes import reconcile  # noqa: E402
 app.include_router(reconcile.router)
 from app.routes import email_settings  # noqa: E402
 app.include_router(email_settings.router)
+from app.routes import accounting  # noqa: E402
+app.include_router(accounting.router)
 
 
 def _mail_loop():

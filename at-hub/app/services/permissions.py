@@ -42,6 +42,8 @@ CATALOG = [
     ("payments.import", "Money", "Import PO payment files", True, "admin"),
     ("reconcile", "Money", "Customer open-lines check: upload a customer's open-PO report, compare it with our orders (quantities, prices, "
                            "dates), create the orders that are missing", True, "admin"),
+    ("accounting", "Money", "Accounting: bank statements, every line in an account, P&L, loans, partners' split, AP / AR, "
+                            "CPA export", True, "admin"),
     # Purchasing
     ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "admin"),
     ("vendors", "Purchasing", "Vendors", False, "manager"),
