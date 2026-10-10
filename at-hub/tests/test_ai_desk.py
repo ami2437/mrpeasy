@@ -158,6 +158,9 @@ def test_vendor_known_by_part_numbers_and_file_name_with_page_number_misread(cli
     # their name only in the file name (words joined by "_") -> still them
     named = _drop(client, admin_headers, f"{v['name'].replace(' ', '_')}_Sales_Order_77.txt", "SALES ORDER\nSold To: American Traders LLC\n")
     assert named["quick"]["party"]["id"] == v["id"]
+    # just the first word of the name in the file name (the text says nothing) -> still them
+    first = _drop(client, admin_headers, f"{v['name'].split()[0]}_Sales_Order_1980403.txt", "HEX FINISH NUT 10000\n")
+    assert first["quick"]["party"]["id"] == v["id"]
     # no name anywhere: their part # on it -> them
     row = _drop(client, admin_headers, "Sales_-_Quote_1515258.txt", text)
     assert row["quick"]["side"] == "vendor" and row["quick"]["party"]["id"] == v["id"]

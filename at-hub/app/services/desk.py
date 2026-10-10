@@ -72,8 +72,9 @@ def _distinct_words(name: str):
                                          "industries", "group", "usa", "intl", "international", "services", "of")]
 
 
-def _party_score(p, flat: str, low: str, digits: str):
-    """How sure we are this customer / vendor is named on the document: (score, why)."""
+def _party_score(p, flat: str, low: str, digits: str, fname: str = ""):
+    """How sure we are this customer / vendor is named on the document: (score, why). fname: the file name in words --
+    someone named the file, so the first word of a name there is enough ("Ziegler_Sales_Order_1980403.pdf")."""
     s, why = 0.0, ""
     pn = _norm(p.name)
     words = _distinct_words(p.name)
@@ -82,6 +83,8 @@ def _party_score(p, flat: str, low: str, digits: str):
     elif words and len(words[0]) >= 5 and re.search(rf"\b{re.escape(words[0])}\b", low) \
             and (len(words) == 1 or re.search(rf"\b{re.escape(words[1])}\b", low)):
         s, why = 0.9, "its name is on the document"
+    elif words and len(words[0]) >= 6 and re.search(rf"\b{re.escape(words[0])}\b", fname):
+        s, why = 0.88, "its name is in the file name"
     try:
         card = p.details
     except Exception:
@@ -125,7 +128,7 @@ def _rank(db: Session, model, text: str, name: str, ours: set):
     for p in db.query(model).filter(model.is_active == True).all():  # noqa: E712
         if _norm(p.name) in ours:
             continue  # ourselves
-        s, why = _party_score(p, flat, low, digits)
+        s, why = _party_score(p, flat, low, digits, fname.lower())
         if parts.get(p.id):
             hits = sorted(parts[p.id])
             s2 = 0.9 if len(hits) == 1 else 0.95
