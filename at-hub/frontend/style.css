@@ -427,6 +427,9 @@ a.tag { text-decoration: none; }
 /* ---- Icons ---- */
 .ico { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; flex: none; }
 button .ico, .seg-tab .ico { margin-right: 6px; }
+/* a button with only an icon (no label): no gap after it, so the icon sits in the middle (class set by auth-guard.js) */
+button.icon-only .ico, a.icon-only .ico, .seg-tab.icon-only .ico { margin-right: 0 !important; margin-left: 0 !important; }
+.file-thumb-wrap .file-thumb-del .ico { width: 12px; height: 12px; color: inherit; }  /* inside a record's title bar: not the big title icon */
 .dsec-title .ico, .card > h3 .ico, .card > h4 .ico { margin-right: 7px; color: #2563eb; width: 16px; height: 16px; vertical-align: -3px; }
 .sidebar a { display: flex; align-items: center; gap: 9px; }
 .sidebar a .ico { width: 16px; height: 16px; opacity: .8; }

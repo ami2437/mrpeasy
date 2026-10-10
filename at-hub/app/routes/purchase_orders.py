@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
@@ -239,6 +239,41 @@ def add_bill(po_id: int, data: VendorBillInput, db: Session = Depends(get_db), c
 @router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("purchasing"))])
 def delete_bill(po_id: int, bill_id: int, db: Session = Depends(get_db)):
     return VendorBillService.delete(db, po_id, bill_id)
+
+
+class ReceiptIn(BaseModel):
+    lot_ids: List[int]
+    received_date: Optional[str] = None  # YYYY-MM-DD
+
+
+class ReceiptLineIn(BaseModel):
+    quantity: Optional[float] = None
+    lot_code: Optional[str] = None
+    po_line_id: Optional[int] = None
+    received_date: Optional[str] = None
+
+
+@router.put("/{po_id}/receipts/date", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("receipts.correct"))])
+def receipt_date(po_id: int, data: ReceiptIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """A receipt's received date (all its lots) -- a calendar day, not in the future."""
+    from app.services import receipt_edit
+    return _la(db, receipt_edit.set_date(db, PurchaseOrderService.get(db, po_id), data.lot_ids, data.received_date, current_user.username,
+                                         current_user.timezone))
+
+
+@router.post("/{po_id}/receipts/undo", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("receipts.correct"))])
+def receipt_undo(po_id: int, data: ReceiptIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Take a whole receipt back off (only while nothing from it is booked or shipped)."""
+    from app.services import receipt_edit
+    return _la(db, receipt_edit.undo(db, PurchaseOrderService.get(db, po_id), data.lot_ids, current_user.username))
+
+
+@router.put("/{po_id}/receipts/lots/{lot_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("receipts.correct"))])
+def receipt_line(po_id: int, lot_id: int, data: ReceiptLineIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """One received line: quantity, lot #, the PO line it was received on, its date."""
+    from app.services import receipt_edit
+    return _la(db, receipt_edit.edit_line(db, PurchaseOrderService.get(db, po_id), lot_id, data.dict(exclude_unset=True), current_user.username,
+                                          current_user.timezone))
 
 
 @router.post("/{po_id}/vendor-shipments", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("po_shipments"))])

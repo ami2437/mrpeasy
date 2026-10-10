@@ -421,14 +421,18 @@
     }
 
     // ---- Receipts: each Receive click -- when, who, every line with qty, lot # and landed cost ----
+    const receiptIndex = {};  // receipt cards on screen, for Edit Receipt
     function receiptCards(list, showPo) {
       if (!list.length) return `<p class="muted small" style="margin:0;">Nothing received yet.</p>`;
       const money = !hidesMoney();
+      const canFix = AuthGuard.can("receipts.correct");
+      list.forEach(r => { receiptIndex[`${r.po_id}:${r.lines[0].lot_id}`] = r; });
       return list.map(r => `<div class="rcv-card">
           <div class="rcv-head">${icon("package")}<strong>${fmtWhen(r.when)}</strong>
             <span class="muted">received by</span> <strong>${escapeHtml(r.by)}</strong>
             ${showPo ? `<span class="muted">·</span> <a class="link" onclick="showDetail(${r.po_id})">${escapeHtml(r.po_code)}</a> <span class="muted">${escapeHtml(r.vendor)}</span>` : ""}
-            <span class="rcv-sum">${r.lines.length} line${r.lines.length === 1 ? "" : "s"} · ${fmtQty(r.units)} units${money && r.value ? ` · ${fmtMoney(r.value)}` : ""}</span></div>
+            <span class="rcv-sum">${r.lines.length} line${r.lines.length === 1 ? "" : "s"} · ${fmtQty(r.units)} units${money && r.value ? ` · ${fmtMoney(r.value)}` : ""}</span>
+            ${canFix ? `<button class="secondary small-btn rcv-edit" data-icon="pencil" onclick="editReceipt('${r.po_id}:${r.lines[0].lot_id}')" title="Change its date, a quantity, lot # or PO line -- or undo it">Edit Receipt</button>` : ""}</div>
           <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th class="num">Qty received</th><th>Lot #</th><th class="num">Still in that lot</th>${money ? `<th class="num">Unit cost (landed)</th>` : ""}</tr></thead><tbody>
           ${r.lines.map(l => `<tr><td><a class="link" href="item.html?id=${l.item_id}">${escapeHtml(l.item_code)}</a> <span class="muted small">${escapeHtml(l.item_title)}</span>
               ${l.vendor_item_code ? `<div class="muted small">Vendor part # ${escapeHtml(l.vendor_item_code)}</div>` : ""}</td>
@@ -443,6 +447,76 @@
         document.getElementById("po-timeline").innerHTML = poTimeline(order, rec);
       } catch (e) { el.innerHTML = `<div class="error small">${escapeHtml(e.message)}</div>`; }
     }
+    // ---- Edit Receipt: the date (whole receipt), per line quantity / lot # / PO line, or undo it all ----
+    function localDay(moment) {
+      try { return utcTime(moment).toLocaleDateString("en-CA", { timeZone: userTz() }); } catch (e) { return String(moment || "").slice(0, 10); }
+    }
+    async function editReceipt(key) {
+      const r = receiptIndex[key];
+      if (!r) return;
+      let po = currentOrder && currentOrder.id === r.po_id ? currentOrder : null;
+      try { po = po || await apiFetch(`/api/purchase-orders/${r.po_id}`); } catch (e) { alert(e.message); return; }
+      const lineNo = id => po.lines.findIndex(l => l.id === id) + 1;
+      const day = localDay(r.when);
+      const rows = r.lines.map(l => {
+        const out = Math.max(0, (l.quantity || 0) - (l.left || 0));
+        const same = po.lines.filter(x => x.item_id === l.item_id);
+        return `<tr data-lot="${l.lot_id}" data-qty="${l.quantity}" data-code="${escapeHtml(l.lot_code)}" data-line="${l.po_line_id}">
+            <td><strong>${escapeHtml(l.item_code)}</strong> <span class="muted small">${escapeHtml(l.item_title || "")}</span>
+              ${out ? `<div class="muted small">${fmtQty(out)} already out of this lot — the quantity can't go below that</div>` : ""}</td>
+            <td><input type="number" class="rc-qty" min="0" step="any" value="${l.quantity}" style="width:100px;"></td>
+            <td><input type="text" class="rc-code" value="${escapeHtml(l.lot_code)}" style="width:140px;"></td>
+            <td>${same.length > 1 ? `<select class="rc-line" style="width:auto;">${same.map(x => `<option value="${x.id}" ${x.id === l.po_line_id ? "selected" : ""}>Line #${lineNo(x.id)} · ${fmtQty(x.received_quantity)} of ${fmtQty(x.quantity)} received</option>`).join("")}</select>`
+                                   : `<span class="muted small">Line #${lineNo(l.po_line_id)}</span>`}</td></tr>`;
+      }).join("");
+      const { value, el } = await askDialog({ title: `Edit Receipt — ${r.po_code}`, wide: true,
+        body: `<p class="muted small" style="margin-top:0;">Received ${fmtWhen(r.when)} by ${escapeHtml(r.by)}. Stock, the PO's received quantities and the
+            stock ledger follow every change; what's already booked or shipped can't be taken back.</p>
+          <div class="field-grid" style="margin-bottom:8px;"><div><label>Received Date</label><input type="date" class="rc-date" value="${day}" max="${todayISO()}"></div></div>
+          <table class="compact-table no-table-tools"><thead><tr><th>Item</th><th>Qty Received</th><th>Lot #</th><th>PO Line</th></tr></thead><tbody>${rows}</tbody></table>`,
+        buttons: [{ label: "Save Changes", value: "save", cls: "confirm-btn" }, { label: "Undo This Receipt", value: "undo", cls: "danger" },
+                  { label: "Cancel", value: null, cls: "secondary" }] });
+      if (!value) return;
+      const lotIds = r.lines.map(l => l.lot_id);
+      try {
+        if (value === "undo") {
+          const ok = await askDialog({ title: "Undo This Receipt?", tone: "warn",
+            body: `<p style="margin-top:0;">${fmtQty(r.units)} units come back off stock and ${escapeHtml(r.po_code)} goes back to not received for them.</p>
+              <p class="muted small">Only possible while nothing from it is booked or shipped.</p>`,
+            buttons: [{ label: "Undo Receipt", value: "go", cls: "danger" }, { label: "Keep It", value: null, cls: "secondary" }] });
+          if (ok.value !== "go") return;
+          await apiFetch(`/api/purchase-orders/${r.po_id}/receipts/undo`, { method: "POST", body: JSON.stringify({ lot_ids: lotIds }) });
+          toast(`Receipt undone on ${r.po_code}`);
+        } else {
+          let n = 0;
+          const newDay = el.querySelector(".rc-date").value;
+          if (newDay && newDay !== day) {
+            await apiFetch(`/api/purchase-orders/${r.po_id}/receipts/date`, { method: "PUT", body: JSON.stringify({ lot_ids: lotIds, received_date: newDay }) });
+            n++;
+          }
+          for (const tr of el.querySelectorAll("tr[data-lot]")) {
+            const ch = {};
+            const q = parseFloat(tr.querySelector(".rc-qty").value);
+            if (!isNaN(q) && Math.abs(q - parseFloat(tr.dataset.qty)) > 1e-9) ch.quantity = q;
+            const code = tr.querySelector(".rc-code").value.trim();
+            if (code !== tr.dataset.code) ch.lot_code = code;
+            const ln = tr.querySelector(".rc-line");
+            if (ln && parseInt(ln.value) !== parseInt(tr.dataset.line)) ch.po_line_id = parseInt(ln.value);
+            if (Object.keys(ch).length) {
+              await apiFetch(`/api/purchase-orders/${r.po_id}/receipts/lots/${tr.dataset.lot}`, { method: "PUT", body: JSON.stringify(ch) });
+              n++;
+            }
+          }
+          toast(n ? `Receipt on ${r.po_code} corrected` : "Nothing changed");
+          if (!n) return;
+        }
+      } catch (e) { alert(e.message); }
+      receivingRows = null;
+      loadOrders();
+      if (document.getElementById("detail-card").style.display === "block" && currentOrder && currentOrder.id === r.po_id) showDetail(r.po_id);
+      else renderOrders();
+    }
+
     let receivingDays = 30, receivingRows = null;
     async function renderReceiving(q) {
       const el = document.getElementById("receiving-view");

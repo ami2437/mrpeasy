@@ -43,6 +43,7 @@ CATALOG = [
     # Purchasing
     ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "admin"),
     ("vendors", "Purchasing", "Vendors", False, "manager"),
+    ("receipts.correct", "Purchasing", "Correct received goods: change a receipt's date, quantity, lot # or PO line, or undo it", False, "manager"),
     ("po_shipments", "Purchasing", "Record vendor shipments on purchase orders (shipped / in transit: carrier, tracking, ETA)", False, "manager"),
     ("vendor_payments", "Purchasing", "Vendor payments", True, "admin"),
     ("landed_costs", "Purchasing", "Landed costs", True, "admin"),

@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, po_shipments: 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -3327,6 +3327,8 @@ async function renderActivity(container, entityType, entityId, lineNo = {}) {
     return ({ confirm: "confirmed the order", cancel: "cancelled it", "duplicate-po-ok": "OK'd the duplicate customer PO #", shipments: "created a shipment",
       receive: "received stock", "mark-ordered": "marked it ordered", bills: r.method === "DELETE" ? "deleted a vendor invoice" : "added a vendor invoice",
       charges: r.method === "DELETE" ? "removed a charge" : "added a charge",
+      receipts: sub === "undo" ? "undid a receipt (stock taken back off)" : sub === "date" ? `changed a receipt's date${d && d.received_date ? ` to ${String(d.received_date).slice(0, 10)}` : ""}`
+        : `corrected a received line${d ? `: ${fields(d)}` : ""}`,
       "vendor-shipments": r.method === "DELETE" ? "deleted a vendor shipment" : r.method === "PUT" ? "edited a vendor shipment" : "recorded a vendor shipment (shipped)", payments: "recorded a payment" }[what]) || `${r.method.toLowerCase()} ${escapeHtml(r.action)}`;
   };
   el.innerHTML = rows.length ? `<ul class="activity-list">${rows.map(r => `<li><span class="muted small">${fmtWhen(r.at)}</span>
@@ -4964,3 +4966,20 @@ function withAllowDuplicate(options) {
   try { return Object.assign({}, options, { body: JSON.stringify(Object.assign(JSON.parse(options.body || "{}"), { allow_duplicate: true })) }); }
   catch (x) { return options; }
 }
+
+// ---- Icon-only buttons: the gap after a button's icon is for its label; when there's no label, drop it so the icon
+// sits in the middle of the button (contact icon, file trash, top-bar icons, the sticky button once notes exist...) ----
+function markIconOnly(root) {
+  (root.querySelectorAll ? root : document).querySelectorAll("button, a.tb-btn, .seg-tab").forEach(b => {
+    const label = [...b.childNodes].filter(n => !(n.nodeType === 1 && /badge/.test(n.getAttribute("class") || ""))).map(n => n.textContent).join("").trim();
+    const only = !!b.querySelector(".ico") && !label;  // a count badge ("4") isn't a label
+    if (only !== b.classList.contains("icon-only")) b.classList.toggle("icon-only", only);
+  });
+}
+(() => {
+  let queued = false;
+  const run = () => { queued = false; markIconOnly(document); };
+  const later = () => { if (!queued) { queued = true; requestAnimationFrame(run); } };
+  document.addEventListener("DOMContentLoaded", run);
+  new MutationObserver(later).observe(document.documentElement, { childList: true, subtree: true });
+})();
