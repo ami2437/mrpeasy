@@ -60,23 +60,27 @@ def words(desc: str) -> set:
 
 
 class Mapper:
-    """Built from the lines already in an account: (description, amount, account_id). Cheap -- rebuilt per request."""
+    """Built from the lines already in an account: (description, amount, account_id[, day of month, weight]). Cheap --
+    rebuilt per request. weight 2 = a person corrected AT-HUB's pick on that line (counts double)."""
 
-    def __init__(self, examples: Iterable[Tuple[str, float, int]]):
-        self.by_payee = defaultdict(list)  # payee -> [(note words, sign, account)]
+    def __init__(self, examples: Iterable[tuple]):
+        self.by_payee = defaultdict(list)  # payee -> [(note words, sign, account, amount, day, weight)]
         raw = defaultdict(list)
-        for desc, amount, acc in examples:
+        for e in examples:
+            desc, amount, acc = e[0], e[1], e[2]
+            day = e[3] if len(e) > 3 else None
+            wt = e[4] if len(e) > 4 else 1.0
             if acc:
-                raw[payee(desc)].append((words(desc), 1 if amount >= 0 else -1, acc))
+                raw[payee(desc)].append((words(desc), 1 if amount >= 0 else -1, acc, abs(amount or 0.0), day, wt))
         self.word_acc = defaultdict(Counter)  # note word -> accounts it was seen with (any payee)
         df = Counter()
         for p, ex in raw.items():
             frame = self._frame(p, [e[0] for e in ex])
-            for w, sign, acc in ex:
+            for w, sign, acc, amt, day, wt in ex:
                 note = w - frame
-                self.by_payee[p].append((note, sign, acc))
+                self.by_payee[p].append((note, sign, acc, amt, day, wt))
                 for x in note:
-                    self.word_acc[x][acc] += 1
+                    self.word_acc[x][acc] += wt
                 df.update(note)
         self.frames = {p: self._frame(p, [e[0] for e in ex]) for p, ex in raw.items()}
         n = sum(len(v) for v in raw.values())
@@ -92,62 +96,62 @@ class Mapper:
         c = Counter(x for n in notes for x in n)
         return own | {x for x, k in c.items() if k / len(notes) >= 0.6}
 
-    def suggest(self, desc: str, amount: float, rules: Optional[List[dict]] = None) -> Tuple[Optional[int], Optional[str], str]:
-        d = clean(desc)
-        for r in rules or []:  # a person's own rule wins
-            if rule_matches(r, d, amount):
-                return r["account_id"], "sure", f"rule: {r['label']}"
+    def suggest(self, desc: str, amount: float, rules=None, day: Optional[int] = None) -> Tuple[Optional[int], Optional[str], str]:
+        """rules: not used here any more (accounting.py runs the rules first); kept so old callers still work."""
         p = payee(desc)
         who = payee_label(desc)
         sign = 1 if amount >= 0 else -1
+        amt = abs(amount or 0.0)
         ex = [e for e in self.by_payee.get(p, []) if e[1] == sign] or self.by_payee.get(p, [])
         note = words(desc) - self.frames.get(p, self._frame(p, []))
         score = defaultdict(float)
         support = Counter()  # same-payee lines sharing a note word, per account
-        for ew, _s, acc in ex:  # lines from the same payee: the closer the note, the more it counts
+        same_amt = Counter()  # same-payee lines with the very same amount (rent, a loan payment), per account
+        use_amt = amt >= 20 and (not note or amt % 50 > 0.009)  # round $500s say little when a note says more
+        for ew, _s, acc, eamt, eday, wt in ex:  # lines from the same payee: the closer the note, the more it counts
             common = note & ew
             if common:
-                score[acc] += sum(self.idf.get(x, 1.0) for x in common)
-                support[acc] += 1
+                score[acc] += wt * sum(self.idf.get(x, 1.0) for x in common)
+                support[acc] += wt
             elif not note and not ew:
-                score[acc] += 1.0
+                score[acc] += wt * 1.0
+            if use_amt and abs(eamt - amt) <= max(0.01, amt * 0.002):
+                score[acc] += wt * 1.5
+                same_amt[acc] += wt
+                if day and eday and min(abs(day - eday), 31 - abs(day - eday)) <= 2:  # and about the same day of the month
+                    score[acc] += wt * 0.5
         for x in note:  # a note word seen with an account on other payees' lines too (MTB LOAN -> M & T)
             seen = self.word_acc.get(x)
             if seen and len(seen) <= 3:
                 tot = sum(seen.values())
                 for acc, k in seen.items():
                     score[acc] += 0.6 * self.idf.get(x, 1.0) * k / tot
-        accs = Counter(e[2] for e in ex)
+        accs = Counter()
+        for e in ex:
+            accs[e[2]] += e[5]
         if not score:
             if not accs:
                 return None, None, "new payee"
             acc, n = accs.most_common(1)[0]
             if len(accs) == 1:
-                return acc, ("sure" if n >= 2 and not note else "guess"), f"{who}: {n} before"
+                return acc, ("sure" if n >= 2 and not note else "guess"), f"{who}: {_n(n)} before"
             share = n / sum(accs.values())
-            return acc, ("guess" if share >= 0.5 else None), f"{who}: usually this ({n} of {sum(accs.values())})"
+            return acc, ("guess" if share >= 0.5 else None), f"{who}: usually this ({_n(n)} of {_n(sum(accs.values()))})"
         ranked = sorted(score.items(), key=lambda x: -x[1])
         best, top = ranked[0]
         second = ranked[1][1] if len(ranked) > 1 else 0.0
         if len(accs) == 1 and best in accs and accs[best] >= 2 and top >= 2 * second:
-            return best, "sure", f"{who}: {accs[best]} before"
-        if len(accs) == 1 and best in accs and note and not p.startswith("text:") and any(ew == note for ew, _s, _a in ex):
+            return best, "sure", f"{who}: {_n(accs[best])} before"
+        if len(accs) == 1 and best in accs and note and not p.startswith("text:") and any(e[0] == note for e in ex):
             return best, "sure", f"{who}: same as before"  # the same payee and the very same note words
         if note and support[best] >= 2 and top >= 3 * max(second, 0.5):
             return best, "sure", f"{who} + the note words"
+        if not note and same_amt[best] >= 2 and len([a for a in same_amt if same_amt[a]]) == 1 and top >= 2 * max(second, 0.5):
+            return best, "sure", f"{who}: the same amount as before"
+        if same_amt[best]:
+            return best, "guess", f"{who}: the same amount as before"
         return best, "guess", (f"{who}: the note words point here" if note else f"{who}: usually this")
 
 
-def rule_matches(r: dict, d: str, amount: float) -> bool:
-    """A person's rule: every word of `contains` in the description (and `sign` / amount range when given)."""
-    need = [w for w in clean(r.get("contains") or "").split() if w]
-    if not need or any(w not in d for w in need):
-        return False
-    if r.get("sign") == "in" and amount < 0 or r.get("sign") == "out" and amount >= 0:
-        return False
-    a = abs(amount)
-    if r.get("min_amount") is not None and a < r["min_amount"] - 0.005:
-        return False
-    if r.get("max_amount") is not None and a > r["max_amount"] + 0.005:
-        return False
-    return True
+def _n(x: float) -> str:
+    return str(int(round(x)))

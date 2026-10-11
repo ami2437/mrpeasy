@@ -1689,6 +1689,8 @@ class AcctTxn(Base):
     import_id = Column(Integer, ForeignKey("acct_imports.id"), nullable=True, index=True)
     dedupe = Column(String, nullable=True, index=True)  # date|amount|description|n -- the same line isn't brought in twice
     bank_description = Column(Text, nullable=True)  # a typed-in line's statement wording once matched
+    corrected = Column(Boolean, nullable=True)  # a person moved it out of the account AT-HUB had picked: counts double when learning
+    no_learn = Column(Boolean, nullable=True)  # "forget": AT-HUB doesn't learn from this line
     external_id = Column(String, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1710,12 +1712,23 @@ class AcctSplit(Base):
 
 
 class AcctRule(Base):
-    """A person's rule: a description containing these words (in / out, amount range) goes in this account. Rules
-    come before what AT-HUB learned from earlier lines."""
+    """A person's rule (services/acct_rules.py): for money in / out, on some bank accounts, when all / any of its
+    conditions hold, file the line in an account (or split it), set the payee / note -- by itself or as a suggestion.
+    Rules run in priority order and come before what AT-HUB learned. Old rules (contains + amount range only) still read."""
     __tablename__ = "acct_rules"
 
     id = Column(Integer, primary_key=True, index=True)
-    contains = Column(String, nullable=False)
+    name = Column(String, nullable=True)
+    match_mode = Column(String, nullable=True)  # all | any (None = all)
+    conditions = Column(Text, nullable=True)  # JSON [{field, op, value}]; None = built from contains / min / max
+    source_ids = Column(Text, nullable=True)  # JSON [AcctSource.id]; empty = every bank account / card
+    splits = Column(Text, nullable=True)  # JSON [{account_id, pct | amount}]; the rest goes in account_id
+    set_payee = Column(String, nullable=True)
+    set_note = Column(String, nullable=True)
+    action = Column(String, nullable=True)  # file (by itself) | suggest (one-click suggestion only); None = file
+    enabled = Column(Boolean, nullable=True, default=True)
+    priority = Column(Integer, nullable=True)  # lower runs first
+    contains = Column(String, nullable=False, default="")  # summary of the text conditions (old rules: the words)
     sign = Column(String, nullable=True)  # in | out | None
     min_amount = Column(Float, nullable=True)
     max_amount = Column(Float, nullable=True)

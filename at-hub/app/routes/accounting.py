@@ -15,7 +15,7 @@ from app.dependencies import get_current_active_user, require_perm
 from app.models import AcctAccount, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, User
 from app.routes.attachments import MAX_BYTES
 from app.services import accounting as A
-from app.services import acct_mapper
+from app.services import acct_mapper, acct_rules
 from app.services.money import cents
 
 router = APIRouter(prefix="/api/accounting", tags=["accounting"], dependencies=[Depends(require_perm("accounting"))])
@@ -415,16 +415,22 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
         t.payee = (body.payee or "").strip() or None
     if "note" in fields:
         t.note = (body.note or "").strip() or None
-    filed_more = 0
+    filed_more = taken_back = 0
+    alike = []
     if "account_id" in fields or "splits" in fields:
+        old, was_auto = t.account_id, (t.how in ("auto", "rule") and not t.reviewed)
         A.set_account(db, t, body.account_id, body.splits, _who(user))
         db.flush()
         if body.learn and (body.account_id or body.splits):
+            if was_auto and old and old != t.account_id:
+                taken_back = A.recheck_after_correction(db, t, old)
             filed_more = A.autofill(db)
+            db.flush()
+            alike = A.look_alikes(db, t)
     t.updated_by = _who(user)
     db.commit()
     accounts, sources = A.maps(db)
-    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more}
+    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more, "taken_back": taken_back, "alike": alike}
 
 
 class BulkIn(BaseModel):
@@ -474,43 +480,98 @@ def delete_txn(txn_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- rules
+# ---------------------------------------------------------------- rules (services/acct_rules.py)
 class RuleIn(BaseModel):
-    contains: str
-    account_id: Optional[int] = None
-    sign: Optional[str] = None
+    name: Optional[str] = None
+    match: Optional[str] = "all"  # all | any
+    conditions: Optional[List[dict]] = None  # [{field, op, value}]
+    contains: Optional[str] = None  # the old one-box form: words in the line (made into a condition)
+    sign: Optional[str] = None  # in | out | None
     min_amount: Optional[float] = None
     max_amount: Optional[float] = None
+    source_ids: Optional[List[int]] = None
+    account_id: Optional[int] = None
+    splits: Optional[List[dict]] = None  # [{account_id, pct | amount}]
+    set_payee: Optional[str] = None
+    set_note: Optional[str] = None
+    action: Optional[str] = "file"  # file | suggest
+    enabled: Optional[bool] = True
 
 
-def _rule_dict(body) -> dict:
-    return {"contains": body.contains.strip().upper(), "sign": body.sign or None, "min_amount": body.min_amount, "max_amount": body.max_amount}
+def _spec_in(body: RuleIn) -> dict:
+    d = body.model_dump()
+    if not d.get("conditions"):
+        d["conditions"] = None  # spec() builds them from contains / min / max
+    d["match_mode"] = d.pop("match") or "all"
+    s_ = acct_rules.spec(d)
+    s_["splits"] = [{"account_id": int(x["account_id"]), **({"pct": float(x["pct"])} if x.get("pct") not in (None, "") else {"amount": abs(float(x.get("amount") or 0))})}
+                    for x in (body.splits or []) if x.get("account_id")]
+    if s_["sign"] not in ("in", "out"):
+        s_["sign"] = None
+    if s_["action"] not in ("file", "suggest"):
+        s_["action"] = "file"
+    return s_
+
+
+def _rule_row(db: Session, r: AcctRule, s_: dict) -> None:
+    err = acct_rules.check(s_)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    for aid in [s_["account_id"]] + [x["account_id"] for x in s_["splits"]]:
+        if aid and not db.get(AcctAccount, aid):
+            raise HTTPException(status_code=400, detail="Account not found")
+    r.name = (s_["name"] or "").strip() or None
+    r.match_mode = s_["match"]
+    r.conditions = json.dumps(s_["conditions"])
+    r.source_ids = json.dumps(s_["source_ids"])
+    r.splits = json.dumps(s_["splits"])
+    r.set_payee, r.set_note = s_["set_payee"], s_["set_note"]
+    r.action, r.enabled, r.sign = s_["action"], s_["enabled"], s_["sign"]
+    r.account_id = s_["account_id"] or s_["splits"][0]["account_id"]
+    r.contains = " / ".join(str(c["value"]) for c in s_["conditions"] if c.get("field") in acct_rules.TEXT_FIELDS)[:200]
+    r.min_amount = r.max_amount = None  # the conditions say it now
+
+
+def _rule_out(r: AcctRule, accounts, sources) -> dict:
+    s_ = acct_rules.spec(r)
+    return {**s_, "id": r.id, "hits": r.hits, "created_by": r.created_by, "contains": r.contains,
+            "account": A.path(accounts[r.account_id], accounts) if r.account_id in accounts else "",
+            "splits": [{**x, "account": A.path(accounts[x["account_id"]], accounts) if x["account_id"] in accounts else "?"} for x in s_["splits"]],
+            "summary": acct_rules.describe(s_, {k: v.name for k, v in sources.items()})}
 
 
 @router.get("/rules")
 def rules(db: Session = Depends(get_db)):
-    accounts = {a.id: a for a in db.query(AcctAccount).all()}
-    return [{"id": r.id, "contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount,
-             "account_id": r.account_id, "account": A.path(accounts[r.account_id], accounts) if r.account_id in accounts else "",
-             "hits": r.hits, "created_by": r.created_by}
-            for r in db.query(AcctRule).order_by(AcctRule.id).all()]
+    accounts, sources = A.maps(db)
+    rows = db.query(AcctRule).all()
+    rows.sort(key=lambda r: (r.priority if r.priority is not None else 10 ** 6, r.id))
+    return [_rule_out(r, accounts, sources) for r in rows]
+
+
+@router.get("/rules/meta")
+def rules_meta():
+    return {"text_fields": acct_rules.TEXT_FIELDS, "num_fields": acct_rules.NUM_FIELDS, "text_ops": acct_rules.TEXT_OPS, "num_ops": acct_rules.NUM_OPS}
 
 
 @router.post("/rules/preview")
 def preview_rule(body: RuleIn, db: Session = Depends(get_db)):
-    """The lines a rule would cover (before or after saving it), grouped -- for the pick-and-apply pop-up."""
-    if not body.contains.strip():
-        raise HTTPException(status_code=400, detail="The words to look for")
-    return A.rule_lines(db, _rule_dict(body), body.account_id)
+    """The lines a rule would cover (before or after saving it), grouped -- for the live count and the pop-up."""
+    s_ = _spec_in(body)
+    if not [c for c in s_["conditions"] if c.get("value") not in (None, "", [])]:
+        raise HTTPException(status_code=400, detail="Add a condition")
+    return A.rule_lines(db, s_, s_["account_id"])
+
+
+def _next_priority(db: Session) -> int:
+    return max([r.priority or 0 for r in db.query(AcctRule).all()] + [0]) + 10
 
 
 @router.post("/rules")
 def add_rule(body: RuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Saved only -- nothing is filed until someone picks the lines in the pop-up (POST /rules/{id}/apply). Lines
-    brought in later that match are filed by it by themselves."""
-    if not body.contains.strip() or not body.account_id or not db.get(AcctAccount, body.account_id):
-        raise HTTPException(status_code=400, detail="The words to look for and the account")
-    r = AcctRule(account_id=body.account_id, created_by=_who(user), **_rule_dict(body))
+    brought in later that match are filed by it by themselves (or suggested, if it's a suggest-only rule)."""
+    r = AcctRule(created_by=_who(user), priority=_next_priority(db), contains="")
+    _rule_row(db, r, _spec_in(body))
     db.add(r)
     db.commit()
     return {"id": r.id}
@@ -521,13 +582,53 @@ def edit_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db)):
     r = db.get(AcctRule, rule_id)
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
-    if not body.contains.strip() or not body.account_id or not db.get(AcctAccount, body.account_id):
-        raise HTTPException(status_code=400, detail="The words to look for and the account")
-    for k, v in _rule_dict(body).items():
-        setattr(r, k, v)
-    r.account_id = body.account_id
+    _rule_row(db, r, _spec_in(body))
     db.commit()
     return {"id": r.id}
+
+
+class OnOff(BaseModel):
+    enabled: bool
+
+
+@router.put("/rules/{rule_id}/enabled")
+def rule_on_off(rule_id: int, body: OnOff, db: Session = Depends(get_db)):
+    r = db.get(AcctRule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    r.enabled = body.enabled
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/rules/{rule_id}/copy")
+def copy_rule(rule_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    r = db.get(AcctRule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    c = AcctRule(created_by=_who(user), priority=(r.priority or 0) + 1, contains=r.contains or "")
+    s_ = acct_rules.spec(r)
+    s_["name"] = ((r.name or r.contains or "Rule") + " (copy)")[:120]
+    s_["enabled"] = False  # a copy starts switched off, so it can't fight the original
+    _rule_row(db, c, s_)
+    db.add(c)
+    db.commit()
+    return {"id": c.id}
+
+
+class OrderIn(BaseModel):
+    ids: List[int]
+
+
+@router.put("/rules-order")
+def rules_order(body: OrderIn, db: Session = Depends(get_db)):
+    """The order rules run in (first match wins): the ids top to bottom."""
+    for n, rid in enumerate(body.ids):
+        r = db.get(AcctRule, rid)
+        if r:
+            r.priority = (n + 1) * 10
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/rules/{rule_id}/lines")
@@ -535,7 +636,7 @@ def rule_lines(rule_id: int, db: Session = Depends(get_db)):
     r = db.get(AcctRule, rule_id)
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
-    return A.rule_lines(db, {"contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount}, r.account_id)
+    return A.rule_lines(db, acct_rules.spec(r))
 
 
 class ApplyIn(BaseModel):
@@ -557,6 +658,64 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)):
         db.delete(r)
         db.commit()
     return {"ok": True}
+
+
+@router.get("/rules-export.xlsx")
+def export_rules(db: Session = Depends(get_db)):
+    """Every rule in order, one row each (like QuickBooks' rule export) -- to keep, or for a QuickBooks hand-over."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    accounts, sources = A.maps(db)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Rules"
+    ws.append(["Order", "Name", "On", "Money", "Bank Accounts", "Match", "Conditions", "Account", "Split", "Set Payee", "Set Note", "Files Or Suggests", "Used"])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for n, r in enumerate(rules(db), start=1):
+        ws.append([n, r["name"], "yes" if r["enabled"] else "no", {"in": "In", "out": "Out"}.get(r["sign"] or "", "Both"),
+                   ", ".join(sources[i].name for i in r["source_ids"] if i in sources) or "All", "All" if r["match"] != "any" else "Any",
+                   r["summary"], r["account"], ", ".join(f"{x['account']} {x['pct']}%" if "pct" in x else f"{x['account']} ${x['amount']}" for x in r["splits"]),
+                   r["set_payee"] or "", r["set_note"] or "", "Suggests" if r["action"] == "suggest" else "Files", r["hits"]])
+    for col, w in zip("ABCDEFGHIJKLM", (7, 24, 5, 8, 22, 7, 60, 28, 30, 18, 22, 14, 7)):
+        ws.column_dimensions[col].width = w
+    import io as _io
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="Accounting Rules.xlsx"'})
+
+
+@router.get("/rule-suggestions")
+def rule_suggestions(db: Session = Depends(get_db)):
+    return A.suggest_rules(db)
+
+
+class DismissIn(BaseModel):
+    key: str
+
+
+@router.post("/rule-suggestions/dismiss")
+def dismiss_rule_suggestion(body: DismissIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    A.dismiss_suggestion(db, body.key, _who(user))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- what AT-HUB learned
+@router.get("/learned")
+def learned(db: Session = Depends(get_db)):
+    return A.learned(db)
+
+
+class ForgetIn(BaseModel):
+    key: str
+    forget: bool = True
+
+
+@router.post("/learned/forget")
+def forget(body: ForgetIn, db: Session = Depends(get_db)):
+    """Stop (or start again) learning from a payee's lines -- the lines keep their accounts."""
+    return {"lines": A.forget(db, body.key, body.forget)}
 
 
 # ---------------------------------------------------------------- reports

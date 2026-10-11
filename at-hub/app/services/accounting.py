@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import (AcctAccount, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, AppSetting,
                         Customer, CustomerOrder, Invoice, PurchaseOrder, Vendor)
-from app.services import acct_mapper, clock
+from app.services import acct_mapper, acct_rules, clock
 from app.services.money import cents, line_amount
 
 KINDS = {  # kind -> (label, QuickBooks account type, in the P&L?)
@@ -230,53 +230,104 @@ def source_dict(db: Session, s: AcctSource) -> dict:
             "layout": json.loads(s.layout) if s.layout else None}
 
 
-# ---------------------------------------------------------------- the mapper
-def _rules(db: Session) -> List[dict]:
-    return [{"id": r.id, "contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount,
-             "account_id": r.account_id, "label": r.contains} for r in db.query(AcctRule).order_by(AcctRule.id).all()]
+# ---------------------------------------------------------------- rules + what AT-HUB learned
+def rule_specs(db: Session) -> List[dict]:
+    """Every rule in its order (priority, then age) as an acct_rules spec."""
+    rs = db.query(AcctRule).all()
+    rs.sort(key=lambda r: (r.priority if r.priority is not None else 10 ** 6, r.id))
+    return [acct_rules.spec(r) for r in rs]
 
 
 def mapper(db: Session) -> acct_mapper.Mapper:
-    """Learns from every line a person (or their workbook) put in an account -- not from AT-HUB's own picks."""
-    ex = (db.query(AcctTxn.description, AcctTxn.amount, AcctTxn.account_id)
-          .filter(AcctTxn.account_id.isnot(None), AcctTxn.how.in_(("person", "workbook", "rule"))).all())
-    return acct_mapper.Mapper([(d, a, acc) for d, a, acc in ex])
+    """Learns from every line a person (or their workbook / a rule they applied) put in an account -- not from AT-HUB's
+    own picks, not from lines someone told it to forget. A line a person corrected counts double."""
+    ex = (db.query(AcctTxn.description, AcctTxn.bank_description, AcctTxn.amount, AcctTxn.account_id, AcctTxn.date, AcctTxn.corrected)
+          .filter(AcctTxn.account_id.isnot(None), AcctTxn.how.in_(("person", "workbook", "rule")),
+                  (AcctTxn.no_learn.is_(None)) | (AcctTxn.no_learn.is_(False))).all())
+    return acct_mapper.Mapper([(b or d, a, acc, dt.day if dt else None, 2.0 if c else 1.0) for d, b, a, acc, dt, c in ex])
+
+
+def decide(t: AcctTxn, m: acct_mapper.Mapper, specs: List[dict]) -> Tuple[Optional[int], Optional[str], str, Optional[dict]]:
+    """(account, sure | guess | None, why, the rule that decided) -- rules first, in order, then what was learned."""
+    r = acct_rules.first_match(specs, acct_rules.line_of(t))
+    if r:
+        label = r["name"] or acct_rules.describe(r)
+        return r["account_id"] or (r["splits"][0]["account_id"] if r["splits"] else None), ("sure" if r["action"] != "suggest" else "guess"), f"rule: {label}", r
+    acc, conf, why = m.suggest(t.bank_description or t.description, t.amount, day=t.date.day if t.date else None)
+    return acc, conf, why, None
+
+
+def file_by_rule(db: Session, t: AcctTxn, r: dict, by: Optional[str], reviewed: bool) -> None:
+    """Put a line where a rule says: one account, or the rule's split; its payee / note when the rule sets them."""
+    t.splits.clear()
+    ps = acct_rules.parts(r, t.amount)
+    if len(ps) == 1:
+        t.account_id = ps[0][0]
+    else:
+        t.account_id = None
+        for aid, amt in ps:
+            t.splits.append(AcctSplit(account_id=aid, amount=amt, note=(r["name"] or None)))
+    if r["set_payee"]:
+        t.payee = r["set_payee"]
+    if r["set_note"] and not t.note:
+        t.note = r["set_note"]
+    t.how, t.reviewed = "rule", reviewed
+    if by:
+        t.updated_by = by
+    row = db.get(AcctRule, r["id"]) if r.get("id") else None
+    if row:
+        row.hits = (row.hits or 0) + 1
 
 
 def autofill(db: Session, txns: Optional[List[AcctTxn]] = None, m=None) -> int:
-    """Put the lines with no account in one when AT-HUB is sure (a rule, or the same payee + note as before)."""
+    """Put the lines with no account in one when AT-HUB is sure (a rule that files by itself, or the same payee + note
+    / amount as before). A rule set to "suggest" only suggests."""
     m = m or mapper(db)
-    rules = _rules(db)
+    specs = rule_specs(db)
     if txns is None:
-        txns = db.query(AcctTxn).filter(AcctTxn.account_id.is_(None)).all()
+        txns = db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.account_id.is_(None)).all()
     n = 0
     for t in txns:
         if t.account_id or t.splits:
             continue
-        acc, conf, why = m.suggest(t.bank_description or t.description, t.amount, rules)
+        acc, conf, why, r = decide(t, m, specs)
         if conf == "sure" and acc:
-            t.account_id, t.how, t.reviewed = acc, ("rule" if why.startswith("rule:") else "auto"), False
-            if why.startswith("rule:"):
-                r = next((x for x in rules if x["account_id"] == acc and f"rule: {x['label']}" == why), None)
-                if r:
-                    db.get(AcctRule, r["id"]).hits += 1
+            if r:
+                file_by_rule(db, t, r, None, False)
+            else:
+                t.account_id, t.how, t.reviewed = acc, "auto", False
             n += 1
     return n
 
 
-def rule_lines(db: Session, rule: dict, account_id: Optional[int]) -> dict:
-    """Every line (all dates) a rule's words / money / amount match, grouped: not filed, filed by AT-HUB (not looked
-    at), filed elsewhere by a person (or the workbook), already in the rule's account, split (left alone)."""
+def suggestions(db: Session, txns: List[AcctTxn]) -> Dict[int, dict]:
+    m = mapper(db)
+    specs = rule_specs(db)
+    out = {}
+    for t in txns:
+        acc, conf, why, r = decide(t, m, specs)
+        if acc:
+            out[t.id] = {"account_id": acc, "confidence": conf or "maybe", "why": why, "rule_id": r["id"] if r else None}
+    return out
+
+
+def rule_lines(db: Session, rule: dict, account_id: Optional[int] = None) -> dict:
+    """Every line (all dates) a rule matches, grouped: not filed, filed by AT-HUB (not looked at), filed elsewhere by a
+    person (or the workbook), already where the rule puts it, split (left alone unless the rule splits)."""
+    s_ = acct_rules.spec(rule) if "conditions" not in rule or "match" not in rule else rule
+    account_id = account_id or s_["account_id"]
     accounts, sources = maps(db)
     groups = {"unfiled": [], "auto": [], "elsewhere": [], "here": [], "split": []}
     for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).order_by(AcctTxn.date.desc(), AcctTxn.id.desc()).all():
-        if not acct_mapper.rule_matches(rule, acct_mapper.clean(t.bank_description or t.description), t.amount):
+        if not acct_rules.matches(s_, acct_rules.line_of(t)):
             continue
-        if t.splits:
+        if t.splits and not s_["splits"]:
             g = "split"
-        elif account_id and t.account_id == account_id:
+        elif not s_["splits"] and account_id and t.account_id == account_id:
             g = "here"
-        elif not t.account_id:
+        elif s_["splits"] and t.how == "rule" and t.reviewed and sorted((x.account_id, x.amount) for x in t.splits) == sorted(acct_rules.parts(s_, t.amount)):
+            g = "here"
+        elif not t.account_id and not t.splits:
             g = "unfiled"
         elif not t.reviewed:
             g = "auto"
@@ -288,28 +339,229 @@ def rule_lines(db: Session, rule: dict, account_id: Optional[int]) -> dict:
 
 
 def apply_rule(db: Session, r: AcctRule, ids: List[int], by: str) -> int:
-    """Put the picked lines in the rule's account (only lines the rule really matches; split lines are left alone)."""
-    rd = {"contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount}
+    """Put the picked lines where the rule says (only lines it really matches)."""
+    s_ = acct_rules.spec(r)
     n = 0
     for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.id.in_(ids)).all():
-        if t.splits or not acct_mapper.rule_matches(rd, acct_mapper.clean(t.bank_description or t.description), t.amount):
+        if (t.splits and not s_["splits"]) or not acct_rules.matches(s_, acct_rules.line_of(t)):
             continue
-        t.account_id, t.how, t.reviewed, t.updated_by = r.account_id, "rule", True, by
+        file_by_rule(db, t, s_, by, True)  # counts a hit on the rule
         n += 1
-    r.hits += n
     db.commit()
     return n
 
 
-def suggestions(db: Session, txns: List[AcctTxn]) -> Dict[int, dict]:
+def look_alikes(db: Session, t: AcctTxn, limit: int = 60) -> List[dict]:
+    """After a person files a line: the lines with no account that look like it (same payee, or AT-HUB now leans to
+    the same account) but that it isn't sure enough about to file by itself -- for the "like this" pop-up."""
+    if not t.account_id:
+        return []
     m = mapper(db)
-    rules = _rules(db)
-    out = {}
-    for t in txns:
-        acc, conf, why = m.suggest(t.bank_description or t.description, t.amount, rules)
-        if acc:
-            out[t.id] = {"account_id": acc, "confidence": conf or "maybe", "why": why}
+    specs = rule_specs(db)
+    key = acct_mapper.payee(t.bank_description or t.description)
+    accounts, sources = maps(db)
+    out = []
+    for x in (db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.account_id.is_(None), AcctTxn.id != t.id)
+              .order_by(AcctTxn.date.desc()).all()):
+        if x.splits:
+            continue
+        if (x.amount >= 0) != (t.amount >= 0):
+            continue  # money in vs money out: not alike
+        same_payee = acct_mapper.payee(x.bank_description or x.description) == key
+        acc, conf, why, _r = decide(x, m, specs)
+        if same_payee or acc == t.account_id:
+            d = txn_dict(x, accounts, sources)
+            d["lean"] = acc == t.account_id
+            d["why"] = why
+            out.append(d)
+            if len(out) >= limit:
+                break
+    out.sort(key=lambda d: (not d["lean"], d["date"]), reverse=False)
     return out
+
+
+def recheck_after_correction(db: Session, t: AcctTxn, old_account: Optional[int]) -> int:
+    """A person moved a line out of the account AT-HUB had picked: AT-HUB's other unchecked picks of that payee into
+    the same old account go back to To File (with fresh suggestions) unless it's still sure about them."""
+    if not old_account:
+        return 0
+    db.flush()
+    m = mapper(db)
+    specs = rule_specs(db)
+    key = acct_mapper.payee(t.bank_description or t.description)
+    n = 0
+    for x in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.account_id == old_account, AcctTxn.how == "auto",
+                                                                             AcctTxn.reviewed.is_(False), AcctTxn.id != t.id).all():
+        if acct_mapper.payee(x.bank_description or x.description) != key:
+            continue
+        acc, conf, _w, _r = decide(x, m, specs)
+        if not (acc == old_account and conf == "sure"):
+            x.account_id, x.how = None, None
+            n += 1
+    return n
+
+
+def learned(db: Session) -> List[dict]:
+    """What AT-HUB learned: per payee, the accounts people put its lines in, how many times; mixed ones flagged."""
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
+    groups = defaultdict(lambda: {"accounts": Counter(), "forgotten": 0, "label": "", "last": None, "sample": ""})
+    for t in (db.query(AcctTxn).filter(AcctTxn.account_id.isnot(None), AcctTxn.how.in_(("person", "workbook", "rule"))).all()):
+        desc = t.bank_description or t.description
+        k = acct_mapper.payee(desc)
+        g = groups[k]
+        g["label"] = g["label"] or acct_mapper.payee_label(desc)
+        g["sample"] = g["sample"] or desc
+        if t.no_learn:
+            g["forgotten"] += 1
+        else:
+            g["accounts"][t.account_id] += 1
+        d = t.date.date()
+        g["last"] = max(g["last"], d) if g["last"] else d
+    out = []
+    for k, g in groups.items():
+        total = sum(g["accounts"].values())
+        accs = [{"account_id": a, "account": path(accounts[a], accounts) if a in accounts else "?", "count": c} for a, c in g["accounts"].most_common()]
+        top = accs[0]["count"] / total if total else 0
+        out.append({"key": k, "label": g["label"], "sample": g["sample"], "lines": total, "forgotten": g["forgotten"],
+                    "accounts": accs, "how": "one account" if len(accs) == 1 else ("mostly one" if top >= 0.8 else "mixed -- the note words decide"),
+                    "last": g["last"].isoformat() if g["last"] else None})
+    out.sort(key=lambda x: (-x["lines"], x["label"]))
+    return out
+
+
+def forget(db: Session, key: str, on: bool = True) -> int:
+    n = 0
+    for t in db.query(AcctTxn).filter(AcctTxn.account_id.isnot(None)).all():
+        if acct_mapper.payee(t.bank_description or t.description) == key:
+            t.no_learn = True if on else None
+            n += 1
+    db.commit()
+    return n
+
+
+# ---- rules AT-HUB suggests from patterns in all the lines (filed and not)
+GENERIC = set("""ZELLE TO FROM ON ONLINE TRANSFER DIRECT PAY PAYMENT PAYMENTS TRAN ID WF ACH BUSINESS WIRE WT MONEY AUTHORIZED CASH APP
+DEPOSIT CHECK REF PMT WEB MOBILE EDI PYMNTS PYMT INVOICE AMERICAN TRADERS LLC INC BANK FARGO WELLS CHECKING EVERYDAY SERV
+CARD CREDIT DEBIT FEE TRANS INDIVIDUAL MONTHLY BASE""".split())
+_KIND_WORDS = {"zelle": "ZELLE", "wire": "", "ach": "", "transfer": "TRANSFER", "directpay": "DIRECT PAY", "cashapp": "CASH APP", "payee": "", "text": ""}
+DISMISS_KEY = "acct_rule_dismissed"
+
+
+def _pattern_words(key: str) -> str:
+    kind, _, name = key.partition(":")
+    return " ".join(x for x in (_KIND_WORDS.get(kind, ""), name) if x).strip()
+
+
+def suggest_rules(db: Session, limit: int = 12) -> List[dict]:
+    """Repeated lines (3+) sharing a payee -- or, for a payee whose lines go to different accounts, a payee + note word --
+    turned into ready-made rules: the account people already used (or AT-HUB's guess when none is filed yet), how many
+    lines it would file now. Patterns an existing rule covers, and ones dismissed, are left out."""
+    row = db.get(AppSetting, DISMISS_KEY)
+    dismissed = set(json.loads(row.value)) if row and row.value else set()
+    specs = [x for x in rule_specs(db) if x["enabled"]]
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
+    txns = db.query(AcctTxn).options(selectinload(AcctTxn.splits)).all()
+    info = []
+    for t in txns:
+        if t.splits:
+            continue
+        a = accounts.get(t.account_id)
+        if a and a.kind == "pending":
+            continue
+        desc = t.bank_description or t.description
+        info.append((t, acct_mapper.payee(desc), acct_mapper.words(desc), acct_rules.line_of(t)))
+    by_key = defaultdict(list)
+    for x in info:
+        by_key[x[1]].append(x)
+    m = mapper(db)
+    cands = []
+
+    def filed_by_person(t):
+        return t.account_id and t.how in ("person", "workbook", "rule") and t.reviewed and not t.no_learn
+
+    def add(words_, sign, members):
+        if not words_ or len(members) < 3:
+            return
+        if not any(w not in GENERIC and len(w) >= 3 for w in words_.split()):
+            return  # only bank wording ("DIRECT PAY", "ONLINE") -- says nothing about who
+        spec_ = {"name": "", "match": "all", "conditions": [{"field": "text", "op": "contains", "value": words_}], "sign": sign,
+                 "source_ids": [], "account_id": None, "splits": [], "set_payee": None, "set_note": None, "action": "file",
+                 "enabled": True, "priority": 0, "id": None}
+        hit = [x for x in info if acct_rules.matches(spec_, x[3])]
+        if len(hit) < 3:
+            return
+        filed = Counter(x[0].account_id for x in hit if filed_by_person(x[0]))  # every line the rule would match, not just this payee's
+        total_f = sum(filed.values())
+        unfiled = [x[0] for x in hit if not x[0].account_id]
+        if total_f:
+            acc, k = filed.most_common(1)[0]
+            if k < 2 or k / total_f < 0.9:
+                return  # people put these in different places -- not one rule
+            source = f"you put {k} of them in it"
+        else:
+            if not unfiled:
+                return
+            votes = Counter()
+            for t in unfiled:
+                a_, _c, _w = m.suggest(t.bank_description or t.description, t.amount)
+                if a_:
+                    votes[a_] += 1
+            acc = votes.most_common(1)[0][0] if votes else None
+            source = "AT-HUB's guess" if acc else "pick an account"
+        if not unfiled and not total_f:
+            return
+        covered = sum(1 for x in hit if any(acct_rules.matches(r, x[3]) for r in specs))
+        if covered >= 0.8 * len(hit):
+            return
+        dkey = f"{words_}|{sign or ''}|{acc or ''}"
+        if dkey in dismissed:
+            return
+        n_unfiled = sum(1 for x in hit if not x[0].account_id)
+        n_here = sum(1 for x in hit if acc and x[0].account_id == acc)
+        cands.append({"key": dkey, "words": words_, "sign": sign, "account_id": acc,
+                      "account": path(accounts[acc], accounts) if acc in accounts else None, "source": source,
+                      "lines": len(hit), "unfiled": n_unfiled, "already": n_here, "elsewhere": len(hit) - n_unfiled - n_here,
+                      "sample": (hit[0][0].bank_description or hit[0][0].description), "_ids": frozenset(x[0].id for x in hit)})
+
+    for key, members in by_key.items():
+        if len(members) < 3:
+            continue
+        signs = {1 if t.amount >= 0 else -1 for t, *_ in members}
+        sign = None if len(signs) > 1 else ("in" if signs == {1} else "out")
+        base = _pattern_words(key)
+        filed = Counter(t.account_id for t, *_ in members if filed_by_person(t))
+        mixed = len(filed) > 1 and filed.most_common(1)[0][1] / sum(filed.values()) < 0.9
+        if not mixed:
+            add(base, sign, members)
+            continue
+        # one payee, several accounts: a note word that keeps going to one account (ZELLE SHAH NIRAJ + MAALIKS -> Richard)
+        frame = set(base.split()) | {"ZELLE", "TRANSFER", "DIRECT", "PAY"}
+        wc = Counter(w for _t, _k, ws, _l in members for w in ws - frame)
+        for w, c in wc.most_common(8):
+            if c < 3:
+                break
+            sub = [x for x in members if w in x[2]]
+            add(f"{base} {w}".strip(), sign, sub)
+    seen, same_lines, out = set(), set(), []
+    for c in sorted(cands, key=lambda c: (-c["unfiled"], -c["lines"], len(c["words"]))):
+        ids = c.pop("_ids")
+        if c["key"] in seen or ids in same_lines:
+            continue  # two wordings that catch the very same lines: keep the shorter
+        seen.add(c["key"])
+        same_lines.add(ids)
+        out.append(c)
+    return out[:limit]
+
+
+def dismiss_suggestion(db: Session, key: str, by: str) -> None:
+    row = db.get(AppSetting, DISMISS_KEY)
+    cur = set(json.loads(row.value)) if row and row.value else set()
+    cur.add(key)
+    if not row:
+        row = AppSetting(key=DISMISS_KEY)
+        db.add(row)
+    row.value, row.updated_by = json.dumps(sorted(cur)), by
+    db.commit()
 
 
 # ---------------------------------------------------------------- statement files
@@ -548,6 +800,8 @@ def maps(db: Session):
 
 
 def set_account(db: Session, t: AcctTxn, account_id: Optional[int], splits: Optional[List[dict]], by: str) -> None:
+    if t.how in ("auto", "rule") and not t.reviewed and t.account_id and (splits or account_id != t.account_id):
+        t.corrected = True  # a person moved AT-HUB's pick: counts double when learning
     t.splits.clear()
     db.flush()
     if splits:
