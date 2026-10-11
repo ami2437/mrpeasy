@@ -60,6 +60,14 @@ case "$ACTION" in
     ;;
   push-data)
     # a fresh MRPeasy import made on this PC -> the real site (its own user accounts + company profile kept), then test
+    # GUARD (user 2026-10-11 "make sure my current work is not wiped out"): Accounting is worked on ON THE SITE and isn't
+    # carried over by this push yet -- refuse while the site has any accounting lines (the server script checks too).
+    SITE_ACCT=$($SSH "sqlite3 /opt/athub/data/at_hub.db 'select count(*) from acct_txns' 2>/dev/null || echo 0")
+    if [ "${SITE_ACCT:-0}" -gt 0 ]; then
+      echo "STOPPED: the real site has $SITE_ACCT Accounting lines; pushing this PC's data would replace them. Nothing was changed."
+      echo "(Build 'keep Accounting through imports' first -- then the site's Accounting is kept.)"
+      exit 3
+    fi
     TMP=$(mktemp -d)
     (cd "$ATHUB" && venv/Scripts/python.exe -c "
 import sqlite3, sys

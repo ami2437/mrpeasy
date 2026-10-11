@@ -11,6 +11,12 @@ NEW=$2
 [ -f "$NEW" ] || { echo "no file $NEW"; exit 2; }
 [ "$(sqlite3 "$NEW" 'pragma integrity_check')" = ok ] || { echo "the uploaded database is damaged -- nothing changed"; exit 1; }
 D=$DIR/data
+# GUARD: the site's Accounting isn't carried into an import yet -- never replace a database that has accounting lines
+SITE_ACCT=$(sqlite3 "$D/at_hub.db" 'select count(*) from acct_txns' 2>/dev/null || echo 0)
+if [ "${SITE_ACCT:-0}" -gt 0 ]; then
+  echo "STOPPED: this site has $SITE_ACCT Accounting lines; loading the import would replace them. Nothing was changed."
+  exit 3
+fi
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 BK=$D/backups/before-import-$STAMP.db
 mkdir -p "$D/backups"
