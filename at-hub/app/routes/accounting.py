@@ -1,7 +1,8 @@
 """Accounting (services/accounting.py): statements in, every line in an account, reports. Money permission
 "accounting" -- Admin and Super admin until a role is given it on Users & Roles."""
 import json
-from datetime import date
+from collections import defaultdict
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -12,10 +13,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config.database import get_db
 from app.dependencies import get_current_active_user, require_perm
-from app.models import AcctAccount, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, User
+from app.models import AcctAccount, AcctCheckOk, AcctComment, AcctImport, AcctOpenItem, AcctReconcile, AcctRule, AcctSheet, AcctSource, AcctSplit, AcctTxn, User
 from app.routes.attachments import MAX_BYTES
 from app.services import accounting as A
-from app.services import acct_mapper, acct_rules
+from app.services import acct_mapper, acct_more as M, acct_rules
 from app.services.money import cents
 
 router = APIRouter(prefix="/api/accounting", tags=["accounting"], dependencies=[Depends(require_perm("accounting"))])
@@ -138,7 +139,7 @@ def _apply_account(a: AcctAccount, body: AccountIn, db: Session):
             accounts[d].kind = a.kind
             if a.kind != "owner":
                 accounts[d].partner = None
-    if a.kind != "owner":
+    if a.kind not in ("owner", "loan"):
         a.partner = None
 
 
@@ -303,51 +304,77 @@ def undo_import(import_id: int, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------- lines
+def _search_params(start, end, **kw) -> dict:
+    return {"start": start, "end": end, **{k: v for k, v in kw.items() if v not in (None, "")}}
+
+
 @router.get("/txns")
 def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Optional[int] = None, account_id: Optional[int] = None,
          kind: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None, all_dates: bool = False,
-         limit: int = 500, offset: int = 0, db: Session = Depends(get_db)):
-    """status: unfiled (no account) | auto (AT-HUB put it there, nobody looked) | expected (typed in, not on a statement yet)
-    | typed (typed in) | split."""
-    qy = db.query(AcctTxn).options(selectinload(AcctTxn.splits))
-    if not all_dates:
+         date_from: Optional[str] = None, date_to: Optional[str] = None, amin: Optional[str] = None, amax: Optional[str] = None,
+         amt: Optional[str] = None, sign: Optional[str] = None, has_note: bool = False, how: Optional[str] = None,
+         sort: Optional[str] = None, group: Optional[str] = None, limit: int = 300, offset: int = 0, db: Session = Depends(get_db)):
+    """Bank-style search (services/acct_more.py): status unfiled|review / auto / expected / typed / split / sent_back;
+    q understands amounts ("1072.50", ">500", "500-1000", "-300"), words and "phrases". Totals, stats and groups are for
+    EVERYTHING that matches, the rows for the page asked for."""
+    if not all_dates and not (date_from or date_to):
         a, b = _period(db, start, end)
-        qy = qy.filter(AcctTxn.date >= A._dt(a), AcctTxn.date <= A._dt(b))
-    if source_id:
-        qy = qy.filter(AcctTxn.source_id == source_id)
-    if account_id:
-        ids = [account_id] + A.descendants(account_id, {x.id: x for x in db.query(AcctAccount).all()})  # with its sub-accounts
-        qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
-    if kind:
-        ids = [a.id for a in db.query(AcctAccount).filter(AcctAccount.kind == kind).all()]
-        qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
-    if status == "unfiled":
-        qy = qy.filter(AcctTxn.account_id.is_(None), ~AcctTxn.splits.any())
-    elif status == "auto":
-        qy = qy.filter(AcctTxn.reviewed.is_(False))
-    elif status == "expected":
-        qy = qy.filter(AcctTxn.expected.is_(True))
-    elif status == "typed":
-        qy = qy.filter(AcctTxn.origin == "manual")
-    elif status == "split":
-        qy = qy.filter(AcctTxn.splits.any())
-    if q:
-        like = f"%{q.strip()}%"
-        qy = qy.filter(or_(AcctTxn.description.ilike(like), AcctTxn.note.ilike(like), AcctTxn.payee.ilike(like), AcctTxn.bank_description.ilike(like)))
-    total = qy.count()
-    rows = qy.order_by(AcctTxn.date.desc(), AcctTxn.id.desc()).offset(offset).limit(min(limit, 2000)).all()
+        start, end = a.isoformat(), b.isoformat()
+    r = M.search(db, _search_params(start, end, source_id=source_id, account_id=account_id, kind=kind, status=status, q=q,
+                                    all_dates=all_dates, date_from=date_from, date_to=date_to, amin=amin, amax=amax, amt=amt,
+                                    sign=sign, has_note=has_note, how=how, sort=sort, group=group, limit=limit, offset=offset))
+    rows = r.pop("rows_obj")
+    r.pop("all_rows")
     accounts, sources = A.maps(db)
-    sums = qy.with_entities(AcctTxn.amount).all()
     unfiled = [t for t in rows if not t.account_id and not t.splits]
     sugg = A.suggestions(db, unfiled) if unfiled else {}
     out = []
     for t in rows:
         d = A.txn_dict(t, accounts, sources)
-        if t.id in sugg:
-            s = sugg[t.id]
-            d["suggest"] = {**s, "account": accounts[s["account_id"]].name if s["account_id"] in accounts else ""}
+        was = json.loads(t.sent_back_from) if t.sent_back_from and not t.account_id and not t.splits else None
+        if was and was.get("account_id") in accounts:  # sent back: where it was is the top suggestion
+            d["suggest"] = {"account_id": was["account_id"], "account": A.path(accounts[was["account_id"]], accounts), "confidence": "guess",
+                            "why": "where it was before it was sent back"}
+        elif t.id in sugg:
+            sg = sugg[t.id]
+            d["suggest"] = {**sg, "account": A.path(accounts[sg["account_id"]], accounts) if sg["account_id"] in accounts else ""}
+        if t.id in r["balance"]:
+            d["balance"] = r["balance"][t.id]
         out.append(d)
-    return {"total": total, "rows": out, "money_in": cents(sum(a for (a,) in sums if a > 0)), "money_out": cents(sum(a for (a,) in sums if a < 0))}
+    r.pop("balance")
+    return {**r, "rows": out}
+
+
+@router.get("/txns/export.xlsx")
+def txns_export(start: Optional[str] = None, end: Optional[str] = None, source_id: Optional[int] = None, account_id: Optional[int] = None,
+                kind: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None, all_dates: bool = False,
+                date_from: Optional[str] = None, date_to: Optional[str] = None, amin: Optional[str] = None, amax: Optional[str] = None,
+                amt: Optional[str] = None, sign: Optional[str] = None, has_note: bool = False, how: Optional[str] = None,
+                sort: Optional[str] = None, db: Session = Depends(get_db)):
+    if not all_dates and not (date_from or date_to):
+        a, b = _period(db, start, end)
+        start, end = a.isoformat(), b.isoformat()
+    r = M.search(db, _search_params(start, end, source_id=source_id, account_id=account_id, kind=kind, status=status, q=q,
+                                    all_dates=all_dates, date_from=date_from, date_to=date_to, amin=amin, amax=amax, amt=amt,
+                                    sign=sign, has_note=has_note, how=how, sort=sort, limit=1, offset=0))
+    return Response(M.found_xlsx(db, r["all_rows"]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="Transactions.xlsx"'})
+
+
+class SendBackIn(BaseModel):
+    ids: List[int]
+    reason: Optional[str] = None
+
+
+@router.post("/txns/send-back")
+def send_back(body: SendBackIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Back to Review: out of its account (where it was is kept as the top suggestion), with an optional reason."""
+    return {"done": M.send_back(db, body.ids, body.reason, _who(user))}
+
+
+@router.post("/txns/undo-send-back")
+def undo_send_back(body: SendBackIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return {"done": M.undo_send_back(db, body.ids, _who(user))}
 
 
 class TxnIn(BaseModel):
@@ -545,7 +572,11 @@ def rules(db: Session = Depends(get_db)):
     accounts, sources = A.maps(db)
     rows = db.query(AcctRule).all()
     rows.sort(key=lambda r: (r.priority if r.priority is not None else 10 ** 6, r.id))
-    return [_rule_out(r, accounts, sources) for r in rows]
+    filed = defaultdict(lambda: [0, 0.0])
+    for rid, amt in db.query(AcctTxn.rule_id, AcctTxn.amount).filter(AcctTxn.rule_id.isnot(None)).all():
+        filed[rid][0] += 1
+        filed[rid][1] += amt
+    return [{**_rule_out(r, accounts, sources), "filed_lines": filed[r.id][0], "filed_total": cents(filed[r.id][1])} for r in rows]
 
 
 @router.get("/rules/meta")
@@ -722,7 +753,10 @@ def forget(body: ForgetIn, db: Session = Depends(get_db)):
 @router.get("/overview")
 def overview(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
     a, b = _period(db, start, end)
-    return A.overview(db, a, b)
+    pa, pb = M.prev_range(a, b)
+    prev = A.overview(db, pa, pb)
+    return {**A.overview(db, a, b), "prev": {k: prev[k] for k in ("money_in", "money_out", "income", "cogs", "expense", "profit")},
+            "prev_period": {"start": pa.isoformat(), "end": pb.isoformat()}}
 
 
 @router.get("/pnl")
@@ -730,7 +764,17 @@ def pnl(start: Optional[str] = None, end: Optional[str] = None, by: str = "month
     a, b = _period(db, start, end)
     if by not in ("month", "quarter", "fy"):
         raise HTTPException(status_code=400, detail="month, quarter or fy")
-    return A.pnl(db, a, b, by)
+    cur = A.pnl(db, a, b, by)
+    pa, pb = M.prev_range(a, b)
+    prev = A.pnl(db, pa, pb, "fy")
+    prev_acc = {r["account_id"]: r["total"] for sec in prev["sections"] for r in sec["rows"] if not r.get("own_only")}
+    for sec in cur["sections"]:
+        for r in sec["rows"]:
+            if not r.get("own_only"):
+                r["prev"] = prev_acc.get(r["account_id"], 0.0)
+    cur["prev"] = {"sections": {sec["kind"]: sec["total"] for sec in prev["sections"]}, "profit": prev["profit_total"], "gross": prev["gross_total"],
+                   "start": pa.isoformat(), "end": pb.isoformat()}
+    return cur
 
 
 @router.get("/accounts-summary")
@@ -809,3 +853,285 @@ def export_qb(source_id: int, start: Optional[str] = None, end: Optional[str] = 
         raise HTTPException(status_code=404, detail="Not found")
     return Response(A.export_quickbooks_csv(db, source_id, a, b), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{s.name} {a.isoformat()} to {b.isoformat()} QuickBooks.csv"'})
+
+
+# ---------------------------------------------------------------- comments (every section, per period)
+class CommentIn(BaseModel):
+    section: str
+    text: str
+    period_key: Optional[str] = None
+    ref_type: Optional[str] = None
+    ref_id: Optional[int] = None
+
+
+@router.get("/comments")
+def list_comments(section: Optional[str] = None, period_key: Optional[str] = None, all_periods: bool = False, db: Session = Depends(get_db)):
+    return M.comments(db, section, period_key, all_periods)
+
+
+@router.post("/comments")
+def add_comment(body: CommentIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="Write the comment")
+    c = AcctComment(section=body.section, period_key=body.period_key, ref_type=body.ref_type, ref_id=body.ref_id, text=body.text.strip(), created_by=_who(user))
+    db.add(c)
+    db.commit()
+    return M.comment_dict(c)
+
+
+@router.put("/comments/{comment_id}")
+def edit_comment(comment_id: int, body: CommentIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    c = db.get(AcctComment, comment_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    c.text, c.updated_by, c.updated_at = body.text.strip(), _who(user), datetime.utcnow()
+    db.commit()
+    return M.comment_dict(c)
+
+
+@router.delete("/comments/{comment_id}")
+def delete_comment(comment_id: int, db: Session = Depends(get_db)):
+    c = db.get(AcctComment, comment_id)
+    if c:
+        db.delete(c)
+        db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- Ignored (duplicates / estimates)
+@router.get("/ignored")
+def list_ignored(import_id: Optional[int] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+    return M.ignored(db, import_id, status)
+
+
+class DecideIn(BaseModel):
+    ids: List[int]
+    action: str  # ignore | keep | restore
+
+
+@router.post("/ignored/decide")
+def decide_ignored(body: DecideIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return {"done": M.decide_ignored(db, body.ids, body.action, _who(user))}
+
+
+# ---------------------------------------------------------------- Check My Books
+@router.get("/check")
+def check_books(start: Optional[str] = None, end: Optional[str] = None, all_dates: bool = False, db: Session = Depends(get_db)):
+    a, b = (None, None) if all_dates else _period(db, start, end)
+    return M.check_books(db, a, b)
+
+
+class CheckOkIn(BaseModel):
+    txn_id: int
+    check: str
+
+
+@router.post("/check/ok")
+def check_ok(body: CheckOkIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """"It's right": this finding isn't shown again for this line."""
+    if not db.query(AcctCheckOk).filter(AcctCheckOk.txn_id == body.txn_id, AcctCheckOk.check == body.check).first():
+        db.add(AcctCheckOk(txn_id=body.txn_id, check=body.check, created_by=_who(user)))
+        db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- Partner Accounts, Payees, 1099, Recurring
+@router.get("/partner-accounts")
+def partner_accounts(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
+    a, b = _period(db, start, end)
+    return M.partner_accounts(db, a, b, _fy_key(db, a))
+
+
+@router.get("/payees")
+def payees(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
+    a, b = _period(db, start, end)
+    return M.payees(db, a, b)
+
+
+@router.get("/tax1099")
+def tax1099(year: int, threshold: float = 600.0, db: Session = Depends(get_db)):
+    return M.tax1099(db, year, threshold)
+
+
+class MarkIn(BaseModel):
+    year: int
+    payee: str
+    mark: Optional[str] = None  # yes | no | None
+
+
+@router.post("/tax1099/mark")
+def mark1099(body: MarkIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    M.mark1099(db, body.year, body.payee, body.mark, _who(user))
+    return {"ok": True}
+
+
+@router.get("/tax1099/export.xlsx")
+def export1099(year: int, threshold: float = 600.0, db: Session = Depends(get_db)):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    d = M.tax1099(db, year, threshold)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"1099 {year}"
+    ws.append(["Payee", "Paid In " + str(year), "Payments", "First", "Last", "Accounts", "Needs A 1099"])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for r in d["rows"]:
+        ws.append([r["payee"], r["total"], r["count"], r["first"], r["last"], ", ".join(r["accounts"]), {"yes": "Yes", "no": "No"}.get(r["mark"] or "", "?")])
+    for col, w in zip("ABCDEFG", (34, 14, 10, 12, 12, 40, 12)):
+        ws.column_dimensions[col].width = w
+    import io as _io
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="1099 list {year}.xlsx"'})
+
+
+@router.get("/recurring")
+def recurring(db: Session = Depends(get_db)):
+    return M.recurring(db)
+
+
+# ---------------------------------------------------------------- scratch sheets: Projections + Loans quick calculations (NOT the books)
+class SheetIn(BaseModel):
+    kind: Optional[str] = "projection"  # projection | loancalc
+    name: Optional[str] = None
+    doc: Optional[dict] = None
+
+
+@router.get("/sheets")
+def list_sheets(kind: str = "projection", db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    q = db.query(AcctSheet).filter(AcctSheet.kind == kind)
+    if kind == "loancalc":  # each person's own scratch work
+        q = q.filter(AcctSheet.owner == user.username)
+    return [M.sheet_dict(x) for x in q.order_by(AcctSheet.id).all()]
+
+
+@router.post("/sheets")
+def add_sheet(body: SheetIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    kind = body.kind if body.kind in ("projection", "loancalc") else "projection"
+    x = AcctSheet(kind=kind, name=(body.name or "").strip() or ("Quick Calculations" if kind == "loancalc" else "New Projection"),
+                  owner=user.username if kind == "loancalc" else None, doc=json.dumps(body.doc or {}), created_by=_who(user))
+    db.add(x)
+    db.commit()
+    return M.sheet_dict(x)
+
+
+@router.put("/sheets/{sheet_id}")
+def save_sheet(sheet_id: int, body: SheetIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    x = db.get(AcctSheet, sheet_id)
+    if not x:
+        raise HTTPException(status_code=404, detail="Not found")
+    if body.name is not None and body.name.strip():
+        x.name = body.name.strip()
+    if body.doc is not None:
+        x.doc = json.dumps(body.doc)
+    x.updated_by, x.updated_at = _who(user), datetime.utcnow()
+    db.commit()
+    return M.sheet_dict(x)
+
+
+@router.post("/sheets/{sheet_id}/copy")
+def copy_sheet(sheet_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    x = db.get(AcctSheet, sheet_id)
+    if not x:
+        raise HTTPException(status_code=404, detail="Not found")
+    c = AcctSheet(kind=x.kind, name=f"{x.name} (copy)", owner=x.owner, doc=x.doc, created_by=_who(user))
+    db.add(c)
+    db.commit()
+    return M.sheet_dict(c)
+
+
+@router.delete("/sheets/{sheet_id}")
+def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
+    x = db.get(AcctSheet, sheet_id)
+    if x:
+        db.delete(x)
+        db.commit()
+    return {"ok": True}
+
+
+@router.get("/sheets-books")
+def sheets_books(months: int = 6, db: Session = Depends(get_db)):
+    """Today's figures from the books for "Fill from the books"."""
+    return M.books_snapshot(db, max(1, min(months, 24)))
+
+
+@router.get("/sheets/{sheet_id}/export.xlsx")
+def sheet_export(sheet_id: int, db: Session = Depends(get_db)):
+    x = db.get(AcctSheet, sheet_id)
+    if not x:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(M.sheet_xlsx(x.name, json.loads(x.doc or "{}")), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{x.name}.xlsx"'})
+
+
+# ---------------------------------------------------------------- reconcile against QuickBooks
+@router.post("/reconcile/parse")
+async def reconcile_parse(text: Optional[str] = Form(None), file: Optional[UploadFile] = File(None)):
+    data = await file.read() if file else None
+    if data is not None and len(data) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="File too big")
+    return M.parse_qb(data, file.filename if file else None, text)
+
+
+class ReconcileIn(BaseModel):
+    account_ids: List[int]
+    start: Optional[str] = None
+    end: Optional[str] = None
+    rows: List[dict]
+    mapping: Optional[dict] = None  # QuickBooks account name -> AT-HUB account id (saved for next time)
+    tol_days: int = 5
+    name: Optional[str] = None
+    save: bool = True
+
+
+@router.get("/reconcile/map")
+def reconcile_map(db: Session = Depends(get_db)):
+    return M.qb_map(db)
+
+
+@router.post("/reconcile/run")
+def reconcile_run(body: ReconcileIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    if not body.account_ids:
+        raise HTTPException(status_code=400, detail="Pick the AT-HUB accounts to check")
+    a, b = _period(db, body.start, body.end)
+    mapping = M.qb_map(db)
+    for k, v in (body.mapping or {}).items():
+        if v:
+            mapping[M._norm(k)] = int(v)
+        else:
+            mapping.pop(M._norm(k), None)
+    M._save_setting(db, M.QB_MAP_KEY, mapping, _who(user))
+    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)))
+    rid = None
+    if body.save:
+        r = AcctReconcile(name=(body.name or "").strip() or None, account_ids=json.dumps(body.account_ids), start=A._dt(a), end=A._dt(b),
+                          qb_rows=json.dumps(body.rows), result=json.dumps({"counts": res["counts"], "totals": res["totals"]}), created_by=_who(user))
+        db.add(r)
+    db.commit()
+    if body.save:
+        rid = r.id
+    return {**res, "id": rid, "start": a.isoformat(), "end": b.isoformat()}
+
+
+@router.get("/reconcile/history")
+def reconcile_history(db: Session = Depends(get_db)):
+    accounts, _ = A.maps(db)
+    out = []
+    for r in db.query(AcctReconcile).order_by(AcctReconcile.id.desc()).limit(50).all():
+        res = json.loads(r.result or "{}")
+        out.append({"id": r.id, "name": r.name, "accounts": [A.path(accounts[i], accounts) for i in json.loads(r.account_ids or "[]") if i in accounts],
+                    "account_ids": json.loads(r.account_ids or "[]"), "start": r.start.date().isoformat() if r.start else None,
+                    "end": r.end.date().isoformat() if r.end else None, "counts": res.get("counts", {}), "lines": len(json.loads(r.qb_rows or "[]")),
+                    "created_by": r.created_by, "created_at": r.created_at})
+    return out
+
+
+@router.get("/reconcile/{rec_id}")
+def reconcile_get(rec_id: int, db: Session = Depends(get_db)):
+    r = db.get(AcctReconcile, rec_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"id": r.id, "name": r.name, "account_ids": json.loads(r.account_ids or "[]"), "start": r.start.date().isoformat() if r.start else None,
+            "end": r.end.date().isoformat() if r.end else None, "rows": json.loads(r.qb_rows or "[]")}

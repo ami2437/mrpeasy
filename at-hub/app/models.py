@@ -1691,6 +1691,12 @@ class AcctTxn(Base):
     bank_description = Column(Text, nullable=True)  # a typed-in line's statement wording once matched
     corrected = Column(Boolean, nullable=True)  # a person moved it out of the account AT-HUB had picked: counts double when learning
     no_learn = Column(Boolean, nullable=True)  # "forget": AT-HUB doesn't learn from this line
+    rule_id = Column(Integer, nullable=True, index=True)  # the rule that filed it (so a rule can show what it filed)
+    sent_back = Column(Boolean, nullable=True)  # a person sent it back to Review
+    sent_back_reason = Column(String, nullable=True)
+    sent_back_from = Column(Text, nullable=True)  # JSON: where it was ({"account_id"} or {"splits": [...]}) -- the top suggestion
+    sent_back_by = Column(String, nullable=True)
+    sent_back_at = Column(DateTime, nullable=True)
     external_id = Column(String, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1761,3 +1767,81 @@ class AcctOpenItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AcctComment(Base):
+    """A comment on an Accounting section (P&L, Loans, Partners ...) for a period, or on one row (an account, a loan)."""
+    __tablename__ = "acct_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    section = Column(String, nullable=False, index=True)  # overview | review | txns | pnl | accounts | rules | loans | partners ...
+    period_key = Column(String, nullable=True, index=True)  # "2024-04-01..2025-03-31"; None = any period
+    ref_type = Column(String, nullable=True)  # account | ... (None = the section itself)
+    ref_id = Column(Integer, nullable=True)
+    text = Column(Text, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class AcctIgnored(Base):
+    """A statement line not brought in: an exact repeat (ignored), a possible duplicate (waiting for a person), an
+    estimate row from a workbook. Kept so it can be seen -- and restored if it wasn't a duplicate."""
+    __tablename__ = "acct_ignored"
+
+    id = Column(Integer, primary_key=True, index=True)
+    import_id = Column(Integer, ForeignKey("acct_imports.id"), nullable=True, index=True)
+    source_id = Column(Integer, ForeignKey("acct_sources.id"), nullable=True)
+    date = Column(DateTime, nullable=True)
+    amount = Column(Float, nullable=True)
+    description = Column(Text, nullable=True)
+    extra = Column(Text, nullable=True)  # JSON: the row's other columns (workbook account / category)
+    dedupe = Column(String, nullable=True)
+    reason = Column(String, nullable=False, default="exact")  # exact | near | estimate
+    status = Column(String, nullable=False, default="ignored")  # ignored | possible | restored
+    dup_of_txn_id = Column(Integer, nullable=True)
+    restored_txn_id = Column(Integer, nullable=True)
+    decided_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctCheckOk(Base):
+    """'It's right': a Check My Books finding a person looked at and kept -- not shown again for that line."""
+    __tablename__ = "acct_check_ok"
+
+    id = Column(Integer, primary_key=True, index=True)
+    txn_id = Column(Integer, nullable=False, index=True)
+    check = Column(String, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctSheet(Base):
+    """A scratch sheet that's NOT the books: a Projections scenario, or a person's Loans quick calculations."""
+    __tablename__ = "acct_sheets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String, nullable=False, default="projection")  # projection | loancalc
+    name = Column(String, nullable=False)
+    owner = Column(String, nullable=True)  # loancalc: whose
+    doc = Column(Text, nullable=False, default="{}")
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class AcctReconcile(Base):
+    """A check of AT-HUB's accounts against transactions from QuickBooks (routes/accounting.py /reconcile)."""
+    __tablename__ = "acct_reconciles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True)
+    account_ids = Column(Text, nullable=True)  # JSON
+    start = Column(DateTime, nullable=True)
+    end = Column(DateTime, nullable=True)
+    qb_rows = Column(Text, nullable=True)  # JSON: the QuickBooks lines as read
+    result = Column(Text, nullable=True)  # JSON
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

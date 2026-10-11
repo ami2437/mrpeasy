@@ -70,15 +70,15 @@ def test_workbook_then_statement_learns_and_files(api, client, admin_headers):
                        files={"file": ("FY_Input.xlsx", io.BytesIO(_xlsx(wb_rows)), "application/octet-stream")}).json()
     assert prev["workbook"] and prev["rows"] == 13 and prev["bad_count"] == 1
     r = _import(client, admin_headers, src["id"], "FY_Input.xlsx", _xlsx(wb_rows))
-    assert r["added"] == 13 and r["left"] == 0
+    assert r["added"] == 11 and r["left"] == 0 and r["estimates"] == 2  # the AR / AP estimates aren't brought in
 
     meta = api.get("/api/accounting/meta")
     kinds = {a["name"]: a["kind"] for a in meta["accounts"]}
     assert kinds["Chart"] == "income" and kinds["Ali"] == "cogs" and kinds["Bank Fee"] == "expense" and kinds["Sandy"] == "loan"
-    assert kinds["Niraj"] == "owner" and kinds["AR - Unpaid"] == "pending"
+    assert kinds["Niraj"] == "owner" and "AR - Unpaid" not in kinds
     book = next(s for s in meta["sources"] if s["kind"] == "book")
-    pend = _txns(api, start=f"{y}-04-01", end=f"{y + 1}-03-31", kind="pending")["rows"]
-    assert {t["source_id"] for t in pend} == {book["id"]}  # year-end AP / AR aren't bank lines
+    ign = api.get(f"/api/accounting/ignored?import_id={r['import_id']}")
+    assert sorted(x["reason"] for x in ign["rows"]) == ["estimate", "estimate"]  # listed on Ignored instead
 
     # the statement for the next months: same payees again
     stmt = [(f"10/0{i}/{y}", a, d) for i, (a, d) in enumerate([
@@ -128,13 +128,13 @@ def test_workbook_then_statement_learns_and_files(api, client, admin_headers):
     assert p["profit_total"] == round(50000 - 24000 - 75 - 99 * 2 - 650, 2)
     assert p["columns"] == [f"FY{y}-{str(y + 1)[2:]} Q{i}" for i in (1, 2, 3, 4)]
     assert sec["owner"]["total"] == -(1000 + 1500 + 300 + 400 + 700) and sec["loan"]["total"] == 15000
-    assert sec["pending"]["total"] == 0 and p["set_aside"]["count"] == 2
+    assert sec["pending"]["total"] == 0 and p["set_aside"]["count"] == 0
 
     # partners: equal thirds of (income + cogs + expenses + loans + year-end AR/AP + bank balance counted)
     api.put("/api/accounting/settings", json={"year": f"FY{y}-{str(y + 1)[2:]}", "bank_balance": 1000, "adjust": {"Anuj": 50}})
     pt = api.get(f"/api/accounting/partners?start={y}-04-01&end={y + 1}-03-31")
-    total = 50000 - 24000 - 75 - 198 - 650 - 15000 + 1000  # net borrowed 15000 taken off; the AR / AP estimates set aside
-    assert pt["total"] == total and pt["set_aside"] == {"count": 2, "total": 8000.0}
+    total = 50000 - 24000 - 75 - 198 - 650 - 15000 + 1000  # net borrowed 15000 taken off; no AR / AP estimates
+    assert pt["total"] == total and pt["set_aside"]["count"] == 0
     by = {x["name"]: x for x in pt["partners"]}
     assert by["Niraj"]["taken"] == -2500 and by["Richard"]["taken"] == -1400
     assert abs(by["Anuj"]["remaining"] - (total / 3 + 50)) < 0.02
@@ -146,11 +146,10 @@ def test_workbook_then_statement_learns_and_files(api, client, admin_headers):
     assert x.status_code == 200 and x.content[:2] == b"PK"
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(x.content))
-    assert wb.sheetnames[:1] == ["All Transactions"] and {"COGS", "Expense", "Loans", "Payments", "Shares", "Not Included", "Summary"} <= set(wb.sheetnames)
+    assert wb.sheetnames[:1] == ["All Transactions"] and {"COGS", "Expense", "Loans", "Payments", "Shares", "Summary"} <= set(wb.sheetnames) and "Not Included" not in wb.sheetnames
     assert "Pending" not in wb.sheetnames
     cats = {r[0]: r[2] for r in wb["Summary"].iter_rows(values_only=True) if r[0] in ("COGS", "Payments", "Loans")}
     assert cats == {"COGS": -24000, "Payments": 50000, "Loans": 15000}
-    assert any("Not included: 2 year-end AR / AP estimate" in str(r[0]) for r in wb["Summary"].iter_rows(values_only=True))
     loans = [r for r in wb["Loans"].iter_rows(values_only=True)]
     assert ("Account", "Total_Outgoing", "Total_Incoming", None, None, None) in loans
     q = client.get(f"/api/accounting/export/quickbooks.csv?source_id={src2}&start={y}-10-01&end={y}-10-31", headers=admin_headers)

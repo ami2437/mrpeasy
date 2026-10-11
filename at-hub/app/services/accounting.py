@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import (AcctAccount, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, AppSetting,
+from app.models import (AcctAccount, AcctIgnored, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, AppSetting,
                         Customer, CustomerOrder, Invoice, PurchaseOrder, Vendor)
 from app.services import acct_mapper, acct_rules, clock
 from app.services.money import cents, line_amount
@@ -272,6 +272,7 @@ def file_by_rule(db: Session, t: AcctTxn, r: dict, by: Optional[str], reviewed: 
     if r["set_note"] and not t.note:
         t.note = r["set_note"]
     t.how, t.reviewed = "rule", reviewed
+    t.rule_id = r.get("id")
     if by:
         t.updated_by = by
     row = db.get(AcctRule, r["id"]) if r.get("id") else None
@@ -690,17 +691,74 @@ def layout_for(rows: List[List], src: Optional[AcctSource], layout: Optional[dic
     return guess_layout(rows)
 
 
+def _sim_words(desc: str) -> set:
+    return set(re.findall(r"[A-Z0-9]+", (desc or "").upper())) - {"REF", "ON", "TO", "FROM", "THE"}
+
+
+def classify(db: Session, src: Optional[AcctSource], parsed: List[dict], keys: List[str], workbook: bool) -> List[dict]:
+    """What happens to each row of a file: new | exact (already in -- ignored) | possible (looks like a line already in:
+    same amount, within 3 days, very similar wording -- a person decides) | expected (a typed-in line it matches) |
+    estimate (a workbook "Pending" AR / AP estimate -- not brought in)."""
+    sid = src.id if src else None
+    have = {k: tid for k, tid in db.query(AcctTxn.dedupe, AcctTxn.id).filter(AcctTxn.source_id == sid).all()} if sid else {}
+    expected = db.query(AcctTxn).filter(AcctTxn.source_id == sid, AcctTxn.expected.is_(True)).all() if sid else []
+    lo = min((r["date"] for r in parsed), default=None)
+    hi = max((r["date"] for r in parsed), default=None)
+    pool = (db.query(AcctTxn).filter(AcctTxn.date >= _dt(lo - timedelta(days=4)), AcctTxn.date <= _dt(hi + timedelta(days=4)),
+                                     AcctTxn.expected.is_(False)).all() if lo else [])
+    by_amt = defaultdict(list)
+    for t in pool:
+        by_amt[round(t.amount, 2)].append(t)
+    claimed = set()
+    out = []
+    for r, k in zip(parsed, keys):
+        if workbook and (r.get("category") or "").strip().lower() == "pending":
+            out.append({"status": "estimate"})
+            continue
+        if k in have:
+            out.append({"status": "exact", "txn_id": have[k]})
+            continue
+        hit = next((e for e in expected if e.id not in claimed and abs(e.amount - r["amount"]) < 0.005 and abs((e.date.date() - r["date"]).days) <= 7), None)
+        if hit:
+            claimed.add(hit.id)
+            out.append({"status": "expected", "txn_id": hit.id})
+            continue
+        w = _sim_words(r["description"])
+        best = None
+        for t in by_amt.get(round(r["amount"], 2), []):
+            if t.id in claimed:
+                continue
+            days = abs((t.date.date() - r["date"]).days)
+            if days > 3:
+                continue
+            tw = _sim_words(t.bank_description or t.description)
+            sim = len(w & tw) / max(1, len(w | tw))
+            same_payee = acct_mapper.payee(t.bank_description or t.description) == acct_mapper.payee(r["description"])
+            if sim >= 0.7 or (same_payee and days == 0):
+                if not best or sim > best[1]:
+                    best = (t, sim)
+        if best:
+            claimed.add(best[0].id)
+            out.append({"status": "possible", "txn_id": best[0].id})
+            continue
+        out.append({"status": "new"})
+    return out
+
+
 def preview(db: Session, data: bytes, filename: str, source_id: Optional[int], layout: Optional[dict] = None) -> dict:
     rows = read_table(data, filename)
     src = db.get(AcctSource, source_id) if source_id else None
     lay = layout_for(rows, src, layout)
     parsed, bad = parse_rows(rows, lay, src.kind if src else "bank")
     keys = dedupe_keys(parsed)
-    have = {k for (k,) in db.query(AcctTxn.dedupe).filter(AcctTxn.source_id == source_id, AcctTxn.dedupe.in_(keys)).all()} if source_id and keys else set()
+    wb = lay.get("account") is not None and lay.get("category") is not None
+    cls = classify(db, src, parsed, keys, wb) if parsed else []
+    st = Counter(c["status"] for c in cls)
     width = max((len(r) for r in rows[:30]), default=0)
     headers = [str(c or f"Column {i + 1}") for i, c in enumerate(rows[0])] if rows and lay.get("has_header") else [f"Column {chr(65 + i)}" for i in range(width)]
     return {"layout": lay, "headers": headers, "sample": [[str(c if c is not None else "") for c in r] for r in rows[:8]],
-            "rows": len(parsed), "already": sum(1 for k in keys if k in have), "bad": bad[:20], "bad_count": len(bad),
+            "rows": len(parsed), "already": st["exact"], "possible": st["possible"], "expected": st["expected"], "estimate": st["estimate"],
+            "new": st["new"], "bad": bad[:20], "bad_count": len(bad),
             "workbook": lay.get("account") is not None and lay.get("category") is not None,
             "first": parsed[0]["date"].isoformat() if parsed else None, "last": parsed[-1]["date"].isoformat() if parsed else None,
             "money_in": cents(sum(r["amount"] for r in parsed if r["amount"] > 0)),
@@ -724,20 +782,28 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
         raise HTTPException(status_code=400, detail="No lines with a date and an amount in this file")
     workbook = lay.get("account") is not None and lay.get("category") is not None
     keys = dedupe_keys(parsed)
-    have = {k for (k,) in db.query(AcctTxn.dedupe).filter(AcctTxn.source_id == src.id).all()}
-    expected = db.query(AcctTxn).filter(AcctTxn.source_id == src.id, AcctTxn.expected.is_(True)).all()
+    cls = classify(db, src, parsed, keys, workbook)
     imp = AcctImport(source_id=src.id, filename=filename, kind="workbook" if workbook else "statement", rows=len(parsed), created_by=by)
     db.add(imp)
     db.flush()
     new = []
-    book = book_source(db) if workbook else None
-    for r, k in zip(parsed, keys):
-        if k in have:
-            imp.skipped += 1
+    possible = estimates = 0
+    for r, k, c in zip(parsed, keys, cls):
+        st = c["status"]
+        if st in ("exact", "possible", "estimate"):  # not brought in -- kept on the Ignored list (possible: a person decides)
+            db.add(AcctIgnored(import_id=imp.id, source_id=src.id, date=_dt(r["date"]), amount=r["amount"], description=r["description"],
+                               extra=json.dumps({x: r.get(x) for x in ("account", "category") if r.get(x)}) or None, dedupe=k,
+                               reason={"exact": "exact", "possible": "near", "estimate": "estimate"}[st],
+                               status="possible" if st == "possible" else "ignored", dup_of_txn_id=c.get("txn_id")))
+            if st == "exact":
+                imp.skipped += 1
+            elif st == "possible":
+                possible += 1
+            else:
+                estimates += 1
             continue
-        hit = next((e for e in expected if abs(e.amount - r["amount"]) < 0.005 and abs((e.date.date() - r["date"]).days) <= 7), None)
-        if hit:  # typed in earlier -- now it's on the statement
-            expected.remove(hit)
+        if st == "expected":  # typed in earlier -- now it's on the statement
+            hit = db.get(AcctTxn, c["txn_id"])
             hit.expected, hit.bank_description, hit.dedupe, hit.date = False, r["description"], k, _dt(r["date"])
             hit.updated_by = by
             imp.matched += 1
@@ -751,11 +817,8 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
             partner = name if kind == "owner" else None
             acc = account_by_name(db, name, kind, partner)
             t.account_id, t.how, t.reviewed = acc.id, "workbook", True
-            if kind == "pending" and book:  # year-end AP / AR figures aren't bank lines
-                t.source_id = book.id
         db.add(t)
         new.append(t)
-        have.add(k)
     db.flush()
     imp.added = len(new)
     if not workbook:
@@ -764,7 +827,7 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
         src.layout = json.dumps(lay)
     db.commit()
     return {"import_id": imp.id, "rows": imp.rows, "added": imp.added, "skipped": imp.skipped, "matched": imp.matched,
-            "auto": imp.auto, "bad": bad[:20], "bad_count": len(bad),
+            "possible": possible, "estimates": estimates, "auto": imp.auto, "bad": bad[:20], "bad_count": len(bad),
             "left": sum(1 for t in new if not t.account_id)}
 
 
@@ -776,6 +839,7 @@ def undo_import(db: Session, import_id: int) -> int:
     for t in db.query(AcctTxn).filter(AcctTxn.import_id == import_id).all():
         db.delete(t)
         n += 1
+    db.query(AcctIgnored).filter(AcctIgnored.import_id == import_id).delete()
     db.delete(imp)
     db.commit()
     return n
@@ -792,7 +856,9 @@ def txn_dict(t: AcctTxn, accounts: Dict[int, AcctAccount], sources: Dict[int, Ac
             "source": s.name if s else "", "import_id": t.import_id,
             "splits": [{"id": x.id, "account_id": x.account_id, "account": path(accounts[x.account_id], accounts) if x.account_id in accounts else "",
                         "kind": accounts[x.account_id].kind if x.account_id in accounts else None, "amount": x.amount, "note": x.note} for x in t.splits],
-            "created_by": t.created_by, "updated_by": t.updated_by}
+            "created_by": t.created_by, "updated_by": t.updated_by, "rule_id": t.rule_id,
+            "sent_back": bool(t.sent_back), "sent_back_reason": t.sent_back_reason, "sent_back_by": t.sent_back_by,
+            "sent_back_at": t.sent_back_at}
 
 
 def maps(db: Session):
@@ -819,6 +885,9 @@ def set_account(db: Session, t: AcctTxn, account_id: Optional[int], splits: Opti
         t.account_id = account_id or None
     t.how = "person" if (account_id or splits) else None
     t.reviewed = True
+    t.rule_id = None
+    if account_id or splits:
+        t.sent_back = None
     t.updated_by = by
 
 
