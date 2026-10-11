@@ -33,6 +33,7 @@
     .ac-pnl tr.tot td { font-weight: 700; border-top: 1px solid var(--border); }
     .ac-pnl tr.profit td { font-weight: 700; font-size: 13.5px; border-top: 2px solid var(--border); }
     .ac-pnl tr.drill { cursor: pointer; } .ac-pnl tr.drill:hover td { background: var(--surface-2); }
+    .ac-pnl tr.sub td { color: var(--text-2); }
     .ac-pnl td.name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ac-bars { display: flex; align-items: flex-end; gap: 4px; height: 150px; padding: 8px 0 0; border-bottom: 1px solid var(--border); }
     .ac-bars .m { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; position: relative; }
@@ -96,8 +97,8 @@
       const order = sign > 0 ? ["income", "loan", "transfer", "owner", "other", "pending", "cogs", "expense"] : ["cogs", "expense", "owner", "loan", "transfer", "income", "other", "pending"];
       const kl = KIND_LABEL();
       return `<option value="">${blank}</option>` + order.map(k => {
-        const list = META.accounts.filter(a => a.kind === k && (a.is_active || a.id === selected)).sort((a, b) => a.name.localeCompare(b.name));
-        return list.length ? `<optgroup label="${escapeHtml(kl[k])}">${list.map(a => `<option value="${a.id}" ${a.id === selected ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("")}</optgroup>` : "";
+        const list = META.accounts.filter(a => a.kind === k && (a.is_active || a.id === selected));  // the server sends them parents-first
+        return list.length ? `<optgroup label="${escapeHtml(kl[k])}">${list.map(a => `<option value="${a.id}" ${a.id === selected ? "selected" : ""}>${"\u00a0\u00a0\u00a0".repeat(a.depth || 0)}${escapeHtml(a.path || a.name)}</option>`).join("")}</optgroup>` : "";
       }).join("") + `<option value="new">+ New account…</option>`;
     }
     async function pickNew(sel, sign) {  // "+ New account…" in any picker
@@ -316,6 +317,7 @@
         <button type="button" class="small-btn" id="el-addsplit">${icon("plus")} Add A Part</button>
         ${t.created_by ? `<p class="muted small" style="margin-top:10px;">${manual ? "Typed in" : "Brought in"} by ${escapeHtml(t.created_by)}${t.updated_by ? ` · last changed by ${escapeHtml(t.updated_by)}` : ""}</p>` : ""}`;
       const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
+      buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" });
       if (manual) buttons.push({ label: "Delete Line", value: "delete", cls: "danger" });
       const dlgP = askDialog({ title: manual ? "Typed-In Line" : "Statement Line", body, buttons, wide: true });
       setTimeout(() => {
@@ -326,6 +328,7 @@
       const { value, el } = await dlgP;
       if (!value) return;
       try {
+        if (value === "rule") { await newRule({ contains: ruleWords(t.bank_description || t.description), account_id: t.account_id, sign: t.amount < 0 ? "out" : "in" }); return; }
         if (value === "delete") { await apiFetch(`/api/accounting/txns/${id}`, { method: "DELETE" }); toast("Deleted"); }
         else {
           const q = s => el.querySelector(s);
@@ -374,7 +377,7 @@
       const d = await apiFetch(`/api/accounting/pnl?${qs({ by: PNL_BY })}`);
       const cols = d.columns;
       const sec = (s, opts = {}) => !s.rows.length ? "" : `<tr class="sec"><td colspan="${cols.length + 2}">${escapeHtml(s.label)}</td></tr>
-        ${s.rows.map(r => `<tr class="drill" onclick="drill(${r.account_id})" title="Open its lines"><td class="name">${escapeHtml(r.name)}</td>${r.cells.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num"><strong>${money0(r.total)}</strong></td></tr>`).join("")}
+        ${s.rows.map(r => `<tr class="drill${r.depth ? " sub" : ""}" onclick="drill(${r.account_id})" title="Open its lines${r.has_children ? " (with its sub-accounts)" : ""}"><td class="name" style="padding-left:${6 + 16 * (r.depth || 0)}px;${r.has_children ? "font-weight:600;" : ""}">${r.depth ? `<span class="muted">↳ </span>` : ""}${escapeHtml(r.name)}</td>${r.cells.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num"><strong>${money0(r.total)}</strong></td></tr>`).join("")}
         <tr class="tot"><td>Total ${escapeHtml(s.label)}</td>${s.totals.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(s.total)}</td></tr>`;
       const by = Object.fromEntries(d.sections.map(s => [s.kind, s]));
       const below = d.sections.filter(s => !s.in_pnl && s.rows.length);
@@ -402,22 +405,42 @@
     const asideNote = a => a && a.count ? ` <span class="muted">${a.count} year-end AR / AP estimate line(s) (${fmtMoney(a.total)}) are set aside — not included anywhere.</span>` : "";
 
     // ================================================================ Accounts & rules
-    async function accountDialog(a, kind = "expense") {
-      const k = a ? a.kind : kind;
+    function subIds(id) {  // an account's sub-accounts, all levels
+      const out = [], todo = [id];
+      while (todo.length) { const x = todo.pop(); META.accounts.filter(a => a.parent_id === x).forEach(a => { out.push(a.id); todo.push(a.id); }); }
+      return out;
+    }
+    async function accountDialog(a, kind = "expense", parentId = null) {
+      const pid = a ? a.parent_id : parentId;
+      const parent = pid ? acc(pid) : null;
+      const k = parent ? parent.kind : a ? a.kind : kind;
+      const banned = a ? [a.id, ...subIds(a.id)] : [];
+      const kl = KIND_LABEL();
+      const under = `<option value="0">— None (a main account) —</option>` + META.kinds.map(x => {
+        const list = META.accounts.filter(o => o.kind === x.key && !banned.includes(o.id));
+        return list.length ? `<optgroup label="${escapeHtml(kl[x.key])}">${list.map(o => `<option value="${o.id}" ${o.id === pid ? "selected" : ""}>${"\u00a0\u00a0\u00a0".repeat(o.depth || 0)}${escapeHtml(o.path || o.name)}</option>`).join("")}</optgroup>` : "";
+      }).join("");
       const body = `<div class="ac-form">
-        <label>Name</label><input id="ad-name" value="${escapeHtml(a?.name || "")}" placeholder="e.g. Superior Bolts, Rent, Sandy Spring loan">
-        <label>Type</label><select id="ad-kind">${META.kinds.map(x => `<option value="${x.key}" ${x.key === k ? "selected" : ""}>${escapeHtml(x.label)}</option>`).join("")}</select>
+        <label>Name</label><input id="ad-name" value="${escapeHtml(a?.name || "")}" placeholder="e.g. Labor, Faustino, Superior Bolts, Sandy Spring loan">
+        <label>Under</label><select id="ad-parent" title="Make it a sub-account: e.g. Faustino under Labor">${under}</select>
+        <label>Type</label><select id="ad-kind" ${parent ? "disabled" : ""} title="${parent ? "A sub-account is the same type as the account it's under" : ""}">${META.kinds.map(x => `<option value="${x.key}" ${x.key === k ? "selected" : ""}>${escapeHtml(x.label)}</option>`).join("")}</select>
         <label>Partner</label><select id="ad-partner"><option value="">—</option>${META.settings.partners.map(p => `<option ${a?.partner === p.name ? "selected" : ""}>${escapeHtml(p.name)}</option>`).join("")}</select>
         <label>Owed At Start</label><input type="number" step="0.01" id="ad-open" value="${a?.opening_balance || ""}" placeholder="Loans: owed before the first line here">
         <label>QuickBooks Type</label><input id="ad-qb" value="${escapeHtml(a?.qb_type || "")}" placeholder="filled from the type">
         <label>Note</label><input id="ad-note" value="${escapeHtml(a?.note || "")}">
         ${a ? `<label></label><label class="inline-check"><input type="checkbox" id="ad-active" ${a.is_active ? "checked" : ""}> In use (switched off: hidden from the pickers)</label>` : ""}
-      </div><p class="ac-help" style="margin-top:10px;">Partner Draws accounts need a partner — that's how the Partners tab knows whose draws they are.</p>`;
-      const { value, el } = await askDialog({ title: a ? "Account" : "New Account", body, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      </div><p class="ac-help" style="margin-top:10px;">A sub-account (Labor › Faustino) is the same type as the account it's under, and its money counts in
+        that account's totals too. Partner Draws accounts need a partner — that's how the Partners tab knows whose draws they are.</p>`;
+      const dlg = askDialog({ title: a ? "Account" : parent ? `New Sub-Account Under ${parent.path || parent.name}` : "New Account", body, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      setTimeout(() => {
+        const ps = document.getElementById("ad-parent"), ks = document.getElementById("ad-kind");
+        if (ps && ks) ps.onchange = () => { const p = acc(+ps.value); ks.disabled = !!p; if (p) ks.value = p.kind; };
+      }, 0);
+      const { value, el } = await dlg;
       if (!value) return null;
       const q = s => el.querySelector(s);
       const data = { name: q("#ad-name").value, kind: q("#ad-kind").value, partner: q("#ad-partner").value, opening_balance: parseFloat(q("#ad-open").value || 0),
-        qb_type: q("#ad-qb").value, note: q("#ad-note").value };
+        qb_type: q("#ad-qb").value, note: q("#ad-note").value, parent_id: +q("#ad-parent").value };
       if (a) data.is_active = q("#ad-active").checked;
       try { const r = await apiFetch(`/api/accounting/accounts${a ? "/" + a.id : ""}`, { method: a ? "PUT" : "POST", body: JSON.stringify(data) }); toast("Saved"); return r; }
       catch (e) { alert(e.message); return null; }
@@ -428,28 +451,35 @@
       const groups = META.kinds.map(k => ({ ...k, rows: rows.filter(r => r.kind === k.key) })).filter(g => g.rows.length);
       view().innerHTML = `<div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Accounts</h3><span style="flex:1"></span><button onclick="newAccount()">${icon("plus")} New Account</button></div>
-        <p class="ac-help">Every place money goes or comes from. Figures are for ${escapeHtml(PERIOD.key === "custom" ? "the dates picked" : PERIOD.key || "")}. Click a name to see its lines.
+        <p class="ac-help">Every place money goes or comes from. ${icon("plus")} adds a sub-account (Expense › Labor › Faustino) — a main account's figures include its sub-accounts. Figures are for ${escapeHtml(PERIOD.key === "custom" ? "the dates picked" : PERIOD.key || "")}. Click a name to see its lines.
           Two accounts that are one thing? Merge them — every line moves over.</p>
         <table class="compact-table no-table-tools"><thead><tr><th>Account</th><th class="num">Lines</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th><th>Last</th><th></th></tr></thead><tbody>
         ${groups.map(g => `<tr class="sec"><td colspan="7"><strong>${escapeHtml(g.label)}</strong> <span class="muted small">QuickBooks: ${escapeHtml(g.qb_type)}</span></td></tr>` + g.rows.map(r => `<tr ${r.is_active ? "" : 'style="opacity:.55"'}>
-          <td><a class="link" href="#" onclick="drill(${r.id});return false;">${escapeHtml(r.name)}</a>${r.partner ? ` <span class="ac-chip">${escapeHtml(r.partner)}</span>` : ""}${r.is_active ? "" : ` <span class="ac-chip">Off</span>`}${r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : ""}</td>
+          <td style="padding-left:${8 + 20 * (r.depth || 0)}px;">${r.depth ? `<span class="muted">↳ </span>` : ""}<a class="link" href="#" onclick="drill(${r.id});return false;">${escapeHtml(r.name)}</a>${r.partner && !r.depth ? ` <span class="ac-chip">${escapeHtml(r.partner)}</span>` : ""}${r.is_active ? "" : ` <span class="ac-chip">Off</span>`}
+            ${r.subs ? `<div class="muted small">incl. ${r.subs} sub-account${r.subs === 1 ? "" : "s"}${r.own_net ? ` · ${fmtMoney(r.own_net)} not in one` : ""}</div>` : ""}${r.note ? `<div class="muted small">${escapeHtml(r.note)}</div>` : ""}</td>
           <td class="num">${r.count}</td><td class="ac-amt">${r.in ? money(r.in) : ""}</td><td class="ac-amt">${r.out ? money(r.out) : ""}</td><td class="ac-amt"><strong>${money(r.net)}</strong></td>
           <td class="nowrap">${day(r.last)}</td>
-          <td class="nowrap"><button class="small-btn icon-only" title="Change" onclick="editAccount(${r.id})">${icon("pencil")}</button>
+          <td class="nowrap"><button class="small-btn icon-only" title="Add a sub-account under ${escapeHtml(r.name)}" onclick="newSubAccount(${r.id})">${icon("plus")}</button>
+            <button class="small-btn icon-only" title="Change" onclick="editAccount(${r.id})">${icon("pencil")}</button>
             <button class="small-btn" onclick="mergeAccount(${r.id})" title="Move its lines into another account">Merge</button>
             <button class="small-btn icon-only" title="Delete (only when it has no lines)" onclick="deleteAccount(${r.id})">${icon("trash")}</button></td></tr>`).join("")).join("")
           || `<tr><td colspan="7" class="muted">No accounts yet — they're made as you file lines (or from your workbook).</td></tr>`}</tbody></table></div>
       <div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Rules</h3><span style="flex:1"></span><button onclick="newRule()">${icon("plus")} New Rule</button></div>
         <p class="ac-help">AT-HUB learns from every line you file, so rules are only for what it can't learn — e.g. "CARDMEMBER SERV 2738" is always the US Bank card.
-          A rule comes before what AT-HUB learned. All the words must be in the description.</p>
+          A rule comes before what AT-HUB learned. All the words must be in the description. Saving a rule shows every line it matches — tick all, some or one and apply;
+          lines brought in later are filed by it by themselves.</p>
         <table class="compact-table"><thead><tr><th>Description Contains</th><th>Money</th><th>Amount</th><th>Goes In</th><th class="num">Used</th><th></th></tr></thead><tbody>
         ${rules.map(r => `<tr><td><code>${escapeHtml(r.contains)}</code></td><td>${r.sign === "in" ? "In" : r.sign === "out" ? "Out" : "Either"}</td>
           <td>${r.min_amount != null || r.max_amount != null ? `${r.min_amount != null ? fmtMoney(r.min_amount) : "any"} – ${r.max_amount != null ? fmtMoney(r.max_amount) : "any"}` : "Any"}</td>
-          <td>${escapeHtml(r.account)}</td><td class="num">${r.hits}</td><td><button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${r.id})">${icon("trash")}</button></td></tr>`).join("")
+          <td>${escapeHtml(r.account)}</td><td class="num">${r.hits}</td>
+          <td class="nowrap"><button class="small-btn" onclick="rulePreview(${r.id})" title="See every line it matches and file the ones you pick">Apply…</button>
+            <button class="small-btn icon-only" title="Change rule" onclick='newRule(${JSON.stringify(r).replace(/'/g, "&#39;")})'>${icon("pencil")}</button>
+            <button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${r.id})">${icon("trash")}</button></td></tr>`).join("")
           || `<tr><td colspan="6" class="muted">No rules — AT-HUB is going on what it learned.</td></tr>`}</tbody></table></div>`;
     }
     async function newAccount() { if (await accountDialog(null)) { await loadMeta(); show("accounts"); } }
+    async function newSubAccount(pid) { if (await accountDialog(null, acc(pid).kind, pid)) { await loadMeta(); show("accounts"); } }
     async function editAccount(id) { if (await accountDialog(acc(id))) { await loadMeta(); show("accounts"); } }
     async function mergeAccount(id) {
       const a = acc(id);
@@ -466,21 +496,92 @@
       if (!(await askDialog({ title: `Delete ${acc(id).name}?`, body: "", buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
       try { await apiFetch(`/api/accounting/accounts/${id}`, { method: "DELETE" }); await loadMeta(); show("accounts"); } catch (e) { alert(e.message); }
     }
-    async function newRule() {
+    // a rule's words from a bank line: the first few words that aren't numbers / reference codes
+    function ruleWords(desc) {
+      return (desc || "").toUpperCase().replace(/REF ?#\s?\S+|#\S+/g, " ").split(/\s+/).filter(w => w && !/\d/.test(w) && !["ON", "TO", "FROM"].includes(w)).slice(0, 3).join(" ");
+    }
+    async function newRule(r = {}) {
+      const opts = accountOptions(r.account_id || null);
       const body = `<div class="ac-form">
-        <label>Description Has</label><input id="nr-words" placeholder="e.g. CARDMEMBER SERV 2738">
-        <label>Money</label><select id="nr-sign"><option value="">In or out</option><option value="out">Out only</option><option value="in">In only</option></select>
-        <label>Amount From</label><input type="number" step="0.01" id="nr-min" placeholder="any">
-        <label>Amount To</label><input type="number" step="0.01" id="nr-max" placeholder="any">
-        <label>Goes In</label><select id="nr-acc">${accountOptions(null).replace(`<option value="new">+ New account…</option>`, "")}</select>
-        <label></label><label class="inline-check"><input type="checkbox" id="nr-refile" checked> Also move lines AT-HUB filed elsewhere (not ones a person filed)</label></div>`;
-      const { value, el } = await askDialog({ title: "New Rule", body, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+        <label>Description Has</label><input id="nr-words" value="${escapeHtml(r.contains || "")}" placeholder="e.g. FAUSTINO  or  CARDMEMBER SERV 2738">
+        <label>Money</label><select id="nr-sign"><option value="">In or out</option><option value="out" ${r.sign === "out" ? "selected" : ""}>Out only</option><option value="in" ${r.sign === "in" ? "selected" : ""}>In only</option></select>
+        <label>Amount From</label><input type="number" step="0.01" id="nr-min" placeholder="any" value="${r.min_amount ?? ""}">
+        <label>Amount To</label><input type="number" step="0.01" id="nr-max" placeholder="any" value="${r.max_amount ?? ""}">
+        <label>Goes In</label><select id="nr-acc">${opts}</select>
+        <label></label><div id="nr-count" class="muted small">Type the words to see how many lines match.</div></div>`;
+      const dlg = askDialog({ title: r.id ? "Change Rule" : "New Rule", body, buttons: [{ label: r.id ? "Save & See Matches" : "Save & See Matches", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+      let timer = null;
+      const read = (root = document) => {  // after Save the dialog is off the page: read its own fields
+        const q = s => root.querySelector("#" + s), n = s => q(s).value === "" ? null : parseFloat(q(s).value);
+        const a = q("nr-acc").value;
+        return { contains: q("nr-words").value, sign: q("nr-sign").value || null, min_amount: n("nr-min"), max_amount: n("nr-max"), account_id: a && a !== "new" ? +a : null };
+      };
+      const count = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const box = document.getElementById("nr-count"); if (!box) return;
+          const body = read();
+          if (!body.contains.trim()) { box.textContent = "Type the words to see how many lines match."; return; }
+          try {
+            const d = await apiFetch("/api/accounting/rules/preview", { method: "POST", body: JSON.stringify(body) });
+            const g = d.groups;
+            box.innerHTML = `<strong>${d.count}</strong> line(s) match: ${g.unfiled.length} not filed, ${g.auto.length} filed by AT-HUB, ${g.elsewhere.length} filed elsewhere by a person${body.account_id ? `, ${g.here.length} already there` : ""}${g.split.length ? `, ${g.split.length} split (left alone)` : ""}.`;
+          } catch (e) { box.textContent = e.message; }
+        }, 300);
+      };
+      setTimeout(() => {
+        ["nr-words", "nr-min", "nr-max"].forEach(i => document.getElementById(i).oninput = count);
+        document.getElementById("nr-sign").onchange = count;
+        const a = document.getElementById("nr-acc");
+        a.onchange = async () => { if (a.value === "new") await pickNew(a, -1); count(); };
+        count();
+      }, 0);
+      const { value, el } = await dlg;
       if (!value) return;
-      const q = s => el.querySelector(s), n = s => q(s).value === "" ? null : parseFloat(q(s).value);
+      const data = read(el);
       try {
-        const r = await apiFetch("/api/accounting/rules", { method: "POST", body: JSON.stringify({ contains: q("#nr-words").value, sign: q("#nr-sign").value || null, min_amount: n("#nr-min"), max_amount: n("#nr-max"), account_id: +q("#nr-acc").value, refile: q("#nr-refile").checked }) });
-        toast(`Rule saved${r.filed ? ` · ${r.filed} line(s) filed by it` : ""}`); show("accounts"); refreshCount();
+        const out = await apiFetch(`/api/accounting/rules${r.id ? "/" + r.id : ""}`, { method: r.id ? "PUT" : "POST", body: JSON.stringify(data) });
+        await rulePreview(out.id);
       } catch (e) { alert(e.message); }
+    }
+    // every line a rule matches, grouped; tick all / some / one and put them in the rule's account
+    async function rulePreview(ruleId) {
+      let d, rule;
+      try { [d, rule] = await Promise.all([apiFetch(`/api/accounting/rules/${ruleId}/lines`), apiFetch("/api/accounting/rules").then(rs => rs.find(x => x.id === ruleId))]); }
+      catch (e) { alert(e.message); return; }
+      const G = [["unfiled", "Not Filed", true, ""], ["auto", "Filed By AT-HUB, Not Looked At", true, ""],
+        ["elsewhere", "Filed Elsewhere By A Person", false, "someone put these in another account — tick only the ones this rule should move"],
+        ["here", `Already In ${rule.account}`, null, ""], ["split", "Split Over Accounts (Left Alone)", null, ""]];
+      const row = (t, tickable, on) => `<tr>${tickable ? `<td><input type="checkbox" class="rp-tick" data-id="${t.id}" ${on ? "checked" : ""}></td>` : "<td></td>"}
+        <td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description)}</div></td>
+        <td class="small">${escapeHtml(t.account || "—")}</td><td class="ac-amt">${money(t.amount)}</td></tr>`;
+      const body = `<p class="ac-help"><code>${escapeHtml(rule.contains)}</code>${rule.sign ? ` · money ${rule.sign}` : ""} → <strong>${escapeHtml(rule.account)}</strong> ·
+          ${d.count} line(s) match (every date). Tick the ones to put in ${escapeHtml(rule.account)}.</p>
+        <div class="btn-row" style="margin-bottom:8px;"><button type="button" class="small-btn" id="rp-all">Tick All</button><button type="button" class="small-btn" id="rp-none">Tick None</button></div>
+        <div style="max-height:55vh;overflow:auto;">${G.filter(([k]) => d.groups[k].length).map(([k, label, def, hint]) => `
+          <h4 style="margin:10px 0 4px;">${def !== null ? `<input type="checkbox" class="rp-grp" data-g="${k}" ${def ? "checked" : ""} title="Tick all in this group"> ` : ""}${escapeHtml(label)} <span class="muted small">${d.groups[k].length}${hint ? " · " + hint : ""}</span></h4>
+          <table class="compact-table no-table-tools" data-g="${k}"><tbody>${d.groups[k].map(t => row(t, def !== null, def)).join("")}</tbody></table>`).join("") || `<p class="muted">No lines match.</p>`}</div>
+        <p class="muted small" style="margin-top:8px;">Lines brought in later that match are filed by this rule by themselves.</p>`;
+      const dlg = askDialog({ title: "Apply Rule", body, buttons: [{ label: "Apply To Ticked", value: "apply", cls: "primary" }, { label: "Close", value: null }], wide: true });
+      setTimeout(() => {
+        const box = document.querySelector(".ask-dialog");
+        if (!box) return;
+        const btn = box.querySelector('button[data-i="0"]');
+        const upd = () => { const n = box.querySelectorAll(".rp-tick:checked").length; btn.textContent = `Apply To ${n} Ticked`; btn.disabled = !n; };
+        box.querySelectorAll(".rp-tick").forEach(c => c.onchange = upd);
+        box.querySelectorAll(".rp-grp").forEach(g => g.onchange = () => { box.querySelectorAll(`table[data-g="${g.dataset.g}"] .rp-tick`).forEach(c => c.checked = g.checked); upd(); });
+        box.querySelector("#rp-all").onclick = () => { box.querySelectorAll(".rp-tick, .rp-grp").forEach(c => c.checked = true); upd(); };
+        box.querySelector("#rp-none").onclick = () => { box.querySelectorAll(".rp-tick, .rp-grp").forEach(c => c.checked = false); upd(); };
+        upd();
+      }, 0);
+      const { value, el } = await dlg;
+      if (value === "apply") {
+        const ids = [...el.querySelectorAll(".rp-tick:checked")].map(c => +c.dataset.id);
+        try { const r = await apiFetch(`/api/accounting/rules/${ruleId}/apply`, { method: "POST", body: JSON.stringify({ ids }) }); toast(`${r.filed} line(s) put in ${rule.account}`); }
+        catch (e) { alert(e.message); }
+      }
+      refreshCount();
+      show(TAB);
     }
     async function deleteRule(id) { await apiFetch(`/api/accounting/rules/${id}`, { method: "DELETE" }); show("accounts"); }
 

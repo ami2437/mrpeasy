@@ -157,8 +157,65 @@ def account_by_name(db: Session, name: str, kind: str, partner: Optional[str] = 
     return a
 
 
-def account_dict(a: AcctAccount) -> dict:
-    return {"id": a.id, "name": a.name, "kind": a.kind, "kind_label": KINDS.get(a.kind, KINDS["other"])[0], "partner": a.partner,
+SEP = " › "
+
+
+def ancestors(a: AcctAccount, accounts: Dict[int, AcctAccount]) -> List[AcctAccount]:
+    """Parent, grandparent ... (nearest first); stops on a loop."""
+    out, seen, cur = [], {a.id}, a
+    while cur.parent_id and cur.parent_id in accounts and cur.parent_id not in seen:
+        cur = accounts[cur.parent_id]
+        seen.add(cur.id)
+        out.append(cur)
+    return out
+
+
+def path(a: AcctAccount, accounts: Dict[int, AcctAccount]) -> str:
+    """'Labor › Faustino' -- how a sub-account is shown everywhere."""
+    return SEP.join([x.name for x in reversed(ancestors(a, accounts))] + [a.name])
+
+
+def descendants(aid: int, accounts: Dict[int, AcctAccount]) -> List[int]:
+    kids = defaultdict(list)
+    for x in accounts.values():
+        if x.parent_id:
+            kids[x.parent_id].append(x.id)
+    out, todo = [], list(kids.get(aid, []))
+    while todo:
+        k = todo.pop()
+        if k not in out and k != aid:
+            out.append(k)
+            todo += kids.get(k, [])
+    return out
+
+
+def tree_order(accs: List[AcctAccount], accounts: Dict[int, AcctAccount], key=None) -> List[Tuple[AcctAccount, int]]:
+    """(account, depth) parents first, each followed by its sub-accounts; siblings by `key` (default name)."""
+    key = key or (lambda x: x.name.lower())
+    ids = {a.id for a in accs}
+    kids = defaultdict(list)
+    tops = []
+    for a in accs:
+        (kids[a.parent_id] if a.parent_id in ids else tops).append(a)
+    out, seen = [], set()
+
+    def walk(a, d):
+        if a.id in seen:
+            return
+        seen.add(a.id)
+        out.append((a, d))
+        for k in sorted(kids.get(a.id, []), key=key):
+            walk(k, d + 1)
+    for a in sorted(tops, key=key):
+        walk(a, 0)
+    return out
+
+
+def account_dict(a: AcctAccount, accounts: Optional[Dict[int, AcctAccount]] = None) -> dict:
+    accounts = accounts or {}
+    up = ancestors(a, accounts) if accounts else []
+    return {"id": a.id, "name": a.name, "path": path(a, accounts) if accounts else a.name, "parent_id": a.parent_id, "depth": len(up),
+            "kind": a.kind, "kind_label": KINDS.get(a.kind, KINDS["other"])[0], "partner": a.partner,
             "qb_type": a.qb_type or KINDS.get(a.kind, KINDS["other"])[1], "external_id": a.external_id, "note": a.note,
             "opening_balance": a.opening_balance or 0.0, "is_active": a.is_active}
 
@@ -204,6 +261,43 @@ def autofill(db: Session, txns: Optional[List[AcctTxn]] = None, m=None) -> int:
                 if r:
                     db.get(AcctRule, r["id"]).hits += 1
             n += 1
+    return n
+
+
+def rule_lines(db: Session, rule: dict, account_id: Optional[int]) -> dict:
+    """Every line (all dates) a rule's words / money / amount match, grouped: not filed, filed by AT-HUB (not looked
+    at), filed elsewhere by a person (or the workbook), already in the rule's account, split (left alone)."""
+    accounts, sources = maps(db)
+    groups = {"unfiled": [], "auto": [], "elsewhere": [], "here": [], "split": []}
+    for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).order_by(AcctTxn.date.desc(), AcctTxn.id.desc()).all():
+        if not acct_mapper.rule_matches(rule, acct_mapper.clean(t.bank_description or t.description), t.amount):
+            continue
+        if t.splits:
+            g = "split"
+        elif account_id and t.account_id == account_id:
+            g = "here"
+        elif not t.account_id:
+            g = "unfiled"
+        elif not t.reviewed:
+            g = "auto"
+        else:
+            g = "elsewhere"
+        groups[g].append(txn_dict(t, accounts, sources))
+    return {"groups": groups, "count": sum(len(v) for v in groups.values()),
+            "can_apply": len(groups["unfiled"]) + len(groups["auto"]) + len(groups["elsewhere"])}
+
+
+def apply_rule(db: Session, r: AcctRule, ids: List[int], by: str) -> int:
+    """Put the picked lines in the rule's account (only lines the rule really matches; split lines are left alone)."""
+    rd = {"contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount}
+    n = 0
+    for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.id.in_(ids)).all():
+        if t.splits or not acct_mapper.rule_matches(rd, acct_mapper.clean(t.bank_description or t.description), t.amount):
+            continue
+        t.account_id, t.how, t.reviewed, t.updated_by = r.account_id, "rule", True, by
+        n += 1
+    r.hits += n
+    db.commit()
     return n
 
 
@@ -441,10 +535,10 @@ def txn_dict(t: AcctTxn, accounts: Dict[int, AcctAccount], sources: Dict[int, Ac
     s = sources.get(t.source_id)
     return {"id": t.id, "date": t.date.date().isoformat(), "amount": t.amount, "description": t.description,
             "bank_description": t.bank_description, "payee": t.payee, "account_id": t.account_id,
-            "account": a.name if a else None, "kind": a.kind if a else None, "how": t.how, "reviewed": t.reviewed,
+            "account": path(a, accounts) if a else None, "kind": a.kind if a else None, "how": t.how, "reviewed": t.reviewed,
             "note": t.note, "origin": t.origin, "expected": t.expected, "source_id": t.source_id,
             "source": s.name if s else "", "import_id": t.import_id,
-            "splits": [{"id": x.id, "account_id": x.account_id, "account": accounts[x.account_id].name if x.account_id in accounts else "",
+            "splits": [{"id": x.id, "account_id": x.account_id, "account": path(accounts[x.account_id], accounts) if x.account_id in accounts else "",
                         "kind": accounts[x.account_id].kind if x.account_id in accounts else None, "amount": x.amount, "note": x.note} for x in t.splits],
             "created_by": t.created_by, "updated_by": t.updated_by}
 
@@ -534,14 +628,8 @@ def pnl(db: Session, start: date, end: date, by: str = "month") -> dict:
             cells[l["account_id"]][b] += l["amount"]
     sections = []
     for kind in ("income", "cogs", "expense", "loan", "owner", "transfer", "pending", "other"):
-        rows = []
-        for aid, by_col in cells.items():
-            a = accounts.get(aid)
-            if a and a.kind == kind:
-                rows.append({"account_id": aid, "name": a.name, "cells": [cents(by_col.get(c, 0.0)) for c in cols],
-                             "total": cents(sum(by_col.values()))})
-        rows.sort(key=lambda r: r["total"] if kind != "income" else -r["total"])
-        tot = [cents(sum(r["cells"][i] for r in rows)) for i in range(len(cols))]
+        rows = tree_rows([a for a in accounts.values() if a.kind == kind], accounts, cells, cols, kind)
+        tot = [cents(sum(cells[aid].get(c, 0.0) for aid in cells if aid in accounts and accounts[aid].kind == kind)) for c in cols]
         sections.append({"kind": kind, "label": KINDS[kind][0], "in_pnl": KINDS[kind][2], "rows": rows, "totals": tot,
                          "total": cents(sum(tot))})
     by_kind = {s["kind"]: s for s in sections}
@@ -550,6 +638,27 @@ def pnl(db: Session, start: date, end: date, by: str = "month") -> dict:
     return {"columns": cols, "sections": sections, "gross": gross, "gross_total": cents(sum(gross)), "profit": profit,
             "profit_total": cents(sum(profit)), "unfiled": [cents(unfiled.get(c, 0.0)) for c in cols],
             "unfiled_total": cents(sum(unfiled.values())), "set_aside": set_aside(db, start, end)}
+
+
+def tree_rows(accs: List[AcctAccount], accounts: Dict[int, AcctAccount], cells, cols, kind: str) -> List[dict]:
+    """P&L rows for one section: accounts with money in the period (or a sub-account that has), a parent's figures
+    including its sub-accounts; when a parent also has lines of its own, they get their own indented row."""
+    own = {a.id: [cents(cells.get(a.id, {}).get(c, 0.0)) for c in cols] for a in accs}
+    roll = {}
+    for a in accs:
+        ids = [a.id] + [d for d in descendants(a.id, accounts) if d in own]
+        roll[a.id] = [cents(sum(own[i][k] for i in ids)) for k in range(len(cols))]
+    used = {a.id for a in accs if any(roll[a.id])}
+    sign = -1 if kind == "income" else 1
+    out = []
+    for a, d in tree_order([a for a in accs if a.id in used], accounts, key=lambda x: (sign * sum(roll[x.id]), x.name.lower())):
+        kids = [k for k in descendants(a.id, accounts) if k in used]
+        out.append({"account_id": a.id, "name": a.name, "path": path(a, accounts), "depth": d, "has_children": bool(kids),
+                    "cells": roll[a.id], "total": cents(sum(roll[a.id]))})
+        if kids and any(own[a.id]):
+            out.append({"account_id": a.id, "name": f"{a.name} (Other)", "path": path(a, accounts), "depth": d + 1,
+                        "has_children": False, "own_only": True, "cells": own[a.id], "total": cents(sum(own[a.id]))})
+    return out
 
 
 def set_aside(db: Session, start: date, end: date) -> dict:
@@ -594,11 +703,17 @@ def account_summary(db: Session, start: date, end: date) -> List[dict]:
         x["count"] += 1
         x["in" if l["amount"] > 0 else "out"] += l["amount"]
         x["last"] = max(x["last"], l["date"]) if x["last"] else l["date"]
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
+    empty = {"count": 0, "in": 0.0, "out": 0.0, "last": None}
     out = []
-    for a in db.query(AcctAccount).order_by(AcctAccount.kind, AcctAccount.name).all():
-        x = acc.get(a.id, {"count": 0, "in": 0.0, "out": 0.0, "last": None})
-        out.append({**account_dict(a), "count": x["count"], "in": cents(x["in"]), "out": cents(x["out"]),
-                    "net": cents(x["in"] + x["out"]), "last": x["last"].isoformat() if x["last"] else None})
+    for a, d in tree_order(list(accounts.values()), accounts):
+        ids = [a.id] + descendants(a.id, accounts)
+        xs = [acc.get(i, empty) for i in ids]
+        last = max((x["last"] for x in xs if x["last"]), default=None)
+        x = acc.get(a.id, empty)
+        out.append({**account_dict(a, accounts), "count": sum(y["count"] for y in xs), "in": cents(sum(y["in"] for y in xs)),
+                    "out": cents(sum(y["out"] for y in xs)), "net": cents(sum(y["in"] + y["out"] for y in xs)),
+                    "own_net": cents(x["in"] + x["out"]), "subs": len(ids) - 1, "last": last.isoformat() if last else None})
     return out
 
 
@@ -738,12 +853,14 @@ def partners(db: Session, start: date, end: date, fy_key: str) -> dict:
     steps = [("Money In (Payments)", k.get("income", 0.0)), ("Cost Of Goods", k.get("cogs", 0.0)), ("Expenses", k.get("expense", 0.0)),
              ("Less Loans (Borrowed − Repaid)", -k.get("loan", 0.0)), ("Bank Balance Counted", bank)]
     total = cents(sum(v for _l, v in steps))
-    accounts = {a.id: a for a in db.query(AcctAccount).filter(AcctAccount.kind == "owner").all()}
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
     taken = defaultdict(float)
     for l in lines(db, start, end):
         if l["kind"] == "owner":
             a = accounts.get(l["account_id"])
-            taken[(a.partner or a.name).strip().lower() if a else "?"] += l["amount"]
+            who = next((x.partner for x in ([a] + ancestors(a, accounts)) if x.partner), None) if a else None
+            top = ([a] + ancestors(a, accounts))[-1] if a else None
+            taken[(who or (top.name if top else "?")).strip().lower()] += l["amount"]
     people = []
     adj = yr.get("adjust", {})
     for pt in s["partners"]:
@@ -806,7 +923,7 @@ def export_xlsx(db: Session, start: date, end: date, fy_key: str) -> bytes:
         parts = [(x.account_id, x.amount, x.note) for x in t.splits] or [(t.account_id, t.amount, None)]
         for aid, amt, note in parts:
             a = accounts.get(aid)
-            r = [t.date, amt, t.bank_description or t.description, a.name if a else "",
+            r = [t.date, amt, t.bank_description or t.description, path(a, accounts) if a else "",
                  CATEGORY.get(a.kind, "Other") if a else "Not Filed", " · ".join(x for x in (note, t.note) if x)]
             (aside if a and a.kind == "pending" else rows).append(r)
 
@@ -831,6 +948,11 @@ def export_xlsx(db: Session, start: date, end: date, fy_key: str) -> bytes:
             c.font = bold
         for n in sorted(tot, key=str.lower):
             ws.append([n, cents(tot[n])])
+            ws.cell(ws._current_row, 2).number_format = money_fmt
+        parents = sorted({n.split(SEP)[0] for n in tot if SEP in n}, key=str.lower)
+        for top in parents:  # Labor (All) = Labor + Labor › Faustino + ...
+            ws.append([f"{top} (All)", cents(sum(v for n, v in tot.items() if n == top or n.startswith(top + SEP)))])
+            ws.cell(ws._current_row, 1).font = bold
             ws.cell(ws._current_row, 2).number_format = money_fmt
         if loans:
             ws.append([])
@@ -960,5 +1082,5 @@ def export_quickbooks_csv(db: Session, source_id: int, start: date, end: date) -
     for t in (db.query(AcctTxn).filter(AcctTxn.source_id == source_id, AcctTxn.date >= _dt(start), AcctTxn.date <= _dt(end),
                                        AcctTxn.expected.is_(False)).order_by(AcctTxn.date, AcctTxn.id).all()):
         a = accounts.get(t.account_id)
-        w.writerow([t.date.strftime("%m/%d/%Y"), t.bank_description or t.description, f"{t.amount:.2f}", a.name if a else ""])
+        w.writerow([t.date.strftime("%m/%d/%Y"), t.bank_description or t.description, f"{t.amount:.2f}", path(a, accounts) if a else ""])
     return buf.getvalue()

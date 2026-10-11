@@ -258,3 +258,60 @@ def test_mapper_reads_payee_and_note():
 def test_accounting_is_a_money_permission():
     from app.services import permissions as P
     assert "accounting" in P.MONEY and dict((k, d) for k, _m, _l, _money, d in P.CATALOG)["accounting"] == "admin"
+
+
+def test_sub_accounts_roll_up_and_rule_pick_and_apply(api, client, admin_headers):
+    """Expense > Labor > Faustino: a sub-account takes its parent's type, Labor's figures include Faustino's, Labor's
+    lines include his. A new rule files nothing by itself: the pop-up lists what it matches (grouped) and only the
+    picked lines are filed."""
+    y = 2039
+    labor = api.post("/api/accounting/accounts", json={"name": uid("Labor "), "kind": "expense"})
+    fau = api.post("/api/accounting/accounts", json={"name": uid("Faustino "), "kind": "income", "parent_id": labor["id"]})
+    assert fau["kind"] == "expense" and fau["parent_id"] == labor["id"] and fau["path"] == f"{labor['name']} › {fau['name']}"
+    # can't be put under its own sub-account; a parent with sub-accounts can't be deleted
+    bad = client.put(f"/api/accounting/accounts/{labor['id']}", headers=admin_headers, json={"parent_id": fau["id"]})
+    assert bad.status_code == 400
+    assert client.delete(f"/api/accounting/accounts/{labor['id']}", headers=admin_headers).status_code == 400
+    src = _source(api)
+    tag = uid("FAUSTINOX")
+    r = _import(client, admin_headers, src["id"], "wf.csv", _csv([
+        (f"05/01/{y}", -300.0, f"ZELLE TO {tag} ON 05/01 REF #RP1"), (f"05/08/{y}", -320.0, f"ZELLE TO {tag} ON 05/08 REF #RP2"),
+        (f"05/15/{y}", -310.0, f"ZELLE TO {tag} ON 05/15 REF #RP3"), (f"05/20/{y}", 50.0, f"ZELLE FROM {tag} ON 05/20 REF #RP4"),
+        (f"05/22/{y}", -40.0, "WALMART SUPPLIES 123")]))
+    assert r["added"] == 5
+    rows = {t["description"][-3:]: t for t in _txns(api, start=f"{y}-05-01", end=f"{y}-05-31", source_id=src["id"])["rows"]}
+    # someone already filed one of his lines straight in Labor
+    api.put(f"/api/accounting/txns/{rows['RP3']['id']}", json={"account_id": labor["id"], "learn": False})
+
+    rule = {"contains": tag.lower(), "sign": "out", "account_id": fau["id"]}
+    pv = api.post("/api/accounting/rules/preview", json=rule)
+    g = pv["groups"]
+    assert pv["count"] == 3 and len(g["unfiled"]) == 2 and len(g["elsewhere"]) == 1 and not g["here"]  # money in left out by "out"
+    rid = api.post("/api/accounting/rules", json=rule)["id"]
+    assert all(t["account_id"] is None for t in g["unfiled"])
+    assert _txns(api, start=f"{y}-05-01", end=f"{y}-05-31", source_id=src["id"], account_id=fau["id"])["total"] == 0  # saving filed nothing
+    lines = api.get(f"/api/accounting/rules/{rid}/lines")["groups"]
+    pick = [lines["unfiled"][0]["id"]]
+    assert api.post(f"/api/accounting/rules/{rid}/apply", json={"ids": pick + [rows["L 123"]["id"] if "L 123" in rows else rows["123"]["id"]]})["filed"] == 1  # a line it doesn't match is ignored
+    lines = api.get(f"/api/accounting/rules/{rid}/lines")["groups"]
+    assert len(lines["here"]) == 1 and len(lines["unfiled"]) == 1 and len(lines["elsewhere"]) == 1
+    api.post(f"/api/accounting/rules/{rid}/apply", json={"ids": [t["id"] for t in lines["unfiled"] + lines["elsewhere"]]})
+    assert len(api.get(f"/api/accounting/rules/{rid}/lines")["groups"]["here"]) == 3
+    assert next(x for x in api.get("/api/accounting/rules") if x["id"] == rid)["hits"] == 3
+
+    # Labor's lines and totals include Faustino's
+    assert _txns(api, start=f"{y}-05-01", end=f"{y}-05-31", source_id=src["id"], account_id=labor["id"])["total"] == 3
+    summ = {a["id"]: a for a in api.get(f"/api/accounting/accounts-summary?start={y}-05-01&end={y}-05-31")}
+    assert summ[labor["id"]]["net"] == -930 and summ[labor["id"]]["subs"] == 1 and summ[fau["id"]]["depth"] == 1
+    p = api.get(f"/api/accounting/pnl?start={y}-05-01&end={y}-05-31&by=fy")
+    exp = next(s for s in p["sections"] if s["kind"] == "expense")
+    lab = next(r for r in exp["rows"] if r["account_id"] == labor["id"] and not r.get("own_only"))
+    sub = next(r for r in exp["rows"] if r["account_id"] == fau["id"])
+    assert lab["total"] == -930 and lab["has_children"] and sub["depth"] == 1 and exp["total"] <= -930
+    assert exp["rows"].index(sub) > exp["rows"].index(lab)
+    # Excel: the sub-account by its path, the parent's total with it
+    x = client.get(f"/api/accounting/export.xlsx?start={y}-05-01&end={y}-05-31", headers=admin_headers)
+    from openpyxl import load_workbook
+    vals = [r for r in load_workbook(io.BytesIO(x.content))["Expense"].iter_rows(values_only=True)]
+    assert any(r[0] == f"{labor['name']} › {fau['name']}" and r[1] == -930 for r in vals)
+    assert any(r[0] == f"{labor['name']} (All)" and r[1] == -930 for r in vals)

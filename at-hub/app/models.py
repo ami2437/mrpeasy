@@ -1627,6 +1627,7 @@ class AcctAccount(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     kind = Column(String, nullable=False, default="expense")  # income | cogs | expense | loan | owner | transfer | pending | other
+    parent_id = Column(Integer, ForeignKey("acct_accounts.id"), nullable=True, index=True)  # a sub-account (Labor > Faustino) takes its parent's kind
     partner = Column(String, nullable=True)  # owner accounts: whose draws
     qb_type = Column(String, nullable=True)  # QuickBooks account type when synced (Income, Cost of Goods Sold, Expense ...)
     external_id = Column(String, nullable=True)  # id in QuickBooks (later)

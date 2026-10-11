@@ -35,6 +35,11 @@ def _period(db: Session, start: Optional[str], end: Optional[str]):
     return a, b
 
 
+def _accounts(db: Session) -> list:
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
+    return [A.account_dict(a, accounts) for a, _d in A.tree_order(list(accounts.values()), accounts)]
+
+
 def _fy_key(db: Session, a: date) -> str:
     m = A.settings(db)["fy_start_month"]
     return A.fy_label(A.fy_start(a, m), m)
@@ -46,7 +51,7 @@ def meta(db: Session = Depends(get_db)):
     A.book_source(db)
     db.commit()
     return {"settings": A.settings(db), "years": A.years(db), "kinds": [{"key": k, "label": v[0], "qb_type": v[1], "in_pnl": v[2]} for k, v in A.KINDS.items()],
-            "accounts": [A.account_dict(a) for a in db.query(AcctAccount).order_by(AcctAccount.name).all()],
+            "accounts": _accounts(db),
             "sources": [A.source_dict(db, s) for s in db.query(AcctSource).order_by(AcctSource.kind, AcctSource.id).all()],
             "today": A.today().isoformat()}
 
@@ -96,6 +101,7 @@ class AccountIn(BaseModel):
     note: Optional[str] = None
     opening_balance: Optional[float] = None
     is_active: Optional[bool] = None
+    parent_id: Optional[int] = None  # 0 = no parent (a main account)
 
 
 def _apply_account(a: AcctAccount, body: AccountIn, db: Session):
@@ -113,6 +119,25 @@ def _apply_account(a: AcctAccount, body: AccountIn, db: Session):
         v = getattr(body, k)
         if v is not None:
             setattr(a, k, (v.strip() or None) if isinstance(v, str) else v)
+    accounts = {x.id: x for x in db.query(AcctAccount).all()}
+    if body.parent_id is not None:
+        if not body.parent_id:
+            a.parent_id = None
+        else:
+            parent = accounts.get(body.parent_id)
+            if not parent or parent.id == a.id or (a.id and parent.id in A.descendants(a.id, accounts)):
+                raise HTTPException(status_code=400, detail="An account can't be under itself or one of its own sub-accounts")
+            a.parent_id = parent.id
+    if a.parent_id and a.parent_id in accounts:  # a sub-account is the same type as its parent (and the same partner's)
+        parent = accounts[a.parent_id]
+        a.kind = parent.kind
+        if parent.kind == "owner" and not a.partner:
+            a.partner = next((x.partner for x in [parent] + A.ancestors(parent, accounts) if x.partner), None)
+    if a.id:
+        for d in A.descendants(a.id, accounts):  # a parent's type change carries down
+            accounts[d].kind = a.kind
+            if a.kind != "owner":
+                accounts[d].partner = None
     if a.kind != "owner":
         a.partner = None
 
@@ -126,7 +151,7 @@ def add_account(body: AccountIn, db: Session = Depends(get_db)):
     a.qb_type = a.qb_type or A.KINDS[a.kind][1]
     db.add(a)
     db.commit()
-    return A.account_dict(a)
+    return A.account_dict(a, {x.id: x for x in db.query(AcctAccount).all()})
 
 
 @router.put("/accounts/{account_id}")
@@ -136,7 +161,7 @@ def edit_account(account_id: int, body: AccountIn, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Account not found")
     _apply_account(a, body, db)
     db.commit()
-    return A.account_dict(a)
+    return A.account_dict(a, {x.id: x for x in db.query(AcctAccount).all()})
 
 
 @router.post("/accounts/{account_id}/merge")
@@ -148,6 +173,10 @@ def merge_account(account_id: int, into_id: int, db: Session = Depends(get_db)):
     n = db.query(AcctTxn).filter(AcctTxn.account_id == a.id).update({AcctTxn.account_id: b.id})
     n += db.query(AcctSplit).filter(AcctSplit.account_id == a.id).update({AcctSplit.account_id: b.id})
     db.query(AcctRule).filter(AcctRule.account_id == a.id).update({AcctRule.account_id: b.id})
+    accounts = {x.id: x for x in db.query(AcctAccount).all()}
+    if b.id in A.descendants(a.id, accounts):
+        raise HTTPException(status_code=400, detail=f"{b.name} is one of {a.name}'s own sub-accounts -- move it out first")
+    db.query(AcctAccount).filter(AcctAccount.parent_id == a.id).update({AcctAccount.parent_id: b.id})  # its sub-accounts go along
     b.opening_balance = (b.opening_balance or 0) + (a.opening_balance or 0)
     db.delete(a)
     db.commit()
@@ -162,6 +191,9 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     used = db.query(AcctTxn).filter(AcctTxn.account_id == a.id).count() + db.query(AcctSplit).filter(AcctSplit.account_id == a.id).count()
     if used:
         raise HTTPException(status_code=400, detail=f"{used} line(s) are in {a.name} -- merge it into another account, or switch it off")
+    subs = db.query(AcctAccount).filter(AcctAccount.parent_id == a.id).count()
+    if subs:
+        raise HTTPException(status_code=400, detail=f"{a.name} has {subs} sub-account(s) -- move or delete them first")
     db.query(AcctRule).filter(AcctRule.account_id == a.id).delete()
     db.delete(a)
     db.commit()
@@ -284,7 +316,8 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
     if source_id:
         qy = qy.filter(AcctTxn.source_id == source_id)
     if account_id:
-        qy = qy.filter(or_(AcctTxn.account_id == account_id, AcctTxn.splits.any(AcctSplit.account_id == account_id)))
+        ids = [account_id] + A.descendants(account_id, {x.id: x for x in db.query(AcctAccount).all()})  # with its sub-accounts
+        qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
     if kind:
         ids = [a.id for a in db.query(AcctAccount).filter(AcctAccount.kind == kind).all()]
         qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
@@ -444,40 +477,77 @@ def delete_txn(txn_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------- rules
 class RuleIn(BaseModel):
     contains: str
-    account_id: int
+    account_id: Optional[int] = None
     sign: Optional[str] = None
     min_amount: Optional[float] = None
     max_amount: Optional[float] = None
-    refile: bool = False  # also move lines AT-HUB filed (not a person) that this rule now covers
+
+
+def _rule_dict(body) -> dict:
+    return {"contains": body.contains.strip().upper(), "sign": body.sign or None, "min_amount": body.min_amount, "max_amount": body.max_amount}
 
 
 @router.get("/rules")
 def rules(db: Session = Depends(get_db)):
-    acc = {a.id: a.name for a in db.query(AcctAccount).all()}
+    accounts = {a.id: a for a in db.query(AcctAccount).all()}
     return [{"id": r.id, "contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount,
-             "account_id": r.account_id, "account": acc.get(r.account_id, ""), "hits": r.hits, "created_by": r.created_by}
+             "account_id": r.account_id, "account": A.path(accounts[r.account_id], accounts) if r.account_id in accounts else "",
+             "hits": r.hits, "created_by": r.created_by}
             for r in db.query(AcctRule).order_by(AcctRule.id).all()]
+
+
+@router.post("/rules/preview")
+def preview_rule(body: RuleIn, db: Session = Depends(get_db)):
+    """The lines a rule would cover (before or after saving it), grouped -- for the pick-and-apply pop-up."""
+    if not body.contains.strip():
+        raise HTTPException(status_code=400, detail="The words to look for")
+    return A.rule_lines(db, _rule_dict(body), body.account_id)
 
 
 @router.post("/rules")
 def add_rule(body: RuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
-    if not body.contains.strip() or not db.get(AcctAccount, body.account_id):
+    """Saved only -- nothing is filed until someone picks the lines in the pop-up (POST /rules/{id}/apply). Lines
+    brought in later that match are filed by it by themselves."""
+    if not body.contains.strip() or not body.account_id or not db.get(AcctAccount, body.account_id):
         raise HTTPException(status_code=400, detail="The words to look for and the account")
-    r = AcctRule(contains=body.contains.strip().upper(), account_id=body.account_id, sign=body.sign or None,
-                 min_amount=body.min_amount, max_amount=body.max_amount, created_by=_who(user))
+    r = AcctRule(account_id=body.account_id, created_by=_who(user), **_rule_dict(body))
     db.add(r)
-    db.flush()
-    rd = {"contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount}
-    moved = 0
-    if body.refile:
-        for t in db.query(AcctTxn).filter(AcctTxn.how == "auto").all():
-            if not t.splits and acct_mapper.rule_matches(rd, acct_mapper.clean(t.bank_description or t.description), t.amount) and t.account_id != r.account_id:
-                t.account_id, t.how = r.account_id, "rule"
-                moved += 1
-    filed = A.autofill(db)
-    r.hits += moved
     db.commit()
-    return {"id": r.id, "filed": filed + moved}
+    return {"id": r.id}
+
+
+@router.put("/rules/{rule_id}")
+def edit_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db)):
+    r = db.get(AcctRule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if not body.contains.strip() or not body.account_id or not db.get(AcctAccount, body.account_id):
+        raise HTTPException(status_code=400, detail="The words to look for and the account")
+    for k, v in _rule_dict(body).items():
+        setattr(r, k, v)
+    r.account_id = body.account_id
+    db.commit()
+    return {"id": r.id}
+
+
+@router.get("/rules/{rule_id}/lines")
+def rule_lines(rule_id: int, db: Session = Depends(get_db)):
+    r = db.get(AcctRule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return A.rule_lines(db, {"contains": r.contains, "sign": r.sign, "min_amount": r.min_amount, "max_amount": r.max_amount}, r.account_id)
+
+
+class ApplyIn(BaseModel):
+    ids: List[int]
+
+
+@router.post("/rules/{rule_id}/apply")
+def apply_rule(rule_id: int, body: ApplyIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    r = db.get(AcctRule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"filed": A.apply_rule(db, r, body.ids, _who(user))}
 
 
 @router.delete("/rules/{rule_id}")
