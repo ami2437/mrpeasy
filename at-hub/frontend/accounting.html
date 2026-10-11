@@ -230,6 +230,7 @@
       const chips = [!t.reviewed && t.account_id ? `<span class="ac-chip auto" title="${t.how === "rule" ? "Filed by your rule" : "AT-HUB filed it from earlier lines"} -- nobody has looked yet">Auto</span>` : "",
         t.origin === "manual" ? `<span class="ac-chip typed">Typed In</span>` : "", t.expected ? `<span class="ac-chip exp" title="Not on a statement yet -- matched when it comes in">Expected</span>` : "",
         t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : "",
+        t.hint ? `<span class="ac-chip" title="The file's own category for this line">${escapeHtml(t.hint.slice(0, 40))}</span>` : "",
         t.sent_back ? `<span class="ac-chip back" title="Sent back by ${escapeHtml(t.sent_back_by || "")}${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason) : ""}">Sent Back${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason.slice(0, 40)) : ""}</span>` : ""].join("");
       const filed = t.splits.length ? t.splits.map(s => `<div>${escapeHtml(s.account)} <span class="muted">${fmtMoney(s.amount)}</span></div>`).join("")
         : `<select class="ac-pick" onchange="fileOne(${t.id}, this, ${t.amount})">${accountOptions(t.account_id, { blank: t.account_id ? "— None —" : "— Pick an account —", sign: t.amount })}</select>`;
@@ -1209,56 +1210,80 @@
       };
       pick.click();
     }
-    async function previewImport() {
+    function impForm(withLayout = true) {
       const fd = new FormData(); fd.append("source_id", IMP.sourceId); fd.append("file", IMP.file);
-      if (IMP.layout) fd.append("layout", JSON.stringify(IMP.layout));
+      if (withLayout && IMP.layout) fd.append("layout", JSON.stringify(IMP.layout));
+      if (IMP.from) fd.append("date_from", IMP.from);
+      if (IMP.to) fd.append("date_to", IMP.to);
+      if (IMP.replace) fd.append("replace", "true");
+      return fd;
+    }
+    async function previewImport() {
       let p;
-      try { p = await apiUpload("/api/accounting/import/preview", fd); } catch (e) { alert(e.message); return; }
+      try { p = await apiUpload("/api/accounting/import/preview", impForm()); } catch (e) { alert(e.message); return; }
       IMP.layout = p.layout;
       IMP.first = p.first; IMP.last = p.last;
       const col = (key, label, optional) => `<div><label>${label}</label><select class="mp" data-k="${key}">${optional ? `<option value="">—</option>` : `<option value="">— pick —</option>`}${p.headers.map((h, i) => `<option value="${i}" ${p.layout[key] === i ? "selected" : ""}>${escapeHtml(h)}</option>`).join("")}</select></div>`;
       const src = META.sources.find(s => s.id === IMP.sourceId);
-      const body = `<p class="ac-help">${escapeHtml(IMP.file.name)} → <strong>${escapeHtml(src.name)}</strong>. Check AT-HUB read the columns right (it remembers them for this account).</p>
+      const dayBefore = d => { if (!d) return ""; const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() - 1); return x.toISOString().slice(0, 10); };
+      const st = { exact: "already in", possible: "possible duplicate", expected: "typed in earlier", estimate: "estimate", new: "new" };
+      const body = `<p class="ac-help">${escapeHtml(IMP.file.name)} → <strong>${escapeHtml(src.name)}</strong>. Check AT-HUB read the columns right — the In / Out totals and the signs below.</p>
+        ${p.warning ? `<p class="neg" style="padding:8px 10px;border:1px solid #fca5a5;border-radius:8px;"><strong>Check the amounts:</strong> ${escapeHtml(p.warning)}</p>` : ""}
         <label class="inline-check"><input type="checkbox" id="mp-head" ${p.layout.has_header ? "checked" : ""}> The first row is column names</label>
-        <div class="ac-map">${col("date", "Date")}${col("description", "Description")}${col("amount", "Amount (+ in, − out)", true)}${col("debit", "Or: Debit (out)", true)}${col("credit", "And: Credit (in)", true)}
-          ${col("account", "Account (your workbook)", true)}${col("category", "Category (your workbook)", true)}</div>
-        <div class="table-scroll"><table class="compact-table ac-sample"><tbody>${p.sample.map(r => `<tr>${r.map(c => `<td title="${escapeHtml(c)}">${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
-        <div class="ac-tiles" style="margin-top:10px;"><div class="ac-tile"><div class="l">Lines Read</div><div class="v">${p.rows}</div><div class="s">${day(p.first)} – ${day(p.last)}</div></div>
+        <div class="ac-map">${col("date", "Date")}${col("description", "Description")}${col("amount", "Amount (+ in, − out)", true)}${col("debit", "Or: Money Out (Debit / Payment)", true)}${col("credit", "And: Money In (Credit / Deposit)", true)}
+          ${col("hint", "Their Category (a hint, e.g. QuickBooks Account)", true)}${col("account", "Account (your workbook)", true)}${col("category", "Category (your workbook)", true)}</div>
+        <h4 style="margin:10px 0 4px;">Which Dates</h4>
+        <div class="ac-map"><div><label>From</label><input type="date" id="mp-from" value="${IMP.from || ""}"></div><div><label>To</label><input type="date" id="mp-to" value="${IMP.to || ""}"></div>
+          <div style="grid-column: span 2;"><label>&nbsp;</label><span class="small">File: ${day(p.file_first)} – ${day(p.file_last)}.
+            ${p.books_from ? `This account's books: ${day(p.books_from)} – ${day(p.books_to)}. <a class="link" href="#" id="mp-before">Only lines before the books start</a>` : ""}</span></div></div>
+        <label class="inline-check" style="margin-top:4px;"><input type="checkbox" id="mp-replace" ${IMP.replace ? "checked" : ""}> <strong>Replace</strong> the lines already in the books for these dates with this file's lines — keeping how each was filed
+          (account, split, note). Lines in the books that aren't on this file move to Book Entries. Undo puts everything back.</label>
+        <div class="ac-tiles" style="margin-top:10px;"><div class="ac-tile"><div class="l">Lines Read</div><div class="v">${p.rows}</div><div class="s">${day(p.first)} – ${day(p.last)}${p.outside ? ` · ${p.outside} outside the dates` : ""}</div></div>
           <div class="ac-tile"><div class="l">New</div><div class="v">${p.new}</div><div class="s">come in</div></div>
-          <div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">ignored (listed on Ignored)</div></div>
-          ${p.possible ? `<div class="ac-tile"><div class="l">Possible Duplicates</div><div class="v neg">${p.possible}</div><div class="s">you decide on Ignored</div></div>` : ""}
+          ${p.replace ? `<div class="ac-tile"><div class="l">Replace, Filing Kept</div><div class="v pos">${p.replace_keep}</div><div class="s">the file's line takes their place</div></div>
+            <div class="ac-tile"><div class="l">Not On This File</div><div class="v">${p.replace_unmatched}</div><div class="s">move to Book Entries</div></div>`
+          : `<div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">ignored (listed on Ignored)</div></div>
+          ${p.possible ? `<div class="ac-tile"><div class="l">Possible Duplicates</div><div class="v neg">${p.possible}</div><div class="s">you decide on Ignored</div></div>` : ""}`}
           ${p.expected ? `<div class="ac-tile"><div class="l">Typed In Earlier</div><div class="v">${p.expected}</div><div class="s">matched, not doubled</div></div>` : ""}
           ${p.estimate ? `<div class="ac-tile"><div class="l">AR / AP Estimates</div><div class="v">${p.estimate}</div><div class="s">not brought in</div></div>` : ""}
-          <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;">${fmtMoney(p.money_in)}<br>${fmtMoney(p.money_out)}</div></div></div>
-        ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account (accounts made from your names, typed by Category: Payments → Income,
-          COGS, Expense, Loans, Shares → Partner Draws, Wash → Transfers; Pending (AR / AP estimates) is kept but set aside — not counted). This also teaches AT-HUB how you file.</p>` : ""}
+          <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;"><span class="pos">${fmtMoney(p.money_in)}</span><br><span class="neg">${fmtMoney(p.money_out)}</span></div></div></div>
+        ${p.hints ? `<p class="muted small">${p.hints} line(s) carry the file's own category — shown as a hint in Review.</p>` : ""}
+        ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account. This also teaches AT-HUB how you file.</p>` : ""}
         ${p.bad_count ? `<p class="muted small">${p.bad_count} row(s) without a date or amount are left out: ${p.bad.slice(0, 3).map(escapeHtml).join(" · ")}</p>` : ""}
-        <div class="table-scroll" style="max-height:220px;"><table class="compact-table ac-sample"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th>${p.workbook ? "<th>Account</th><th>Category</th>" : ""}</tr></thead>
-          <tbody>${p.parsed.map(r => `<tr><td>${r.date}</td><td class="ac-amt">${fmtMoney(r.amount)}</td><td>${escapeHtml(r.description)}</td>${p.workbook ? `<td>${escapeHtml(r.account || "")}</td><td>${escapeHtml(r.category || "")}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
-      const dlg = askDialog({ title: "Bring In Statement", body, buttons: [{ label: `Bring In ${p.rows - p.already} Line(s)`, value: "go", cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+        <div class="table-scroll" style="max-height:220px;"><table class="compact-table ac-sample"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th><th>Will Be</th></tr></thead>
+          <tbody>${p.parsed.map(r => `<tr><td>${r.date}</td><td class="ac-amt">${money(r.amount)}</td><td>${escapeHtml(r.description)}${r.hint ? `<div class="muted small">${escapeHtml(r.hint)}</div>` : ""}</td>
+            <td class="small">${p.replace && ["exact", "possible"].includes(r.status) ? "replaces a line (filing kept)" : escapeHtml(st[r.status] || r.status)}</td></tr>`).join("")}</tbody></table></div>`;
+      const goLabel = p.replace ? `Replace ${p.replace_keep} · Add ${p.new}` : `Bring In ${p.new + (p.possible ? 0 : 0)} New Line(s)`;
+      const dlg = askDialog({ title: "Bring In Statement", body, buttons: [{ label: goLabel, value: "go", cls: "primary" }, { label: "Cancel", value: null }], wide: true });
       setTimeout(() => {
+        const again = () => { IMP.again = true; [...document.querySelectorAll(".ask-dialog button")].find(b => b.textContent === "Cancel")?.click(); };
         document.querySelectorAll(".mp, #mp-head").forEach(s => s.onchange = () => {
           const lay = { has_header: document.getElementById("mp-head").checked };
           document.querySelectorAll(".mp").forEach(x => { if (x.value !== "") lay[x.dataset.k] = +x.value; });
           if (lay.amount != null) { delete lay.debit; delete lay.credit; }
-          IMP.layout = lay;
-          IMP.again = true;
-          [...document.querySelectorAll(".ask-dialog button")].find(b => b.textContent === "Cancel")?.click();
+          IMP.layout = lay; again();
         });
+        const f = document.getElementById("mp-from"), t = document.getElementById("mp-to"), rp = document.getElementById("mp-replace"), b4 = document.getElementById("mp-before");
+        if (f) f.onchange = () => { IMP.from = f.value; again(); };
+        if (t) t.onchange = () => { IMP.to = t.value; again(); };
+        if (rp) rp.onchange = () => { IMP.replace = rp.checked; again(); };
+        if (b4) b4.onclick = e => { e.preventDefault(); IMP.from = ""; IMP.to = dayBefore(p.books_from); IMP.replace = false; again(); };
       }, 0);
       const { value } = await dlg;
       if (IMP.again) { IMP.again = false; return previewImport(); }
       if (value !== "go") return;
-      const fd2 = new FormData(); fd2.append("source_id", IMP.sourceId); fd2.append("file", IMP.file); fd2.append("layout", JSON.stringify(IMP.layout));
+      if (p.replace && !(await askDialog({ title: "Replace These Lines?", body: `<p>${p.replace_keep} line(s) in the books are replaced by this file's lines (their accounts / splits / notes move across),
+          ${p.new} new line(s) come in, ${p.replace_unmatched} line(s) not on this file move to Book Entries. <strong>Undo</strong> on Statements puts it all back.</p>`,
+          buttons: [{ label: "Replace", value: true, cls: "primary" }, { label: "Cancel", value: null }] })).value) return;
       try {
-        const r = await apiUpload("/api/accounting/import", fd2);
-        await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.skipped ? `, ${r.skipped} already in (ignored)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}.</p>
+        const r = await apiUpload("/api/accounting/import", impForm());
+        await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.replaced ? `, <strong>${r.replaced}</strong> replaced (filing kept)` : ""}${r.moved_to_book ? `, ${r.moved_to_book} not on the file moved to Book Entries` : ""}${r.skipped ? `, ${r.skipped} already in (ignored)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}${r.outside ? `, ${r.outside} outside the dates` : ""}.</p>
           ${r.possible ? `<p class="neg"><strong>${r.possible}</strong> look like lines already in — waiting on the <a class="link" href="#" onclick="document.querySelector('.ask-dialog button[data-i]').click();setTimeout(()=>show('ignored'),50);return false;">Ignored</a> tab for you to decide.</p>` : ""}
           ${r.estimates ? `<p>${r.estimates} AR / AP estimate row(s) weren't brought in (listed on Ignored).</p>` : ""}
-          ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}
-          <p class="muted small">The output Excel covers ${day(IMP.first < IMP.last ? IMP.first : IMP.last)} – ${day(IMP.first < IMP.last ? IMP.last : IMP.first)}, this file's dates.</p>`,
-          buttons: [...(r.left ? [{ label: "File Them Now", value: "file", cls: "primary" }] : []), { label: "Download Output Excel", value: "xlsx", cls: r.left ? "" : "primary" }, { label: "Close", value: null }] })
-          .then(x => { if (x.value === "xlsx") { const [a, b] = [IMP.first, IMP.last].sort(); exportXlsx(a, b); show("statements"); } else if (x.value === "file") show("review"); else show("statements"); });
+          ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}`,
+          buttons: [...(r.left ? [{ label: "File Them Now", value: "file", cls: "primary" }] : []), { label: "Close", value: null }] })
+          .then(x => { if (x.value === "file") show("review"); else show("statements"); });
+        IMP.from = IMP.to = ""; IMP.replace = false;
         await loadMeta(); refreshCount();
       } catch (e) { alert(e.message); }
     }

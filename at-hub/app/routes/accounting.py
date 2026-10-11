@@ -277,16 +277,20 @@ async def _read(file: UploadFile) -> bytes:
 
 @router.post("/import/preview")
 async def import_preview(source_id: int = Form(...), layout: Optional[str] = Form(None), file: UploadFile = File(...),
+                         date_from: Optional[str] = Form(None), date_to: Optional[str] = Form(None), replace: bool = Form(False),
                          db: Session = Depends(get_db)):
     data = await _read(file)
-    return A.preview(db, data, file.filename, source_id, json.loads(layout) if layout else None)
+    return A.preview(db, data, file.filename, source_id, json.loads(layout) if layout else None,
+                     A.parse_day(date_from), A.parse_day(date_to), replace)
 
 
 @router.post("/import")
 async def import_statement(source_id: int = Form(...), layout: Optional[str] = Form(None), file: UploadFile = File(...),
+                           date_from: Optional[str] = Form(None), date_to: Optional[str] = Form(None), replace: bool = Form(False),
                            db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     data = await _read(file)
-    return A.import_file(db, data, file.filename, source_id, json.loads(layout) if layout else None, _who(user))
+    return A.import_file(db, data, file.filename, source_id, json.loads(layout) if layout else None, _who(user),
+                         A.parse_day(date_from), A.parse_day(date_to), replace)
 
 
 @router.get("/imports")

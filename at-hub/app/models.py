@@ -1666,6 +1666,8 @@ class AcctImport(Base):
     skipped = Column(Integer, nullable=False, default=0)  # already in (same date, amount, description)
     matched = Column(Integer, nullable=False, default=0)  # typed in earlier, now found on the statement
     auto = Column(Integer, nullable=False, default=0)  # put in an account by AT-HUB
+    replaced = Column(Text, nullable=True)  # JSON: lines this file replaced (kept so Undo can put them back)
+    moved = Column(Text, nullable=True)  # JSON: [txn id, old source id] lines moved to Book Entries by a replace
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1692,6 +1694,7 @@ class AcctTxn(Base):
     corrected = Column(Boolean, nullable=True)  # a person moved it out of the account AT-HUB had picked: counts double when learning
     no_learn = Column(Boolean, nullable=True)  # "forget": AT-HUB doesn't learn from this line
     rule_id = Column(Integer, nullable=True, index=True)  # the rule that filed it (so a rule can show what it filed)
+    hint = Column(String, nullable=True)  # the file's own category for it (QuickBooks' Account column): shown as a hint
     sent_back = Column(Boolean, nullable=True)  # a person sent it back to Review
     sent_back_reason = Column(String, nullable=True)
     sent_back_from = Column(Text, nullable=True)  # JSON: where it was ({"account_id"} or {"splits": [...]}) -- the top suggestion

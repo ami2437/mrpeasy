@@ -52,16 +52,20 @@ def test_ignored_exact_possible_restore(api, client, admin_headers):
     y = 2046
     src = _source(api)
     p = name("WIDGETX")
-    first = _import(client, admin_headers, src["id"], "a.csv", _csv([(f"03/01/{y}", -99.0, f"ACH {p} INVOICE 7"), (f"03/02/{y}", -15.0, f"FEE {p}")]))
-    assert first["added"] == 2
+    first = _import(client, admin_headers, src["id"], "a.csv", _csv([(f"03/01/{y}", -99.0, f"ACH {p} INVOICE 7"), (f"03/02/{y}", -15.0, f"FEE {p}"),
+                                                                     (f"03/05/{y}", -40.0, f"WIRE TO {p}")]))
+    assert first["added"] == 3
     # the same file again + a near-duplicate (the bank's wording changed a little)
-    again = _import(client, admin_headers, src["id"], "b.csv", _csv([(f"03/01/{y}", -99.0, f"ACH {p} INVOICE 7"), (f"03/03/{y}", -15.0, f"FEE {p}  ")]))
-    assert again["added"] == 0 and again["skipped"] == 1 and again["possible"] == 1
+    # the same file again: one exact repeat, one with the bank's wording a little different a day later (same start of text:
+    # a definite duplicate), and one of the same amount 3 days later with other wording (a person decides)
+    again = _import(client, admin_headers, src["id"], "b.csv", _csv([(f"03/01/{y}", -99.0, f"ACH {p} INVOICE 7"), (f"03/03/{y}", -15.0, f"FEE {p}  "),
+                                                                     (f"03/08/{y}", -40.0, f"OUTGOING PAYMENT {p} VENDOR")]))
+    assert again["added"] == 0 and again["skipped"] == 2 and again["possible"] == 1
     ign = api.get(f"/api/accounting/ignored?import_id={again['import_id']}")
     possible = next(r for r in ign["rows"] if r["status"] == "possible")
-    assert possible["dup_of"]["amount"] == -15.0 and any(r["reason"] == "exact" for r in ign["rows"])
+    assert possible["dup_of"]["amount"] == -40.0 and sum(1 for r in ign["rows"] if r["reason"] == "exact") == 2
     assert api.post("/api/accounting/ignored/decide", json={"ids": [possible["id"]], "action": "keep"})["done"] == 1
-    assert _txns(api, start=f"{y}-03-01", end=f"{y}-03-31", source_id=src["id"])["total"] == 3
+    assert _txns(api, start=f"{y}-03-01", end=f"{y}-03-31", source_id=src["id"])["total"] == 4
     exact = next(r for r in ign["rows"] if r["reason"] == "exact")
     api.post("/api/accounting/ignored/decide", json={"ids": [exact["id"]], "action": "ignore"})  # already ignored: nothing
     assert api.get(f"/api/accounting/ignored?import_id={again['import_id']}&status=restored")["restored"] == 1
