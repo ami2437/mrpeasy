@@ -503,6 +503,9 @@ def load(snapshot: Path, target: Path = TARGET_DB) -> Path:
     db.flush()
     normalize_import(db)  # moments -> UTC, calendar dates -> midnight (app/services/clock.py)
     db.commit()
+    if LIVE_DB.exists():  # Accounting has nothing to do with MRPeasy: kept exactly as it is (keep.py)
+        from .keep import keep_independent
+        keep_independent(target, LIVE_DB, rep)
     (snapshot / "load-notes.json").write_text(json.dumps(rep.dump(), indent=1), encoding="utf-8")
     print(f"Loaded into {target}")
     for section, msgs in rep.dump().items():

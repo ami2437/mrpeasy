@@ -1,8 +1,12 @@
 #!/bin/bash
-# Put a freshly imported database (made on the PC) on the real site, KEEPING the server's own user accounts and
-# company profile (people sign up / change passwords on the cloud -- an import must never drop them).
+# Put a freshly imported database (made on the PC) on the real site, KEEPING the site's own:
+#   - user accounts and company profile (people sign up / change passwords on the cloud)
+#   - Accounting -- every acct_* table + the acct_* settings (the user works on Accounting ON THE SITE; it has nothing to
+#     do with MRPeasy) -- copied with app/importers/mrpeasy/keep.py, the same code a fresh import on the PC uses
 #   athub-load-data.sh prod|test /root/incoming/at_hub.import.db
-# Backup first (data/backups/before-import-<time>.db), swap, smoke test; on failure the old database is put back.
+# The site is stopped first (nothing typed in during the push is lost), backed up (data/backups/before-import-<time>.db),
+# then the import gets the site's users / company / Accounting, the Accounting counts are checked, swap, smoke test;
+# on any failure the old database is put back.
 set -euo pipefail
 . /opt/athub-bin/athub-instances.sh
 WHICH=$1
@@ -11,15 +15,12 @@ NEW=$2
 [ -f "$NEW" ] || { echo "no file $NEW"; exit 2; }
 [ "$(sqlite3 "$NEW" 'pragma integrity_check')" = ok ] || { echo "the uploaded database is damaged -- nothing changed"; exit 1; }
 D=$DIR/data
-# GUARD: the site's Accounting isn't carried into an import yet -- never replace a database that has accounting lines
-SITE_ACCT=$(sqlite3 "$D/at_hub.db" 'select count(*) from acct_txns' 2>/dev/null || echo 0)
-if [ "${SITE_ACCT:-0}" -gt 0 ]; then
-  echo "STOPPED: this site has $SITE_ACCT Accounting lines; loading the import would replace them. Nothing was changed."
-  exit 3
-fi
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 BK=$D/backups/before-import-$STAMP.db
 mkdir -p "$D/backups"
+systemctl stop "$SVC"
+restart_old() { systemctl start "$SVC"; }
+trap 'echo "stopped before the swap -- the site keeps its own database"; restart_old' ERR
 sqlite3 "$D/at_hub.db" ".backup '$BK'"
 echo "backup: $BK"
 # columns both databases have (the server may run a newer / older schema)
@@ -31,7 +32,23 @@ sqlite3 "$NEW" "attach '$BK' as live; begin;
   delete from company_profile; insert into company_profile ($C) select $C from live.company_profile;
   commit;"
 echo "kept $(sqlite3 "$NEW" 'select count(*) from users') user accounts from the site"
-systemctl stop "$SVC"
+# the site's Accounting, exactly as it is
+cd "$DIR/app"
+"$DIR/venv/bin/python" - "$NEW" "$BK" <<'PY'
+import sys
+from pathlib import Path
+from app.importers.mrpeasy.keep import counts, keep_independent
+new, live = Path(sys.argv[1]), Path(sys.argv[2])
+before = counts(live)
+kept = keep_independent(new, live)
+after = counts(new)
+lost = {t: (n, after.get(t, 0)) for t, n in before.items() if t != "acct_open_items" and after.get(t, 0) != n}
+if lost:
+    print("STOPPED: Accounting rows would change:", lost)
+    sys.exit(4)
+print("kept the site's Accounting:", ", ".join(f"{t} {n}" for t, n in kept.items()))
+PY
+trap - ERR
 rm -f "$D/at_hub.db-wal" "$D/at_hub.db-shm"
 mv "$NEW" "$D/at_hub.db"
 chown -R athub:athub "$D"
@@ -43,4 +60,4 @@ if ! /opt/athub-bin/athub-smoke.sh "$WHICH"; then
   cp "$BK" "$D/at_hub.db"; chown athub:athub "$D/at_hub.db"; systemctl start "$SVC"; exit 1
 fi
 ls -1t "$D"/backups/before-import-*.db | tail -n +6 | xargs -r rm -f
-echo "$WHICH site now has the imported data (its own accounts kept)"
+echo "$WHICH site now has the imported data (its own user accounts and Accounting kept)"
