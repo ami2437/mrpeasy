@@ -1135,3 +1135,49 @@ def reconcile_get(rec_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Not found")
     return {"id": r.id, "name": r.name, "account_ids": json.loads(r.account_ids or "[]"), "start": r.start.date().isoformat() if r.start else None,
             "end": r.end.date().isoformat() if r.end else None, "rows": json.loads(r.qb_rows or "[]")}
+
+
+def _xlsx(sheets: list, filename: str) -> Response:
+    """sheets: [(title, header, rows)] -> an Excel download."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    import io as _io
+    wb = Workbook()
+    wb.remove(wb.active)
+    for title, header, rows in sheets:
+        ws = wb.create_sheet(str(title)[:31])
+        ws.append(header)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for r in rows:
+            ws.append(r)
+        ws.column_dimensions["A"].width = 26
+        for col in "BCDEFGH":
+            ws.column_dimensions[col].width = 16
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/partner-accounts/export.xlsx")
+def partner_accounts_export(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
+    a, b = _period(db, start, end)
+    d = M.partner_accounts(db, a, b, _fy_key(db, a))
+    head = ["Period", "Withdrawn", "Invested", "Net", "Lent To Company", "Repaid To Them", "Loan Owed To Them"]
+    row = lambda k, t: [k, t["withdrawn"], t["invested"], t["net"], t["lent"], t["repaid"], t["loan_owed"]]
+    sheets = [("All Partners", ["Partner"] + head[1:] + ["Share", "Remaining"],
+               [[p["name"]] + row("", p["period"])[1:] + [p["share"], p["remaining"]] for p in d["partners"]])]
+    for p in d["partners"]:
+        sheets.append((p["name"], head, [row(x["fy"], x) for x in p["by_fy"]] + [[]] + [row(x["month"], x) for x in p["by_month"]]))
+    return _xlsx(sheets, f"Partner Accounts {a.isoformat()} to {b.isoformat()}.xlsx")
+
+
+@router.get("/check/export.xlsx")
+def check_export(start: Optional[str] = None, end: Optional[str] = None, all_dates: bool = False, db: Session = Depends(get_db)):
+    a, b = (None, None) if all_dates else _period(db, start, end)
+    d = M.check_books(db, a, b)
+    rows = [[f["label"], f["severity"], f["txn"]["date"] if f["txn"] else "", f["txn"]["amount"] if f["txn"] else "",
+             (f["txn"]["description"] if f["txn"] else ""), (f["txn"]["account"] or "") if f["txn"] else "", f["why"],
+             f["suggest"]["account"] if f["suggest"] else ""] for f in d["findings"]]
+    return _xlsx([("Check My Books", ["Check", "How Sure", "Date", "Amount", "Description", "Account", "Why", "Suggested"], rows)], "Check My Books.xlsx")

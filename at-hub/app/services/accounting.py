@@ -695,6 +695,21 @@ def _sim_words(desc: str) -> set:
     return set(re.findall(r"[A-Z0-9]+", (desc or "").upper())) - {"REF", "ON", "TO", "FROM", "THE"}
 
 
+def _refs(desc: str) -> set:
+    """The bank's own transaction references (Cash App S-numbers, Zelle REF #, wire TRN#): long codes with digits."""
+    return {w for w in re.findall(r"[A-Z0-9]+", (desc or "").upper()) if len(w) >= 8 and re.search(r"\d", w) and re.search(r"[A-Z]", w) or (len(w) >= 10 and w.isdigit())}
+
+
+def same_line(a_desc: str, b_desc: str, days: int) -> bool:
+    """Two lines of the same amount a few days apart: the same transaction? Different bank references = no."""
+    ra, rb = _refs(a_desc), _refs(b_desc)
+    if ra and rb and not (ra & rb):
+        return False
+    w1, w2 = _sim_words(a_desc), _sim_words(b_desc)
+    sim = len(w1 & w2) / max(1, len(w1 | w2))
+    return sim >= (0.7 if days <= 1 else 0.85)
+
+
 def classify(db: Session, src: Optional[AcctSource], parsed: List[dict], keys: List[str], workbook: bool) -> List[dict]:
     """What happens to each row of a file: new | exact (already in -- ignored) | possible (looks like a line already in:
     same amount, within 3 days, very similar wording -- a person decides) | expected (a typed-in line it matches) |
@@ -716,6 +731,7 @@ def classify(db: Session, src: Optional[AcctSource], parsed: List[dict], keys: L
             out.append({"status": "estimate"})
             continue
         if k in have:
+            claimed.add(have[k])
             out.append({"status": "exact", "txn_id": have[k]})
             continue
         hit = next((e for e in expected if e.id not in claimed and abs(e.amount - r["amount"]) < 0.005 and abs((e.date.date() - r["date"]).days) <= 7), None)
@@ -733,8 +749,11 @@ def classify(db: Session, src: Optional[AcctSource], parsed: List[dict], keys: L
                 continue
             tw = _sim_words(t.bank_description or t.description)
             sim = len(w & tw) / max(1, len(w | tw))
+            ra, rb = _refs(r["description"]), _refs(t.bank_description or t.description)
+            if ra and rb and not (ra & rb):
+                continue  # different bank references: two real transactions
             same_payee = acct_mapper.payee(t.bank_description or t.description) == acct_mapper.payee(r["description"])
-            if sim >= 0.7 or (same_payee and days == 0):
+            if sim >= (0.7 if days <= 1 else 0.85) or (same_payee and days == 0):
                 if not best or sim > best[1]:
                     best = (t, sim)
         if best:

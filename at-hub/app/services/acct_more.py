@@ -431,8 +431,7 @@ def check_books(db: Session, start: Optional[date], end: Optional[date]) -> dict
             for u in ts[i + 1:]:
                 if (u.date - t.date).days > 3:
                     break
-                w1, w2 = A._sim_words(t.bank_description or t.description), A._sim_words(u.bank_description or u.description)
-                if len(w1 & w2) / max(1, len(w1 | w2)) >= 0.7:
+                if A.same_line(t.bank_description or t.description, u.bank_description or u.description, (u.date - t.date).days):
                     add("duplicate", u, f"Looks like the {t.date.date().isoformat()} line of the same amount", also=[t])
     # account-level: loans repaid more than borrowed, transfers that don't net out
     for l_ in A.loans(db, end):
@@ -840,3 +839,24 @@ def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_ro
             "unmapped_names": [{"name": n, "count": c, "guess": guess_map(n, accounts),
                                 "guess_account": A.path(accounts[guess_map(n, accounts)], accounts) if guess_map(n, accounts) in accounts else None}
                                for n, c in unmapped_names.most_common()]}
+
+
+def drop_estimate_accounts(db: Session) -> dict:
+    """One-off (user, 2026-10-11): the old year-end AR / AP estimate accounts (kind "pending") and their lines go -- they
+    were 2024 guesses, already left out of every total. Rules pointing at them go too."""
+    accs = db.query(AcctAccount).filter(AcctAccount.kind == "pending").all()
+    ids = [a.id for a in accs]
+    if not ids:
+        return {"accounts": 0, "lines": 0}
+    lines = db.query(AcctTxn).filter(AcctTxn.account_id.in_(ids)).all()
+    total = cents(sum(t.amount for t in lines))
+    for t in lines:
+        db.delete(t)
+    db.query(AcctSplit).filter(AcctSplit.account_id.in_(ids)).delete(synchronize_session=False)
+    from app.models import AcctRule
+    db.query(AcctRule).filter(AcctRule.account_id.in_(ids)).delete(synchronize_session=False)
+    db.query(AcctAccount).filter(AcctAccount.parent_id.in_(ids)).update({AcctAccount.parent_id: None}, synchronize_session=False)
+    for a in accs:
+        db.delete(a)
+    db.commit()
+    return {"accounts": len(ids), "lines": len(lines), "total": total, "names": [a.name for a in accs]}

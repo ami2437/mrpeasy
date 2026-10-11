@@ -5,6 +5,7 @@
   <title>AT-HUB — Accounting</title>
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
+  <script src="accounting-more.js"></script>
   <style>
     .ac-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .ac-top .tabs { margin: 0; flex-wrap: wrap; order: 3; flex-basis: 100%; width: auto; max-width: 100%; box-sizing: border-box; }
@@ -71,6 +72,24 @@
     .ac-sugg-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
     .ac-sugg-row input, .ac-sugg-row select { width: 100%; min-width: 0; font-size: 12.5px; }
     .ac-session { font-size: 12.5px; color: var(--text-2); }
+    .ac-tabgrp { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); align-self: center; margin: 0 2px 0 8px; font-weight: 700; }
+    .ac-tabgrp:first-child { margin-left: 2px; }
+    .ac-top .tabs .tab { padding: 4px 9px; font-size: 13px; }
+    .ac-totbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 7px 10px; margin: 0 0 8px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow); }
+    .ac-totbar strong { font-size: 14px; }
+    .ac-stats { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text-2); margin: -2px 0 8px; }
+    .ac-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -2px 0 8px; }
+    .ac-fchip { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; padding: 2px 8px; border-radius: 12px; background: var(--surface-3); }
+    .ac-fchip a { cursor: pointer; color: var(--muted); }
+    .ac-adv { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; margin: 8px 0; }
+    .ac-adv label { font-size: 12px; font-weight: 600; color: var(--text-2); display: block; }
+    .ac-adv input, .ac-adv select { width: 100%; }
+    .ac-comment { padding: 6px 10px; border-left: 3px solid var(--border); margin: 6px 0; background: var(--surface-2); border-radius: 4px; }
+    .ac-comment-new textarea { width: 100%; margin: 6px 0; }
+    .pj-grid input, .pj-grid select { width: 100%; min-width: 0; font-size: 12.5px; padding: 3px 6px; }
+    .rec-accs { max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+    .ac-chip.back { background: #fee2e2; color: #991b1b; } :root[data-theme="dark"] .ac-chip.back { background: #5f1e1e; color: #fecaca; }
   </style>
 </head>
 <body>
@@ -88,8 +107,12 @@
   <script>
     AuthGuard.requirePerm("accounting");
     document.getElementById("sidebar").innerHTML = renderSidebar("accounting.html");
-    const TABS = [["overview", "Overview"], ["inbox", "To File"], ["txns", "Transactions"], ["pnl", "P&L"], ["accounts", "Accounts & Rules"],
-      ["loans", "Loans"], ["partners", "Partners"], ["apar", "AP / AR"], ["cash", "Cash Flow"], ["statements", "Statements"]];
+    const TAB_GROUPS = [["Work", [["review", "Review"], ["txns", "Transactions"], ["statements", "Statements"], ["ignored", "Ignored"]]],
+      ["Reports", [["overview", "Overview"], ["pnl", "P&L"], ["cash", "Cash Flow"], ["payees", "Payees"], ["partneraccts", "Partner Accounts"], ["partners", "Partners Split"],
+        ["loans", "Loans"], ["apar", "AP / AR"], ["tax", "1099"], ["recurring", "Recurring"]]],
+      ["Check", [["check", "Check My Books"], ["reconcile", "Reconcile"]]], ["Plan", [["projections", "Projections"]]], ["Setup", [["accounts", "Accounts & Rules"], ["notes", "Notes"]]]];
+    const TABS = TAB_GROUPS.flatMap(g => g[1]);
+    window.TAB_LIST = TABS;
     let META = null, TAB = "overview", PERIOD = { start: null, end: null, key: null };
     const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("ac." + k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("ac." + k, JSON.stringify(v)); } catch {} } };
     const $ = id => document.getElementById(id);
@@ -146,12 +169,17 @@
 
     async function loadMeta() { META = await apiFetch("/api/accounting/meta"); }
     function drawTabs() {
-      $("ac-tabs").innerHTML = TABS.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "inbox" && META.unfiled ? ` <span class="ac-chip auto">${META.unfiled}</span>` : ""}</div>`).join("");
+      $("ac-tabs").innerHTML = TAB_GROUPS.map(([g, tabs]) => `<span class="ac-tabgrp">${g}</span>` + tabs.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "review" && META.unfiled ? ` <span class="ac-chip auto">${META.unfiled}</span>` : ""}</div>`).join("")).join("");
     }
     async function show(tab) {
+      if (tab === "inbox") tab = "review";  // the old name ("To File")
+      if (!LOADERS[tab]) tab = "overview";
       TAB = tab; store.set("tab", tab); history.replaceState(null, "", "#" + tab); drawTabs();
       view().innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
-      try { await LOADERS[tab](); } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; }
+      try {
+        await LOADERS[tab]();
+        if (!["projections", "notes"].includes(tab)) commentsCard(tab);  // a comment line on every tab (per period)
+      } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; }
     }
     async function refreshCount() {
       try { const r = await apiFetch(`/api/accounting/txns?status=unfiled&all_dates=true&limit=1`); META.unfiled = r.total; drawTabs(); } catch {}
@@ -167,10 +195,11 @@
           statement (CSV or Excel) on <a class="link" href="#" onclick="show('statements');return false;">Statements</a> — or your categorized workbook
           (Date, Amount, Description, Account, Category) to bring the history in and teach AT-HUB how you file things.</p></div>` : ""}
         <div class="ac-tiles">
-          <div class="ac-tile"><div class="l">Money In</div><div class="v pos">${fmtMoney(d.money_in)}</div><div class="s">${d.lines} lines</div></div>
-          <div class="ac-tile"><div class="l">Money Out</div><div class="v neg">${fmtMoney(d.money_out)}</div><div class="s">net ${fmtMoney(d.money_in + d.money_out)}</div></div>
-          <div class="ac-tile click" onclick="show('pnl')"><div class="l">Profit</div><div class="v ${d.profit < 0 ? "neg" : "pos"}">${fmtMoney(d.profit)}</div><div class="s">income − cost of goods − expenses</div></div>
-          <div class="ac-tile click" onclick="show('inbox')"><div class="l">To File</div><div class="v ${d.unfiled ? "neg" : ""}">${d.unfiled}</div><div class="s">lines with no account (all dates)</div></div>
+          <div class="ac-tile"><div class="l">Money In</div><div class="v pos">${fmtMoney(d.money_in)}</div><div class="s">${d.lines} lines</div>${vsPrev(d.money_in, d.prev && d.prev.money_in, "period before")}</div>
+          <div class="ac-tile"><div class="l">Money Out</div><div class="v neg">${fmtMoney(d.money_out)}</div><div class="s">net ${fmtMoney(d.money_in + d.money_out)}</div>${vsPrev(d.money_out, d.prev && d.prev.money_out, "period before")}</div>
+          <div class="ac-tile click" onclick="show('pnl')"><div class="l">Profit</div><div class="v ${d.profit < 0 ? "neg" : "pos"}">${fmtMoney(d.profit)}</div><div class="s">income − cost of goods − expenses</div>${vsPrev(d.profit, d.prev && d.prev.profit, "period before")}</div>
+          <div class="ac-tile click" onclick="show('check')"><div class="l">Check My Books</div><div class="v">${icon("check")}</div><div class="s">lines that may be in the wrong account</div></div>
+          <div class="ac-tile click" onclick="show('review')"><div class="l">To Review</div><div class="v ${d.unfiled ? "neg" : ""}">${d.unfiled}</div><div class="s">lines with no account (all dates)</div></div>
           <div class="ac-tile click" onclick="TXF={status:'auto'};show('txns')"><div class="l">Filed By AT-HUB</div><div class="v">${d.unreviewed}</div><div class="s">not looked at yet</div></div>
         </div>
         <div class="ac-grid2">
@@ -200,7 +229,8 @@
     function lineRow(t, { inbox = false } = {}) {
       const chips = [!t.reviewed && t.account_id ? `<span class="ac-chip auto" title="${t.how === "rule" ? "Filed by your rule" : "AT-HUB filed it from earlier lines"} -- nobody has looked yet">Auto</span>` : "",
         t.origin === "manual" ? `<span class="ac-chip typed">Typed In</span>` : "", t.expected ? `<span class="ac-chip exp" title="Not on a statement yet -- matched when it comes in">Expected</span>` : "",
-        t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : ""].join("");
+        t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : "",
+        t.sent_back ? `<span class="ac-chip back" title="Sent back by ${escapeHtml(t.sent_back_by || "")}${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason) : ""}">Sent Back${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason.slice(0, 40)) : ""}</span>` : ""].join("");
       const filed = t.splits.length ? t.splits.map(s => `<div>${escapeHtml(s.account)} <span class="muted">${fmtMoney(s.amount)}</span></div>`).join("")
         : `<select class="ac-pick" onchange="fileOne(${t.id}, this, ${t.amount})">${accountOptions(t.account_id, { blank: t.account_id ? "— None —" : "— Pick an account —", sign: t.amount })}</select>`;
       const sugg = !t.account_id && !t.splits.length && t.suggest ? `<div style="margin-top:4px;"><button class="small-btn ac-sugg" onclick="fileTo(${t.id}, ${t.suggest.account_id})" title="${escapeHtml(t.suggest.why)}">${icon("check")} ${escapeHtml(t.suggest.account)}</button>
@@ -211,8 +241,8 @@
           ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
           ${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
         <td style="min-width:200px;">${filed}${sugg}</td>
-        <td class="ac-amt">${money(t.amount)}</td>
-        <td class="nowrap"><button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button>
+        <td class="ac-amt">${money(t.amount)}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
+        <td class="nowrap">${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button>
           <button class="small-btn icon-only" title="Open: split, note${t.origin === "manual" ? ", change, delete" : ""}" onclick="editLine(${t.id})">${icon("pencil")}</button></td></tr>`;
     }
     function tick(id, on) { on ? TICKED.add(id) : TICKED.delete(id); drawBulk(); }
@@ -220,10 +250,11 @@
     function drawBulk() {
       const el = $("ac-bulk"); if (!el) return;
       el.style.display = TICKED.size ? "" : "none";
-      el.innerHTML = `<strong>${TICKED.size} ticked</strong>
+      const tk = (TXDATA?.rows || []).filter(t => TICKED.has(t.id)), tin = tk.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0), tout = tk.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0);
+      el.innerHTML = `<strong>${TICKED.size} ticked</strong> <span class="small">in ${fmtMoney(tin)} · out ${fmtMoney(tout)} · net <strong>${fmtMoney(tin + tout)}</strong></span>
         <select id="bulk-acc">${accountOptions(null, { blank: "— Put in account —" })}</select><button class="small-btn" onclick="bulkDo('file')">File</button>
         <button class="small-btn" onclick="bulkDo('review')" title="Keep the account AT-HUB picked">Looks Right</button>
-        <button class="small-btn" onclick="bulkDo('unfile')">Take Out Of Account</button>
+        <button class="small-btn" onclick="sendBack([...TICKED])" title="Out of its account, back to Review (where it was is kept as the suggestion)">Send Back To Review</button>
         <button class="small-btn danger" onclick="bulkDo('delete')" title="Typed-in lines only">Delete</button>
         <button class="small-btn" onclick="TICKED.clear();drawLines()">Clear</button>`;
     }
@@ -263,7 +294,7 @@
       drawSession();
       const bits = [`Filed in ${r.account || "a split"}`];
       if (r.filed_more) bits.push(`${r.filed_more} more like it filed too`);
-      if (r.taken_back) bits.push(`${r.taken_back} of AT-HUB's picks like it went back to To File`);
+      if (r.taken_back) bits.push(`${r.taken_back} of AT-HUB's picks like it went back to Review`);
       toast(bits.join(" · "), null, 6000);
       if (!(r.alike || []).length || !r.account_id) return;
       const lean = r.alike.filter(x => x.lean), other = r.alike.filter(x => !x.lean);
@@ -293,26 +324,79 @@
       fileTo(id, v ? +v : null);
     }
     let LINES_MODE = "txns";
+    const TXF_KEYS = ["q", "source_id", "kind", "account_id", "status", "amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group"];
+    function txParams(extra = {}) {
+      const p = {};
+      if (LINES_MODE === "inbox") Object.assign(p, { status: "review", all_dates: true });
+      else {
+        for (const k of TXF_KEYS) if (TXF[k] !== undefined && TXF[k] !== "" && TXF[k] !== false && TXF[k] !== null) p[k] = TXF[k];
+        if (!p.all_dates && !p.date_from && !p.date_to) Object.assign(p, { start: PERIOD.start, end: PERIOD.end });
+      }
+      return { ...p, ...extra };
+    }
     async function reloadLines() {
-      const p = { limit: 300, offset: TXF.offset || 0 };
-      if (LINES_MODE === "inbox") Object.assign(p, { status: "unfiled", all_dates: true });
-      else { Object.assign(p, { start: PERIOD.start, end: PERIOD.end }); for (const k of ["source_id", "account_id", "kind", "status", "q"]) if (TXF[k]) p[k] = TXF[k]; }
-      TXDATA = await apiFetch(`/api/accounting/txns?${new URLSearchParams(p)}`);
+      TXDATA = await apiFetch(`/api/accounting/txns?${new URLSearchParams(txParams({ limit: 300, offset: TXF.offset || 0 }))}`);
       drawLines();
+    }
+    const FILTER_LABELS = { q: "Search", source_id: "Bank", kind: "Type", account_id: "Account", status: "Status", amin: "From $", amax: "To $", amt: "Exactly $", sign: "Money",
+      date_from: "From", date_to: "To", all_dates: "All dates", has_note: "Has a note", how: "Filed by", group: "Grouped by" };
+    function filterValue(k, v) {
+      if (k === "source_id") return (META.sources.find(s => s.id == v) || {}).name || v;
+      if (k === "account_id") return (acc(+v) || {}).path || v;
+      if (k === "kind") return KIND_LABEL()[v] || v;
+      if (k === "sign") return v === "in" ? "in" : "out";
+      if (k === "all_dates" || k === "has_note") return "yes";
+      return v;
     }
     function drawLines() {
       const d = TXDATA, el = $("ac-lines"); if (!el) return;
-      el.innerHTML = `<div id="ac-bulk" class="ac-bulk" style="display:none"></div>
+      const chips = LINES_MODE === "inbox" ? "" : TXF_KEYS.filter(k => k !== "sort" && TXF[k] !== undefined && TXF[k] !== "" && TXF[k] !== false && TXF[k] !== null)
+        .map(k => `<span class="ac-fchip">${escapeHtml(FILTER_LABELS[k] || k)}: <strong>${escapeHtml(String(filterValue(k, TXF[k])))}</strong><a title="Remove" onclick="TXF['${k}']='';saveTxf();tabTxns()">×</a></span>`).join("");
+      const st = d.stats || {};
+      const groupsHtml = (d.groups || []).length ? `<table class="compact-table no-table-tools" style="margin-bottom:10px;"><thead><tr><th>${escapeHtml(FILTER_LABELS.group)}: ${escapeHtml(TXF.group)}</th><th class="num">Lines</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th></tr></thead><tbody>
+          ${d.groups.map(g => `<tr class="drill" style="cursor:pointer" onclick='groupDrill(${JSON.stringify(g.key)})'><td>${escapeHtml(TXF.group === "month" ? monthLabel(g.key) : g.key)}</td><td class="num">${g.count}</td>
+            <td class="ac-amt">${g.in ? money(g.in) : ""}</td><td class="ac-amt">${g.out ? money(g.out) : ""}</td><td class="ac-amt"><strong>${money(g.net)}</strong></td></tr>`).join("")}
+          <tr class="tot"><td>Total</td><td class="num">${d.count}</td><td class="ac-amt">${money(d.money_in)}</td><td class="ac-amt">${money(d.money_out)}</td><td class="ac-amt"><strong>${money(d.net)}</strong></td></tr></tbody></table>` : "";
+      el.innerHTML = `${chips ? `<div class="ac-chips">${chips}<span class="ac-fchip"><a onclick="TXF={};saveTxf();tabTxns()">Clear all</a></span></div>` : ""}
+        <div class="ac-totbar"><span><strong>${d.total}</strong> line(s)</span><span>in <strong class="pos">${fmtMoney(d.money_in)}</strong></span><span>out <strong class="neg">${fmtMoney(d.money_out)}</strong></span>
+          <span>net <strong>${fmtMoney(d.net)}</strong></span><span style="flex:1"></span>
+          ${LINES_MODE === "inbox" ? "" : `<a class="link" href="#" onclick="exportFound();return false;">${icon("download")} Excel</a>`}</div>
+        ${st.first ? `<div class="ac-stats"><span>${day(st.first)} – ${day(st.last)}</span>${st.largest_in ? `<span>largest in ${fmtMoney(st.largest_in)}</span>` : ""}${st.largest_out ? `<span>largest out ${fmtMoney(st.largest_out)}</span>` : ""}
+          <span>average ${fmtMoney(st.average)}</span><span>per month ${fmtMoney(st.per_month)} (${st.months} mo)</span>${d.has_balance ? `<span>balance shown under each amount</span>` : ""}</div>` : ""}
+        ${groupsHtml}
+        <div id="ac-bulk" class="ac-bulk" style="display:none"></div>
         <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th><th>Date</th><th>Payee / Description</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
-        <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="muted">${LINES_MODE === "inbox" ? "Nothing to file — every line is in an account." : "No lines match."}</td></tr>`}</tbody></table>
-        <div class="muted small" style="margin-top:8px;">${d.rows.length} of ${d.total} shown · in ${fmtMoney(d.money_in)} · out ${fmtMoney(d.money_out)}
+        <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="muted">${LINES_MODE === "inbox" ? "Nothing to review — every line is in an account." : "No lines match."}</td></tr>`}</tbody></table>
+        <div class="muted small" style="margin-top:8px;">${d.rows.length} of ${d.total} shown
           ${d.total > (TXF.offset || 0) + d.rows.length ? ` · <a class="link" href="#" onclick="TXF.offset=(TXF.offset||0)+300;reloadLines();return false;">Next 300</a>` : ""}
           ${TXF.offset ? ` · <a class="link" href="#" onclick="TXF.offset=Math.max(0,TXF.offset-300);reloadLines();return false;">Previous</a>` : ""}</div>`;
       drawBulk();
     }
+    function groupDrill(key) {
+      const g = TXF.group;
+      if (g === "month") { const [y, m] = key.split("-").map(Number); const last = new Date(y, m, 0).getDate(); Object.assign(TXF, { date_from: `${key}-01`, date_to: `${key}-${String(last).padStart(2, "0")}`, all_dates: "" }); }
+      else if (g === "account") { const a = META.accounts.find(x => x.path === key); if (a) TXF.account_id = a.id; else if (key === "Not filed") TXF.status = "unfiled"; }
+      else if (g === "payee") TXF.q = `"${key.replace(/ \(.*\)$/, "")}"`;
+      else if (g === "source") { const sr = META.sources.find(x => x.name === key); if (sr) TXF.source_id = sr.id; }
+      TXF.group = ""; saveTxf(); tabTxns();
+    }
+    function saveTxf() { const k = {}; TXF_KEYS.forEach(x => { if (TXF[x]) k[x] = TXF[x]; }); store.set("txf", k); }
+    async function exportFound() { try { await downloadFile(`/api/accounting/txns/export.xlsx?${new URLSearchParams(txParams())}`, "Transactions.xlsx"); } catch (e) { alert(e.message); } }
+    async function sendBack(ids) {
+      if (!ids.length) return;
+      const { value, el } = await askDialog({ title: `Send ${ids.length} Line(s) Back To Review?`, body: `<p>They come out of their account and wait in Review — where they were is kept as the top suggestion.</p>
+        <input id="sb-why" placeholder="Why? (optional, e.g. not sure this is Saul)" style="width:100%;">`, buttons: [{ label: "Send Back", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      try {
+        const r = await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids, reason: el.querySelector("#sb-why").value }) });
+        TICKED.clear();
+        toast(`${r.done} sent back to Review`, { label: "Undo", run: async () => { await apiFetch("/api/accounting/txns/undo-send-back", { method: "POST", body: JSON.stringify({ ids }) }); await reloadLines(); refreshCount(); } }, 9000);
+        await reloadLines(); refreshCount();
+      } catch (e) { alert(e.message); }
+    }
     async function tabInbox() {
       LINES_MODE = "inbox"; TICKED.clear(); TXF = {};
-      view().innerHTML = `<div class="card" id="sugg-card" style="display:none;"></div><div class="card"><h3 style="margin-top:0;">To File</h3>
+      view().innerHTML = `<div class="card" id="sugg-card" style="display:none;"></div><div class="card"><h3 style="margin-top:0;">Review</h3>
         <p class="ac-help">Lines with no account yet (every date). Click a suggestion to accept it, or pick an account — each one you file teaches AT-HUB, and the
           look-alikes it's now sure about are filed for you. Lines AT-HUB filed by itself are marked <span class="ac-chip auto">Auto</span> on Transactions until someone looks.</p>
         <div class="btn-row" style="margin-bottom:10px;"><button onclick="acceptAll()">${icon("check")} Accept All Suggestions Shown</button>
@@ -335,22 +419,44 @@
     }
     async function tabTxns() {
       LINES_MODE = "txns"; TICKED.clear();
-      const srcs = META.sources, kl = KIND_LABEL();
+      if (!TXF_KEYS.some(k => TXF[k])) TXF = { ...store.get("txf", {}) };  // remember the last search
+      const srcs = META.sources;
+      const adv = ["amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group"].some(k => TXF[k]);
       view().innerHTML = `<div class="card">
         <div class="ac-filters">
-          <input type="search" id="tf-q" placeholder="Search description, payee, note…" value="${escapeHtml(TXF.q || "")}" onkeydown="if(event.key==='Enter')setTxf()">
-          <select id="tf-src" onchange="setTxf()"><option value="">Every account</option>${srcs.map(s => `<option value="${s.id}" ${TXF.source_id == s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
-          <select id="tf-kind" onchange="setTxf()"><option value="">Every type</option>${META.kinds.map(k => `<option value="${k.key}" ${TXF.kind === k.key ? "selected" : ""}>${escapeHtml(k.label)}</option>`).join("")}</select>
+          <input type="search" id="tf-q" placeholder='Search like a bank: words, "a phrase", 1072.50, >500, 500-1000, -300, check 1043…' value="${escapeHtml(TXF.q || "")}" onkeydown="if(event.key==='Enter')setTxf()" style="min-width:320px;">
+          <select id="tf-src" onchange="setTxf()"><option value="">Every bank account</option>${srcs.map(s => `<option value="${s.id}" ${TXF.source_id == s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
           <select id="tf-acc" onchange="setTxf()" style="max-width:220px;">${accountOptions(TXF.account_id ? +TXF.account_id : null, { blank: "Every account" }).replace(`<option value="new">+ New account…</option>`, "")}</select>
           <select id="tf-status" onchange="setTxf()"><option value="">Everything</option>
-            ${[["unfiled", "Not filed"], ["auto", "Filed by AT-HUB, not looked at"], ["typed", "Typed in"], ["expected", "Expected (not on a statement yet)"], ["split", "Split"]].map(([k, l]) => `<option value="${k}" ${TXF.status === k ? "selected" : ""}>${l}</option>`).join("")}</select>
-          <button onclick="addLine()">${icon("plus")} Type In A Line</button>
+            ${[["unfiled", "Not filed"], ["auto", "Filed by AT-HUB, not looked at"], ["sent_back", "Sent back"], ["typed", "Typed in"], ["expected", "Expected (not on a statement yet)"], ["split", "Split"]].map(([k, l]) => `<option value="${k}" ${TXF.status === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <button onclick="setTxf()">${icon("search")} Search</button><button onclick="addLine()">${icon("plus")} Type In A Line</button>
         </div>
-        <div id="ac-lines"><p class="muted">Loading…</p></div></div>`;
+        <details ${adv ? "open" : ""}><summary class="small"><strong>Advanced</strong> — amounts, dates, sort, group by</summary><div class="ac-adv">
+          <div><label>Amount From</label><input type="number" step="0.01" id="tf-amin" value="${escapeHtml(TXF.amin || "")}"></div>
+          <div><label>Amount To</label><input type="number" step="0.01" id="tf-amax" value="${escapeHtml(TXF.amax || "")}"></div>
+          <div><label>Exact Amount</label><input type="number" step="0.01" id="tf-amt" value="${escapeHtml(TXF.amt || "")}"></div>
+          <div><label>Money</label><select id="tf-sign"><option value="">In or out</option><option value="out" ${TXF.sign === "out" ? "selected" : ""}>Out</option><option value="in" ${TXF.sign === "in" ? "selected" : ""}>In</option></select></div>
+          <div><label>Date From</label><input type="date" id="tf-df" value="${escapeHtml(TXF.date_from || "")}"></div>
+          <div><label>Date To</label><input type="date" id="tf-dt" value="${escapeHtml(TXF.date_to || "")}"></div>
+          <div><label>Type</label><select id="tf-kind"><option value="">Every type</option>${META.kinds.map(k => `<option value="${k.key}" ${TXF.kind === k.key ? "selected" : ""}>${escapeHtml(k.label)}</option>`).join("")}</select></div>
+          <div><label>Filed By</label><select id="tf-how"><option value="">Anyone</option>${[["person", "A person"], ["rule", "A rule"], ["auto", "AT-HUB"], ["workbook", "The workbook"]].map(([k, l]) => `<option value="${k}" ${TXF.how === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div><label>Sort</label><select id="tf-sort">${[["date_desc", "Newest first"], ["date_asc", "Oldest first"], ["amount_desc", "Biggest amount"], ["amount_asc", "Smallest amount"]].map(([k, l]) => `<option value="${k}" ${(TXF.sort || "date_desc") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div><label>Group By</label><select id="tf-group"><option value="">No groups</option>${[["account", "Account"], ["payee", "Payee"], ["month", "Month"], ["source", "Bank account"]].map(([k, l]) => `<option value="${k}" ${TXF.group === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div><label>&nbsp;</label><label class="inline-check"><input type="checkbox" id="tf-all" ${TXF.all_dates ? "checked" : ""}> All dates (not just ${escapeHtml(PERIOD.key && PERIOD.key !== "custom" ? PERIOD.key : "the period")})</label></div>
+          <div><label>&nbsp;</label><label class="inline-check"><input type="checkbox" id="tf-note" ${TXF.has_note ? "checked" : ""}> Has a note</label></div>
+        </div><div class="btn-row"><button class="small-btn primary" onclick="setTxf()">Search</button><button class="small-btn" onclick="TXF={};saveTxf();tabTxns()">Clear</button>
+          <button class="small-btn" onclick="show('check')">${icon("check")} Check My Books</button></div></details>
+        <div id="ac-lines" style="margin-top:8px;"><p class="muted">Loading…</p></div></div>`;
       await reloadLines();
     }
-    function setTxf() { TXF = { q: $("tf-q").value.trim(), source_id: $("tf-src").value, kind: $("tf-kind").value, account_id: $("tf-acc").value, status: $("tf-status").value }; TICKED.clear(); reloadLines(); }
-    function drill(accountId) { TXF = { account_id: accountId }; show("txns"); }
+    function setTxf() {
+      const v = id => ($(id) ? $(id).value.trim() : "");
+      TXF = { q: v("tf-q"), source_id: v("tf-src"), account_id: v("tf-acc"), status: v("tf-status"), amin: v("tf-amin"), amax: v("tf-amax"), amt: v("tf-amt"), sign: v("tf-sign"),
+        date_from: v("tf-df"), date_to: v("tf-dt"), kind: v("tf-kind"), how: v("tf-how"), sort: v("tf-sort") === "date_desc" ? "" : v("tf-sort"), group: v("tf-group"),
+        all_dates: $("tf-all") && $("tf-all").checked ? true : "", has_note: $("tf-note") && $("tf-note").checked ? true : "" };
+      TICKED.clear(); saveTxf(); reloadLines().then(() => { const ch = document.querySelector(".ac-chips"); });
+    }
+    function drill(accountId) { TXF = { account_id: accountId }; saveTxf(); show("txns"); }
 
     // ---- one line: account / split / note; typed-in ones: everything ----
     async function editLine(id) {
@@ -376,6 +482,7 @@
         ${t.created_by ? `<p class="muted small" style="margin-top:10px;">${manual ? "Typed in" : "Brought in"} by ${escapeHtml(t.created_by)}${t.updated_by ? ` · last changed by ${escapeHtml(t.updated_by)}` : ""}</p>` : ""}`;
       const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
       buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" });
+      if (t.account_id || t.splits.length) buttons.splice(2, 0, { label: "Send Back To Review", value: "back" });
       if (manual) buttons.push({ label: "Delete Line", value: "delete", cls: "danger" });
       const dlgP = askDialog({ title: manual ? "Typed-In Line" : "Statement Line", body, buttons, wide: true });
       setTimeout(() => {
@@ -386,6 +493,7 @@
       const { value, el } = await dlgP;
       if (!value) return;
       try {
+        if (value === "back") { await sendBack([t.id]); return; }
         if (value === "rule") { await newRule({ contains: ruleWords(t.bank_description || t.description), account_id: t.account_id, sign: t.amount < 0 ? "out" : "in" }); return; }
         if (value === "delete") { await apiFetch(`/api/accounting/txns/${id}`, { method: "DELETE" }); toast("Deleted"); }
         else {
@@ -437,7 +545,7 @@
       const d = await apiFetch(`/api/accounting/pnl?${qs({ by: PNL_BY })}`);
       const cols = d.columns;
       const sec = (s, opts = {}) => !s.rows.length ? "" : `<tr class="sec"><td colspan="${cols.length + 2}">${escapeHtml(s.label)}</td></tr>
-        ${s.rows.map(r => `<tr class="drill${r.depth ? " sub" : ""}" onclick="drill(${r.account_id})" title="Open its lines${r.has_children ? " (with its sub-accounts)" : ""}"><td class="name" style="padding-left:${6 + 16 * (r.depth || 0)}px;${r.has_children ? "font-weight:600;" : ""}">${r.depth ? `<span class="muted">↳ </span>` : ""}${escapeHtml(r.name)}</td>${r.cells.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num"><strong>${money0(r.total)}</strong></td></tr>`).join("")}
+        ${s.rows.map(r => `<tr class="drill${r.depth ? " sub" : ""}" onclick="drill(${r.account_id})" title="Open its lines${r.has_children ? " (with its sub-accounts)" : ""}"><td class="name" style="padding-left:${6 + 16 * (r.depth || 0)}px;${r.has_children ? "font-weight:600;" : ""}">${r.depth ? `<span class="muted">↳ </span>` : ""}${escapeHtml(r.name)}</td>${r.cells.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num"><strong>${money0(r.total)}</strong>${r.prev != null && (r.prev || r.total) ? `<div class="muted small" title="The period before: ${fmtMoney(r.prev)}">${pct(r.total, r.prev) || "new"}</div>` : ""}</td></tr>`).join("")}
         <tr class="tot"><td>Total ${escapeHtml(s.label)}</td>${s.totals.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(s.total)}</td></tr>`;
       const by = Object.fromEntries(d.sections.map(s => [s.kind, s]));
       const below = d.sections.filter(s => !s.in_pnl && s.rows.length);
@@ -445,12 +553,12 @@
         <div class="ac-filters"><h3 style="margin:0;">Profit &amp; Loss</h3><span style="flex:1"></span>
           <div class="tabs" style="margin:0;">${[["month", "By Month"], ["quarter", "By Quarter"], ["fy", "By Year"]].map(([k, l]) => `<div class="tab ${PNL_BY === k ? "active" : ""}" onclick="PNL_BY='${k}';store.set('pnlby','${k}');show('pnl')">${l}</div>`).join("")}</div>
           <button onclick="exportXlsx()" title="Laid out like your Auto_Analyzed workbook: All Transactions, a tab per category, Summary">${icon("download")} Output Excel</button></div>
-        <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}${asideNote(d.set_aside)}</p>
+        <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('review');return false;">Review</a>.` : ""}${asideNote(d.set_aside)}</p>
         <table class="ac-pnl no-table-tools"><thead><tr><th>Account</th>${cols.map(c => `<th class="num">${escapeHtml(colLabel(c))}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
           ${sec(by.income)}${sec(by.cogs)}
           <tr class="tot"><td>Gross Profit</td>${d.gross.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.gross_total)}</td></tr>
           ${sec(by.expense)}
-          <tr class="profit"><td>Profit</td>${d.profit.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.profit_total)}</td></tr>
+          <tr class="profit"><td>Profit</td>${d.profit.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.profit_total)}${d.prev ? `<div class="muted small" title="The period before: ${fmtMoney(d.prev.profit)}">${pct(d.profit_total, d.prev.profit)}</div>` : ""}</td></tr>
           ${below.length ? `<tr><td colspan="${cols.length + 2}" style="padding-top:16px;" class="muted small">Below the line — money that moved but isn't profit or loss:</td></tr>` + below.map(s => sec(s)).join("") : ""}
           ${d.unfiled_total ? `<tr class="tot"><td>Not Filed</td>${d.unfiled.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.unfiled_total)}</td></tr>` : ""}
         </tbody></table></div>`;
@@ -527,8 +635,14 @@
             <button class="small-btn" title="Move some of its lines to another account" onclick="moveLinesDialog(${r.id})">Move</button>
             <button class="small-btn icon-only" title="Change" onclick="editAccount(${r.id})">${icon("pencil")}</button>
             <button class="small-btn" onclick="mergeAccount(${r.id})" title="Move all its lines into another account">Merge</button>
-            <button class="small-btn icon-only" title="Delete (only when it has no lines)" onclick="deleteAccount(${r.id})">${icon("trash")}</button></td></tr>`).join("")).join("")
-          || `<tr><td colspan="7" class="muted">No accounts yet — they're made as you file lines (or from your workbook).</td></tr>`}</tbody></table></div>
+            <button class="small-btn icon-only" title="Delete (only when it has no lines)" onclick="deleteAccount(${r.id})">${icon("trash")}</button></td></tr>`).join("")
+          + `<tr class="tot"><td>Total ${escapeHtml(g.label)}</td><td class="num">${g.rows.filter(r => !r.depth).reduce((a, r) => a + r.count, 0)}</td>
+            <td class="ac-amt">${money(g.rows.filter(r => !r.depth).reduce((a, r) => a + r.in, 0))}</td><td class="ac-amt">${money(g.rows.filter(r => !r.depth).reduce((a, r) => a + r.out, 0))}</td>
+            <td class="ac-amt"><strong>${money(g.rows.filter(r => !r.depth).reduce((a, r) => a + r.net, 0))}</strong></td><td colspan="2"></td></tr>`).join("")
+          || `<tr><td colspan="7" class="muted">No accounts yet — they're made as you file lines (or from your workbook).</td></tr>`}
+        ${rows.length ? `<tr class="tot"><td><strong>All Accounts</strong></td><td class="num">${rows.filter(r => !r.depth).reduce((a, r) => a + r.count, 0)}</td>
+          <td class="ac-amt">${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.in, 0))}</td><td class="ac-amt">${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.out, 0))}</td>
+          <td class="ac-amt"><strong>${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.net, 0))}</strong></td><td colspan="2"></td></tr>` : ""}</tbody></table></div>
       <div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Rules</h3><span style="flex:1"></span>
           <button onclick="exportRules()">${icon("download")} Export</button><button onclick="newRule()">${icon("plus")} New Rule</button></div>
@@ -543,7 +657,7 @@
           <td>${r.splits.length ? `Split: ${r.splits.map(x => `${escapeHtml(x.account)} ${x.pct != null ? x.pct + "%" : fmtMoney(x.amount)}`).join(", ")}${r.account ? `, rest ${escapeHtml(r.account)}` : ""}` : escapeHtml(r.account)}
             ${r.set_payee ? `<div class="muted small">payee: ${escapeHtml(r.set_payee)}</div>` : ""}${r.set_note ? `<div class="muted small">note: ${escapeHtml(r.set_note)}</div>` : ""}
             ${r.action === "suggest" ? ` <span class="ac-chip">Suggests Only</span>` : ""}</td>
-          <td class="num">${r.hits}</td>
+          <td class="num">${r.filed_lines || r.hits}${r.filed_total ? `<div class="muted small">${fmtMoney(r.filed_total)}</div>` : ""}</td>
           <td class="nowrap"><button class="small-btn" onclick="rulePreview(${r.id})" title="See every line it matches and file the ones you pick">Apply…</button>
             <button class="small-btn icon-only" title="Change rule" onclick="newRule(RULES.find(x => x.id === ${r.id}))">${icon("pencil")}</button>
             <button class="small-btn icon-only" title="Copy rule" onclick="copyRule(${r.id})">${icon("layers")}</button>
@@ -652,7 +766,7 @@
 
     // ---- pick lines: tick all / some / one, by group (rule Apply, "like this", Move Lines)
     function pickLines({ title, intro = "", groups, apply = "Apply", target = null, search = false }) {
-      const row = (t, tickable, on) => `<tr data-text="${escapeHtml(((t.payee || "") + " " + t.description + " " + (t.note || "")).toLowerCase())}">${tickable ? `<td><input type="checkbox" class="pl-tick" data-id="${t.id}" ${on ? "checked" : ""}></td>` : "<td></td>"}
+      const row = (t, tickable, on) => `<tr data-text="${escapeHtml(((t.payee || "") + " " + t.description + " " + (t.note || "")).toLowerCase())}">${tickable ? `<td><input type="checkbox" class="pl-tick" data-id="${t.id}" data-amt="${t.amount}" ${on ? "checked" : ""}></td>` : "<td></td>"}
         <td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description)}</div>${t.why ? `<div class="muted small">${escapeHtml(t.why)}</div>` : ""}</td>
         <td class="small" style="min-width:120px;">${escapeHtml(t.account || (t.splits && t.splits.length ? "split" : "—"))}</td><td class="ac-amt">${money(t.amount)}</td></tr>`;
       const shownGroups = groups.filter(g => g.lines.length);
@@ -668,7 +782,7 @@
         const box = [...document.querySelectorAll(".ask-dialog")].pop();
         if (!box) return;
         const btn = box.querySelector('button[data-i="0"]');
-        const upd = () => { const n = box.querySelectorAll(".pl-tick:checked").length; btn.textContent = `${apply} ${n} Ticked`; btn.disabled = !n; };
+        const upd = () => { const t = [...box.querySelectorAll(".pl-tick:checked")]; const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0); btn.textContent = `${apply} ${t.length} Ticked · ${fmtMoney(sum)}`; btn.disabled = !t.length; };
         const visible = () => [...box.querySelectorAll("tr[data-text]")].filter(r => r.style.display !== "none");
         box.querySelectorAll(".pl-tick").forEach(c => c.onchange = upd);
         box.querySelectorAll(".pl-grp").forEach(g => g.onchange = () => { box.querySelectorAll(`table[data-g="${g.dataset.g}"] .pl-tick`).forEach(c => c.checked = g.checked); upd(); });
@@ -771,7 +885,7 @@
           <label>Set Payee</label><input id="rb-payee" value="${escapeHtml(r.set_payee || "")}" placeholder="optional">
           <label>Add Note</label><input id="rb-note" value="${escapeHtml(r.set_note || "")}" placeholder="optional (only on lines without a note)">
           <label>Then</label><div><label class="inline-check"><input type="radio" name="rb-action" value="file" ${r.action !== "suggest" ? "checked" : ""}> File the line by itself</label>
-            <label class="inline-check" style="margin-left:12px;"><input type="radio" name="rb-action" value="suggest" ${r.action === "suggest" ? "checked" : ""}> Only suggest it (one click in To File)</label></div>
+            <label class="inline-check" style="margin-left:12px;"><input type="radio" name="rb-action" value="suggest" ${r.action === "suggest" ? "checked" : ""}> Only suggest it (one click in Review)</label></div>
           <label></label><label class="inline-check"><input type="checkbox" id="rb-on" ${r.enabled === false ? "" : "checked"}> Rule switched on</label>
           <label></label><div id="rb-count" class="muted small">…</div>
         </div>`;
@@ -898,6 +1012,7 @@
           <td class="num">${r.count}</td><td>${day(r.last)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No loan accounts.</td></tr>`}
         ${rows.length ? `<tr class="tot"><td><strong>Total</strong></td><td></td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.borrowed, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.repaid, 0))}</td>
           <td class="ac-amt"><strong>${fmtMoney(rows.reduce((a, r) => a + r.owed, 0))}</strong></td><td colspan="2"></td></tr>` : ""}</tbody></table></div>`;
+      await loansCalcCard(rows);
     }
 
     // ================================================================ Partners
@@ -910,7 +1025,7 @@
           <table class="ac-steps" style="width:100%;"><tbody>
             ${d.steps.map(s => `<tr><td>${escapeHtml(s.label)}</td><td class="ac-amt">${money(s.amount)}</td></tr>`).join("")}
             <tr class="total"><td>To Share</td><td class="ac-amt">${money(d.total)}</td></tr></tbody></table>
-          <p class="muted small">AR / AP estimates aren't part of the split.${asideNote(d.set_aside)}${d.unfiled ? ` <strong class="neg">${fmtMoney(d.unfiled)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}
+          <p class="muted small">AR / AP estimates aren't part of the split.${asideNote(d.set_aside)}${d.unfiled ? ` <strong class="neg">${fmtMoney(d.unfiled)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('review');return false;">Review</a>.` : ""}
             <button class="small-btn" onclick="exportXlsx()">${icon("download")} Output Excel</button></p>
           <div class="ac-form" style="margin-top:12px;">
             <label>Bank Balance Counted</label><div style="display:flex;gap:6px;"><input type="number" step="0.01" id="pt-bank" value="${d.bank_balance || ""}" placeholder="0.00"><button class="small-btn" style="flex:none;white-space:nowrap;" onclick="saveYear('${escapeHtml(d.year)}')">Save</button></div>
@@ -1044,7 +1159,7 @@
           <td class="nowrap">${s.kind === "book" ? "" : `<button class="small-btn" onclick="importDialog(${s.id})">${icon("upload")} Bring In Statement</button>
             <button class="small-btn icon-only" title="Change" onclick="sourceDialog(${s.id})">${icon("pencil")}</button>
             <button class="small-btn icon-only" title="QuickBooks bank file (CSV) for the period" onclick="qbExport(${s.id})">${icon("download")}</button>`}</td></tr>`).join("")}</tbody></table></div>
-      <div class="card"><h3 style="margin-top:0;">Files Brought In</h3>
+      <div class="card"><div class="ac-filters"><h3 style="margin:0;">Files Brought In</h3><span style="flex:1"></span><button class="small-btn" onclick="show('ignored')">Ignored &amp; Possible Duplicates</button></div>
         <table class="compact-table"><thead><tr><th>When</th><th>Account</th><th>File</th><th class="num">Lines</th><th class="num">New</th><th class="num">Already In</th><th class="num">Matched</th><th class="num">Auto-Filed</th><th></th></tr></thead><tbody>
         ${imps.map(i => `<tr><td class="nowrap">${fmtWhen(i.created_at)}<div class="muted small">${escapeHtml(i.created_by || "")}</div></td><td>${escapeHtml(i.source)}</td>
           <td>${escapeHtml(i.filename || "")}${i.kind === "workbook" ? ` <span class="ac-chip">Workbook</span>` : ""}</td><td class="num">${i.rows}</td><td class="num">${i.added}</td>
@@ -1109,7 +1224,11 @@
           ${col("account", "Account (your workbook)", true)}${col("category", "Category (your workbook)", true)}</div>
         <div class="table-scroll"><table class="compact-table ac-sample"><tbody>${p.sample.map(r => `<tr>${r.map(c => `<td title="${escapeHtml(c)}">${escapeHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
         <div class="ac-tiles" style="margin-top:10px;"><div class="ac-tile"><div class="l">Lines Read</div><div class="v">${p.rows}</div><div class="s">${day(p.first)} – ${day(p.last)}</div></div>
-          <div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">skipped</div></div>
+          <div class="ac-tile"><div class="l">New</div><div class="v">${p.new}</div><div class="s">come in</div></div>
+          <div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">ignored (listed on Ignored)</div></div>
+          ${p.possible ? `<div class="ac-tile"><div class="l">Possible Duplicates</div><div class="v neg">${p.possible}</div><div class="s">you decide on Ignored</div></div>` : ""}
+          ${p.expected ? `<div class="ac-tile"><div class="l">Typed In Earlier</div><div class="v">${p.expected}</div><div class="s">matched, not doubled</div></div>` : ""}
+          ${p.estimate ? `<div class="ac-tile"><div class="l">AR / AP Estimates</div><div class="v">${p.estimate}</div><div class="s">not brought in</div></div>` : ""}
           <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;">${fmtMoney(p.money_in)}<br>${fmtMoney(p.money_out)}</div></div></div>
         ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account (accounts made from your names, typed by Category: Payments → Income,
           COGS, Expense, Loans, Shares → Partner Draws, Wash → Transfers; Pending (AR / AP estimates) is kept but set aside — not counted). This also teaches AT-HUB how you file.</p>` : ""}
@@ -1133,21 +1252,24 @@
       const fd2 = new FormData(); fd2.append("source_id", IMP.sourceId); fd2.append("file", IMP.file); fd2.append("layout", JSON.stringify(IMP.layout));
       try {
         const r = await apiUpload("/api/accounting/import", fd2);
-        await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.skipped ? `, ${r.skipped} already in (skipped)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}.</p>
+        await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.skipped ? `, ${r.skipped} already in (ignored)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}.</p>
+          ${r.possible ? `<p class="neg"><strong>${r.possible}</strong> look like lines already in — waiting on the <a class="link" href="#" onclick="document.querySelector('.ask-dialog button[data-i]').click();setTimeout(()=>show('ignored'),50);return false;">Ignored</a> tab for you to decide.</p>` : ""}
+          ${r.estimates ? `<p>${r.estimates} AR / AP estimate row(s) weren't brought in (listed on Ignored).</p>` : ""}
           ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}
           <p class="muted small">The output Excel covers ${day(IMP.first < IMP.last ? IMP.first : IMP.last)} – ${day(IMP.first < IMP.last ? IMP.last : IMP.first)}, this file's dates.</p>`,
           buttons: [...(r.left ? [{ label: "File Them Now", value: "file", cls: "primary" }] : []), { label: "Download Output Excel", value: "xlsx", cls: r.left ? "" : "primary" }, { label: "Close", value: null }] })
-          .then(x => { if (x.value === "xlsx") { const [a, b] = [IMP.first, IMP.last].sort(); exportXlsx(a, b); show("statements"); } else if (x.value === "file") show("inbox"); else show("statements"); });
+          .then(x => { if (x.value === "xlsx") { const [a, b] = [IMP.first, IMP.last].sort(); exportXlsx(a, b); show("statements"); } else if (x.value === "file") show("review"); else show("statements"); });
         await loadMeta(); refreshCount();
       } catch (e) { alert(e.message); }
     }
 
-    const LOADERS = { overview: tabOverview, inbox: tabInbox, txns: tabTxns, pnl: tabPnl, accounts: tabAccounts, loans: tabLoans, partners: tabPartners, apar: tabApar, cash: tabCash, statements: tabStatements };
+    const LOADERS = { overview: tabOverview, review: tabInbox, inbox: tabInbox, txns: tabTxns, pnl: tabPnl, accounts: tabAccounts, loans: tabLoans, partners: tabPartners,
+      apar: tabApar, cash: tabCash, statements: tabStatements, ...(window.MORE_LOADERS || {}) };
     (async () => {
       try { await loadMeta(); } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; return; }
       drawPeriod();
       const h = location.hash.slice(1);
-      TAB = LOADERS[h] ? h : store.get("tab", "overview");
+      TAB = LOADERS[h] ? h : store.get("tab", "review");
       if (!LOADERS[TAB]) TAB = "overview";
       await refreshCount();
       show(TAB);
