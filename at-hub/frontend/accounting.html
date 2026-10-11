@@ -168,7 +168,7 @@
             <div class="ac-bars-lab">${d.months.map(m => `<span>${monthLabel(m.month).split(" ")[0]}</span>`).join("")}</div>
             <div class="rp-legend"><span><b style="background:#2f6fed"></b>Money In</span><span><b style="background:#eb6834"></b>Money Out</span></div>
           </div>
-          <div class="card"><h3 style="margin-top:0;">Where The Money Went</h3>
+          <div class="card"><div class="ac-filters"><h3 style="margin:0;">Where The Money Went</h3><span style="flex:1"></span><button class="small-btn" onclick="exportXlsx()">${icon("download")} Output Excel</button></div>
             <table class="compact-table"><thead><tr><th>Account</th><th>Type</th><th class="num">Amount</th></tr></thead><tbody>
             ${d.top_spend.map(r => `<tr class="drill" style="cursor:pointer" onclick="drill(${r.account_id})"><td>${escapeHtml(r.name)}</td><td class="muted">${escapeHtml(KIND_LABEL()[r.kind] || "")}</td><td class="ac-amt">${money(r.amount)}</td></tr>`).join("")
               || `<tr><td colspan="3" class="muted">Nothing filed under cost of goods or expenses yet.</td></tr>`}</tbody></table>
@@ -381,8 +381,8 @@
       view().innerHTML = `<div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Profit &amp; Loss</h3><span style="flex:1"></span>
           <div class="tabs" style="margin:0;">${[["month", "By Month"], ["quarter", "By Quarter"], ["fy", "By Year"]].map(([k, l]) => `<div class="tab ${PNL_BY === k ? "active" : ""}" onclick="PNL_BY='${k}';store.set('pnlby','${k}');show('pnl')">${l}</div>`).join("")}</div>
-          <button onclick="exportXlsx()">${icon("download")} Excel For The CPA</button></div>
-        <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}</p>
+          <button onclick="exportXlsx()" title="Laid out like your Auto_Analyzed workbook: All Transactions, a tab per category, Summary">${icon("download")} Output Excel</button></div>
+        <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}${asideNote(d.set_aside)}</p>
         <table class="ac-pnl no-table-tools"><thead><tr><th>Account</th>${cols.map(c => `<th class="num">${escapeHtml(colLabel(c))}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
           ${sec(by.income)}${sec(by.cogs)}
           <tr class="tot"><td>Gross Profit</td>${d.gross.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.gross_total)}</td></tr>
@@ -392,10 +392,14 @@
           ${d.unfiled_total ? `<tr class="tot"><td>Not Filed</td>${d.unfiled.map(v => `<td class="num">${money0(v)}</td>`).join("")}<td class="num">${money0(d.unfiled_total)}</td></tr>` : ""}
         </tbody></table></div>`;
     }
-    async function exportXlsx() {
-      try { await downloadFile(`/api/accounting/export.xlsx?${qs()}`, `Accounting ${PERIOD.key && PERIOD.key !== "custom" ? PERIOD.key : PERIOD.start + " to " + PERIOD.end}.xlsx`); }
-      catch (e) { alert(e.message); }
+    // the output workbook for the period (or the dates of a file just brought in), like their *_Auto_Analyzed.xlsx
+    async function exportXlsx(start, end) {
+      const s = start || PERIOD.start, e = end || PERIOD.end;
+      const name = !start && PERIOD.key && PERIOD.key !== "custom" ? PERIOD.key : `${s} to ${e}`;
+      try { await downloadFile(`/api/accounting/export.xlsx?${new URLSearchParams({ start: s, end: e })}`, `${name}_Analyzed.xlsx`); }
+      catch (err) { alert(err.message); }
     }
+    const asideNote = a => a && a.count ? ` <span class="muted">${a.count} year-end AR / AP estimate line(s) (${fmtMoney(a.total)}) are set aside — not included anywhere.</span>` : "";
 
     // ================================================================ Accounts & rules
     async function accountDialog(a, kind = "expense") {
@@ -504,8 +508,8 @@
           <table class="ac-steps" style="width:100%;"><tbody>
             ${d.steps.map(s => `<tr><td>${escapeHtml(s.label)}</td><td class="ac-amt">${money(s.amount)}</td></tr>`).join("")}
             <tr class="total"><td>To Share</td><td class="ac-amt">${money(d.total)}</td></tr></tbody></table>
-          ${d.apar ? `<p class="muted small">This year is still open, so AR − AP is today's: AR ${fmtMoney(d.apar.ar)} − AP ${fmtMoney(d.apar.ap)} (<a class="link" href="#" onclick="show('apar');return false;">AP / AR</a>).
-            For a closed year, type in year-end AP / AR entries (account type Year-End AP / AR) and they're used instead.</p>` : ""}
+          <p class="muted small">AR / AP estimates aren't part of the split.${asideNote(d.set_aside)}${d.unfiled ? ` <strong class="neg">${fmtMoney(d.unfiled)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('inbox');return false;">To File</a>.` : ""}
+            <button class="small-btn" onclick="exportXlsx()">${icon("download")} Output Excel</button></p>
           <div class="ac-form" style="margin-top:12px;">
             <label>Bank Balance Counted</label><div style="display:flex;gap:6px;"><input type="number" step="0.01" id="pt-bank" value="${d.bank_balance || ""}" placeholder="0.00"><button class="small-btn" style="flex:none;white-space:nowrap;" onclick="saveYear('${escapeHtml(d.year)}')">Save</button></div>
             <label>Notes</label><textarea id="pt-notes" rows="4" placeholder="e.g. Includes payments made to the 401K from a personal account">${escapeHtml(d.notes || "")}</textarea>
@@ -694,6 +698,7 @@
       let p;
       try { p = await apiUpload("/api/accounting/import/preview", fd); } catch (e) { alert(e.message); return; }
       IMP.layout = p.layout;
+      IMP.first = p.first; IMP.last = p.last;
       const col = (key, label, optional) => `<div><label>${label}</label><select class="mp" data-k="${key}">${optional ? `<option value="">—</option>` : `<option value="">— pick —</option>`}${p.headers.map((h, i) => `<option value="${i}" ${p.layout[key] === i ? "selected" : ""}>${escapeHtml(h)}</option>`).join("")}</select></div>`;
       const src = META.sources.find(s => s.id === IMP.sourceId);
       const body = `<p class="ac-help">${escapeHtml(IMP.file.name)} → <strong>${escapeHtml(src.name)}</strong>. Check AT-HUB read the columns right (it remembers them for this account).</p>
@@ -705,7 +710,7 @@
           <div class="ac-tile"><div class="l">Already In</div><div class="v">${p.already}</div><div class="s">skipped</div></div>
           <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;">${fmtMoney(p.money_in)}<br>${fmtMoney(p.money_out)}</div></div></div>
         ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account (accounts made from your names, typed by Category: Payments → Income,
-          COGS, Expense, Loans, Shares → Partner Draws, Wash → Transfers, Pending → Year-End AP / AR). This also teaches AT-HUB how you file.</p>` : ""}
+          COGS, Expense, Loans, Shares → Partner Draws, Wash → Transfers; Pending (AR / AP estimates) is kept but set aside — not counted). This also teaches AT-HUB how you file.</p>` : ""}
         ${p.bad_count ? `<p class="muted small">${p.bad_count} row(s) without a date or amount are left out: ${p.bad.slice(0, 3).map(escapeHtml).join(" · ")}</p>` : ""}
         <div class="table-scroll" style="max-height:220px;"><table class="compact-table ac-sample"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th>${p.workbook ? "<th>Account</th><th>Category</th>" : ""}</tr></thead>
           <tbody>${p.parsed.map(r => `<tr><td>${r.date}</td><td class="ac-amt">${fmtMoney(r.amount)}</td><td>${escapeHtml(r.description)}</td>${p.workbook ? `<td>${escapeHtml(r.account || "")}</td><td>${escapeHtml(r.category || "")}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
@@ -727,8 +732,10 @@
       try {
         const r = await apiUpload("/api/accounting/import", fd2);
         await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.skipped ? `, ${r.skipped} already in (skipped)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}.</p>
-          ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}`,
-          buttons: r.left ? [{ label: "File Them Now", value: true, cls: "primary" }, { label: "Later", value: null }] : [{ label: "OK", value: null }] }).then(x => { if (x.value) show("inbox"); else show("statements"); });
+          ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}
+          <p class="muted small">The output Excel covers ${day(IMP.first < IMP.last ? IMP.first : IMP.last)} – ${day(IMP.first < IMP.last ? IMP.last : IMP.first)}, this file's dates.</p>`,
+          buttons: [...(r.left ? [{ label: "File Them Now", value: "file", cls: "primary" }] : []), { label: "Download Output Excel", value: "xlsx", cls: r.left ? "" : "primary" }, { label: "Close", value: null }] })
+          .then(x => { if (x.value === "xlsx") { const [a, b] = [IMP.first, IMP.last].sort(); exportXlsx(a, b); show("statements"); } else if (x.value === "file") show("inbox"); else show("statements"); });
         await loadMeta(); refreshCount();
       } catch (e) { alert(e.message); }
     }

@@ -35,13 +35,16 @@ KINDS = {  # kind -> (label, QuickBooks account type, in the P&L?)
     "loan": ("Loans", "Long Term Liabilities", False),
     "owner": ("Partner Draws", "Equity", False),
     "transfer": ("Transfers / Wash", "Bank", False),
-    "pending": ("Year-End AP / AR", "Other Current Liabilities", False),
+    "pending": ("Set Aside: AR / AP Estimates", "Other Current Liabilities", False),  # in no total (user, 2026-10-10)
     "other": ("Other", "Other Expense", False),
 }
 # The user's workbook categories (FY2024-25_Input_File.xlsx) -> our kinds
 WORKBOOK_KINDS = {"payments": "income", "income": "income", "cogs": "cogs", "expense": "expense", "expenses": "expense",
                   "loans": "loan", "loan": "loan", "shares": "owner", "share": "owner", "wash": "transfer",
                   "transfer": "transfer", "pending": "pending"}
+# Their category names (the input / output workbooks) for each kind
+CATEGORY = {"income": "Payments", "cogs": "COGS", "expense": "Expense", "loan": "Loans", "owner": "Shares", "transfer": "Wash",
+            "pending": "Pending", "other": "Other"}
 SETTINGS_KEY = "acct_settings"
 DEFAULT_SETTINGS = {"fy_start_month": 4, "partners": [{"name": "Anuj", "share": 1 / 3}, {"name": "Niraj", "share": 1 / 3},
                                                       {"name": "Richard", "share": 1 / 3}],
@@ -472,8 +475,10 @@ def set_account(db: Session, t: AcctTxn, account_id: Optional[int], splits: Opti
 
 
 # ---------------------------------------------------------------- reports
-def lines(db: Session, start: Optional[date] = None, end: Optional[date] = None, source_id: Optional[int] = None) -> List[dict]:
-    """Every line, a split line counted once per part: {date, amount, account_id, kind, source_id, txn_id}."""
+def lines(db: Session, start: Optional[date] = None, end: Optional[date] = None, source_id: Optional[int] = None,
+          set_aside: bool = False) -> List[dict]:
+    """Every line, a split line counted once per part: {date, amount, account_id, kind, source_id, txn_id}. The
+    year-end AR / AP estimates (kind "pending") are set aside -- in no report total -- unless set_aside=True."""
     q = db.query(AcctTxn).options(selectinload(AcctTxn.splits))
     if start:
         q = q.filter(AcctTxn.date >= _dt(start))
@@ -487,6 +492,8 @@ def lines(db: Session, start: Optional[date] = None, end: Optional[date] = None,
         parts = [(x.account_id, x.amount) for x in t.splits] or [(t.account_id, t.amount)]
         for acc, amt in parts:
             a = accounts.get(acc)
+            if a and a.kind == "pending" and not set_aside:
+                continue
             out.append({"date": t.date.date(), "amount": amt, "account_id": acc, "kind": a.kind if a else None,
                         "source_id": t.source_id, "txn_id": t.id, "expected": t.expected})
     return out
@@ -542,7 +549,13 @@ def pnl(db: Session, start: date, end: date, by: str = "month") -> dict:
     gross = [cents(by_kind["income"]["totals"][i] + by_kind["cogs"]["totals"][i]) for i in range(len(cols))]
     return {"columns": cols, "sections": sections, "gross": gross, "gross_total": cents(sum(gross)), "profit": profit,
             "profit_total": cents(sum(profit)), "unfiled": [cents(unfiled.get(c, 0.0)) for c in cols],
-            "unfiled_total": cents(sum(unfiled.values()))}
+            "unfiled_total": cents(sum(unfiled.values())), "set_aside": set_aside(db, start, end)}
+
+
+def set_aside(db: Session, start: date, end: date) -> dict:
+    """The year-end AR / AP estimates in the period: kept, shown on their own, counted nowhere."""
+    ls = [l for l in lines(db, start, end, set_aside=True) if l["kind"] == "pending"]
+    return {"count": len(ls), "total": cents(sum(l["amount"] for l in ls))}
 
 
 def overview(db: Session, start: date, end: date) -> dict:
@@ -576,7 +589,7 @@ def overview(db: Session, start: date, end: date) -> dict:
 
 def account_summary(db: Session, start: date, end: date) -> List[dict]:
     acc = defaultdict(lambda: {"count": 0, "in": 0.0, "out": 0.0, "last": None})
-    for l in lines(db, start, end):
+    for l in lines(db, start, end, set_aside=True):
         x = acc[l["account_id"]]
         x["count"] += 1
         x["in" if l["amount"] > 0 else "out"] += l["amount"]
@@ -714,30 +727,22 @@ def set_open_item(db: Session, data: dict, by: str) -> AcctOpenItem:
 
 # ---------------------------------------------------------------- partners
 def partners(db: Session, start: date, end: date, fy_key: str) -> dict:
-    """The user's year-end split (their Summary sheet): what's left to share = money in - cost of goods - expenses
-    - what was borrowed (net of repayments: borrowed money in the bank isn't profit) + year-end AR - AP + the bank
-    balance counted; each partner's share, what they already took, what's left. Matches their FY2024-25 sheet to the cent."""
+    """The user's year-end split (their Summary sheet): to share = money in - cost of goods - expenses - what was
+    borrowed (net of repayments: borrowed money in the bank isn't profit) + the bank balance counted; each partner's
+    share, what they already took, what's left. AR / AP estimates are set aside, not counted (user, 2026-10-10)."""
     s = settings(db)
     yr = s.get("years", {}).get(fy_key, {})
     p = pnl(db, start, end, "fy")
     k = {x["kind"]: x["total"] for x in p["sections"]}
-    pending = k.get("pending", 0.0)
-    apar = None
-    if abs(pending) < 0.005 and end >= today():  # the open year: today's AP / AR
-        oi = open_items(db)
-        apar = {"ar": oi["ar"], "ap": oi["ap"]}
-        pending = cents(oi["ar"] - oi["ap"])
     bank = float(yr.get("bank_balance") or 0.0)
-    steps = [("Money In (Income)", k.get("income", 0.0)), ("Cost Of Goods", k.get("cogs", 0.0)), ("Expenses", k.get("expense", 0.0)),
-             ("Less Loans (Borrowed − Repaid)", -k.get("loan", 0.0)),
-             ("AR − AP" + (" (Today)" if apar else " (Year-End Entries)"), pending),
-             ("Bank Balance Counted", bank)]
+    steps = [("Money In (Payments)", k.get("income", 0.0)), ("Cost Of Goods", k.get("cogs", 0.0)), ("Expenses", k.get("expense", 0.0)),
+             ("Less Loans (Borrowed − Repaid)", -k.get("loan", 0.0)), ("Bank Balance Counted", bank)]
     total = cents(sum(v for _l, v in steps))
-    accounts = db.query(AcctAccount).filter(AcctAccount.kind == "owner").all()
+    accounts = {a.id: a for a in db.query(AcctAccount).filter(AcctAccount.kind == "owner").all()}
     taken = defaultdict(float)
     for l in lines(db, start, end):
         if l["kind"] == "owner":
-            a = next((x for x in accounts if x.id == l["account_id"]), None)
+            a = accounts.get(l["account_id"])
             taken[(a.partner or a.name).strip().lower() if a else "?"] += l["amount"]
     people = []
     adj = yr.get("adjust", {})
@@ -750,7 +755,8 @@ def partners(db: Session, start: date, end: date, fy_key: str) -> dict:
     known = {pt["name"].strip().lower() for pt in s["partners"]}
     others = [{"name": n, "taken": cents(v)} for n, v in taken.items() if n not in known]
     return {"steps": [{"label": l, "amount": cents(v)} for l, v in steps], "total": total, "partners": people, "others": others,
-            "apar": apar, "bank_balance": bank, "notes": yr.get("notes", ""), "operating_profit": p["profit_total"]}
+            "bank_balance": bank, "notes": yr.get("notes", ""), "operating_profit": p["profit_total"],
+            "set_aside": p["set_aside"], "unfiled": p["unfiled_total"]}
 
 
 def cashflow(db: Session, start: date, end: date, source_id: Optional[int] = None) -> dict:
@@ -782,94 +788,163 @@ def cashflow(db: Session, start: date, end: date, source_id: Optional[int] = Non
     return {"opening": cents(opening), "rows": rows}
 
 
-# ---------------------------------------------------------------- Excel (the CPA package)
+# ---------------------------------------------------------------- Excel: the analysis, laid out like the user's own output
 def export_xlsx(db: Session, start: date, end: date, fy_key: str) -> bytes:
+    """Like their FY2024-25_Auto_Analyzed.xlsx (made by their "ATind Analysis Script.py"): All Transactions, a tab per
+    category (its lines, then the total per account; Loans also money out / in per lender), Summary (count and total
+    per category, then the split). The AR / AP estimates go on "Not Included" and are counted nowhere."""
     from openpyxl import Workbook
     from openpyxl.styles import Font
-    accounts, sources = maps(db)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "All Transactions"
-    head = ["Date", "Amount", "Description", "Account", "Category", "Source", "Note"]
-    ws.append(head)
+    accounts, _sources = maps(db)
+    bold = Font(bold=True)
+    money_fmt = '#,##0.00;[Red]-#,##0.00'
+    head = ["Date ", "Amount", "Description", "Account", "Category", "Note"]
     txns = (db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.date >= _dt(start), AcctTxn.date <= _dt(end))
             .order_by(AcctTxn.date, AcctTxn.id).all())
-    by_kind = defaultdict(list)
+    rows, aside = [], []
     for t in txns:
         parts = [(x.account_id, x.amount, x.note) for x in t.splits] or [(t.account_id, t.amount, None)]
         for aid, amt, note in parts:
             a = accounts.get(aid)
-            kind = KINDS[a.kind][0] if a else "Not Filed"
-            row = [t.date.date(), amt, t.bank_description or t.description, a.name if a else "", kind,
-                   sources[t.source_id].name if t.source_id in sources else "", note or t.note or ""]
-            ws.append(row)
-            by_kind[kind].append(row)
-    for kind, rows in by_kind.items():
-        sh = wb.create_sheet(kind[:31].replace("/", "-"))
-        sh.append(head)
-        for r in rows:
-            sh.append(r)
-        sh.append([])
-        sh.append(["Account", "Total"])
+            r = [t.date, amt, t.bank_description or t.description, a.name if a else "",
+                 CATEGORY.get(a.kind, "Other") if a else "Not Filed", " · ".join(x for x in (note, t.note) if x)]
+            (aside if a and a.kind == "pending" else rows).append(r)
+
+    def sheet(ws, data):
+        ws.append(head)
+        for c in ws[ws._current_row]:
+            c.font = bold
+        for r in data:
+            ws.append(r)
+            ws.cell(ws._current_row, 1).number_format = "yyyy-mm-dd"
+            ws.cell(ws._current_row, 2).number_format = money_fmt
+        for col, w in zip("ABCDEF", (13, 14, 80, 22, 12, 30)):
+            ws.column_dimensions[col].width = w
+
+    def totals(ws, data, loans=False):
         tot = defaultdict(float)
-        for r in rows:
+        for r in data:
             tot[r[3]] += r[1]
-        for n, v in sorted(tot.items(), key=lambda x: x[1]):
-            sh.append([n, cents(v)])
-        if kind == KINDS["loan"][0]:
+        ws.append([])
+        ws.append(["Account", "Total Amount"])
+        for c in ws[ws._current_row][:2]:
+            c.font = bold
+        for n in sorted(tot, key=str.lower):
+            ws.append([n, cents(tot[n])])
+            ws.cell(ws._current_row, 2).number_format = money_fmt
+        if loans:
+            ws.append([])
+            ws.append(["Account", "Total_Outgoing", "Total_Incoming"])
+            for c in ws[ws._current_row][:3]:
+                c.font = bold
+            for n in sorted(tot, key=str.lower):
+                ws.append([n, cents(sum(r[1] for r in data if r[3] == n and r[1] < 0)), cents(sum(r[1] for r in data if r[3] == n and r[1] > 0))])
+                ws.cell(ws._current_row, 2).number_format = ws.cell(ws._current_row, 3).number_format = money_fmt
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "All Transactions"
+    sheet(ws, rows)
+    cats = sorted({r[4] for r in rows}, key=lambda c: (c == "Not Filed", c))
+    for cat in cats:
+        data = [r for r in rows if r[4] == cat]
+        sh = wb.create_sheet(cat[:31])
+        if cat == "Not Filed":
+            sh.append(["Not in an account yet -- file them in AT-HUB (Accounting > To File) and make this file again."])
+            sh["A1"].font = Font(bold=True, color="C00000")
             sh.append([])
-            sh.append(["Account", "Repaid (Out)", "Borrowed (In)"])
-            for n in sorted(tot):
-                sh.append([n, cents(sum(r[1] for r in rows if r[3] == n and r[1] < 0)), cents(sum(r[1] for r in rows if r[3] == n and r[1] > 0))])
+        sheet(sh, data)
+        totals(sh, data, loans=cat == "Loans")
+    if aside:
+        sh = wb.create_sheet("Not Included")
+        sh.append(["Year-end AR / AP estimates -- set aside: not included in any total, in the Summary or in the split."])
+        sh["A1"].font = Font(bold=True, color="C00000")
+        sh.append([])
+        sheet(sh, aside)
+        sh.append([])
+        sh.append(["Total (not included)", cents(sum(r[1] for r in aside))])
+        sh.cell(sh._current_row, 1).font = bold
+        sh.cell(sh._current_row, 2).number_format = money_fmt
+
+    # Summary: like theirs, with live formulas
+    pt = partners(db, start, end, fy_key)
+    sm = wb.create_sheet("Summary")
+    sm.append(["Category", "Transaction Count", "Total Amount"])
+    for c in sm[1]:
+        c.font = bold
+    at = {}
+    for cat in cats:
+        data = [r for r in rows if r[4] == cat]
+        sm.append([cat, len(data), cents(sum(r[1] for r in data))])
+        sm.cell(sm._current_row, 3).number_format = money_fmt
+        at[cat] = sm._current_row
+    sm.append(["Account Balance", None, pt["bank_balance"]])
+    sm.cell(sm._current_row, 3).number_format = money_fmt
+    bal = sm._current_row
+    sm.append([])
+
+    def ref(cat):
+        return f"C{at[cat]}" if cat in at else "0"
+    first = sm._current_row + 1
+    sm.append(["Money Out [Expenses + COGS]", f"={ref('Expense')}+{ref('COGS')}"])
+    sm.append(["Money In [Payments]", f"={ref('Payments')}"])
+    sm.append(["Debt / Loans Payable [borrowed - repaid, taken off]", f"=-{ref('Loans')}"])
+    sm.append(["Account Balance", f"=C{bal}"])
+    last = sm._current_row
+    sm.append([])
+    sm.append(["Profit", f"=SUM(B{first}:B{last})"])
+    prow = sm._current_row
+    sm.cell(prow, 1).font = sm.cell(prow, 2).font = bold
+    for r in range(first, prow + 1):
+        sm.cell(r, 2).number_format = money_fmt
+    sm.append([])
+    sm.append(["Partner", "Already Taken", "Share", "Adjust", "Remaining"])
+    for c in sm[sm._current_row]:
+        c.font = bold
+    for x in pt["partners"]:
+        n = sm._current_row + 1
+        sm.append([x["name"], x["taken"], f"=B${prow}*{x['share_pct']}", x["adjust"], f"=C{n}+B{n}+D{n}"])
+        for col in range(2, 6):
+            sm.cell(n, col).number_format = money_fmt
+    sm.append([])
+    sm.append(["Notes:"])
+    sm.cell(sm._current_row, 1).font = bold
+    notes = [l for l in (pt["notes"] or "").splitlines() if l.strip()]
+    if pt["set_aside"]["count"]:
+        notes.append(f"Not included: {pt['set_aside']['count']} year-end AR / AP estimate line(s), net {pt['set_aside']['total']:,.2f} "
+                     "-- set aside (they were estimates), see the Not Included tab.")
+    if "Not Filed" in at:
+        notes.append(f"{sum(1 for r in rows if r[4] == 'Not Filed')} line(s) not in an account yet ({pt['unfiled']:,.2f}) -- see the Not Filed tab.")
+    notes.append(f"Period {start.isoformat()} to {end.isoformat()} ({fy_key}). Made by AT-HUB Accounting.")
+    for l in notes:
+        sm.append([l])
+    sm.column_dimensions["A"].width = 48
+    for c in "BCDE":
+        sm.column_dimensions[c].width = 18
+
+    # one extra the old script didn't have: the P&L by month
     p = pnl(db, start, end, "month")
-    sh = wb.create_sheet("P&L")
-    sh.append(["Account"] + p["columns"] + ["Total"])
+    sh = wb.create_sheet("P&L By Month")
+    sh.append(["Account"] + [colname for colname in p["columns"]] + ["Total"])
+    for c in sh[1]:
+        c.font = bold
     for sec in p["sections"]:
         if not sec["rows"]:
             continue
-        sh.append([sec["label"]])
-        sh.cell(sh.max_row, 1).font = Font(bold=True)
+        name = CATEGORY.get(sec["kind"], sec["label"])
+        sh.append([name])
+        sh.cell(sh._current_row, 1).font = bold
         for r in sec["rows"]:
             sh.append([r["name"]] + r["cells"] + [r["total"]])
-        sh.append([f"Total {sec['label']}"] + sec["totals"] + [sec["total"]])
+        sh.append([f"Total {name}"] + sec["totals"] + [sec["total"]])
+        sh.cell(sh._current_row, 1).font = bold
         if sec["kind"] == "expense":
-            sh.append(["Profit (income - cost of goods - expenses)"] + p["profit"] + [p["profit_total"]])
-            sh.cell(sh.max_row, 1).font = Font(bold=True)
-    pt = partners(db, start, end, fy_key)
-    sh = wb.create_sheet("Summary")
-    for st in pt["steps"]:
-        sh.append([st["label"], st["amount"]])
-    sh.append(["To share", pt["total"]])
-    sh.cell(sh.max_row, 1).font = Font(bold=True)
-    sh.append([])
-    sh.append(["Partner", "Share", "Already Taken", "Adjustments", "Remaining"])
-    for x in pt["partners"]:
-        sh.append([x["name"], x["share"], x["taken"], x["adjust"], x["remaining"]])
-    if pt["notes"]:
-        sh.append([])
-        sh.append(["Notes"])
-        for line in pt["notes"].splitlines():
-            sh.append([line])
-    oi = open_items(db)
-    sh = wb.create_sheet("AP AR")
-    sh.append(["Side", "Group", "Who", "Ref", "Amount", "Date", "Due", "Status", "Note"])
-    for r in oi["items"]:
-        sh.append([r["side"].upper(), r["group"], r["party"], r["ref"], r["amount"], r["date"], r["due_date"], r["status"], r["note"] or ""])
-    sh.append([])
-    sh.append(["Total AR", oi["ar"]])
-    sh.append(["Total AP", -oi["ap"]])
-    lo = loans(db, end)
-    sh = wb.create_sheet("Loans")
-    sh.append(["Lender", "Opening", "Borrowed", "Repaid", "Owed"])
-    for x in lo:
-        sh.append([x["name"], x["opening"], x["borrowed"], x["repaid"], x["owed"]])
-    for w in wb.worksheets:
-        w.column_dimensions["A"].width = 14 if w.title not in ("P&L", "Summary", "Loans", "AP AR") else 34
-        if w.max_column >= 3 and w.title not in ("P&L", "Summary", "Loans", "AP AR"):
-            w.column_dimensions["C"].width = 70
-            w.column_dimensions["D"].width = 22
-        for c in w[1]:
-            c.font = Font(bold=True)
+            sh.append(["Profit (Payments - COGS - Expense)"] + p["profit"] + [p["profit_total"]])
+            sh.cell(sh._current_row, 1).font = bold
+    sh.column_dimensions["A"].width = 34
+    for row in sh.iter_rows(min_row=2, min_col=2):
+        for c in row:
+            c.number_format = money_fmt
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
