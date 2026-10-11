@@ -16,6 +16,7 @@ from app.dependencies import get_current_active_user, require_perm
 from app.models import AcctAccount, AcctCheckOk, AcctComment, AcctImport, AcctOpenItem, AcctReconcile, AcctRule, AcctSheet, AcctSource, AcctSplit, AcctTxn, User
 from app.routes.attachments import MAX_BYTES
 from app.services import accounting as A
+from app.services import acct_changes as CH
 from app.services import acct_mapper, acct_more as M, acct_rules
 from app.services.money import cents
 
@@ -51,6 +52,7 @@ def _fy_key(db: Session, a: date) -> str:
 def meta(db: Session = Depends(get_db)):
     A.book_source(db)
     db.commit()
+    A.seed_memory_once(db)
     return {"settings": A.settings(db), "years": A.years(db), "kinds": [{"key": k, "label": v[0], "qb_type": v[1], "in_pnl": v[2]} for k, v in A.KINDS.items()],
             "accounts": _accounts(db),
             "sources": [A.source_dict(db, s) for s in db.query(AcctSource).order_by(AcctSource.kind, AcctSource.id).all()],
@@ -156,21 +158,25 @@ def add_account(body: AccountIn, db: Session = Depends(get_db)):
 
 
 @router.put("/accounts/{account_id}")
-def edit_account(account_id: int, body: AccountIn, db: Session = Depends(get_db)):
+def edit_account(account_id: int, body: AccountIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     a = db.get(AcctAccount, account_id)
     if not a:
         raise HTTPException(status_code=404, detail="Account not found")
+    snap = CH.start(db)
     _apply_account(a, body, db)
-    db.commit()
-    return A.account_dict(a, {x.id: x for x in db.query(AcctAccount).all()})
+    cid = CH.finish(db, snap, f"Account {a.name} changed", "account", _who(user))
+    return {**A.account_dict(a, {x.id: x for x in db.query(AcctAccount).all()}), "change_id": cid}
 
 
 @router.post("/accounts/{account_id}/merge")
-def merge_account(account_id: int, into_id: int, db: Session = Depends(get_db)):
-    """Move every line, part and rule of this account into another, then remove it (two names for one thing)."""
+def merge_account(account_id: int, into_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Move every line, part and rule of this account into another, then remove it (two names for one thing). Undo puts
+    it all back."""
     a, b = db.get(AcctAccount, account_id), db.get(AcctAccount, into_id)
     if not a or not b or a.id == b.id:
         raise HTTPException(status_code=400, detail="Pick another account to merge into")
+    snap = CH.start(db)
+    what = f"{a.name} merged into {b.name}"
     n = db.query(AcctTxn).filter(AcctTxn.account_id == a.id).update({AcctTxn.account_id: b.id})
     n += db.query(AcctSplit).filter(AcctSplit.account_id == a.id).update({AcctSplit.account_id: b.id})
     db.query(AcctRule).filter(AcctRule.account_id == a.id).update({AcctRule.account_id: b.id})
@@ -180,12 +186,12 @@ def merge_account(account_id: int, into_id: int, db: Session = Depends(get_db)):
     db.query(AcctAccount).filter(AcctAccount.parent_id == a.id).update({AcctAccount.parent_id: b.id})  # its sub-accounts go along
     b.opening_balance = (b.opening_balance or 0) + (a.opening_balance or 0)
     db.delete(a)
-    db.commit()
-    return {"moved": n}
+    cid = CH.finish(db, snap, what, "account", _who(user))
+    return {"moved": n, "change_id": cid}
 
 
 @router.delete("/accounts/{account_id}")
-def delete_account(account_id: int, db: Session = Depends(get_db)):
+def delete_account(account_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     a = db.get(AcctAccount, account_id)
     if not a:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -195,10 +201,11 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     subs = db.query(AcctAccount).filter(AcctAccount.parent_id == a.id).count()
     if subs:
         raise HTTPException(status_code=400, detail=f"{a.name} has {subs} sub-account(s) -- move or delete them first")
+    snap = CH.start(db)
+    name = a.name
     db.query(AcctRule).filter(AcctRule.account_id == a.id).delete()
     db.delete(a)
-    db.commit()
-    return {"ok": True}
+    return {"ok": True, "change_id": CH.finish(db, snap, f"Account {name} deleted", "account", _who(user))}
 
 
 class SourceIn(BaseModel):
@@ -302,8 +309,9 @@ def imports(db: Session = Depends(get_db)):
             for i in db.query(AcctImport).order_by(AcctImport.id.desc()).limit(100).all()]
 
 
-@router.delete("/imports/{import_id}")
+@router.delete("/imports/{import_id}", dependencies=[Depends(require_perm("accounting.undo_import"))])
 def undo_import(import_id: int, db: Session = Depends(get_db)):
+    """Super admin only (user, 2026-10-11): a whole statement out of the books."""
     return {"removed": A.undo_import(db, import_id)}
 
 
@@ -330,7 +338,7 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
     rows = r.pop("rows_obj")
     r.pop("all_rows")
     accounts, sources = A.maps(db)
-    unfiled = [t for t in rows if not t.account_id and not t.splits]
+    unfiled = [t for t in rows if (not t.account_id and not t.splits) or t.flag == "conflict"]
     sugg = A.suggestions(db, unfiled) if unfiled else {}
     out = []
     for t in rows:
@@ -341,7 +349,12 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
                             "why": "where it was before it was sent back"}
         elif t.id in sugg:
             sg = sugg[t.id]
-            d["suggest"] = {**sg, "account": A.path(accounts[sg["account_id"]], accounts) if sg["account_id"] in accounts else ""}
+            if sg.get("conflict"):
+                d["conflict"] = [{**c, "account": A.path(accounts[c["account_id"]], accounts) if c["account_id"] in accounts else ""} for c in sg["conflict"]]
+            elif sg.get("split"):
+                d["suggest"] = {**sg, "split": [{**x, "account": A.path(accounts[x["account_id"]], accounts) if x["account_id"] in accounts else "?"} for x in sg["split"]]}
+            else:
+                d["suggest"] = {**sg, "account": A.path(accounts[sg["account_id"]], accounts) if sg["account_id"] in accounts else ""}
         if t.id in r["balance"]:
             d["balance"] = r["balance"][t.id]
         out.append(d)
@@ -373,7 +386,47 @@ class SendBackIn(BaseModel):
 @router.post("/txns/send-back")
 def send_back(body: SendBackIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Back to Review: out of its account (where it was is kept as the top suggestion), with an optional reason."""
-    return {"done": M.send_back(db, body.ids, body.reason, _who(user))}
+    snap = CH.start(db)
+    n = M.send_back(db, body.ids, body.reason, _who(user))
+    return {"done": n, "change_id": CH.finish(db, snap, f"{n} line(s) sent back to Review", "send_back", _who(user))}
+
+
+@router.post("/txns/flag")
+def flag_lines(body: SendBackIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Keep the account, but wait in Review with a red flag and the reason (Reconcile: "QuickBooks says ...")."""
+    snap = CH.start(db)
+    n = M.flag_lines(db, body.ids, body.reason, _who(user))
+    return {"done": n, "change_id": CH.finish(db, snap, f"{n} line(s) flagged for review", "flag", _who(user))}
+
+
+@router.post("/txns/clear-flag")
+def clear_flag(body: SendBackIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """"Looks right": out of Review, keeping the account."""
+    snap = CH.start(db)
+    n = M.clear_flags(db, body.ids, _who(user))
+    return {"done": n, "change_id": CH.finish(db, snap, f"{n} line(s) checked -- look right", "flag", _who(user))}
+
+
+@router.get("/txns/{txn_id}/rules")
+def txn_rules(txn_id: int, db: Session = Depends(get_db)):
+    """Every rule against this line: which match, each condition true / false; and the line's history."""
+    t = db.get(AcctTxn, txn_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Line not found")
+    accounts, sources = A.maps(db)
+    line = acct_rules.line_of(t)
+    specs = A.rule_specs(db)
+    win, clash = acct_rules.decide_rules(specs, line)
+    out = []
+    for x in specs:
+        e = acct_rules.explain(x, line)
+        if not e["matches"] and not any(c["ok"] for c in e["conditions"]):
+            continue
+        out.append({"id": x["id"], "name": x["name"] or acct_rules.describe(x), "summary": acct_rules.describe(x, {k: v.name for k, v in sources.items()}),
+                    "account": A.path(accounts[x["account_id"]], accounts) if x["account_id"] in accounts else "", **e,
+                    "decides": bool(win and win["id"] == x["id"]), "in_conflict": any(c["id"] == x["id"] for c in clash)})
+    out.sort(key=lambda x: (not x["matches"], not x["decides"]))
+    return {"txn": A.txn_dict(t, accounts, sources), "rules": out, "conflict": bool(clash), "history": CH.history_of_txn(db, txn_id)}
 
 
 @router.post("/txns/undo-send-back")
@@ -425,6 +478,7 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
     if not t:
         raise HTTPException(status_code=404, detail="Line not found")
     fields = body.model_dump(exclude_unset=True)
+    snap = CH.start(db) if ("account_id" in fields or "splits" in fields) else None  # Undo covers the look-alikes filed with it
     src = db.get(AcctSource, t.source_id)
     if t.origin == "manual" or src.kind == "book":  # typed in / book entries can be changed; a statement line's date / amount / wording can't
         if "date" in fields:
@@ -450,7 +504,10 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
     alike = []
     if "account_id" in fields or "splits" in fields:
         old, was_auto = t.account_id, (t.how in ("auto", "rule") and not t.reviewed)
-        A.set_account(db, t, body.account_id, body.splits, _who(user))
+        splits = body.splits
+        if splits and t.amount and all((float(x.get("amount") or 0) > 0) != (t.amount > 0) for x in splits if float(x.get("amount") or 0)):
+            splits = [{**x, "amount": -float(x["amount"])} for x in splits]  # parts typed without the minus sign: they follow the line
+        A.set_account(db, t, body.account_id, splits, _who(user))
         db.flush()
         if body.learn and (body.account_id or body.splits):
             if was_auto and old and old != t.account_id:
@@ -459,9 +516,15 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
             db.flush()
             alike = A.look_alikes(db, t)
     t.updated_by = _who(user)
-    db.commit()
     accounts, sources = A.maps(db)
-    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more, "taken_back": taken_back, "alike": alike}
+    cid = None
+    if snap is not None:
+        a = accounts.get(t.account_id)
+        what = f"{t.date.date().isoformat()} {t.amount:,.2f} " + (f"filed in {A.path(a, accounts)}" if a else "split" if t.splits else "taken out of its account")
+        cid = CH.finish(db, snap, what + (f" (+{filed_more} like it)" if filed_more else ""), "file", _who(user))
+    else:
+        db.commit()
+    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more, "taken_back": taken_back, "alike": alike, "change_id": cid}
 
 
 class BulkIn(BaseModel):
@@ -473,6 +536,7 @@ class BulkIn(BaseModel):
 @router.post("/txns/bulk")
 def bulk(body: BulkIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     ts = db.query(AcctTxn).filter(AcctTxn.id.in_(body.ids)).all()
+    snap = CH.start(db)
     n = skipped = 0
     for t in ts:
         if body.action == "file":
@@ -482,6 +546,8 @@ def bulk(body: BulkIn, db: Session = Depends(get_db), user: User = Depends(get_c
         elif body.action == "review":
             t.reviewed = True
             t.how = "person" if t.how in ("auto", "rule") and t.account_id else t.how
+            if t.flag and (t.account_id or t.splits):
+                t.flag = t.flag_info = None
         elif body.action == "unfile":
             A.set_account(db, t, None, None, _who(user))
         elif body.action == "delete":
@@ -494,8 +560,11 @@ def bulk(body: BulkIn, db: Session = Depends(get_db), user: User = Depends(get_c
         n += 1
     db.flush()
     more = A.autofill(db) if body.action == "file" else 0
-    db.commit()
-    return {"done": n, "skipped": skipped, "filed_more": more}
+    accounts, _ = A.maps(db)
+    what = {"file": f"{n} line(s) filed in {A.path(accounts[body.account_id], accounts) if body.account_id in accounts else '?'}",
+            "review": f"{n} line(s) marked looked at", "unfile": f"{n} line(s) taken out of their account", "delete": f"{n} typed-in line(s) deleted"}.get(body.action, body.action)
+    cid = CH.finish(db, snap, what + (f" (+{more} like them)" if more else ""), "bulk", _who(user))
+    return {"done": n, "skipped": skipped, "filed_more": more, "change_id": cid}
 
 
 @router.delete("/txns/{txn_id}")
@@ -527,6 +596,8 @@ class RuleIn(BaseModel):
     set_note: Optional[str] = None
     action: Optional[str] = "file"  # file | suggest
     enabled: Optional[bool] = True
+    review: Optional[bool] = False  # files, but the line still waits in Review for a person
+    wins: Optional[bool] = False  # wins when it disagrees with another rule
 
 
 def _spec_in(body: RuleIn) -> dict:
@@ -558,6 +629,7 @@ def _rule_row(db: Session, r: AcctRule, s_: dict) -> None:
     r.splits = json.dumps(s_["splits"])
     r.set_payee, r.set_note = s_["set_payee"], s_["set_note"]
     r.action, r.enabled, r.sign = s_["action"], s_["enabled"], s_["sign"]
+    r.review, r.wins = bool(s_.get("review")), bool(s_.get("wins"))
     r.account_id = s_["account_id"] or s_["splits"][0]["account_id"]
     r.contains = " / ".join(str(c["value"]) for c in s_["conditions"] if c.get("field") in acct_rules.TEXT_FIELDS)[:200]
     r.min_amount = r.max_amount = None  # the conditions say it now
@@ -585,16 +657,33 @@ def rules(db: Session = Depends(get_db)):
 
 @router.get("/rules/meta")
 def rules_meta():
-    return {"text_fields": acct_rules.TEXT_FIELDS, "num_fields": acct_rules.NUM_FIELDS, "text_ops": acct_rules.TEXT_OPS, "num_ops": acct_rules.NUM_OPS}
+    return {"text_fields": acct_rules.TEXT_FIELDS, "num_fields": acct_rules.NUM_FIELDS, "text_ops": acct_rules.TEXT_OPS, "num_ops": acct_rules.NUM_OPS,
+            "date_fields": acct_rules.DATE_FIELDS, "date_ops": acct_rules.DATE_OPS}
 
 
 @router.post("/rules/preview")
 def preview_rule(body: RuleIn, db: Session = Depends(get_db)):
     """The lines a rule would cover (before or after saving it), grouped -- for the live count and the pop-up."""
     s_ = _spec_in(body)
-    if not [c for c in s_["conditions"] if c.get("value") not in (None, "", [])]:
+    if not [c for c in s_["conditions"] if acct_rules._filled(c)]:
         raise HTTPException(status_code=400, detail="Add a condition")
-    return A.rule_lines(db, s_, s_["account_id"])
+    res = A.rule_lines(db, s_, s_["account_id"])
+    res["overlaps"] = M.rule_overlaps(db, s_)
+    return res
+
+
+class ExplainIn(BaseModel):
+    rule: RuleIn
+    txn_id: int
+
+
+@router.post("/rules/explain")
+def explain_rule(body: ExplainIn, db: Session = Depends(get_db)):
+    """A rule (saved or not) against one line: each condition true / false."""
+    t = db.get(AcctTxn, body.txn_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Line not found")
+    return acct_rules.explain(_spec_in(body.rule), acct_rules.line_of(t))
 
 
 def _next_priority(db: Session) -> int:
@@ -605,21 +694,24 @@ def _next_priority(db: Session) -> int:
 def add_rule(body: RuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """Saved only -- nothing is filed until someone picks the lines in the pop-up (POST /rules/{id}/apply). Lines
     brought in later that match are filed by it by themselves (or suggested, if it's a suggest-only rule)."""
+    snap = CH.start(db)
     r = AcctRule(created_by=_who(user), priority=_next_priority(db), contains="")
     _rule_row(db, r, _spec_in(body))
     db.add(r)
-    db.commit()
-    return {"id": r.id}
+    db.flush()
+    cid = CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" made", "rule", _who(user))
+    return {"id": r.id, "change_id": cid}
 
 
 @router.put("/rules/{rule_id}")
-def edit_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db)):
+def edit_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     r = db.get(AcctRule, rule_id)
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
+    snap = CH.start(db)
     _rule_row(db, r, _spec_in(body))
-    db.commit()
-    return {"id": r.id}
+    cid = CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" changed", "rule", _who(user))
+    return {"id": r.id, "change_id": cid}
 
 
 class OnOff(BaseModel):
@@ -627,13 +719,13 @@ class OnOff(BaseModel):
 
 
 @router.put("/rules/{rule_id}/enabled")
-def rule_on_off(rule_id: int, body: OnOff, db: Session = Depends(get_db)):
+def rule_on_off(rule_id: int, body: OnOff, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     r = db.get(AcctRule, rule_id)
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
+    snap = CH.start(db)
     r.enabled = body.enabled
-    db.commit()
-    return {"ok": True}
+    return {"ok": True, "change_id": CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" switched {'on' if body.enabled else 'off'}", "rule", _who(user))}
 
 
 @router.post("/rules/{rule_id}/copy")
@@ -656,14 +748,14 @@ class OrderIn(BaseModel):
 
 
 @router.put("/rules-order")
-def rules_order(body: OrderIn, db: Session = Depends(get_db)):
-    """The order rules run in (first match wins): the ids top to bottom."""
+def rules_order(body: OrderIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """The order rules run in: the ids top to bottom."""
+    snap = CH.start(db)
     for n, rid in enumerate(body.ids):
         r = db.get(AcctRule, rid)
         if r:
             r.priority = (n + 1) * 10
-    db.commit()
-    return {"ok": True}
+    return {"ok": True, "change_id": CH.finish(db, snap, "Rules put in a new order", "rule", _who(user))}
 
 
 @router.get("/rules/{rule_id}/lines")
@@ -683,16 +775,49 @@ def apply_rule(rule_id: int, body: ApplyIn, db: Session = Depends(get_db), user:
     r = db.get(AcctRule, rule_id)
     if not r:
         raise HTTPException(status_code=404, detail="Rule not found")
-    return {"filed": A.apply_rule(db, r, body.ids, _who(user))}
+    snap = CH.start(db)
+    n = A.apply_rule(db, r, body.ids, _who(user))
+    return {"filed": n, "change_id": CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" applied to {n} line(s)", "rule", _who(user))}
 
 
 @router.delete("/rules/{rule_id}")
-def delete_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_rule(rule_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     r = db.get(AcctRule, rule_id)
+    cid = None
     if r:
+        snap = CH.start(db)
+        name = r.name or r.contains
         db.delete(r)
-        db.commit()
-    return {"ok": True}
+        cid = CH.finish(db, snap, f"Rule \"{name}\" deleted", "rule", _who(user))
+    return {"ok": True, "change_id": cid}
+
+
+@router.get("/rule-conflicts")
+def rule_conflicts(db: Session = Depends(get_db)):
+    return M.rule_conflicts(db)
+
+
+@router.get("/rule-health")
+def rule_health(db: Session = Depends(get_db)):
+    return M.rule_health(db)
+
+
+@router.get("/rule-combine")
+def rule_combine_suggestions(db: Session = Depends(get_db)):
+    return M.combine_suggestions(db)
+
+
+class CombineIn(BaseModel):
+    rule_ids: List[int]
+    name: Optional[str] = None
+
+
+@router.post("/rule-combine")
+def rule_combine(body: CombineIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Several rules that do the same thing become one ("contains any of"); Undo brings them back."""
+    snap = CH.start(db)
+    rid = M.combine_rules(db, body.rule_ids, body.name, _who(user))
+    return {"id": rid, "change_id": CH.finish(db, snap, f"{len(body.rule_ids)} rules combined into one", "rule", _who(user))}
 
 
 @router.get("/rules-export.xlsx")
@@ -915,7 +1040,10 @@ class DecideIn(BaseModel):
 
 @router.post("/ignored/decide")
 def decide_ignored(body: DecideIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
-    return {"done": M.decide_ignored(db, body.ids, body.action, _who(user))}
+    snap = CH.start(db)
+    n = M.decide_ignored(db, body.ids, body.action, _who(user))
+    what = {"ignore": f"{n} possible duplicate(s) ignored", "keep": f"{n} line(s) kept (not duplicates)", "restore": f"{n} ignored line(s) restored"}.get(body.action, body.action)
+    return {"done": n, "change_id": CH.finish(db, snap, what, "ignored", _who(user))}
 
 
 # ---------------------------------------------------------------- Check My Books
@@ -933,10 +1061,12 @@ class CheckOkIn(BaseModel):
 @router.post("/check/ok")
 def check_ok(body: CheckOkIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
     """"It's right": this finding isn't shown again for this line."""
+    cid = None
     if not db.query(AcctCheckOk).filter(AcctCheckOk.txn_id == body.txn_id, AcctCheckOk.check == body.check).first():
+        snap = CH.start(db)
         db.add(AcctCheckOk(txn_id=body.txn_id, check=body.check, created_by=_who(user)))
-        db.commit()
-    return {"ok": True}
+        cid = CH.finish(db, snap, "Check My Books: \"it's right\"", "check", _who(user))
+    return {"ok": True, "change_id": cid}
 
 
 # ---------------------------------------------------------------- Partner Accounts, Payees, 1099, Recurring
@@ -1119,6 +1249,27 @@ def reconcile_run(body: ReconcileIn, db: Session = Depends(get_db), user: User =
     return {**res, "id": rid, "start": a.isoformat(), "end": b.isoformat()}
 
 
+class RecDecideIn(BaseModel):
+    items: List[dict]  # [{key | txn_id, decision: athub_right | ignore | ok | pair | None, txn_id?}]
+
+
+@router.post("/reconcile/decide")
+def reconcile_decide(body: RecDecideIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return {"done": M.rec_decide(db, body.items, _who(user))}
+
+
+@router.post("/reconcile/export.xlsx")
+def reconcile_export(body: ReconcileIn, db: Session = Depends(get_db)):
+    a, b = _period(db, body.start, body.end)
+    mapping = M.qb_map(db)
+    for k, v in (body.mapping or {}).items():
+        if v:
+            mapping[M._norm(k)] = int(v)
+    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)))
+    return Response(M.reconcile_xlsx(res), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Reconcile {a.isoformat()} to {b.isoformat()}.xlsx"'})
+
+
 @router.get("/reconcile/history")
 def reconcile_history(db: Session = Depends(get_db)):
     accounts, _ = A.maps(db)
@@ -1185,3 +1336,68 @@ def check_export(start: Optional[str] = None, end: Optional[str] = None, all_dat
              (f["txn"]["description"] if f["txn"] else ""), (f["txn"]["account"] or "") if f["txn"] else "", f["why"],
              f["suggest"]["account"] if f["suggest"] else ""] for f in d["findings"]]
     return _xlsx([("Check My Books", ["Check", "How Sure", "Date", "Amount", "Description", "Account", "Why", "Suggested"], rows)], "Check My Books.xlsx")
+
+
+# ---------------------------------------------------------------- Undo (every change to the books) -- services/acct_changes.py
+@router.get("/changes")
+def changes(db: Session = Depends(get_db)):
+    return CH.recent(db)
+
+
+@router.post("/changes/{change_id}/undo")
+def undo_change(change_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return CH.undo(db, change_id, _who(user))
+
+
+# ---------------------------------------------------------------- remembered filings + a fresh start
+@router.get("/memory")
+def memory(db: Session = Depends(get_db)):
+    return A.memory_list(db)
+
+
+@router.delete("/memory/{memory_id}")
+def forget_one(memory_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    from app.models import AcctMemory
+    m = db.get(AcctMemory, memory_id)
+    cid = None
+    if m:
+        snap = CH.start(db)
+        db.delete(m)
+        cid = CH.finish(db, snap, "A remembered filing forgotten", "memory", _who(user))
+    return {"ok": True, "change_id": cid}
+
+
+class FreshIn(BaseModel):
+    keep_filings: bool = False
+    confirm: str = ""
+
+
+@router.post("/start-fresh", dependencies=[Depends(require_perm("accounting.start_fresh"))])
+def start_fresh(body: FreshIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Super admin only: every line out (a backup first), accounts / rules / settings stay, splits remembered."""
+    if body.confirm.strip().upper() != "START FRESH":
+        raise HTTPException(status_code=400, detail='Type START FRESH to confirm')
+    backup = None
+    try:
+        from app.services.backups import backup_now
+        backup = backup_now("before-start-fresh").name
+    except Exception as e:  # a backup that can't be made stops the clear
+        raise HTTPException(status_code=500, detail=f"Couldn't make a backup first, nothing was cleared: {e}")
+    return {**A.start_fresh(db, body.keep_filings, _who(user)), "backup": backup}
+
+
+# ---------------------------------------------------------------- QuickBooks' pasted memo on lines already in
+@router.get("/qb-tails")
+def qb_tails(db: Session = Depends(get_db)):
+    return A.tails_existing(db)
+
+
+class IdsIn(BaseModel):
+    ids: List[int]
+
+
+@router.post("/qb-tails/apply")
+def qb_tails_apply(body: IdsIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    snap = CH.start(db)
+    r = A.clean_tails(db, body.ids, _who(user))
+    return {**r, "change_id": CH.finish(db, snap, f"QuickBooks' pasted text taken off {r['cleaned']} line(s)", "tails", _who(user))}

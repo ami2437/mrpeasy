@@ -48,8 +48,8 @@ def test_rule_conditions_and_or_fields_whole_words():
 
 
 def test_rules_order_suggest_split_copy_export(api, client, admin_headers):
-    """First rule in order wins; a split rule splits and adds its note; reorder; suggest-only suggests; copy starts off;
-    export; a bad condition is refused."""
+    """Two rules that disagree file nothing (Review, red flag) unless one wins; a split rule splits and adds its note;
+    reorder; suggest-only suggests; copy starts off; export; a bad condition is refused."""
     y = 2041
     tag = name("ROSAX")
     src = _source(api)
@@ -66,9 +66,19 @@ def test_rules_order_suggest_split_copy_export(api, client, admin_headers):
     r = _import(client, admin_headers, src["id"], "wf.csv", _csv([
         (f"06/01/{y}", -1000.0, f"ZELLE TO {tag} ON 06/01 REF #R1"), (f"06/08/{y}", -300.0, f"ZELLE TO {tag} ON 06/08 REF #R2"),
         (f"06/15/{y}", -310.0, f"ZELLE TO {tag} ON 06/15 REF #R3")]))
-    assert r["auto"] == 3
+    assert r["auto"] == 2
     rows = {t["description"][-2:]: t for t in _txns(api, start=f"{y}-06-01", end=f"{y}-06-30", source_id=src["id"])["rows"]}
-    assert rows["R1"]["account_id"] == supplies["id"]                     # the first rule in order wins
+    # R1 matches both rules and they disagree: neither files it -- it waits in Review with a red flag, both rules offered
+    assert rows["R1"]["account_id"] is None and not rows["R1"]["splits"] and rows["R1"]["flag"] == "conflict"
+    review = {t["id"]: t for t in _txns(api, status="review", all_dates="true")["rows"]}
+    assert {c["rule_id"] for c in review[rows["R1"]["id"]]["conflict"]} == {r_big, r_all}
+    assert {x["a"]["id"] for x in api.get("/api/accounting/rule-conflicts")} & {r_big, r_all}
+    # "big ones" set to win: the next look files R1 there
+    api.put(f"/api/accounting/rules/{r_big}", json={"name": "big ones", "conditions": [c("text", "contains", tag), c("amount", "gt", 900)],
+                                                    "sign": "out", "account_id": supplies["id"], "wins": True})
+    api.post("/api/accounting/rules/" + str(r_big) + "/apply", json={"ids": [rows["R1"]["id"]]})
+    rows = {t["description"][-2:]: t for t in _txns(api, start=f"{y}-06-01", end=f"{y}-06-30", source_id=src["id"])["rows"]}
+    assert rows["R1"]["account_id"] == supplies["id"] and not rows["R1"]["flag"]
     assert {(x["account_id"], x["amount"]) for x in rows["R2"]["splits"]} == {(general["id"], -30.0), (rosa["id"], -270.0)}
     assert rows["R2"]["note"] == "Rosa pay"
     api.put("/api/accounting/rules-order", json={"ids": [r_all, r_big]})

@@ -44,6 +44,9 @@ CATALOG = [
                            "dates), create the orders that are missing", True, "admin"),
     ("accounting", "Money", "Accounting: bank statements, every line in an account, P&L, loans, partners' split, AP / AR, "
                             "CPA export", True, "admin"),
+    ("accounting.undo_import", "Money", "Accounting: undo a whole statement import (takes every line of that file out of the books)", True, "super_admin"),
+    ("accounting.start_fresh", "Money", "Accounting: start fresh -- clear every line to bring the statements in again (accounts, rules and "
+                                        "remembered splits stay; a backup is made first)", True, "super_admin"),
     # Purchasing
     ("purchasing", "Purchasing", "Purchase orders and vendor bills", True, "admin"),
     ("vendors", "Purchasing", "Vendors", False, "manager"),

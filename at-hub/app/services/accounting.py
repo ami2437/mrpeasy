@@ -24,9 +24,9 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import (AcctAccount, AcctCheckOk, AcctIgnored, AcctImport, AcctOpenItem, AcctRule, AcctSource, AcctSplit, AcctTxn, AppSetting,
-                        Customer, CustomerOrder, Invoice, PurchaseOrder, Vendor)
-from app.services import acct_mapper, acct_rules, clock
+from app.models import (AcctAccount, AcctChange, AcctCheckOk, AcctIgnored, AcctImport, AcctMemory, AcctOpenItem, AcctRule, AcctSource, AcctSplit,
+                        AcctTxn, AppSetting, Customer, CustomerOrder, Invoice, PurchaseOrder, Vendor)
+from app.services import acct_mapper, acct_rules, acct_tails, clock
 from app.services.money import cents, line_amount
 
 KINDS = {  # kind -> (label, QuickBooks account type, in the P&L?)
@@ -248,9 +248,22 @@ def mapper(db: Session) -> acct_mapper.Mapper:
     return acct_mapper.Mapper([(b or d, a, acc, dt.day if dt else None, 2.0 if c else 1.0) for d, b, a, acc, dt, c in ex])
 
 
+def rule_decision(specs: List[dict], t) -> Tuple[Optional[dict], List[dict]]:
+    """(the rule that decides, the rules that disagree) for a line -- acct_rules.decide_rules."""
+    return acct_rules.decide_rules(specs, acct_rules.line_of(t))
+
+
+def _clash_info(clash: List[dict]) -> List[dict]:
+    return [{"rule_id": r["id"], "name": r["name"] or acct_rules.describe(r), "account_id": r["account_id"],
+             "splits": r["splits"], "action": r["action"]} for r in clash]
+
+
 def decide(t: AcctTxn, m: acct_mapper.Mapper, specs: List[dict]) -> Tuple[Optional[int], Optional[str], str, Optional[dict]]:
-    """(account, sure | guess | None, why, the rule that decided) -- rules first, in order, then what was learned."""
-    r = acct_rules.first_match(specs, acct_rules.line_of(t))
+    """(account, sure | guess | None, why, the rule that decided) -- rules first, then what was learned. Two rules that
+    match and disagree decide nothing: the line waits in Review."""
+    r, clash = rule_decision(specs, t)
+    if clash:
+        return None, None, "rules disagree: " + "; ".join(x["name"] or acct_rules.describe(x) for x in clash[:3]), None
     if r:
         label = r["name"] or acct_rules.describe(r)
         return r["account_id"] or (r["splits"][0]["account_id"] if r["splits"] else None), ("sure" if r["action"] != "suggest" else "guess"), f"rule: {label}", r
@@ -274,6 +287,11 @@ def file_by_rule(db: Session, t: AcctTxn, r: dict, by: Optional[str], reviewed: 
         t.note = r["set_note"]
     t.how, t.reviewed = "rule", reviewed
     t.rule_id = r.get("id")
+    if r.get("review") and not reviewed:  # the rule files it, a person still looks
+        t.flag = "check"
+        t.flag_info = json.dumps({"reason": f"Filed by rule \"{r['name'] or acct_rules.describe(r)}\" -- check it", "rule_id": r.get("id")})
+    elif t.flag in ("check", "conflict"):
+        t.flag = t.flag_info = None
     if by:
         t.updated_by = by
     row = db.get(AcctRule, r["id"]) if r.get("id") else None
@@ -292,22 +310,56 @@ def autofill(db: Session, txns: Optional[List[AcctTxn]] = None, m=None) -> int:
     for t in txns:
         if t.account_id or t.splits:
             continue
-        acc, conf, why, r = decide(t, m, specs)
-        if conf == "sure" and acc:
-            if r:
+        r, clash = rule_decision(specs, t)
+        if clash:  # two rules say different things: nobody files it, it waits in Review with a red flag
+            if t.flag != "conflict":
+                t.flag, t.flag_info = "conflict", json.dumps({"reason": "Rules disagree", "rules": _clash_info(clash)})
+            continue
+        if t.flag == "conflict":
+            t.flag = t.flag_info = None
+        if r:
+            if r["action"] != "suggest":
                 file_by_rule(db, t, r, None, False)
-            else:
-                t.account_id, t.how, t.reviewed = acc, "auto", False
+                n += 1
+            continue
+        acc, conf, _why = m.suggest(t.bank_description or t.description, t.amount, day=t.date.day if t.date else None)
+        if conf == "sure" and acc:
+            t.account_id, t.how, t.reviewed = acc, "auto", False
             n += 1
     return n
+
+
+def last_splits(db: Session) -> Dict[Tuple[str, bool], dict]:
+    """Per payee (and money in / out): the latest line a person split -- "split it like last time" for the next one."""
+    out = {}
+    for t in (db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.splits.any(), AcctTxn.how == "person")
+              .order_by(AcctTxn.date).all()):
+        if not t.amount:
+            continue
+        k = (acct_mapper.payee(t.bank_description or t.description), t.amount >= 0)
+        out[k] = {"date": t.date.date().isoformat(), "txn_id": t.id,
+                  "parts": [{"account_id": x.account_id, "pct": round(x.amount / t.amount * 100, 4), "note": x.note} for x in t.splits]}
+    return out
 
 
 def suggestions(db: Session, txns: List[AcctTxn]) -> Dict[int, dict]:
     m = mapper(db)
     specs = rule_specs(db)
+    splits_by = None
     out = {}
     for t in txns:
+        r, clash = rule_decision(specs, t)
+        if clash:
+            out[t.id] = {"account_id": None, "confidence": None, "why": "rules disagree", "conflict": _clash_info(clash)}
+            continue
         acc, conf, why, r = decide(t, m, specs)
+        if conf != "sure" and not r:
+            if splits_by is None:
+                splits_by = last_splits(db)
+            ls = splits_by.get((acct_mapper.payee(t.bank_description or t.description), t.amount >= 0))
+            if ls and len(ls["parts"]) > 1:
+                out[t.id] = {"account_id": None, "confidence": "guess", "why": f"split like the {ls['date']} line", "split": ls["parts"]}
+                continue
         if acc:
             out[t.id] = {"account_id": acc, "confidence": conf or "maybe", "why": why, "rule_id": r["id"] if r else None}
     return out
@@ -665,10 +717,28 @@ def parse_rows(rows: List[List], lay: dict, kind: str = "bank") -> Tuple[List[di
             row["account"] = str(cell(r, "account") or "").strip()
         if lay.get("category") is not None:
             row["category"] = str(cell(r, "category") or "").strip()
-        if lay.get("hint") is not None and str(cell(r, "hint") or "").strip():
-            row["hint"] = str(cell(r, "hint")).strip()
+        if lay.get("hint") is not None:
+            h = str(cell(r, "hint") or "").strip()
+            if h and h.lower() not in ("-split-", "split", "-split"):
+                row["hint"] = h
+            else:  # a QuickBooks register line with no single account: QuickBooks has it split
+                row["qb_split"] = True
         out.append(row)
+    strip_tails(out)
     return out, bad
+
+
+def strip_tails(rows: List[dict]) -> int:
+    """QuickBooks' bank-rule text pasted after the bank's wording comes off (acct_tails.py) -- kept as qb_memo."""
+    if not rows:
+        return 0
+    n = 0
+    for r, (clean, memo, why) in zip(rows, acct_tails.detect(rows)):
+        if memo:
+            r["original"] = r["description"]
+            r["description"], r["qb_memo"], r["memo_why"] = clean, memo, why
+            n += 1
+    return n
 
 
 def _norm(desc: str) -> str:
@@ -879,8 +949,14 @@ def preview(db: Session, data: bytes, filename: str, source_id: Optional[int], l
             "money_in": cents(sum(r["amount"] for r in parsed if r["amount"] > 0)),
             "money_out": cents(sum(r["amount"] for r in parsed if r["amount"] < 0)),
             "parsed": [{"date": r["date"].isoformat(), "amount": r["amount"], "description": r["description"], "hint": r.get("hint"),
+                        "qb_memo": r.get("qb_memo"), "qb_split": r.get("qb_split"),
                         "account": r.get("account"), "category": r.get("category"), "status": c["status"], "rule": c.get("rule")}
-                       for r, c in list(zip(parsed, cls))[:12]]}
+                       for r, c in list(zip(parsed, cls))[:12]],
+            "memos": sum(1 for r in parsed if r.get("qb_memo")), "qb_splits": sum(1 for r in parsed if r.get("qb_split")),
+            "memo_examples": [{"date": r["date"].isoformat(), "amount": r["amount"], "kept": r["description"], "removed": r["qb_memo"]}
+                              for r in parsed if r.get("qb_memo")][:8],
+            "split_lines": [{"date": r["date"].isoformat(), "amount": r["amount"], "description": r["description"]} for r in parsed if r.get("qb_split")][:20],
+            "remembered": len(memory_hits(db, src.id if src else None, [r for r, c in zip(parsed, cls) if c["status"] == "new"])) if src else 0}
 
 
 def _snapshot(t: AcctTxn) -> dict:
@@ -907,7 +983,11 @@ def _restore(db: Session, d: dict) -> None:
 
 
 FILING = ("account_id", "how", "reviewed", "note", "rule_id", "corrected", "no_learn", "sent_back", "sent_back_reason", "sent_back_from",
-          "sent_back_by", "sent_back_at", "external_id")
+          "sent_back_by", "sent_back_at", "external_id", "flag", "flag_info")
+
+
+def _qb_split_flag():
+    return "qb_split", json.dumps({"reason": "QuickBooks has this line split over several accounts (no single account) -- split it here too"})
 
 
 def import_file(db: Session, data: bytes, filename: str, source_id: int, layout: Optional[dict], by: str,
@@ -947,9 +1027,11 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
             snapshots.append(_snapshot(t_old))
             t = AcctTxn(source_id=src.id, date=_dt(r["date"]), amount=r["amount"], description=r["description"],
                         payee=t_old.payee if t_old.origin == "manual" else acct_mapper.payee_label(r["description"]),
-                        origin="import", import_id=imp.id, dedupe=k, hint=r.get("hint"), created_by=by, updated_by=by)
+                        origin="import", import_id=imp.id, dedupe=k, hint=r.get("hint"), qb_memo=r.get("qb_memo"), created_by=by, updated_by=by)
             for f in FILING:
                 setattr(t, f, getattr(t_old, f))
+            if r.get("qb_split") and not t_old.splits:
+                t.flag, t.flag_info = _qb_split_flag()
             if t.how == "workbook":
                 t.how = "person"  # a person's filing (from their workbook) -- still teaches AT-HUB
             for x in t_old.splits:
@@ -997,8 +1079,17 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
             continue
         t = AcctTxn(source_id=src.id, date=_dt(r["date"]), amount=r["amount"], description=r["description"],
                     payee=acct_mapper.payee_label(r["description"]), origin="workbook" if workbook else "import",
-                    import_id=imp.id, dedupe=k, hint=r.get("hint"), created_by=by)
-        if workbook and r.get("account"):
+                    import_id=imp.id, dedupe=k, hint=r.get("hint"), qb_memo=r.get("qb_memo"), created_by=by)
+        if r.get("qb_split"):
+            t.flag, t.flag_info = _qb_split_flag()
+        parts = workbook_parts(r.get("account") or "", r["amount"]) if workbook else None
+        if parts:  # "Niraj 71472; Richard 69259" in their Account column: one line, split
+            kind = WORKBOOK_KINDS.get((r.get("category") or "").strip().lower(), "other")
+            for name, amt in parts:
+                acc = account_by_name(db, name, kind, name if kind == "owner" else None)
+                t.splits.append(AcctSplit(account_id=acc.id, amount=amt))
+            t.how, t.reviewed = "workbook", True
+        elif workbook and r.get("account"):
             kind = WORKBOOK_KINDS.get((r.get("category") or "").strip().lower(), "other")
             name = " ".join(w if w.isupper() and len(w) > 1 else w.capitalize() for w in r["account"].split())  # "factoring fee WF" -> "Factoring Fee WF"
             partner = name if kind == "owner" else None
@@ -1008,7 +1099,9 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
         new.append(t)
     db.flush()
     imp.added = len(new)
+    remembered = 0
     if not workbook:
+        remembered = apply_memory(db, src.id, new, by)
         imp.auto = autofill(db, new)
     if not workbook:  # a statement's columns are kept for next time (the workbook is a one-off)
         src.layout = json.dumps(lay)
@@ -1016,7 +1109,25 @@ def import_file(db: Session, data: bytes, filename: str, source_id: int, layout:
     return {"import_id": imp.id, "rows": imp.rows, "added": imp.added, "skipped": imp.skipped, "matched": imp.matched,
             "possible": possible, "estimates": estimates, "auto": imp.auto, "bad": bad[:20], "bad_count": len(bad),
             "outside": outside, "replaced": replaced, "moved_to_book": len(json.loads(imp.moved or "[]")),
-            "left": sum(1 for t in new if not t.account_id)}
+            "left": sum(1 for t in new if not t.account_id and not t.splits), "remembered": remembered,
+            "memos": sum(1 for r in parsed if r.get("qb_memo")), "qb_splits": sum(1 for r in parsed if r.get("qb_split")),
+            "flagged": sum(1 for t in new if t.flag)}
+
+
+def workbook_parts(cell: str, amount: float) -> Optional[List[Tuple[str, float]]]:
+    """'Niraj 71472; Richard 69259' (or with $ / commas, ; or |) -> [(name, signed amount)] when they add up to the line."""
+    if not re.search(r"[;|]", cell or ""):
+        return None
+    out = []
+    for part in re.split(r"[;|]", cell):
+        m = re.match(r"\s*(.+?)\s+\$?(-?[\d,]+(?:\.\d+)?)\s*$", part)
+        if not m:
+            return None
+        v = abs(float(m.group(2).replace(",", ""))) * (-1 if amount < 0 else 1)
+        out.append((" ".join(w if w.isupper() and len(w) > 1 else w.capitalize() for w in m.group(1).split()), cents(v)))
+    if len(out) < 2 or abs(sum(a for _n, a in out) - amount) > 0.01:
+        return None
+    return out
 
 
 def undo_import(db: Session, import_id: int) -> int:
@@ -1054,7 +1165,8 @@ def txn_dict(t: AcctTxn, accounts: Dict[int, AcctAccount], sources: Dict[int, Ac
                         "kind": accounts[x.account_id].kind if x.account_id in accounts else None, "amount": x.amount, "note": x.note} for x in t.splits],
             "created_by": t.created_by, "updated_by": t.updated_by, "rule_id": t.rule_id,
             "sent_back": bool(t.sent_back), "sent_back_reason": t.sent_back_reason, "sent_back_by": t.sent_back_by,
-            "sent_back_at": t.sent_back_at}
+            "sent_back_at": t.sent_back_at, "flag": t.flag, "flag_info": json.loads(t.flag_info) if t.flag_info else None,
+            "qb_memo": t.qb_memo}
 
 
 def maps(db: Session):
@@ -1084,7 +1196,12 @@ def set_account(db: Session, t: AcctTxn, account_id: Optional[int], splits: Opti
     t.rule_id = None
     if account_id or splits:
         t.sent_back = None
+        t.flag = t.flag_info = None
     t.updated_by = by
+    if splits:
+        remember(db, t, "split", by)
+    else:
+        forget_memory(db, t, "split")
 
 
 # ---------------------------------------------------------------- reports
@@ -1603,3 +1720,203 @@ def export_quickbooks_csv(db: Session, source_id: int, start: date, end: date) -
         a = accounts.get(t.account_id)
         w.writerow([t.date.strftime("%m/%d/%Y"), t.bank_description or t.description, f"{t.amount:.2f}", path(a, accounts) if a else ""])
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------- remembered filings (survive a fresh start / re-import)
+def _mem_same(m: AcctMemory, d: date, amount: float, desc: str) -> bool:
+    if abs(m.amount - amount) > 0.005:
+        return False
+    days = abs((m.date.date() - d).days)
+    if days > 3:
+        return False
+    if days == 0 and starts_same(m.description or "", desc, 3):
+        return True
+    rr = _plain_refs(desc)
+    return starts_same(m.description or "", desc) or bool(rr and rr & _plain_refs(m.description or ""))
+
+
+def remember(db: Session, t: AcctTxn, kind: str, by: Optional[str]) -> AcctMemory:
+    """Keep how a person filed this line (kind split: always, from set_account; filing: on a fresh start)."""
+    desc = t.bank_description or t.description
+    m = next((x for x in db.query(AcctMemory).filter(AcctMemory.amount == t.amount).all() if _mem_same(x, t.date.date(), t.amount, desc)), None)
+    if not m:
+        m = AcctMemory(date=t.date, amount=t.amount, description=desc, created_by=by)
+        db.add(m)
+    m.source_id, m.kind, m.payee, m.note = t.source_id, kind, t.payee, t.note
+    if t.splits or kind == "split":
+        m.kind = "split"
+        m.account_id = None
+        m.splits = json.dumps([{"account_id": x.account_id, "amount": x.amount, "note": x.note} for x in t.splits])
+    else:
+        m.account_id, m.splits = t.account_id, None
+    return m
+
+
+def forget_memory(db: Session, t: AcctTxn, kind: Optional[str] = None) -> int:
+    n = 0
+    for m in db.query(AcctMemory).filter(AcctMemory.amount == t.amount).all():
+        if (kind is None or m.kind == kind) and _mem_same(m, t.date.date(), t.amount, t.bank_description or t.description):
+            db.delete(m)
+            n += 1
+    return n
+
+
+def memory_hits(db: Session, source_id: Optional[int], items) -> Dict[int, AcctMemory]:
+    """index in items -> the remembered filing for it (items: AcctTxn or parsed rows)."""
+    mems = db.query(AcctMemory).all()
+    if not mems:
+        return {}
+    by_amt = defaultdict(list)
+    for m in mems:
+        by_amt[round(m.amount, 2)].append(m)
+    out, used = {}, set()
+    for i, x in enumerate(items):
+        g = (lambda k: x.get(k)) if isinstance(x, dict) else (lambda k: getattr(x, k))
+        d = g("date")
+        d = d.date() if isinstance(d, datetime) else d
+        desc = (g("bank_description") if not isinstance(x, dict) else None) or g("description")
+        for m in by_amt.get(round(g("amount"), 2), []):
+            if m.id in used or (m.source_id and source_id and m.source_id != source_id):
+                continue
+            if _mem_same(m, d, g("amount"), desc):
+                out[i] = m
+                used.add(m.id)
+                break
+    return out
+
+
+def apply_memory(db: Session, source_id: int, txns: List[AcctTxn], by: str) -> int:
+    """New statement lines a person had filed before (a fresh start, a re-import): filed the same way again."""
+    accounts = {x[0] for x in db.query(AcctAccount.id).all()}
+    n = 0
+    for i, m in memory_hits(db, source_id, txns).items():
+        t = txns[i]
+        if t.account_id or t.splits:
+            continue
+        parts = json.loads(m.splits or "[]")
+        if parts and all(p["account_id"] in accounts for p in parts):
+            total = sum(p["amount"] for p in parts) or t.amount
+            for p in parts:
+                t.splits.append(AcctSplit(account_id=p["account_id"], amount=cents(p["amount"] * t.amount / total), note=p.get("note")))
+            diff = cents(t.amount - sum(x.amount for x in t.splits))
+            if abs(diff) > 0.004:
+                t.splits[-1].amount = cents(t.splits[-1].amount + diff)
+        elif m.account_id in accounts:
+            t.account_id = m.account_id
+        else:
+            continue
+        t.how, t.reviewed = "person", True
+        t.note = t.note or m.note
+        if t.flag == "qb_split" and t.splits:
+            t.flag = t.flag_info = None
+        m.used, m.last_used = (m.used or 0) + 1, datetime.utcnow()
+        n += 1
+    return n
+
+
+def memory_list(db: Session) -> List[dict]:
+    accounts, _ = maps(db)
+    out = []
+    for m in db.query(AcctMemory).order_by(AcctMemory.date.desc()).all():
+        parts = json.loads(m.splits or "[]")
+        out.append({"id": m.id, "date": m.date.date().isoformat(), "amount": m.amount, "description": m.description, "kind": m.kind,
+                    "account": path(accounts[m.account_id], accounts) if m.account_id in accounts else None,
+                    "splits": [{**p, "account": path(accounts[p["account_id"]], accounts) if p["account_id"] in accounts else "?"} for p in parts],
+                    "note": m.note, "used": m.used, "last_used": m.last_used, "created_by": m.created_by, "created_at": m.created_at})
+    return out
+
+
+SEEDED_KEY = "acct_memory_seeded"
+
+
+def seed_memory_once(db: Session) -> int:
+    """Once: every line a person has split so far is remembered (later splits are remembered as they're made)."""
+    if db.get(AppSetting, SEEDED_KEY):
+        return 0
+    n = 0
+    for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.splits.any()).all():
+        remember(db, t, "split", t.updated_by or t.created_by)
+        n += 1
+    db.add(AppSetting(key=SEEDED_KEY, value=json.dumps({"lines": n, "at": datetime.utcnow().isoformat()})))
+    db.commit()
+    return n
+
+
+def start_fresh(db: Session, keep_filings: bool, by: str) -> dict:
+    """Clear the books' lines (every statement line, typed-in line, import, ignored line) to bring the statements in again --
+    accounts, sub-accounts, rules, bank accounts, comments, projections, AP / AR notes and settings stay. Every split is
+    remembered first (and, keep_filings, how a person filed each line), so the same lines come back filed the same way."""
+    splits = filings = 0
+    for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).all():
+        if t.expected or t.origin == "manual":
+            continue
+        if t.splits and t.how in ("person", "workbook"):
+            remember(db, t, "split", by)
+            splits += 1
+        elif keep_filings and t.account_id and t.how in ("person", "workbook") and t.reviewed:
+            remember(db, t, "filing", by)
+            filings += 1
+    db.flush()
+    lines = db.query(AcctTxn).count()
+    db.query(AcctSplit).delete(synchronize_session=False)
+    db.query(AcctTxn).delete(synchronize_session=False)
+    db.query(AcctIgnored).delete(synchronize_session=False)
+    db.query(AcctCheckOk).delete(synchronize_session=False)
+    imports = db.query(AcctImport).count()
+    db.query(AcctImport).delete(synchronize_session=False)
+    db.query(AcctChange).delete(synchronize_session=False)
+    db.query(AcctRule).update({AcctRule.hits: 0}, synchronize_session=False)
+    for k in ("acct_rec_decisions",):
+        row = db.get(AppSetting, k)
+        if row:
+            db.delete(row)
+    db.commit()
+    return {"lines": lines, "imports": imports, "remembered_splits": splits, "remembered_filings": filings,
+            "memory": db.query(AcctMemory).count()}
+
+
+# ---------------------------------------------------------------- QuickBooks' pasted memo on lines already in
+def tails_existing(db: Session) -> List[dict]:
+    """Statement lines already in the books that carry QuickBooks' pasted text: what comes off, and what that does to a
+    line a rule / AT-HUB filed (the rule no longer matches -> back to Review)."""
+    accounts, _ = maps(db)
+    txns = (db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.origin != "manual", AcctTxn.qb_memo.is_(None))
+            .order_by(AcctTxn.date).all())
+    rows = [{"date": t.date.date(), "description": t.description} for t in txns]
+    specs = rule_specs(db)
+    out = []
+    for t, (clean, memo, why) in zip(txns, acct_tails.detect(rows)):
+        if not memo:
+            continue
+        after = {"description": clean, "bank_description": None, "payee": t.payee, "note": t.note, "amount": t.amount,
+                 "source_id": t.source_id, "date": t.date}
+        effect = None
+        if t.how in ("rule", "auto") and (t.account_id or t.splits):
+            r, clash = acct_rules.decide_rules(specs, acct_rules.line_of(after))
+            if clash:
+                effect = "rules disagree now -- back to Review"
+            elif t.how == "rule" and (not r or r["id"] != t.rule_id):
+                effect = "its rule no longer matches -- back to Review"
+        a = accounts.get(t.account_id)
+        out.append({"id": t.id, "date": t.date.date().isoformat(), "amount": t.amount, "before": t.description, "after": clean, "removed": memo,
+                    "why": why, "account": path(a, accounts) if a else ("split" if t.splits else None), "how": t.how, "effect": effect})
+    return out
+
+
+def clean_tails(db: Session, ids: List[int], by: str) -> dict:
+    found = {x["id"]: x for x in tails_existing(db)}
+    n = back = 0
+    for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.id.in_([i for i in ids if i in found])).all():
+        x = found[t.id]
+        t.description, t.qb_memo, t.updated_by = x["after"], x["removed"], by
+        t.payee = acct_mapper.payee_label(x["after"]) if t.origin != "manual" else t.payee
+        n += 1
+        if x["effect"]:
+            was = {"account_id": t.account_id} if t.account_id else {"splits": [{"account_id": s_.account_id, "amount": s_.amount, "note": s_.note} for s_ in t.splits]}
+            t.sent_back_from = json.dumps(was)
+            t.splits.clear()
+            t.account_id, t.how, t.rule_id, t.reviewed = None, None, None, True
+            t.sent_back, t.sent_back_reason, t.sent_back_by, t.sent_back_at = True, "QuickBooks' pasted text removed -- " + x["effect"].split(" -- ")[0], by, datetime.utcnow()
+            back += 1
+    db.flush()
+    return {"cleaned": n, "back_to_review": back}

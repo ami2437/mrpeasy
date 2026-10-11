@@ -86,13 +86,13 @@ async function tabPayees() {
 function drawPayees() {
   const q = (document.getElementById("py-q")?.value || "").toLowerCase();
   const rows = PAYEES.filter(r => !q || r.payee.toLowerCase().includes(q));
-  document.getElementById("py-list").innerHTML = `<table class="compact-table no-table-tools"><thead><tr><th>Payee</th><th class="num">Lines</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th><th>Months</th><th>Filed In</th><th>Last</th></tr></thead><tbody>
+  document.getElementById("py-list").innerHTML = `<table class="compact-table"><thead><tr><th>Payee</th><th class="num">Lines</th><th class="num">In</th><th class="num">Out</th><th class="num">Net</th><th>Months</th><th>Filed In</th><th>Last</th></tr></thead><tbody>
     ${rows.slice(0, 400).map(r => `<tr><td><a class="link" href="#" onclick='TXF={q:${escapeHtml(JSON.stringify(r.payee.replace(/ \(.*\)$/, "")))}};show("txns");return false;'>${escapeHtml(r.payee)}</a></td>
       <td class="num">${r.count}</td><td class="ac-amt">${r.in ? money(r.in) : ""}</td><td class="ac-amt">${r.out ? money(r.out) : ""}</td><td class="ac-amt"><strong>${money(r.net)}</strong></td>
       <td class="num">${r.months}</td><td class="small">${r.accounts.map(a => `${escapeHtml(a.account)} <span class="muted">×${a.count}</span>`).join("<br>")}</td><td class="nowrap">${day(r.last)}</td></tr>`).join("")
-    || `<tr><td colspan="8" class="muted">No payees.</td></tr>`}
-    <tr class="tot"><td>Total (${rows.length})</td><td class="num">${rows.reduce((a, r) => a + r.count, 0)}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.in, 0))}</td>
-      <td class="ac-amt">${money(rows.reduce((a, r) => a + r.out, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.net, 0))}</td><td colspan="3"></td></tr></tbody></table>`;
+    || `<tr><td colspan="8" class="muted">No payees.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td>Total (${rows.length})</td><td class="num">${rows.reduce((a, r) => a + r.count, 0)}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.in, 0))}</td>
+      <td class="ac-amt">${money(rows.reduce((a, r) => a + r.out, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.net, 0))}</td><td></td><td></td><td></td></tr></tfoot></table>`;
 }
 
 // ================================================================ 1099
@@ -105,7 +105,7 @@ async function tab1099() {
       <span style="flex:1"></span><button onclick="downloadFile('/api/accounting/tax1099/export.xlsx?year=${y}', '1099 list ${y}.xlsx').catch(e => alert(e.message))">${icon("download")} Excel For The CPA</button></div>
     <p class="ac-help">People and businesses paid $600 or more in ${y} (calendar year), from lines filed in cost of goods, expenses or other. Mark who needs a 1099 —
       card companies and corporations usually don't. The CPA makes the forms; this is the list.</p>
-    <table class="compact-table no-table-tools"><thead><tr><th>Payee</th><th class="num">Paid In ${y}</th><th class="num">Payments</th><th>Filed In</th><th>First – Last</th><th>Needs A 1099?</th></tr></thead><tbody>
+    <table class="compact-table"><thead><tr><th>Payee</th><th class="num">Paid In ${y}</th><th class="num">Payments</th><th>Filed In</th><th>First – Last</th><th>Needs A 1099?</th></tr></thead><tbody>
     ${d.rows.map(r => `<tr><td><strong>${escapeHtml(r.payee)}</strong></td><td class="ac-amt">${fmtMoney(r.total)}</td><td class="num">${r.count}</td><td class="small">${r.accounts.map(escapeHtml).join(", ")}</td>
       <td class="nowrap small">${day(r.first)} – ${day(r.last)}</td>
       <td class="nowrap">${["yes", "no"].map(m => `<label class="inline-check" style="margin-right:8px;"><input type="radio" name="t-${escapeHtml(r.payee)}" ${r.mark === m ? "checked" : ""} onchange='mark1099(${y}, ${escapeHtml(JSON.stringify(r.payee))}, "${m}")'> ${m === "yes" ? "Yes" : "No"}</label>`).join("")}</td></tr>`).join("")
@@ -120,13 +120,13 @@ async function tabRecurring() {
   view().innerHTML = `<div class="card"><h3 style="margin-top:0;">Recurring</h3>
     <p class="ac-help">Payments that keep coming back — rent, loan payments, payroll, card payments — spotted from the last 15 months: how often, how much, when the next one is due.
       <span class="neg">Red</span> = looks missed (later than usual).</p>
-    <table class="compact-table no-table-tools"><thead><tr><th>Payee</th><th>Money</th><th>How Often</th><th class="num">Amount</th><th class="num">Per Month</th><th>Times</th><th>Last</th><th>Next</th><th>Filed In</th></tr></thead><tbody>
+    <table class="compact-table"><thead><tr><th>Payee</th><th>Money</th><th>How Often</th><th class="num">Amount</th><th class="num">Per Month</th><th>Times</th><th>Last</th><th>Next</th><th>Filed In</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><a class="link" href="#" onclick='TXF={q:${escapeHtml(JSON.stringify(r.payee.replace(/ \(.*\)$/, "")))}};show("txns");return false;'>${escapeHtml(r.payee)}</a></td>
       <td>${r.money === "out" ? "Out" : "In"}</td><td>${escapeHtml(r.how_often)}</td><td class="ac-amt">${fmtMoney(r.amount)}${r.same_amount ? "" : `<div class="muted small">varies</div>`}</td>
       <td class="ac-amt">${money(r.per_month)}</td><td class="num">${r.times}</td><td class="nowrap">${day(r.last)}</td>
       <td class="nowrap ${r.missed ? "neg" : ""}">${day(r.next)}${r.missed ? " · missed?" : ""}</td><td class="small">${escapeHtml(r.account || "—")}</td></tr>`).join("")
       || `<tr><td colspan="9" class="muted">Nothing regular found yet.</td></tr>`}
-    ${rows.length ? `<tr class="tot"><td colspan="4">Per month (all of them)</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.per_month, 0))}</td><td colspan="4"></td></tr>` : ""}</tbody></table></div>`;
+    </tbody>${rows.length ? `<tfoot><tr class="tot"><td>Per month (all of them)</td><td></td><td></td><td></td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.per_month, 0))}</td><td></td><td></td><td></td><td></td></tr></tfoot>` : ""}</table></div>`;
 }
 
 // ================================================================ Ignored (duplicates / estimates)
@@ -134,6 +134,7 @@ async function tabIgnored() {
   const d = await apiFetch("/api/accounting/ignored");
   const possible = d.rows.filter(r => r.status === "possible"), ign = d.rows.filter(r => r.status === "ignored"), rest = d.rows.filter(r => r.status === "restored");
   const why = { exact: "already in (same date, amount, wording)", near: "looked like a line already in", estimate: "a workbook AR / AP estimate" };
+  const head = `<thead><tr><th></th><th>Date</th><th>Description</th><th class="num">Amount</th><th>Why</th></tr></thead>`;
   const line = (r, tick) => `<tr>${tick ? `<td><input type="checkbox" class="ig-tick" data-id="${r.id}"></td>` : "<td></td>"}<td class="nowrap">${day(r.date)}<div class="muted small">${escapeHtml(r.source)}</div></td>
     <td>${escapeHtml(r.description || "")}${r.extra && r.extra.account ? `<div class="muted small">${escapeHtml(r.extra.account)} · ${escapeHtml(r.extra.category || "")}</div>` : ""}</td><td class="ac-amt">${money(r.amount || 0)}</td>
     <td class="small">${escapeHtml(why[r.reason] || r.reason)}${r.dup_of ? `<div class="ac-desc">vs ${day(r.dup_of.date)} · ${fmtMoney(r.dup_of.amount)} · ${escapeHtml(r.dup_of.description.slice(0, 60))}${r.dup_of.account ? ` · ${escapeHtml(r.dup_of.account)}` : ""}</div>` : ""}</td></tr>`;
@@ -142,17 +143,17 @@ async function tabIgnored() {
       <strong>Keep Both</strong>; <strong>Ignore</strong> keeps them out.</p>
     ${possible.length ? `<div class="btn-row" style="margin-bottom:6px;"><button class="small-btn" onclick="igDo('ignore', 'possible')">Ignore Ticked</button><button class="small-btn" onclick="igDo('keep', 'possible')">Keep Both (Ticked)</button>
       <button class="small-btn" onclick="document.querySelectorAll('#ig-possible .ig-tick').forEach(c => c.checked = true)">Tick All</button></div>` : ""}
-    <table class="compact-table no-table-tools" id="ig-possible"><tbody>${possible.map(r => line(r, true)).join("") || `<tr><td class="muted">None waiting.</td></tr>`}</tbody></table></div>
+    <table class="compact-table no-table-tools" id="ig-possible">${head}<tbody>${possible.map(r => line(r, true)).join("") || `<tr><td class="muted">None waiting.</td></tr>`}</tbody></table></div>
     <div class="card"><h3 style="margin-top:0;">Ignored <span class="muted small">${ign.length} · ${fmtMoney(d.total_ignored)}</span></h3>
     <p class="ac-help">Not brought in: exact repeats from overlapping files, duplicates someone ignored, workbook estimates. Wasn't a duplicate? Tick it and <strong>Restore</strong> — it goes to Review.</p>
     ${ign.length ? `<div class="btn-row" style="margin-bottom:6px;"><button class="small-btn" onclick="igDo('restore', 'ignored')">Restore Ticked</button></div>` : ""}
-    <table class="compact-table no-table-tools" id="ig-ignored"><tbody>${ign.slice(0, 500).map(r => line(r, true)).join("") || `<tr><td class="muted">Nothing ignored.</td></tr>`}</tbody></table>
+    <table class="compact-table" id="ig-ignored">${head}<tbody>${ign.slice(0, 500).map(r => line(r, true)).join("") || `<tr><td class="muted">Nothing ignored.</td></tr>`}</tbody></table>
     ${rest.length ? `<p class="muted small">${rest.length} restored earlier.</p>` : ""}</div>`;
 }
 async function igDo(action, where) {
   const ids = [...document.querySelectorAll(`#ig-${where} .ig-tick:checked`)].map(c => +c.dataset.id);
   if (!ids.length) { toast("Tick some lines"); return; }
-  try { const r = await apiFetch("/api/accounting/ignored/decide", { method: "POST", body: JSON.stringify({ ids, action }) }); toast(`${r.done} done`); show("ignored"); refreshCount(); }
+  try { const r = await apiFetch("/api/accounting/ignored/decide", { method: "POST", body: JSON.stringify({ ids, action }) }); doneToast(`${r.done} done`, r.change_id); show("ignored"); refreshCount(); }
   catch (e) { alert(e.message); }
 }
 
@@ -171,18 +172,50 @@ async function tabCheck() {
     <p class="ac-help">Lines that may be in the wrong account or look wrong, ${all ? "every date" : "in this period"}. Fix one with a click, or say <strong>It's Right</strong> and it won't be shown again.</p>
     <div class="ac-tiles">${d.counts.map(c => `<div class="ac-tile click" onclick="document.getElementById('ck-${c.check}').scrollIntoView({behavior:'smooth'})"><div class="l">${escapeHtml(c.label)}</div>
       <div class="v ${c.severity === "high" ? "neg" : ""}">${c.count}</div></div>`).join("") || `<div class="ac-tile"><div class="l">All Clear</div><div class="v pos">0</div><div class="s">nothing looks wrong</div></div>`}</div></div>
+    <div class="ac-bulk" id="ck-bulk" style="display:none;position:sticky;top:0;z-index:4;"></div>
     ${Object.entries(by).map(([k, fs]) => `<div class="card" id="ck-${k}"><h3 style="margin-top:0;">${escapeHtml(fs[0].label)} <span class="muted small">${fs.length}</span></h3>
-      <table class="compact-table no-table-tools"><tbody>${fs.map(f => `<tr data-key="${escapeHtml(f.key)}"><td class="nowrap">${f.txn ? day(f.txn.date) : ""}</td>
+      <table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" title="Tick all in this check" onchange="this.closest('table').querySelectorAll('.ck-t').forEach(c => c.checked = this.checked);ckBulk()"></th>
+        <th>Date</th><th>Line / Why</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead><tbody>${fs.map(f => `<tr data-key="${escapeHtml(f.key)}"><td>${f.txn ? `<input type="checkbox" class="ck-t" data-id="${f.txn.id}" data-check="${f.check}" data-sug="${f.suggest ? f.suggest.account_id : ""}" data-amt="${f.txn.amount}" onchange="ckBulk()">` : ""}</td><td class="nowrap">${f.txn ? day(f.txn.date) : ""}</td>
         <td>${f.txn ? `<span class="ac-who">${escapeHtml(f.txn.payee || "")}</span><div class="ac-desc">${escapeHtml(f.txn.description)}</div>` : ""}<div class="small">${escapeHtml(f.why)}</div>
           ${f.also.map(x => `<div class="ac-desc">vs ${day(x.date)} · ${fmtMoney(x.amount)} · ${escapeHtml(x.description.slice(0, 60))}</div>`).join("")}</td>
         <td class="small">${f.txn ? escapeHtml(f.txn.account || "Not filed") : ""}</td><td class="ac-amt">${f.txn ? money(f.txn.amount) : ""}</td>
         <td class="nowrap">${f.txn && f.suggest ? `<button class="small-btn" onclick="ckMove(${f.txn.id}, ${f.suggest.account_id}, this)">${icon("check")} Move To ${escapeHtml(f.suggest.account)}</button>` : ""}
           ${f.txn ? `<button class="small-btn" onclick="ckBack(${f.txn.id}, this)">Send Back</button><button class="small-btn" onclick="ckOk(${f.txn.id}, '${f.check}', this)">It's Right</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`).join("")}`;
 }
-const ckDone = (btn, msg) => { const tr = btn.closest("tr"); tr.style.opacity = .4; tr.querySelectorAll("button").forEach(b => b.disabled = true); toast(msg); };
-async function ckMove(id, aid, btn) { await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify({ account_id: aid }) }); ckDone(btn, `Moved to ${acc(aid).path}`); }
-async function ckBack(id, btn) { await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids: [id], reason: "Check My Books" }) }); ckDone(btn, "Sent back to Review"); refreshCount(); }
-async function ckOk(id, check, btn) { await apiFetch("/api/accounting/check/ok", { method: "POST", body: JSON.stringify({ txn_id: id, check }) }); ckDone(btn, "OK — won't be shown again"); }
+const ckDone = (btn, msg, changeId) => { const tr = btn.closest("tr"); tr.style.opacity = .4; tr.querySelectorAll("button").forEach(b => b.disabled = true); doneToast(msg, changeId); };
+async function ckMove(id, aid, btn) { const r = await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify({ account_id: aid, learn: false }) }); ckDone(btn, `Moved to ${acc(aid).path}`, r.change_id); }
+async function ckBack(id, btn) { const r = await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids: [id], reason: "Check My Books" }) }); ckDone(btn, "Sent back to Review", r.change_id); refreshCount(); }
+async function ckOk(id, check, btn) { const r = await apiFetch("/api/accounting/check/ok", { method: "POST", body: JSON.stringify({ txn_id: id, check }) }); ckDone(btn, "OK — won't be shown again", r.change_id); }
+function ckTicked() { return [...document.querySelectorAll(".ck-t:checked")]; }
+function ckBulk() {
+  const el = document.getElementById("ck-bulk"); if (!el) return;
+  const t = ckTicked(); el.style.display = t.length ? "" : "none";
+  const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0);
+  el.innerHTML = `<strong>${t.length} ticked</strong> <span class="small">${fmtMoney(sum)}</span>
+    <select id="ck-acc" style="width:auto;max-width:240px;">${accountOptions(null, { blank: "— Move to account —" }).replace(`<option value="new">+ New account…</option>`, "")}</select><button class="small-btn" onclick="ckBulkDo('move')">Move</button>
+    <button class="small-btn" onclick="ckBulkDo('suggested')" title="Each to the account the check suggests">Each To Its Suggestion</button>
+    <button class="small-btn" onclick="ckBulkDo('back')">Send Back</button><button class="small-btn" onclick="ckBulkDo('ok')">It's Right</button>`;
+}
+async function ckBulkDo(what) {
+  const t = ckTicked(); if (!t.length) return;
+  const ids = [...new Set(t.map(c => +c.dataset.id))];
+  try {
+    if (what === "move") {
+      const a = +document.getElementById("ck-acc").value; if (!a) { toast("Pick the account"); return; }
+      const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: a }) }); doneToast(`${r.done} moved to ${acc(a).path}`, r.change_id);
+    } else if (what === "suggested") {
+      const by = {}; t.forEach(c => { if (c.dataset.sug) (by[c.dataset.sug] = by[c.dataset.sug] || []).push(+c.dataset.id); });
+      let n = 0; for (const [a, ids_] of Object.entries(by)) { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: ids_, action: "file", account_id: +a }) }); n += r.done; }
+      toast(`${n} moved to their suggested account (Recent Changes to undo)`);
+    } else if (what === "back") {
+      const r = await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids, reason: "Check My Books" }) }); doneToast(`${r.done} sent back to Review`, r.change_id);
+    } else {
+      for (const c of t) await apiFetch("/api/accounting/check/ok", { method: "POST", body: JSON.stringify({ txn_id: +c.dataset.id, check: c.dataset.check }) });
+      toast(`${t.length} marked right`);
+    }
+    refreshCount(); show("check");
+  } catch (e) { alert(e.message); }
+}
 
 // ================================================================ Reconcile against QuickBooks
 let REC = { rows: [], res: null };
@@ -234,6 +267,7 @@ async function recRun() {
   store.set("rec.accounts", account_ids);
   const tol = +document.getElementById("rec-tol").value || 0; store.set("rec.tol", tol);
   const mapping = {}; document.querySelectorAll(".rec-m").forEach(s => { if (s.value) mapping[s.dataset.name] = +s.value; });
+  Object.assign(mapping, REC.extraMap || {}); REC.extraMap = null;
   try { REC.res = await apiFetch("/api/accounting/reconcile/run", { method: "POST", body: JSON.stringify({ account_ids, start: PERIOD.start, end: PERIOD.end, rows: REC.rows, mapping, tol_days: tol }) }); drawRec(); }
   catch (e) { alert(e.message); }
 }
@@ -245,34 +279,227 @@ async function recLoad(id) {
   document.getElementById("rec-run").disabled = false;
   recRun();
 }
+const REC_BUCKETS = [
+  ["different", "Different Account", "QuickBooks has the line in one account, AT-HUB in another.", true],
+  ["weak", "Check These Matches", "Matched on the amount but not much else (different bank references, days apart, few shared words) — make sure they're the same line.", true],
+  ["split", "Split In QuickBooks", "Several QuickBooks lines add up to one AT-HUB line — QuickBooks has it split over accounts.", true],
+  ["amount_differs", "Amount Differs", "The same line (same reference / same start of the text, near the date) with a different amount.", true],
+  ["date_differs", "Date Differs", "The same line and amount, but further apart than the days allowed — one book has the wrong date.", true],
+  ["unmapped", "QuickBooks Account Not Mapped", "Matched a line, but the QuickBooks account isn't linked to an AT-HUB account — set it in the mapping below.", false],
+  ["qb_only", "Only In QuickBooks", "No AT-HUB line with that amount within the days allowed. The closest AT-HUB lines are listed — pair one if it's the same.", true],
+  ["athub_only", "Only In AT-HUB", "In the picked AT-HUB accounts, but not in what QuickBooks gave.", true],
+  ["same", "Same Account", "These agree.", false],
+  ["decided", "Decided Earlier", "You said these are right (or not for AT-HUB) — they're left alone. Undecide to see them again.", false]];
+let REC_SEL = new Set();
+function recRowsOf(k) { return (REC.res[k] || []).map((r, i) => ({ k, i, r })); }
+function recFlat() { return REC_BUCKETS.filter(b => b[0] !== "same" && b[0] !== "decided").flatMap(b => recRowsOf(b[0])); }
+function recTxnId(k, r) { return k === "athub_only" ? r.id : r.athub ? r.athub.id : null; }
 function drawRec() {
   const d = REC.res;
-  const qbRow = (r, fix) => `<tr><td class="nowrap">${day(r.date)}</td><td>${escapeHtml(r.name || "")}<div class="ac-desc">${escapeHtml(r.memo || "")}</div><div class="muted small">QuickBooks: ${escapeHtml(r.account || "")}${r.mapped_account ? ` → ${escapeHtml(r.mapped_account)}${r.mapped_by === "guess" ? " (guessed)" : ""}` : ""}</div></td>
-    <td class="ac-amt">${fmtMoney(r.amount)}</td>
-    <td>${r.athub ? `<span class="ac-who">${escapeHtml(r.athub.payee || "")}</span> <span class="muted small">${day(r.athub.date)}</span><div class="ac-desc">${escapeHtml(r.athub.description.slice(0, 70))}</div>
-      <div class="small">AT-HUB: <strong>${escapeHtml(r.athub.account || "Not filed")}</strong></div>` : `<span class="muted">not found in AT-HUB</span>`}</td>
-    <td class="nowrap">${fix && r.athub && r.mapped_account_id ? `<button class="small-btn" onclick="recMove(${r.athub.id}, ${r.mapped_account_id}, this)">${icon("check")} Move To ${escapeHtml(r.mapped_account)}</button>` : ""}</td></tr>`;
-  const at = t => `<tr><td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description)}</div></td><td class="ac-amt">${money(t.amount)}</td><td class="small">${escapeHtml(t.account || "")}</td>
-    <td><button class="small-btn" onclick="recBack(${t.id}, this)">Send Back</button></td></tr>`;
-  const sec = (key, title, help, html, open) => `<details class="card" ${open ? "open" : ""}><summary><strong>${title}</strong> <span class="muted small">${d.counts[key] || 0}</span></summary>
-    <p class="ac-help" style="margin-top:6px;">${help}</p><table class="compact-table no-table-tools"><tbody>${html || `<tr><td class="muted">None.</td></tr>`}</tbody></table></details>`;
-  document.getElementById("rec-out").innerHTML = `<div class="card"><h3 style="margin-top:0;">Result</h3>
-    <div class="ac-tiles"><div class="ac-tile"><div class="l">Same Account</div><div class="v pos">${d.counts.same}</div></div>
-      <div class="ac-tile"><div class="l">Different Account</div><div class="v ${d.counts.different ? "neg" : ""}">${d.counts.different}</div></div>
-      <div class="ac-tile"><div class="l">QuickBooks Account Not Mapped</div><div class="v">${d.counts.unmapped}</div></div>
-      <div class="ac-tile"><div class="l">Only In QuickBooks</div><div class="v">${d.counts.qb_only}</div></div>
-      <div class="ac-tile"><div class="l">Only In AT-HUB</div><div class="v">${d.counts.athub_only}</div></div></div>
+  REC_SEL = new Set();
+  const conf = r => r.confidence ? `<span class="ac-chip ${r.confidence === "high" ? "" : r.confidence === "low" ? "flag" : "check"}" title="${escapeHtml(r.reason || "")}">${r.confidence}</span>` : "";
+  const qbCell = r => `<td class="nowrap">${day(r.date)}</td><td>${escapeHtml(r.name || "")}<div class="ac-desc">${escapeHtml(r.memo || "")}</div></td>
+    <td class="small">${escapeHtml(r.account || "")}${r.mapped_account ? `<div class="muted">→ ${escapeHtml(r.mapped_account)}${r.mapped_by === "guess" ? " (guess)" : ""}</div>` : ""}</td><td class="ac-amt">${fmtMoney(r.amount)}</td>`;
+  const atCell = (a, part) => a ? `<td><span class="ac-who">${escapeHtml(a.payee || "")}</span> <span class="muted small">${day(a.date)}</span><div class="ac-desc">${escapeHtml(a.description.slice(0, 80))}</div></td>
+    <td class="small"><strong>${escapeHtml(part ? part.account + " (part)" : a.account || (a.splits.length ? "split" : "Not filed"))}</strong></td>` : `<td class="muted">—</td><td></td>`;
+  const actions = (k, r, i) => {
+    const id = recTxnId(k, r), b = [];
+    if (k === "split") return r.already_same ? `<span class="pos small">already split this way</span>` : r.can_split ? `<button class="small-btn primary" onclick="recSplit(${i})">Split It The Same Way</button>` : `<span class="muted small">map the accounts first</span>`;
+    if (id && r.mapped_account_id && !r.agree && k !== "qb_only") b.push(`<button class="small-btn" title="Move AT-HUB's line to the account QuickBooks has" onclick="recMove([${id}], ${r.mapped_account_id})">→ ${escapeHtml(r.mapped_account.split(" › ").pop())}</button>`);
+    if (id) b.push(`<button class="small-btn" onclick="recMoveTo([${id}])">Move To…</button><button class="small-btn" title="Keep the account, wait in Review with a red flag" onclick="recFlag([${id}], ${escapeHtml(JSON.stringify(r.account ? "Reconcile: QuickBooks says " + r.account : "Reconcile: not in QuickBooks"))})">Flag</button>`);
+    if (k === "qb_only") b.push(`<button class="small-btn" title="Type it into AT-HUB (a book entry in QuickBooks' account)" onclick="recAdd(${i})">Add To AT-HUB</button><button class="small-btn" onclick='recDecide([{key: ${JSON.stringify(r.key)}, decision: "ignore"}])'>Ignore</button>`);
+    else if (k === "athub_only") b.push(`<button class="small-btn" onclick='recDecide([{txn_id: ${r.id}, decision: "ok"}])'>OK</button>`);
+    else if (k !== "decided") b.push(`<button class="small-btn" title="AT-HUB's account is right — don't show it again" onclick='recDecide([{key: ${JSON.stringify(r.key)}, decision: "athub_right", txn_id: ${id || "null"}}])'>AT-HUB Is Right</button>`);
+    if (k === "decided") b.push(`<button class="small-btn" onclick='recDecide([${r.athub_only ? `{txn_id: ${r.athub.id}, key: "athub:${r.athub.id}", decision: null}` : `{key: ${JSON.stringify(r.key)}, decision: null}`}])'>Undecide</button>`);
+    return b.join("");
+  };
+  const head = k => k === "athub_only" ? `<tr><th></th><th>Date</th><th>AT-HUB Description</th><th>AT-HUB Account</th><th class="num">Amount</th><th>Closest In QuickBooks</th><th></th></tr>`
+    : `<tr><th></th><th>QB Date</th><th>QuickBooks: Name / Memo</th><th>QuickBooks Account</th><th class="num">Amount</th><th>AT-HUB: Description</th><th>AT-HUB Account</th><th class="num">Days</th><th>Match</th><th></th></tr>`;
+  const rowHtml = (k, r, i) => {
+    const id = recTxnId(k, r);
+    const tick = id || k === "qb_only" ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="rec-t" data-k="${k}" data-i="${i}" data-amt="${r.amount}" onchange="recTick()"></td>` : "<td></td>";
+    if (k === "athub_only") return `<tr class="drill" onclick="recCompare('${k}', ${i})">${tick}<td class="nowrap">${day(r.date)}</td><td><span class="ac-who">${escapeHtml(r.payee || "")}</span><div class="ac-desc">${escapeHtml(r.description)}</div></td>
+      <td class="small">${escapeHtml(r.account || (r.splits.length ? "split" : ""))}</td><td class="ac-amt">${money(r.amount)}</td>
+      <td class="small">${(r.closest || []).map(c => `<div>${day(c.date)} ${fmtMoney(c.amount)} ${escapeHtml((c.name || c.memo || "").slice(0, 30))} <a class="link" href="#" onclick='event.stopPropagation();recDecide([{key: ${JSON.stringify(c.key)}, decision: "pair", txn_id: ${r.id}}]);return false;'>Pair</a></div>`).join("") || `<span class="muted">—</span>`}</td>
+      <td class="nowrap" onclick="event.stopPropagation()">${actions(k, r, i)}</td></tr>`;
+    if (k === "split") return `<tr class="drill" onclick="recCompare('${k}', ${i})"><td></td><td class="nowrap">${day(r.date)}</td><td>${r.parts.map(p => `<div>${escapeHtml(p.name || p.memo || "")} <span class="muted">${fmtMoney(p.amount)}</span></div>`).join("")}</td>
+      <td class="small">${r.parts.map(p => `<div>${escapeHtml(p.account)}${p.mapped_account ? ` → ${escapeHtml(p.mapped_account)}` : ` <span class="neg">(not mapped)</span>`}</div>`).join("")}</td><td class="ac-amt">${fmtMoney(r.amount)}</td>
+      ${atCell(r.athub)}<td></td><td><span class="ac-chip flag">split</span></td><td class="nowrap" onclick="event.stopPropagation()">${actions(k, r, i)}</td></tr>`;
+    const extra = k === "amount_differs" ? `<div class="neg small">differs by ${fmtMoney(r.difference)}</div>` : k === "date_differs" ? `<div class="neg small">${r.days} days apart</div>` : "";
+    const closest = k === "qb_only" && (r.closest || []).length ? `<div class="small" style="margin-top:3px;">Closest: ${r.closest.map(c => `${day(c.date)} ${fmtMoney(c.amount)} ${escapeHtml((c.description || "").slice(0, 28))}${c.taken ? " (matched elsewhere)" : ""}
+      <a class="link" href="#" onclick='event.stopPropagation();recDecide([{key: ${JSON.stringify(r.key)}, decision: "pair", txn_id: ${c.id}}]);return false;'>Pair</a>`).join(" · ")}</div>` : "";
+    return `<tr class="drill" onclick="recCompare('${k}', ${i})">${tick}${qbCell(r)}${r.athub ? atCell(r.athub, r.athub_part) : `<td class="muted" colspan="2">not found in AT-HUB${closest}</td>`}
+      <td class="num">${r.days ?? ""}</td><td>${conf(r)}${extra}${r.agree === false ? `<div><span class="ac-chip flag">accounts differ</span></div>` : ""}</td><td class="nowrap" onclick="event.stopPropagation()">${actions(k, r, i)}</td></tr>`;
+  };
+  const sec = ([k, title, help, open]) => `<details class="card" id="rec-${k}" ${open && (d.counts[k] || 0) ? "open" : ""}><summary><strong>${title}</strong> <span class="muted small">${d.counts[k] || 0}</span></summary>
+    <p class="ac-help" style="margin-top:6px;">${help}</p>${(d[k] || []).length ? `<div class="btn-row" style="margin-bottom:4px;"><a class="link small" href="#" onclick="document.querySelectorAll('#rec-${k} .rec-t').forEach(c => c.checked = true);recTick();return false;">Tick all in this section</a></div>` : ""}
+    <table class="compact-table"><thead>${head(k)}</thead><tbody>${(d[k] || []).map((r, i) => rowHtml(k, r, i)).join("") || `<tr><td colspan="10" class="muted">None.</td></tr>`}</tbody></table></details>`;
+  document.getElementById("rec-out").innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">Result</h3><span style="flex:1"></span>
+      <button class="small-btn" onclick="recExport()">${icon("download")} Excel</button></div>
+    <div class="ac-tiles">${REC_BUCKETS.filter(b => b[0] !== "decided" || d.counts.decided).map(([k, t]) => `<div class="ac-tile click" onclick="const x=document.getElementById('rec-${k}');x.open=true;x.scrollIntoView({behavior:'smooth'})"><div class="l">${t}</div>
+      <div class="v ${["different", "weak", "split", "amount_differs", "date_differs"].includes(k) && d.counts[k] ? "neg" : k === "same" ? "pos" : ""}">${d.counts[k] || 0}</div></div>`).join("")}</div>
     <table class="compact-table no-table-tools"><thead><tr><th>Account</th><th class="num">AT-HUB</th><th class="num">QuickBooks</th><th class="num">Difference</th></tr></thead><tbody>
       ${d.totals.map(t => `<tr><td>${escapeHtml(t.account)}</td><td class="ac-amt">${fmtMoney(t.athub_abs)}</td><td class="ac-amt">${fmtMoney(t.qb_abs)}</td>
-        <td class="ac-amt ${Math.abs(t.difference) > 0.009 ? "neg" : "pos"}"><strong>${fmtMoney(t.difference)}</strong></td></tr>`).join("")}</tbody></table></div>
-    ${sec("different", "Different Account", "QuickBooks has the line in one account, AT-HUB in another. Move AT-HUB's if QuickBooks is right.", d.different.map(r => qbRow(r, true)).join(""), true)}
-    ${sec("unmapped", "QuickBooks Account Not Mapped", "Matched a line, but the QuickBooks account isn't linked to an AT-HUB account yet — pick it above and match again.", d.unmapped.map(r => qbRow(r, false)).join(""), d.counts.unmapped > 0)}
-    ${sec("qb_only", "Only In QuickBooks", "No AT-HUB line with that amount within the days allowed.", d.qb_only.map(r => qbRow(r, false)).join(""), d.counts.qb_only > 0)}
-    ${sec("athub_only", "Only In AT-HUB", "In the picked AT-HUB accounts, but not in what was pasted from QuickBooks.", d.athub_only.map(at).join(""), d.counts.athub_only > 0)}
-    ${sec("same", "Same Account", "These agree.", d.same.map(r => qbRow(r, false)).join(""), false)}`;
+        <td class="ac-amt ${Math.abs(t.difference) > 0.009 ? "neg" : "pos"}"><strong>${fmtMoney(t.difference)}</strong></td></tr>`).join("")}</tbody></table>
+    <details style="margin-top:8px;" ${d.first_bad_month ? "open" : ""}><summary><strong>Month By Month</strong> <span class="muted small">${d.first_bad_month ? `first month that disagrees: ${monthLabel(d.first_bad_month)}` : "every month agrees"}</span></summary>
+      <table class="compact-table no-table-tools" style="margin-top:6px;"><thead><tr><th>Month</th><th class="num">QuickBooks</th><th class="num">AT-HUB</th><th class="num">Difference</th><th class="num">Running</th><th></th></tr></thead><tbody>
+      ${d.months.map(m => `<tr ${m.month === d.first_bad_month ? 'style="background:var(--surface-3)"' : ""}><td>${monthLabel(m.month)}</td><td class="ac-amt">${fmtMoney(m.qb)} <span class="muted small">${m.qb_lines}</span></td>
+        <td class="ac-amt">${fmtMoney(m.athub)} <span class="muted small">${m.athub_lines}</span></td><td class="ac-amt ${Math.abs(m.difference) > 0.009 ? "neg" : ""}">${fmtMoney(m.difference)}</td>
+        <td class="ac-amt">${fmtMoney(m.running)}</td><td><a class="link small" href="#" onclick="recMonth('${m.month}');return false;">Lines</a></td></tr>`).join("")}</tbody></table></details>
+    <details style="margin-top:8px;"><summary><strong>Account Mapping</strong> <span class="muted small">QuickBooks account → AT-HUB account, with both totals</span></summary>
+      <table class="compact-table no-table-tools" style="margin-top:6px;"><thead><tr><th>QuickBooks Account</th><th class="num">Lines</th><th class="num">QuickBooks</th><th>AT-HUB Account</th><th class="num">AT-HUB</th><th class="num">Difference</th></tr></thead><tbody>
+      ${d.mapping.map(m => `<tr><td>${escapeHtml(m.name || "(no account)")}</td><td class="num">${m.count}</td><td class="ac-amt">${fmtMoney(m.qb_total)}</td>
+        <td><select class="rec-m2" data-name="${escapeHtml(m.name)}" style="max-width:260px;">${accountOptions(m.account_id, { blank: "— not mapped —" }).replace(`<option value="new">+ New account…</option>`, "")}</select>${m.by === "guess" ? ` <span class="muted small">guess</span>` : ""}</td>
+        <td class="ac-amt">${m.athub_total != null ? fmtMoney(m.athub_total) : ""}</td><td class="ac-amt ${m.difference && Math.abs(m.difference) > 0.009 ? "neg" : ""}">${m.difference != null ? fmtMoney(m.difference) : ""}</td></tr>`).join("")}</tbody></table>
+      <button class="small-btn" style="margin-top:6px;" onclick="recRemap()">Save Mapping &amp; Match Again</button></details></div>
+    <div class="ac-bulk" id="rec-bulk" style="display:none;position:sticky;top:0;z-index:4;"></div>
+    ${REC_BUCKETS.map(sec).join("")}`;
 }
-async function recMove(id, aid, btn) { await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify({ account_id: aid }) }); ckDone(btn, `Moved to ${acc(aid).path}`); }
-async function recBack(id, btn) { await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids: [id], reason: "Reconcile: not in QuickBooks" }) }); ckDone(btn, "Sent back to Review"); refreshCount(); }
+function recTick() {
+  const t = [...document.querySelectorAll(".rec-t:checked")];
+  const el = document.getElementById("rec-bulk"); if (!el) return;
+  el.style.display = t.length ? "" : "none";
+  const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0);
+  el.innerHTML = `<strong>${t.length} ticked</strong> <span class="small">${fmtMoney(sum)}</span>
+    <select id="rec-acc" style="width:auto;max-width:240px;">${accountOptions(null, { blank: "— Move to account —" })}</select><button class="small-btn" onclick="recBulk('move')">Move</button>
+    <button class="small-btn" onclick="recBulk('qb')" title="Each AT-HUB line to the account QuickBooks has it in">Each To QuickBooks' Account</button>
+    <button class="small-btn" onclick="recBulk('flag')">Flag For Review</button><button class="small-btn" onclick="recBulk('right')">AT-HUB Is Right</button>
+    <button class="small-btn" onclick="recBulk('ok')" title="Only-in-AT-HUB lines that are fine">OK</button><button class="small-btn" onclick="document.querySelectorAll('.rec-t').forEach(c => c.checked = false);recTick()">Clear</button>`;
+  const sel = document.getElementById("rec-acc");
+  sel.onchange = async () => { if (sel.value === "new") await pickNew(sel, -1); };
+}
+function recTicked() { return [...document.querySelectorAll(".rec-t:checked")].map(c => ({ k: c.dataset.k, r: REC.res[c.dataset.k][+c.dataset.i] })); }
+async function recBulk(what) {
+  const t = recTicked(); if (!t.length) return;
+  const ids = [...new Set(t.map(x => recTxnId(x.k, x.r)).filter(Boolean))];
+  if (what === "move") { const a = +document.getElementById("rec-acc").value; if (!a) { toast("Pick the account"); return; } return recMove(ids, a); }
+  if (what === "qb") {
+    const by = {}; t.forEach(x => { const id = recTxnId(x.k, x.r); if (id && x.r.mapped_account_id) (by[x.r.mapped_account_id] = by[x.r.mapped_account_id] || []).push(id); });
+    const changes = [];
+    for (const [a, ids_] of Object.entries(by)) { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: ids_, action: "file", account_id: +a }) }); if (r.change_id) changes.push(r.change_id); }
+    toast(`${Object.values(by).flat().length} line(s) moved to QuickBooks' accounts`, changes.length ? { label: "Undo", run: async () => { for (const c of changes.reverse()) await apiFetch(`/api/accounting/changes/${c}/undo`, { method: "POST" }); recRun(); } } : null, 10000);
+    return recRun();
+  }
+  if (what === "flag") return recFlag(ids, "Reconcile: check against QuickBooks");
+  if (what === "right") return recDecide(t.filter(x => x.k !== "athub_only").map(x => ({ key: x.r.key, decision: "athub_right", txn_id: recTxnId(x.k, x.r) })));
+  if (what === "ok") return recDecide(t.filter(x => x.k === "athub_only").map(x => ({ txn_id: x.r.id, decision: "ok" })));
+}
+async function recMove(ids, aid) {
+  try { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: aid }) }); doneToast(`${r.done} moved to ${acc(aid).path}`, r.change_id, recRun); recRun(); refreshCount(); }
+  catch (e) { alert(e.message); }
+}
+async function recMoveTo(ids) {
+  const { value, el } = await askDialog({ title: "Move To…", body: `<select id="rm-acc" style="width:100%;">${accountOptions(null)}</select>`, buttons: [{ label: "Move", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+  if (!value) return;
+  let a = el.querySelector("#rm-acc").value;
+  if (a === "new") { const x = await accountDialog(null, "expense"); if (!x) return; await loadMeta(); a = x.id; }
+  if (a) recMove(ids, +a);
+}
+async function recFlag(ids, reason) {
+  try { const r = await apiFetch("/api/accounting/txns/flag", { method: "POST", body: JSON.stringify({ ids, reason }) }); doneToast(`${r.done} flagged — waiting in Review`, r.change_id, recRun); refreshCount(); }
+  catch (e) { alert(e.message); }
+}
+async function recDecide(items) {
+  if (!items.length) return;
+  try { await apiFetch("/api/accounting/reconcile/decide", { method: "POST", body: JSON.stringify({ items }) }); toast(`${items.length} remembered`); recRun(); }
+  catch (e) { alert(e.message); }
+}
+async function recAdd(i) {
+  const r = REC.res.qb_only[i];
+  const t = await addLinePrefilled({ amount: r.amount, description: [r.name, r.memo].filter(Boolean).join(" — ") || r.account, note: `from QuickBooks (${r.account})`, account_id: r.mapped_account_id, date: r.date });
+  if (t) recRun();
+}
+async function recSplit(i) {
+  const s = REC.res.split[i];
+  const splits = s.parts.map(p => ({ account_id: p.mapped_account_id, amount: p.amount, note: p.name || p.memo || "" }));
+  try { const r = await apiFetch(`/api/accounting/txns/${s.athub.id}`, { method: "PUT", body: JSON.stringify({ splits, learn: false }) }); doneToast("Split like QuickBooks", r.change_id, recRun); recRun(); refreshCount(); }
+  catch (e) { alert(e.message); }
+}
+async function recRemap() {
+  const mapping = {}; document.querySelectorAll(".rec-m2").forEach(s => { mapping[s.dataset.name] = s.value ? +s.value : 0; });
+  document.querySelectorAll(".rec-m").forEach(s => { if (s.dataset.name in mapping) s.value = mapping[s.dataset.name] || ""; });
+  REC.extraMap = mapping; recRun();
+}
+function recMonth(m) {
+  const [y, mo] = m.split("-").map(Number), last = new Date(y, mo, 0).getDate();
+  TXF = { date_from: `${m}-01`, date_to: `${m}-${String(last).padStart(2, "0")}`, account_id: (store.get("rec.accounts", []) || [])[0] || "" }; saveTxf(); show("txns");
+}
+async function recExport() {
+  try {
+    const body = JSON.stringify({ account_ids: store.get("rec.accounts", []), start: PERIOD.start, end: PERIOD.end, rows: REC.rows, tol_days: store.get("rec.tol", 5) });
+    const res = await fetch(`${API_BASE}/api/accounting/reconcile/export.xlsx`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` }, body });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const blob = await res.blob(), a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `Reconcile ${PERIOD.start} to ${PERIOD.end}.xlsx` });
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { alert(e.message); }
+}
+// ---- Compare: one QuickBooks line against AT-HUB's, field by field, words told apart; Prev / Next with the arrow keys
+function recWords(s) { return (s || "").toUpperCase().split(/\s+/).filter(Boolean); }
+function recSameWord(a, b) {
+  const clean = w => w.replace(/[^A-Z0-9*#]/g, "");
+  a = clean(a); b = clean(b); if (!a || !b) return false; if (a === b) return true;
+  const m = x => /^([A-WYZ#]*)X{3,}(\d+)$/.exec(x);
+  for (const [x, y] of [[a, b], [b, a]]) { const mm = m(x); if (mm && y.startsWith(mm[1]) && y.endsWith(mm[2])) return true; }
+  return false;
+}
+function recDiff(mine, other) {  // each word of mine: kept plain if the other side has it, marked if not
+  const o = recWords(other);
+  return recWords(mine).map(w => o.some(x => recSameWord(w, x)) ? escapeHtml(w) : `<mark title="Not on the other side">${escapeHtml(w)}</mark>`).join(" ");
+}
+async function recCompare(k, i) {
+  const list = recFlat().concat(k === "same" || k === "decided" ? recRowsOf(k) : []);
+  let pos = list.findIndex(x => x.k === k && x.i === i); if (pos < 0) return;
+  const draw = async () => {
+    const { k, r } = list[pos];
+    const a = k === "athub_only" ? r : r.athub, qbText = k === "athub_only" ? "" : [r.name, r.memo].filter(Boolean).join(" ");
+    let hist = [];
+    if (a) { try { hist = (await apiFetch(`/api/accounting/txns/${a.id}/rules`)).history; } catch {} }
+    const qbAcc = k === "split" ? r.parts.map(p => `${escapeHtml(p.account)} ${fmtMoney(p.amount)}${p.mapped_account ? ` → ${escapeHtml(p.mapped_account)}` : ""}`).join("<br>") : escapeHtml(r.account || "") + (r.mapped_account ? ` → ${escapeHtml(r.mapped_account)}` : "");
+    const atAcc = a ? (a.splits.length ? a.splits.map(x => `${escapeHtml(x.account)} ${fmtMoney(x.amount)}`).join("<br>") : escapeHtml(a.account || "Not filed")) : "—";
+    const refs = s => (s.toUpperCase().match(/[A-Z0-9]{8,}/g) || []).filter(w => /\d/.test(w) && /[A-Z]/.test(w) && !w.includes("XXX"));
+    const rq = refs(qbText), ra = a ? refs(a.description) : [];
+    const refTxt = rq.length && ra.length ? (rq.some(x => ra.includes(x)) ? `<span class="pos">same: ${escapeHtml(rq.filter(x => ra.includes(x)).join(", "))}</span>` : `<span class="neg">different: ${escapeHtml(rq.join(", "))} vs ${escapeHtml(ra.join(", "))}</span>`) : `<span class="muted">not on both</span>`;
+    const days = a && r.date ? Math.round((new Date(a.date) - new Date(k === "athub_only" ? a.date : r.date)) / 864e5) : null;
+    const row = (label, q, at, hl) => `<tr${hl ? ' style="background:var(--surface-3)"' : ""}><th style="width:120px;text-align:left;">${label}</th><td>${q}</td><td>${at}</td></tr>`;
+    const body = `<div class="muted small" style="margin-bottom:6px;">${escapeHtml((REC_BUCKETS.find(b => b[0] === k) || [])[1] || "")} · ${pos + 1} of ${list.length} · ← → to walk</div>
+      <table class="compact-table no-table-tools"><thead><tr><th></th><th>QuickBooks</th><th>AT-HUB</th></tr></thead><tbody>
+      ${row("Date", k === "athub_only" ? "—" : day(r.date), a ? `${day(a.date)}${days ? ` <span class="${Math.abs(days) > 3 ? "neg" : "muted"}">(${days > 0 ? "+" : ""}${days} days)</span>` : ""}` : "—", days && Math.abs(days) > 0)}
+      ${row("Amount", k === "athub_only" ? "—" : fmtMoney(r.amount), a ? fmtMoney(a.amount) + (k !== "athub_only" && Math.abs(Math.abs(a.amount) - Math.abs(r.amount)) > 0.005 ? ` <span class="neg">(${fmtMoney(Math.abs(r.amount) - Math.abs(a.amount))} apart)</span>` : "") : "—", r.difference)}
+      ${row("Description", qbText ? recDiff(qbText, a ? a.description : "") : "—", a ? recDiff(a.description, qbText) + (a.qb_memo ? `<div class="ac-memo">QuickBooks added: ${escapeHtml(a.qb_memo)}</div>` : "") : "—")}
+      ${row("Payee / Name", escapeHtml(r.name || "—"), a ? escapeHtml(a.payee || "—") : "—")}
+      ${row("Account", qbAcc, atAcc, r.agree === false)}
+      ${row("Memo / Note", escapeHtml(r.memo || "—"), a ? escapeHtml(a.note || "—") : "—")}
+      ${row("Bank References", refTxt, "")}
+      ${row("Bank Account", "", a ? escapeHtml(a.source) : "—")}
+      ${row("Why Matched", r.reason ? `${escapeHtml(r.reason)} ${r.confidence ? `<span class="ac-chip">${r.confidence}</span>` : ""}` : `<span class="muted">${k === "qb_only" ? "no AT-HUB line matched" : k === "athub_only" ? "no QuickBooks line matched" : k === "split" ? "the parts add up to the AT-HUB line" : "—"}</span>`, "")}
+      </tbody></table>
+      ${hist.length ? `<h4 style="margin:10px 0 4px;">AT-HUB Line History</h4>${hist.map(h => `<div class="small">${fmtWhen(h.at)} · ${escapeHtml(h.by || "")} · ${escapeHtml(h.what)}${h.undone ? " (undone)" : ""}</div>`).join("")}`
+        : a ? `<p class="muted small" style="margin-top:8px;">${a.created_by ? `Brought in by ${escapeHtml(a.created_by)}` : ""}${a.updated_by ? ` · last changed by ${escapeHtml(a.updated_by)}` : ""}${a.how ? ` · filed by ${escapeHtml(a.how)}` : ""}</p>` : ""}
+`;
+    const btns = [{ label: "← Prev", value: "prev" }, { label: "Next →", value: "next" }];
+    const id = a && a.id;
+    if (k === "split" && r.can_split && !r.already_same) btns.unshift({ label: "Split It The Same Way", value: "split", cls: "primary" });
+    if (id && r.mapped_account_id && r.agree === false) btns.unshift({ label: `Move To ${r.mapped_account.split(" › ").pop()}`, value: "qb", cls: "primary" });
+    if (id) btns.push({ label: "Move To…", value: "move" }, { label: "Flag For Review", value: "flag" });
+    if (k !== "athub_only" && k !== "qb_only" && k !== "decided") btns.push({ label: "AT-HUB Is Right", value: "right" });
+    if (k === "qb_only") btns.push({ label: "Add To AT-HUB", value: "add" });
+    btns.push({ label: "Close", value: null });
+    const dlg = askDialog({ title: "Compare", body, buttons: btns, wide: true });
+    const onKey = e => { const b = [...document.querySelectorAll(".ask-dialog button")]; if (e.key === "ArrowRight") b.find(x => x.textContent === "Next →")?.click(); if (e.key === "ArrowLeft") b.find(x => x.textContent === "← Prev")?.click(); };
+    document.addEventListener("keydown", onKey);
+    const { value } = await dlg;
+    document.removeEventListener("keydown", onKey);
+    if (value === "prev") { pos = (pos - 1 + list.length) % list.length; return draw(); }
+    if (value === "next") { pos = (pos + 1) % list.length; return draw(); }
+    if (value === "split") return recSplit(list[pos].i);
+    if (value === "qb") return recMove([id], r.mapped_account_id);
+    if (value === "move") return recMoveTo([id]);
+    if (value === "flag") return recFlag([id], r.account ? "Reconcile: QuickBooks says " + r.account : "Reconcile: check against QuickBooks");
+    if (value === "right") return recDecide([{ key: r.key, decision: "athub_right", txn_id: id || null }]);
+    if (value === "add") return recAdd(list[pos].i);
+  };
+  draw();
+}
 
 // ================================================================ a small formula engine (Projections, Loans quick calc) -- no eval
 // numbers, + - * / ^ ( ), 10%, R3 (row 3's value), SUM / MIN / MAX / AVG (R2:R8, R3, 5 ...), GROUP("Cash In Bank")
@@ -328,7 +555,17 @@ function makeCalc(rows) {
 }
 
 // ================================================================ Projections (scratch -- never the books)
-const PJ_GROUPS = ["Cash In Bank", "AR Owed To Us", "AP We Owe", "Loans Owed", "Expected Money In", "Expected Money Out", "Partner Draws", "Other"];
+const PJ_GROUPS = ["Cash In Bank", "Customers Owe Us (AR)", "Vendors We Owe (AP)", "Loans We Owe", "Loans Owed To Us", "Expected Money In", "Expected Money Out", "Partner Draws", "Other"];
+const PJ_OLD = { "AR Owed To Us": "Customers Owe Us (AR)", "AP We Owe": "Vendors We Owe (AP)", "Loans Owed": "Loans We Owe" };
+const PJ_OWE = new Set(["Vendors We Owe (AP)", "Loans We Owe", "Expected Money Out", "Partner Draws"]);  // money going out: always shown red
+const PJ_IN = new Set(["Cash In Bank", "Customers Owe Us (AR)", "Loans Owed To Us", "Expected Money In"]);
+function pjMigrate(doc) {  // the old group names (and GROUP("...") in formulas) read as the new ones
+  (doc.rows || []).forEach(r => {
+    if (PJ_OLD[r.group]) r.group = PJ_OLD[r.group];
+    if (typeof r.a === "string") r.a = r.a.replace(/GROUP\("([^"]*)"\)/gi, (m, g) => PJ_OLD[g] ? `GROUP("${PJ_OLD[g]}")` : m);
+  });
+}
+function pjGroups(doc) { return [...PJ_GROUPS, ...new Set((doc.rows || []).map(r => r.group).filter(g => g && !PJ_GROUPS.includes(g)))]; }
 let PJ = { list: [], cur: null, dirty: false };
 async function tabProjections() {
   PJ.list = await apiFetch("/api/accounting/sheets?kind=projection");
@@ -340,13 +577,17 @@ async function tabProjections() {
 function pjSettings() { return Object.assign({ months: 6, ar_pct: 90, ar_months: 2, ap_months: 2, extra_loan: 0 }, PJ.cur.doc.settings || {}); }
 function drawProjections() {
   const doc = PJ.cur.doc; doc.rows = doc.rows || [];
+  pjMigrate(doc);
   const S = pjSettings();
   const calc = makeCalc(doc.rows);
   const vals = doc.rows.map((r, k) => { try { return { v: calc.val(k + 1) }; } catch (e) { return { v: 0, err: e.message }; } });
   const g = name => doc.rows.reduce((s, r, k) => s + ((r.group || "") === name ? vals[k].v : 0), 0);
-  const cash = g("Cash In Bank"), ar = g("AR Owed To Us") * S.ar_pct / 100, ap = Math.abs(g("AP We Owe")), loans = Math.abs(g("Loans Owed"));
-  const expIn = g("Expected Money In"), expOut = Math.abs(g("Expected Money Out")), draws = Math.abs(g("Partner Draws")), other = g("Other");
-  const net = cash + ar - ap - loans + expIn - expOut - draws + other;
+  const cash = g("Cash In Bank"), ar = Math.abs(g("Customers Owe Us (AR)")) * S.ar_pct / 100, ap = Math.abs(g("Vendors We Owe (AP)")), loans = Math.abs(g("Loans We Owe"));
+  const lent = Math.abs(g("Loans Owed To Us"));
+  const expIn = Math.abs(g("Expected Money In")), expOut = Math.abs(g("Expected Money Out")), draws = Math.abs(g("Partner Draws"));
+  const custom = pjGroups(doc).filter(x => !PJ_GROUPS.includes(x));
+  const other = g("Other") + custom.reduce((a, x) => a + g(x), 0);
+  const net = cash + ar + lent - ap - loans + expIn - expOut - draws + other;
   const partners = (META.settings.partners || []);
   // month-by-month cash: rows with a month land in that month, without one every month (Expected In / Out) or spread (AR / AP)
   const months = [], start = new Date(META.today + "T00:00:00");
@@ -359,9 +600,9 @@ function drawProjections() {
       if (has && r.month !== m) return;
       if (r.group === "Expected Money In") inn += Math.abs(v);
       else if (r.group === "Expected Money Out" || r.group === "Partner Draws") out += Math.abs(v) * (has ? 1 : (r.group === "Partner Draws" ? 0 : 1));
-      else if (r.group === "AR Owed To Us" && (has || k < S.ar_months)) inn += Math.abs(v) * S.ar_pct / 100 / (has ? 1 : S.ar_months);
-      else if (r.group === "AP We Owe" && (has || k < S.ap_months)) out += Math.abs(v) / (has ? 1 : S.ap_months);
-      else if (r.group === "Partner Draws" && has) out += 0;
+      else if (r.group === "Customers Owe Us (AR)" && (has || k < S.ar_months)) inn += Math.abs(v) * S.ar_pct / 100 / (has ? 1 : S.ar_months);
+      else if (r.group === "Vendors We Owe (AP)" && (has || k < S.ap_months)) out += Math.abs(v) / (has ? 1 : S.ap_months);
+      else if ((r.group === "Loans Owed To Us" || r.group === "Loans We Owe") && has) (r.group === "Loans Owed To Us" ? inn += Math.abs(v) : out += Math.abs(v));
     });
     out += +S.extra_loan || 0;
     run += inn - out;
@@ -377,29 +618,34 @@ function drawProjections() {
       <button class="small-btn" onclick="downloadFile('/api/accounting/sheets/${PJ.cur.id}/export.xlsx', '${escapeHtml(PJ.cur.name)}.xlsx').catch(e => alert(e.message))">${icon("download")} Excel</button>
       <button id="pj-save" class="small-btn primary" onclick="pjSave()" ${PJ.dirty ? "" : "disabled"}>${icon("save")} Save</button></div>
     <p class="ac-help">A scratch sheet for "where would we stand" — <strong>not the books</strong> (nothing here touches P&L, Partners or the Excel). Amounts can be numbers or formulas:
-      <code>=R3*0.9</code>, <code>=SUM(R2:R8)</code>, <code>=GROUP("AR Owed To Us")</code>, <code>=R4*15%</code>. Give a row a month (2026-12) to put it in that month of the forecast.</p>
+      <code>=R3*0.9</code>, <code>=SUM(R2:R8)</code>, <code>=GROUP("Customers Owe Us (AR)")</code>, <code>=R4*15%</code>. Give a row a month (2026-12) to put it in that month of the forecast.
+      Money we owe or pay out shows <span class="neg">red</span> however it's typed; money coming in <span class="pos">green</span>. Type a new name in Group to make your own group (counted as typed: + in, − out).</p>
     <div class="btn-row" style="margin-bottom:8px;"><span class="muted small">Fill from the books:</span>
       ${[["banks", "Bank Balances"], ["loans", "Loan Balances"], ["ar", "AR"], ["ap", "AP"], ["monthly", "Monthly Averages"], ["recurring", "Recurring Payments"]].map(([k, l]) => `<button class="small-btn" onclick="pjFill('${k}')">${l}</button>`).join("")}</div>
     <table class="compact-table no-table-tools pj-grid"><thead><tr><th>#</th><th>Group</th><th>Name</th><th>Amount / Formula</th><th class="num">Value</th><th>Month</th><th>Note</th><th></th></tr></thead><tbody>
     ${doc.rows.map((r, k) => `<tr><td class="muted">R${k + 1}</td>
-      <td><select onchange="pjSet(${k}, 'group', this.value)">${PJ_GROUPS.map(x => `<option ${x === r.group ? "selected" : ""}>${x}</option>`).join("")}</select></td>
-      <td><input value="${escapeHtml(r.name || "")}" onchange="pjSet(${k}, 'name', this.value)"></td>
+      <td><input list="pj-groups" value="${escapeHtml(r.group || "")}" onchange="pjSetGroup(${k}, this.value)" title="Pick a group, or type a new one"></td>
+      <td><input value="${escapeHtml(r.name || "")}" onchange="pjSet(${k}, 'name', this.value)" placeholder="${r.group === "Vendors We Owe (AP)" ? "vendor" : r.group === "Customers Owe Us (AR)" ? "customer" : ""}"></td>
       <td><input value="${escapeHtml(r.a ?? "")}" onchange="pjSet(${k}, 'a', this.value)" style="font-family:monospace;"></td>
-      <td class="ac-amt">${vals[k].err ? `<span class="neg small" title="${escapeHtml(vals[k].err)}">error</span>` : money(vals[k].v)}</td>
+      <td class="ac-amt">${vals[k].err ? `<span class="neg small" title="${escapeHtml(vals[k].err)}">error</span>` : pjMoney(r.group, vals[k].v)}</td>
       <td><input value="${escapeHtml(r.month || "")}" placeholder="any" onchange="pjSet(${k}, 'month', this.value)" style="width:86px;"></td>
       <td><input value="${escapeHtml(r.note || "")}" onchange="pjSet(${k}, 'note', this.value)"></td>
       <td class="nowrap"><button class="small-btn icon-only" title="Make it real: a typed-in line in the books" onclick="pjReal(${k})">${icon("check")}</button>
         <button class="small-btn icon-only" title="Remove row" onclick="pjDel(${k})">${icon("x")}</button></td></tr>`).join("")}</tbody></table>
-    <div class="btn-row" style="margin-top:6px;"><button class="small-btn" onclick="pjAdd()">${icon("plus")} Row</button></div></div>
+    <datalist id="pj-groups">${pjGroups(doc).map(x => `<option value="${escapeHtml(x)}">`).join("")}</datalist>
+    <div class="btn-row" style="margin-top:6px;"><button class="small-btn" onclick="pjAdd()">${icon("plus")} Row</button></div>
+    ${doc.rows.some(r => r.group === "Customers Owe Us (AR)") ? `<p class="ac-help" style="margin-top:8px;">AR is counted at the <strong>AR Collected</strong> % (${S.ar_pct}% now — change it under What If).
+      If you know the amount and the month a customer will pay, put it under <em>Expected Money In</em> with the month instead.</p>` : ""}</div>
     <div class="ac-grid2"><div class="card"><h3 style="margin-top:0;">Where We'd Stand</h3>
       <table class="ac-steps" style="width:100%;"><tbody>
         <tr><td>Cash in bank</td><td class="ac-amt">${money(cash)}</td></tr>
-        <tr><td>+ AR owed to us (${S.ar_pct}% collected)</td><td class="ac-amt">${money(ar)}</td></tr>
-        <tr><td>− AP we owe</td><td class="ac-amt">${money(-ap)}</td></tr>
-        <tr><td>− Loans owed</td><td class="ac-amt">${money(-loans)}</td></tr>
+        <tr><td>+ Customers owe us — AR (${S.ar_pct}% collected)</td><td class="ac-amt">${money(ar)}</td></tr>
+        ${lent ? `<tr><td>+ Loans owed to us</td><td class="ac-amt">${money(lent)}</td></tr>` : ""}
+        <tr><td>− Vendors we owe — AP</td><td class="ac-amt">${money(-ap)}</td></tr>
+        <tr><td>− Loans we owe (to lenders)</td><td class="ac-amt">${money(-loans)}</td></tr>
         <tr><td>+ Expected money in − out</td><td class="ac-amt">${money(expIn - expOut)}</td></tr>
         <tr><td>− Partner draws planned</td><td class="ac-amt">${money(-draws)}</td></tr>
-        ${other ? `<tr><td>Other</td><td class="ac-amt">${money(other)}</td></tr>` : ""}
+        ${other ? `<tr><td>Other${custom.length ? " + your groups" : ""}</td><td class="ac-amt">${money(other)}</td></tr>` : ""}
         <tr class="total"><td>Net Position</td><td class="ac-amt">${money(net)}</td></tr></tbody></table>
       ${partners.length ? `<h4 style="margin:12px 0 4px;">If We Shared It</h4><table class="compact-table no-table-tools"><tbody>${partners.map(p => `<tr><td>${escapeHtml(p.name)} <span class="muted small">${(p.share * 100).toFixed(1)}%</span></td><td class="ac-amt">${money(net * p.share)}</td></tr>`).join("")}</tbody></table>` : ""}
       <h4 style="margin:12px 0 4px;">What If</h4>
@@ -417,6 +663,17 @@ function drawProjections() {
 }
 function pjDirty() { PJ.dirty = true; drawProjections(); }
 function pjSet(k, f, v) { PJ.cur.doc.rows[k][f] = v; pjDirty(); }
+function pjSetGroup(k, v) {
+  v = (v || "").trim() || "Other";
+  PJ.cur.doc.rows[k].group = PJ_GROUPS.find(x => x.toLowerCase() === v.toLowerCase()) || v;
+  if (PJ.cur.doc.rows[k].group === "Customers Owe Us (AR)") toast(`AR is counted at ${pjSettings().ar_pct}% (AR Collected, under What If). Know the amount and month? Use Expected Money In.`, null, 7000);
+  pjDirty();
+}
+function pjMoney(group, v) {  // owed / going out: red whatever the sign typed; coming in: green
+  if (PJ_OWE.has(group)) return `<span class="neg">${fmtMoney(-Math.abs(v))}</span>`;
+  if (PJ_IN.has(group)) return `<span class="pos">${fmtMoney(Math.abs(v))}</span>`;
+  return money(v);
+}
 function pjSetS(k, v) { PJ.cur.doc.settings = { ...pjSettings(), [k]: v }; pjDirty(); }
 function pjAdd(row) { PJ.cur.doc.rows.push(row || { group: "Other", name: "", a: "" }); pjDirty(); }
 function pjDel(k) { PJ.cur.doc.rows.splice(k, 1); pjDirty(); }
@@ -429,9 +686,9 @@ async function pjFill(what) {
   const b = await apiFetch("/api/accounting/sheets-books?months=6");
   const add = rows => { rows.forEach(r => PJ.cur.doc.rows.push(r)); pjDirty(); toast(`${rows.length} row(s) added — edit them as you like`); };
   if (what === "banks") add(b.banks.map(x => ({ group: "Cash In Bank", name: x.name, a: x.balance != null ? String(x.balance) : "", note: x.has_opening ? "from the books" : "set an opening balance on Statements, or type it" })));
-  if (what === "loans") add(b.loans.map(x => ({ group: "Loans Owed", name: x.name, a: String(x.owed), note: "owed, from Loans" })));
-  if (what === "ar") add(b.ar.map(x => ({ group: "AR Owed To Us", name: x.name, a: String(x.amount), note: "AT-HUB, today" })));
-  if (what === "ap") add(b.ap.map(x => ({ group: "AP We Owe", name: x.name, a: String(x.amount), note: "AT-HUB, today" })));
+  if (what === "loans") add(b.loans.map(x => ({ group: x.owed >= 0 ? "Loans We Owe" : "Loans Owed To Us", name: x.name, a: String(Math.abs(x.owed)), note: "from Loans" })));
+  if (what === "ar") add(b.ar.map(x => ({ group: "Customers Owe Us (AR)", name: x.name, a: String(x.amount), note: "AT-HUB, today" })));
+  if (what === "ap") add(b.ap.map(x => ({ group: "Vendors We Owe (AP)", name: x.name, a: String(x.amount), note: "AT-HUB, today" })));
   if (what === "monthly") add([{ group: "Expected Money In", name: "Average monthly income", a: String(b.monthly.income), note: `${b.monthly.months} months to ${b.monthly.to}` },
     { group: "Expected Money Out", name: "Average monthly cost of goods", a: String(Math.abs(b.monthly.cogs)), note: `${b.monthly.months} months` },
     { group: "Expected Money Out", name: "Average monthly expenses", a: String(Math.abs(b.monthly.expense)), note: `${b.monthly.months} months` }]);
@@ -441,13 +698,13 @@ async function pjReal(k) {
   const r = PJ.cur.doc.rows[k];
   const calc = makeCalc(PJ.cur.doc.rows);
   let v = 0; try { v = calc.val(k + 1); } catch (e) { alert(e.message); return; }
-  const isAr = r.group === "AR Owed To Us", isAp = r.group === "AP We Owe";
+  const isAr = r.group === "Customers Owe Us (AR)", isAp = r.group === "Vendors We Owe (AP)";
   if (isAr || isAp) {
     if (!(await askDialog({ title: "Make It Real?", body: `<p>Add <strong>${escapeHtml(r.name || r.group)}</strong> ${fmtMoney(Math.abs(v))} to AP / AR as a typed-in item?</p>`, buttons: [{ label: "Add", value: true, cls: "primary" }, { label: "Cancel", value: null }] })).value) return;
     await apiFetch("/api/accounting/open-items", { method: "POST", body: JSON.stringify({ source: "manual", side: isAr ? "ar" : "ap", party: r.name || r.group, amount: Math.abs(v), note: r.note || "from Projections" }) });
     toast("Added to AP / AR"); return;
   }
-  const out = ["Expected Money Out", "Partner Draws", "AP We Owe", "Loans Owed"].includes(r.group);
+  const out = PJ_OWE.has(r.group);
   await addLinePrefilled({ amount: (out ? -1 : 1) * Math.abs(v), description: r.name || r.group, note: r.note || "from Projections", date: r.month && /^\d{4}-\d\d$/.test(r.month) ? r.month + "-01" : null });
 }
 async function pjCompare() {
@@ -456,10 +713,10 @@ async function pjCompare() {
   const { value, el } = await askDialog({ title: "Compare Two", body: `<div class="ac-form"><label>This</label><select id="c1">${opts}</select><label>With</label><select id="c2">${opts}</select></div>`, buttons: [{ label: "Compare", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
   if (!value) return;
   const a = PJ.list.find(x => x.id === +el.querySelector("#c1").value), b = PJ.list.find(x => x.id === +el.querySelector("#c2").value);
-  const tot = s => { const rows = s.doc.rows || [], c = makeCalc(rows); const o = {}; rows.forEach((r, k) => { let v = 0; try { v = c.val(k + 1); } catch {} o[r.group] = (o[r.group] || 0) + v; }); return o; };
+  const tot = s => { pjMigrate(s.doc); const rows = s.doc.rows || [], c = makeCalc(rows); const o = {}; rows.forEach((r, k) => { let v = 0; try { v = c.val(k + 1); } catch {} o[r.group] = (o[r.group] || 0) + v; }); return o; };
   const ta = tot(a), tb = tot(b);
   await askDialog({ title: `${a.name} vs ${b.name}`, body: `<table class="compact-table no-table-tools"><thead><tr><th>Group</th><th class="num">${escapeHtml(a.name)}</th><th class="num">${escapeHtml(b.name)}</th><th class="num">Difference</th></tr></thead><tbody>
-    ${PJ_GROUPS.filter(g => ta[g] || tb[g]).map(g => `<tr><td>${g}</td><td class="ac-amt">${money(ta[g] || 0)}</td><td class="ac-amt">${money(tb[g] || 0)}</td><td class="ac-amt">${money((ta[g] || 0) - (tb[g] || 0))}</td></tr>`).join("")}</tbody></table>`, buttons: [{ label: "Close", value: null }], wide: true });
+    ${[...new Set([...pjGroups(a.doc), ...pjGroups(b.doc)])].filter(g => ta[g] || tb[g]).map(g => `<tr><td>${g}</td><td class="ac-amt">${money(ta[g] || 0)}</td><td class="ac-amt">${money(tb[g] || 0)}</td><td class="ac-amt">${money((ta[g] || 0) - (tb[g] || 0))}</td></tr>`).join("")}</tbody></table>`, buttons: [{ label: "Close", value: null }], wide: true });
 }
 // a typed-in line with some of it filled in (Projections / Loans quick calc "Make It Real")
 async function addLinePrefilled(pre) {

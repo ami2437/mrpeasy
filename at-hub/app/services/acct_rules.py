@@ -5,27 +5,40 @@ line in an account -- or split it by % / $ over several, set the payee, add a no
 suggestion ("suggest"). Rules run in their order (priority); the first one that matches wins, before anything AT-HUB
 learned. A condition looks at one part of the line:
 
-  text         anywhere in the line: the bank's wording, our wording, the payee, the note
+  text         anywhere in the line: the bank's wording, our wording, the payee, the note (NOT QuickBooks' memo)
   description  the bank's wording (and ours for a typed-in line)
   payee        who (read from the description, or typed)
   note         a person's note
+  memo         the text QuickBooks pasted after the bank's wording (its own bank-rule memo -- not the bank's)
+  weekday      day of the week (MON ... SUN)
   amount       the amount (always positive -- money in / out is the rule's own setting)
   day          day of the month (rent on the 1st, payroll on the 15th)
+  date         the line's date: on / on or after / on or before / between (a rule that only holds for a while)
+  group        a group of conditions with its own ALL / ANY -- (A or B) and not C
 
 Words match whole words ("SAUL" doesn't hit "SAULT"); "contains" needs every word (any order), a "quoted phrase" needs
-them side by side. Rules made before this (one "contains" + amount range) read as the same thing (spec())."""
+them side by side. Every text test has its NOT (doesn't contain, isn't, doesn't start with, contains none of) and a
+pattern (regular expression) for power use. When two switched-on rules match one line and say different things, neither
+files it -- it waits in Review ("rules disagree") -- unless one of them is marked to win. Rules made before this (one
+"contains" + amount range) read as the same thing (spec())."""
 import json
 import re
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
 from app.services.money import cents
 
-TEXT_FIELDS = {"text": "Anywhere In The Line", "description": "Bank Description", "payee": "Payee", "note": "Note"}
+TEXT_FIELDS = {"text": "Anywhere In The Line", "description": "Bank Description", "payee": "Payee", "note": "Note",
+               "memo": "QuickBooks Memo", "weekday": "Day Of Week"}
 NUM_FIELDS = {"amount": "Amount", "day": "Day Of Month"}
-FIELDS = {**TEXT_FIELDS, **NUM_FIELDS}
-TEXT_OPS = {"contains": "contains", "not_contains": "doesn't contain", "any_of": "contains any of", "is": "is exactly",
-            "starts": "starts with", "ends": "ends with"}
+DATE_FIELDS = {"date": "Date"}
+FIELDS = {**TEXT_FIELDS, **NUM_FIELDS, **DATE_FIELDS}
+TEXT_OPS = {"contains": "contains", "not_contains": "doesn't contain", "any_of": "contains any of", "not_any_of": "contains none of",
+            "is": "is exactly", "not_is": "isn't exactly", "starts": "starts with", "not_starts": "doesn't start with",
+            "ends": "ends with", "regex": "matches pattern"}
 NUM_OPS = {"eq": "equals", "ne": "isn't", "gt": "is more than", "lt": "is less than", "between": "is between"}
+DATE_OPS = {"on": "is on", "after": "is on or after", "before": "is on or before", "between": "is between"}
+WEEKDAYS = ["MON MONDAY", "TUE TUESDAY", "WED WEDNESDAY", "THU THURSDAY", "FRI FRIDAY", "SAT SATURDAY", "SUN SUNDAY"]
 
 
 def _words(s: str) -> List[str]:
@@ -42,9 +55,12 @@ def line_of(t) -> dict:
     bank, ours = g("bank_description") or "", g("description") or ""
     desc = " ".join(x for x in (bank, ours if ours != bank else "") if x)
     d = g("date")
-    return {"description": desc, "payee": g("payee") or "", "note": g("note") or "",
+    day_ = d.date() if isinstance(d, datetime) else d
+    return {"description": desc, "payee": g("payee") or "", "note": g("note") or "", "memo": g("qb_memo") or "",
             "text": "\n".join(x for x in (desc, g("payee") or "", g("note") or "") if x),  # one part per line: a phrase can't span two
-            "amount": float(g("amount") or 0.0), "source_id": g("source_id"), "day": d.day if d is not None and hasattr(d, "day") else None}
+            "amount": float(g("amount") or 0.0), "source_id": g("source_id"), "day": d.day if d is not None and hasattr(d, "day") else None,
+            "date": day_ if isinstance(day_, date) else None,
+            "weekday": WEEKDAYS[day_.weekday()] if isinstance(day_, date) else ""}
 
 
 def _has(words: List[str], phrase: List[str]) -> bool:
@@ -65,8 +81,37 @@ def _contains(text: str, value: str) -> bool:
     return all(w in ws for w in loose) and all(any(_has(pw, _words(p)) for pw in parts) for p in phrases)
 
 
+def _filled(c: dict) -> bool:
+    if c.get("field") == "group":
+        return any(_filled(x) for x in c.get("conditions") or [])
+    return c.get("value") not in (None, "", [])
+
+
+def _date(v) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def cond_ok(c: dict, line: dict) -> bool:
     f, op, v = c.get("field") or "text", c.get("op") or "contains", c.get("value")
+    if f == "group":
+        subs = [x for x in c.get("conditions") or [] if _filled(x)]
+        if not subs:
+            return False
+        ok = [cond_ok(x, line) for x in subs]
+        res = any(ok) if c.get("match") == "any" else all(ok)
+        return not res if c.get("not") else res
+    if f in DATE_FIELDS:
+        d = line.get("date")
+        if d is None:
+            return False
+        if op == "between":
+            lo, hi = (_date(v[0]), _date(v[1])) if isinstance(v, (list, tuple)) and len(v) == 2 else (None, None)
+            return bool(lo and hi) and min(lo, hi) <= d <= max(lo, hi)
+        x = _date(v)
+        return x is not None and {"on": d == x, "after": d >= x, "before": d <= x}.get(op, False)
     if f in NUM_FIELDS:
         x = abs(line["amount"]) if f == "amount" else line.get("day")
         if x is None:
@@ -84,11 +129,20 @@ def cond_ok(c: dict, line: dict) -> bool:
         return _contains(text, v)
     if op == "not_contains":
         return bool(_words(v)) and not _contains(text, v)
-    if op == "any_of":  # "SAUL, FAUSTINO, LABOR"
-        return any(_contains(text, part) for part in str(v or "").split(",") if part.strip())
+    if op in ("any_of", "not_any_of"):  # "SAUL, FAUSTINO, LABOR"
+        parts = [part for part in str(v or "").split(",") if part.strip()]
+        hit = any(_contains(text, part) for part in parts)
+        return hit if op == "any_of" else (bool(parts) and not hit)
+    if op == "regex":
+        try:
+            return bool(re.search(str(v), text, re.I))
+        except re.error:
+            return False
     t, val = _norm(text), _norm(v)
     if not val:
         return False
+    if op in ("not_is", "not_starts"):
+        return not {"not_is": t == val, "not_starts": t == val or t.startswith(val + " ")}[op]
     return {"is": t == val, "starts": t == val or t.startswith(val + " "), "ends": t == val or t.endswith(" " + val)}.get(op, False)
 
 
@@ -118,7 +172,8 @@ def spec(r) -> dict:
     return {"id": g("id"), "name": g("name") or "", "match": g("match_mode") or g("match") or "all", "conditions": conds,
             "sign": g("sign") or None, "source_ids": [int(x) for x in (srcs or [])], "account_id": g("account_id"),
             "splits": splits or [], "set_payee": g("set_payee") or None, "set_note": g("set_note") or None,
-            "action": g("action") or "file", "enabled": g("enabled") is not False, "priority": g("priority") or 0}
+            "action": g("action") or "file", "enabled": g("enabled") is not False, "priority": g("priority") or 0,
+            "review": bool(g("review")), "wins": bool(g("wins"))}
 
 
 def matches(s: dict, line: dict) -> bool:
@@ -126,7 +181,7 @@ def matches(s: dict, line: dict) -> bool:
         return False
     if s["source_ids"] and line.get("source_id") not in s["source_ids"]:
         return False
-    conds = [c for c in s["conditions"] if c.get("value") not in (None, "", [])]
+    conds = [c for c in s["conditions"] if _filled(c)]
     if not conds:
         return False
     ok = [cond_ok(c, line) for c in conds]
@@ -139,6 +194,40 @@ def first_match(specs: List[dict], line: dict) -> Optional[dict]:
         if s["enabled"] and matches(s, line):
             return s
     return None
+
+
+def outcome(s: dict) -> tuple:
+    """What a rule does to a line -- two rules that do the same thing don't disagree."""
+    sp = tuple(sorted((int(p["account_id"]), p.get("pct"), p.get("amount")) for p in s["splits"]))
+    return (s["account_id"], sp, s["action"])
+
+
+def decide_rules(specs: List[dict], line: dict) -> Tuple[Optional[dict], List[dict]]:
+    """(the rule that decides, the rules that disagree): every switched-on rule that matches; if they don't all say the
+    same thing, the first one marked "wins" decides -- else nobody does and the line waits in Review."""
+    hits = [s for s in specs if s["enabled"] and matches(s, line)]
+    if not hits:
+        return None, []
+    if len({outcome(s) for s in hits}) == 1:
+        return hits[0], []
+    win = next((s for s in hits if s.get("wins")), None)
+    if win:
+        return win, []
+    return None, hits
+
+
+def explain(s: dict, line: dict) -> dict:
+    """Why a rule does / doesn't match one line: each condition true / false, money in / out, the bank account."""
+    def one(c):
+        d = {"text": describe({**s, "match": "all", "conditions": [c], "sign": None, "source_ids": []}),
+             "ok": cond_ok(c, line) if _filled(c) else None}
+        if c.get("field") == "group":
+            d["parts"] = [one(x) for x in c.get("conditions") or [] if _filled(x)]
+        return d
+    sign_ok = not (s["sign"] == "in" and line["amount"] < 0 or s["sign"] == "out" and line["amount"] >= 0)
+    src_ok = not s["source_ids"] or line.get("source_id") in s["source_ids"]
+    return {"matches": matches(s, line), "enabled": s["enabled"], "sign_ok": sign_ok, "source_ok": src_ok,
+            "match": s["match"], "conditions": [one(c) for c in s["conditions"] if _filled(c)]}
 
 
 def parts(s: dict, amount: float) -> List[Tuple[int, float]]:
@@ -172,6 +261,14 @@ def describe(s: dict, names: Optional[Dict[int, str]] = None) -> str:
     bits = []
     for c in s["conditions"]:
         f, op, v = c.get("field") or "text", c.get("op") or "contains", c.get("value")
+        if f == "group":
+            inner = describe({**s, "match": c.get("match") or "all", "conditions": c.get("conditions") or [], "sign": None, "source_ids": []})
+            bits.append(f"{'not ' if c.get('not') else ''}({inner})")
+            continue
+        if f in DATE_FIELDS:
+            val = f"{v[0]} and {v[1]}" if op == "between" and isinstance(v, (list, tuple)) else f"{v}"
+            bits.append(f"{FIELDS[f]} {DATE_OPS.get(op, op)} {val}")
+            continue
         if f in NUM_FIELDS:
             val = f"{v[0]} and {v[1]}" if op == "between" and isinstance(v, (list, tuple)) else f"{v}"
             bits.append(f"{FIELDS[f]} {NUM_OPS.get(op, op)} {val}")
@@ -186,20 +283,12 @@ def describe(s: dict, names: Optional[Dict[int, str]] = None) -> str:
 
 def check(s: dict) -> Optional[str]:
     """What's wrong with a rule before saving it (None = fine)."""
-    conds = [c for c in s["conditions"] if c.get("value") not in (None, "", [])]
+    conds = [c for c in s["conditions"] if _filled(c)]
     if not conds:
         return "Add at least one condition with a value"
-    for c in conds:
-        f, op = c.get("field"), c.get("op")
-        if f not in FIELDS:
-            return f"Unknown field {f}"
-        if f in NUM_FIELDS and op not in NUM_OPS or f in TEXT_FIELDS and op not in TEXT_OPS:
-            return f"{FIELDS[f]} can't use '{op}'"
-        if f in NUM_FIELDS:
-            try:
-                [float(x) for x in (c["value"] if op == "between" else [c["value"]])]
-            except (TypeError, ValueError):
-                return f"{FIELDS[f]} needs a number"
+    err = _check_conds(conds)
+    if err:
+        return err
     if not s["account_id"] and not s["splits"]:
         return "Pick the account"
     pcts = [float(p["pct"]) for p in s["splits"] if p.get("pct") not in (None, "")]
@@ -207,4 +296,36 @@ def check(s: dict) -> Optional[str]:
         return "The split adds up to more than 100%"
     if s["splits"] and not s["account_id"] and pcts and abs(sum(pcts) - 100) > 0.001 and len(pcts) == len(s["splits"]):
         return "The split must add up to 100% (or pick an account for the rest)"
+    return None
+
+
+def _check_conds(conds: List[dict]) -> Optional[str]:
+    for c in conds:
+        f, op = c.get("field"), c.get("op")
+        if f == "group":
+            subs = [x for x in c.get("conditions") or [] if _filled(x)]
+            if not subs:
+                return "A group needs at least one condition"
+            err = _check_conds(subs)
+            if err:
+                return err
+            continue
+        if f not in FIELDS:
+            return f"Unknown field {f}"
+        if f in NUM_FIELDS and op not in NUM_OPS or f in TEXT_FIELDS and op not in TEXT_OPS or f in DATE_FIELDS and op not in DATE_OPS:
+            return f"{FIELDS[f]} can't use '{op}'"
+        if f in NUM_FIELDS:
+            try:
+                [float(x) for x in (c["value"] if op == "between" else [c["value"]])]
+            except (TypeError, ValueError):
+                return f"{FIELDS[f]} needs a number"
+        if f in DATE_FIELDS:
+            vals = c["value"] if op == "between" and isinstance(c["value"], (list, tuple)) else [c["value"]]
+            if not all(_date(x) for x in vals):
+                return "Date needs a date (YYYY-MM-DD)"
+        if op == "regex":
+            try:
+                re.compile(str(c["value"]))
+            except re.error as e:
+                return f"The pattern doesn't work: {e}"
     return None

@@ -1700,6 +1700,9 @@ class AcctTxn(Base):
     sent_back_from = Column(Text, nullable=True)  # JSON: where it was ({"account_id"} or {"splits": [...]}) -- the top suggestion
     sent_back_by = Column(String, nullable=True)
     sent_back_at = Column(DateTime, nullable=True)
+    flag = Column(String, nullable=True)  # waits in Review even if filed: conflict (rules disagree) | check (a rule filed it, a person should look) | qb_split | reconcile | split_memory
+    flag_info = Column(Text, nullable=True)  # JSON: why ({"reason", "rules": [...], "parts": [...]})
+    qb_memo = Column(Text, nullable=True)  # text QuickBooks pasted after the bank's wording (its bank-rule memo) -- kept, but no rule / search / learning reads it
     external_id = Column(String, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1735,6 +1738,8 @@ class AcctRule(Base):
     set_payee = Column(String, nullable=True)
     set_note = Column(String, nullable=True)
     action = Column(String, nullable=True)  # file (by itself) | suggest (one-click suggestion only); None = file
+    review = Column(Boolean, nullable=True)  # files the line but it still waits in Review until a person says it's right
+    wins = Column(Boolean, nullable=True)  # when two rules disagree on a line, this one wins (otherwise the line goes to Review)
     enabled = Column(Boolean, nullable=True, default=True)
     priority = Column(Integer, nullable=True)  # lower runs first
     contains = Column(String, nullable=False, default="")  # summary of the text conditions (old rules: the words)
@@ -1833,6 +1838,44 @@ class AcctSheet(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, nullable=True)
+
+
+class AcctChange(Base):
+    """One change to the books a person made (filing, moving, a rule, an account ...), kept so it can be undone: the
+    lines / rules / accounts as they were before, and as the change left them (Undo refuses a line changed since)."""
+    __tablename__ = "acct_changes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    what = Column(String, nullable=False)  # "12 lines moved to Labor"
+    kind = Column(String, nullable=True)  # file | bulk | rule | account | reconcile | check | ...
+    before = Column(Text, nullable=True)  # JSON {table: {id: row or None}}
+    after = Column(Text, nullable=True)  # JSON {table: {id: row or None}}
+    count = Column(Integer, nullable=False, default=0)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    undone_by = Column(String, nullable=True)
+    undone_at = Column(DateTime, nullable=True)
+
+
+class AcctMemory(Base):
+    """How a person filed a bank line, remembered apart from the line -- so it comes back when the same line is brought
+    in again (a fresh start, a re-import): splits always, every person's filing when they chose to keep them."""
+    __tablename__ = "acct_memory"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(Integer, nullable=True)
+    date = Column(DateTime, nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    description = Column(Text, nullable=True)
+    kind = Column(String, nullable=False, default="split")  # split | filing
+    account_id = Column(Integer, nullable=True)
+    splits = Column(Text, nullable=True)  # JSON [{account_id, amount, note}]
+    payee = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    used = Column(Integer, nullable=False, default=0)
+    last_used = Column(DateTime, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AcctReconcile(Base):

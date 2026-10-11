@@ -64,7 +64,7 @@
     .ac-grip { cursor: grab; color: var(--muted); margin-right: 6px; letter-spacing: -2px; user-select: none; }
     tr.dragging { opacity: .45; }
     tr.drop-on td { background: var(--surface-3) !important; box-shadow: inset 0 2px 0 var(--accent); }
-    .rb-cond { display: grid; grid-template-columns: 200px 160px 1fr 110px 34px; gap: 6px; margin-bottom: 6px; align-items: center; }
+    .rb-cond { display: grid; grid-template-columns: 200px 160px 1fr 140px 34px; gap: 6px; margin-bottom: 6px; align-items: center; }
     .rb-cond .rb-x, .rb-split .rb-x { width: 34px; }
     .rb-split { display: grid; grid-template-columns: 1fr 90px 60px 34px; gap: 6px; margin-bottom: 6px; align-items: center; }
     .ac-sugg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
@@ -72,9 +72,28 @@
     .ac-sugg-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
     .ac-sugg-row input, .ac-sugg-row select { width: 100%; min-width: 0; font-size: 12.5px; }
     .ac-session { font-size: 12.5px; color: var(--text-2); }
-    .ac-tabgrp { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); align-self: center; margin: 0 2px 0 8px; font-weight: 700; }
-    .ac-tabgrp:first-child { margin-left: 2px; }
-    .ac-top .tabs .tab { padding: 4px 9px; font-size: 13px; }
+    .ac-top .tabs { display: flex; flex-wrap: wrap; gap: 6px; border: none; background: none; padding: 0; box-shadow: none; }
+    .ac-tabbox { display: inline-flex; flex-direction: column; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); padding: 2px 4px 4px; }
+    .ac-tabbox .ac-tabgrp { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; padding: 1px 6px 2px; display: flex; gap: 5px; align-items: center; }
+    .ac-tabbox .ac-tabgrp .ico { width: 12px; height: 12px; }
+    .ac-tabbox .ac-tabrow { display: flex; flex-wrap: wrap; gap: 2px; }
+    .ac-tabbox.has-active { border-color: var(--accent); }
+    .ac-top .tabs .tab { padding: 3px 9px; font-size: 13px; border-radius: 6px; border: none; margin: 0; }
+    .ac-top .tabs .tab.active { background: var(--accent); color: #fff; }
+    #ac-view .card table:not(.no-sticky) > thead > tr > th { position: sticky; top: var(--ac-stick, 0px); z-index: 2; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
+    #ac-view .ask-dialog table > thead > tr > th, .ask-dialog table > thead > tr > th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+    th.ac-sort { cursor: pointer; user-select: none; } th.ac-sort:hover { color: var(--accent); }
+    th.ac-sort[data-dir="asc"]::after { content: " ▲"; font-size: 9px; } th.ac-sort[data-dir="desc"]::after { content: " ▼"; font-size: 9px; }
+    .ac-chip.flag { background: #fee2e2; color: #991b1b; font-weight: 600; } :root[data-theme="dark"] .ac-chip.flag { background: #5f1e1e; color: #fecaca; }
+    .ac-chip.check { background: #ffedd5; color: #9a3412; } :root[data-theme="dark"] .ac-chip.check { background: #4a2a10; color: #fdba74; }
+    .ac-memo { font-size: 11.5px; color: var(--muted); opacity: .75; text-decoration: line-through dotted; word-break: break-word; }
+    .ac-conflict { margin-top: 4px; padding: 5px 8px; border: 1px solid #fca5a5; border-radius: 7px; background: #fff5f5; }
+    :root[data-theme="dark"] .ac-conflict { background: #2a1414; border-color: #7f1d1d; }
+    .ac-splitsum { font-size: 12.5px; margin: 4px 0 8px; } .ac-splitsum.bad { color: #dc2626; font-weight: 600; } .ac-splitsum.good { color: #16a34a; font-weight: 600; }
+    .ac-err { color: #dc2626; font-weight: 600; margin: 6px 0; }
+    .rb-group { border: 1px dashed var(--border); border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; background: var(--surface-2); }
+    .rb-group .rb-cond { grid-template-columns: 180px 150px 1fr 130px 34px; }
+    .ac-x-ok { color: #16a34a; font-weight: 700; } .ac-x-no { color: #dc2626; font-weight: 700; }
     .ac-totbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 7px 10px; margin: 0 0 8px;
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow); }
     .ac-totbar strong { font-size: 14px; }
@@ -100,6 +119,7 @@
       <h1 class="page-title">Accounting</h1>
       <div class="tabs" id="ac-tabs"></div>
       <span class="ac-period" id="ac-period"></span>
+      <button class="small-btn" onclick="recentChanges()" title="Every change to the books — undo any of them" style="order:2;">Recent Changes</button>
     </div>
     <div id="ac-view"><div class="card"><p class="muted">Loading…</p></div></div>
   </main>
@@ -107,6 +127,7 @@
   <script>
     AuthGuard.requirePerm("accounting");
     document.getElementById("sidebar").innerHTML = renderSidebar("accounting.html");
+    const TAB_ICONS = { Work: "inbox", Reports: "chart", Check: "check", Plan: "calendar", Setup: "sliders" };
     const TAB_GROUPS = [["Work", [["review", "Review"], ["txns", "Transactions"], ["statements", "Statements"], ["ignored", "Ignored"]]],
       ["Reports", [["overview", "Overview"], ["pnl", "P&L"], ["cash", "Cash Flow"], ["payees", "Payees"], ["partneraccts", "Partner Accounts"], ["partners", "Partners Split"],
         ["loans", "Loans"], ["apar", "AP / AR"], ["tax", "1099"], ["recurring", "Recurring"]]],
@@ -169,8 +190,33 @@
 
     async function loadMeta() { META = await apiFetch("/api/accounting/meta"); }
     function drawTabs() {
-      $("ac-tabs").innerHTML = TAB_GROUPS.map(([g, tabs]) => `<span class="ac-tabgrp">${g}</span>` + tabs.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "review" && META.unfiled ? ` <span class="ac-chip auto">${META.unfiled}</span>` : ""}</div>`).join("")).join("");
+      $("ac-tabs").innerHTML = TAB_GROUPS.map(([g, tabs]) => `<div class="ac-tabbox ${tabs.some(([k]) => k === TAB) ? "has-active" : ""}"><span class="ac-tabgrp">${icon(TAB_ICONS[g] || "list")}${g}</span>
+        <div class="ac-tabrow">${tabs.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "review" && META.unfiled ? ` <span class="ac-chip ${META.flagged ? "flag" : "auto"}">${META.unfiled}</span>` : ""}</div>`).join("")}</div></div>`).join("");
     }
+    // ---- Undo: every change to the books comes back with a change id; the toast and Recent Changes undo it
+    function doneToast(msg, changeId, after) {
+      toast(msg, changeId ? { label: "Undo", run: () => undoChange(changeId, after) } : null, changeId ? 10000 : 4500);
+    }
+    async function undoChange(id, after) {
+      try { const r = await apiFetch(`/api/accounting/changes/${id}/undo`, { method: "POST" }); toast(`Undone: ${r.what}`); await loadMeta(); refreshCount(); if (after) await after(); else show(TAB); }
+      catch (e) { alert(e.message); }
+    }
+    async function recentChanges() {
+      let list = [];
+      try { list = await apiFetch("/api/accounting/changes"); } catch (e) { alert(e.message); return; }
+      const { value } = await askDialog({ title: "Recent Changes To The Books", wide: true, body: `<p class="ac-help">The last ${list.length} changes, newest first. Undo puts the lines, rules and accounts back as they
+          were — unless something changed them again since (undo that first). Statement imports have their own Undo on Statements.</p>
+        <div style="max-height:60vh;overflow:auto;"><table class="compact-table no-table-tools"><thead><tr><th>When</th><th>Who</th><th>What</th><th class="num">Rows</th><th></th></tr></thead><tbody>
+        ${list.map(c => `<tr ${c.undone_at ? 'style="opacity:.5"' : ""}><td class="nowrap">${fmtWhen(c.created_at)}</td><td>${escapeHtml(c.created_by || "")}</td><td>${escapeHtml(c.what)}</td><td class="num">${c.count}</td>
+          <td class="nowrap">${c.undone_at ? `<span class="muted small">undone by ${escapeHtml(c.undone_by || "")}</span>` : `<button class="small-btn" data-i="u${c.id}">Undo</button>`}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing yet.</td></tr>`}</tbody></table></div>`,
+        buttons: [{ label: "Close", value: null }] });
+      if (value === undefined) return;
+    }
+    document.addEventListener("click", e => {  // the Undo buttons inside Recent Changes
+      const b = e.target.closest('button[data-i^="u"]'); if (!b || !b.closest(".ask-dialog")) return;
+      e.stopPropagation(); const id = +b.dataset.i.slice(1);
+      b.closest(".modal-backdrop").remove(); undoChange(id);
+    }, true);
     async function show(tab) {
       if (tab === "inbox") tab = "review";  // the old name ("To File")
       if (!LOADERS[tab]) tab = "overview";
@@ -182,7 +228,10 @@
       } catch (e) { view().innerHTML = `<div class="card error">${escapeHtml(e.message)}</div>`; }
     }
     async function refreshCount() {
-      try { const r = await apiFetch(`/api/accounting/txns?status=unfiled&all_dates=true&limit=1`); META.unfiled = r.total; drawTabs(); } catch {}
+      try {
+        const [r, f] = await Promise.all([apiFetch(`/api/accounting/txns?status=review&all_dates=true&limit=1`), apiFetch(`/api/accounting/txns?status=flagged&all_dates=true&limit=1`)]);
+        META.unfiled = r.total; META.flagged = f.total; drawTabs();
+      } catch {}
     }
 
     // ================================================================ Overview
@@ -231,22 +280,64 @@
         t.origin === "manual" ? `<span class="ac-chip typed">Typed In</span>` : "", t.expected ? `<span class="ac-chip exp" title="Not on a statement yet -- matched when it comes in">Expected</span>` : "",
         t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : "",
         t.hint ? `<span class="ac-chip" title="The file's own category for this line">${escapeHtml(t.hint.slice(0, 40))}</span>` : "",
-        t.sent_back ? `<span class="ac-chip back" title="Sent back by ${escapeHtml(t.sent_back_by || "")}${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason) : ""}">Sent Back${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason.slice(0, 40)) : ""}</span>` : ""].join("");
+        t.sent_back ? `<span class="ac-chip back" title="Sent back by ${escapeHtml(t.sent_back_by || "")}${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason) : ""}">Sent Back${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason.slice(0, 40)) : ""}</span>` : "",
+        t.flag ? `<span class="ac-chip ${t.flag === "check" ? "check" : "flag"}" title="${escapeHtml((t.flag_info || {}).reason || "")}">${escapeHtml(FLAG_LABEL[t.flag] || "Flagged")}</span>` : ""].join("");
       const filed = t.splits.length ? t.splits.map(s => `<div>${escapeHtml(s.account)} <span class="muted">${fmtMoney(s.amount)}</span></div>`).join("")
         : `<select class="ac-pick" onchange="fileOne(${t.id}, this, ${t.amount})">${accountOptions(t.account_id, { blank: t.account_id ? "— None —" : "— Pick an account —", sign: t.amount })}</select>`;
-      const sugg = !t.account_id && !t.splits.length && t.suggest ? `<div style="margin-top:4px;"><button class="small-btn ac-sugg" onclick="fileTo(${t.id}, ${t.suggest.account_id})" title="${escapeHtml(t.suggest.why)}">${icon("check")} ${escapeHtml(t.suggest.account)}</button>
-        <span class="muted small">${escapeHtml(t.suggest.why)}</span></div>` : "";
+      const sugg = !t.account_id && !t.splits.length && t.suggest ? (t.suggest.split
+          ? `<div style="margin-top:4px;"><button class="small-btn ac-sugg" onclick="splitLikeLast(${t.id})" title="${escapeHtml(t.suggest.why)}">${icon("check")} Split: ${t.suggest.split.map(x => `${escapeHtml(x.account)} ${(+x.pct).toFixed(0)}%`).join(" / ")}</button>
+            <span class="muted small">${escapeHtml(t.suggest.why)}</span></div>`
+          : `<div style="margin-top:4px;"><button class="small-btn ac-sugg" onclick="fileTo(${t.id}, ${t.suggest.account_id})" title="${escapeHtml(t.suggest.why)}">${icon("check")} ${escapeHtml(t.suggest.account)}</button>
+        <span class="muted small">${escapeHtml(t.suggest.why)}</span></div>`) : "";
+      const clash = (t.conflict || []).length ? `<div class="ac-conflict small"><strong class="neg">Rules disagree</strong> — pick one (or an account above):
+          ${t.conflict.map(c => `<div style="margin-top:3px;"><button class="small-btn" onclick="useRule(${c.rule_id}, ${t.id})">${escapeHtml(c.name)} → ${escapeHtml(c.splits && c.splits.length ? "split" : c.account)}</button></div>`).join("")}
+          <div style="margin-top:3px;"><a class="link" href="#" onclick="lineRules(${t.id});return false;">Why? See each rule</a></div></div>` : "";
+      const looks = t.flag && (t.account_id || t.splits.length) ? `<div style="margin-top:4px;"><button class="small-btn" onclick="clearFlag([${t.id}])">${icon("check")} Looks Right</button>
+        <span class="muted small">${escapeHtml((t.flag_info || {}).reason || "")}</span></div>` : "";
       return `<tr data-id="${t.id}"><td class="tick"><input type="checkbox" ${TICKED.has(t.id) ? "checked" : ""} onchange="tick(${t.id}, this.checked)"></td>
         <td class="nowrap">${day(t.date)}<div class="muted small">${escapeHtml(t.source)}</div></td>
-        <td><span class="ac-who">${escapeHtml(t.payee || "")}</span>${chips}<div class="ac-desc">${escapeHtml(t.description)}</div>
+        <td><span class="ac-who">${escapeHtml(t.payee || "")}</span>${chips}<div class="ac-desc">${escapeHtml(t.description)}</div>${t.qb_memo ? `<div class="ac-memo" title="Text QuickBooks pasted after the bank's wording — not the bank's, not used by rules or search">QuickBooks added: ${escapeHtml(t.qb_memo)}</div>` : ""}
           ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
           ${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
-        <td style="min-width:200px;">${filed}${sugg}</td>
+        <td style="min-width:200px;">${filed}${sugg}${clash}${looks}</td>
         <td class="ac-amt">${money(t.amount)}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
-        <td class="nowrap">${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button>
+        <td class="nowrap">${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button><button class="small-btn icon-only" title="Which rules match this line, and why" onclick="lineRules(${t.id})">${icon("search")}</button>
           <button class="small-btn icon-only" title="Open: split, note${t.origin === "manual" ? ", change, delete" : ""}" onclick="editLine(${t.id})">${icon("pencil")}</button></td></tr>`;
     }
+    const FLAG_LABEL = { conflict: "Rules Disagree", check: "Filed By Rule — Check", qb_split: "Split In QuickBooks", reconcile: "Flagged", split_memory: "Check Split" };
     function tick(id, on) { on ? TICKED.add(id) : TICKED.delete(id); drawBulk(); }
+    async function useRule(ruleId, txnId) {
+      try { const r = await apiFetch(`/api/accounting/rules/${ruleId}/apply`, { method: "POST", body: JSON.stringify({ ids: [txnId] }) }); doneToast(`Filed by that rule`, r.change_id, reloadLines); await reloadLines(); refreshCount(); }
+      catch (e) { alert(e.message); }
+    }
+    async function clearFlag(ids) {
+      try { const r = await apiFetch("/api/accounting/txns/clear-flag", { method: "POST", body: JSON.stringify({ ids }) }); doneToast(`${r.done} checked — out of Review`, r.change_id, reloadLines); TICKED.clear(); await reloadLines(); refreshCount(); }
+      catch (e) { alert(e.message); }
+    }
+    async function splitLikeLast(id) {
+      const t = TXDATA.rows.find(x => x.id === id);
+      const parts = t.suggest.split.map(x => ({ account_id: x.account_id, amount: Math.round(t.amount * x.pct) / 100, note: x.note || "" }));
+      const diff = Math.round((t.amount - parts.reduce((a, x) => a + x.amount, 0)) * 100) / 100;
+      parts[parts.length - 1].amount = Math.round((parts[parts.length - 1].amount + diff) * 100) / 100;
+      try { const r = await apiFetch(`/api/accounting/txns/${id}`, { method: "PUT", body: JSON.stringify({ splits: parts }) }); doneToast("Split like last time", r.change_id, reloadLines); await reloadLines(); refreshCount(); }
+      catch (e) { alert(e.message); }
+    }
+    // every rule against one line: which match, each condition ✓ / ✗, and the line's history
+    async function lineRules(id) {
+      let d;
+      try { d = await apiFetch(`/api/accounting/txns/${id}/rules`); } catch (e) { alert(e.message); return; }
+      const cond = c => `<div style="padding-left:6px;">${c.ok === true ? `<span class="ac-x-ok">✓</span>` : c.ok === false ? `<span class="ac-x-no">✗</span>` : "·"} ${escapeHtml(c.text)}
+        ${(c.parts || []).map(cond).join("")}</div>`;
+      await askDialog({ title: "Rules For This Line", wide: true, body: `<p><strong>${fmtMoney(d.txn.amount)}</strong> on ${day(d.txn.date)} · ${escapeHtml(d.txn.description)}
+          ${d.txn.qb_memo ? `<div class="ac-memo">QuickBooks added: ${escapeHtml(d.txn.qb_memo)} (rules don't read this unless they ask for the QuickBooks Memo)</div>` : ""}</p>
+        ${d.conflict ? `<p class="neg"><strong>Rules disagree on this line</strong> — none of them files it. Pick one, or set one to win (rule → "Wins when rules disagree").</p>` : ""}
+        ${d.rules.map(r => `<div class="card" style="margin:6px 0;padding:8px 10px;"><strong>${escapeHtml(r.name)}</strong> → ${escapeHtml(r.account)}
+            ${r.matches ? `<span class="ac-chip ${r.in_conflict ? "flag" : "check"}">${r.decides ? "Decides" : r.in_conflict ? "Matches — disagrees" : "Matches"}</span>` : `<span class="ac-chip">Doesn't match</span>`}
+            ${r.enabled ? "" : `<span class="ac-chip">Off</span>`}${r.sign_ok ? "" : `<span class="ac-chip">money in / out differs</span>`}${r.source_ok ? "" : `<span class="ac-chip">other bank account</span>`}
+            <div class="small" style="margin-top:4px;">${r.match === "any" ? "ANY of:" : "ALL of:"}${r.conditions.map(cond).join("")}</div></div>`).join("") || `<p class="muted">No rule comes close to this line.</p>`}
+        ${d.history.length ? `<h4 style="margin:10px 0 4px;">History</h4>${d.history.map(h => `<div class="small">${fmtWhen(h.at)} · ${escapeHtml(h.by || "")} · ${escapeHtml(h.what)}${h.undone ? " (undone)" : ""}</div>`).join("")}` : ""}`,
+        buttons: [{ label: "Close", value: null }] });
+    }
     function tickAll(on) { (TXDATA?.rows || []).forEach(t => on ? TICKED.add(t.id) : TICKED.delete(t.id)); drawLines(); }
     function drawBulk() {
       const el = $("ac-bulk"); if (!el) return;
@@ -254,8 +345,9 @@
       const tk = (TXDATA?.rows || []).filter(t => TICKED.has(t.id)), tin = tk.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0), tout = tk.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0);
       el.innerHTML = `<strong>${TICKED.size} ticked</strong> <span class="small">in ${fmtMoney(tin)} · out ${fmtMoney(tout)} · net <strong>${fmtMoney(tin + tout)}</strong></span>
         <select id="bulk-acc">${accountOptions(null, { blank: "— Put in account —" })}</select><button class="small-btn" onclick="bulkDo('file')">File</button>
-        <button class="small-btn" onclick="bulkDo('review')" title="Keep the account AT-HUB picked">Looks Right</button>
+        <button class="small-btn" onclick="bulkDo('review')" title="Keep the account AT-HUB / a rule picked (and take the flag off)">Looks Right</button>
         <button class="small-btn" onclick="sendBack([...TICKED])" title="Out of its account, back to Review (where it was is kept as the suggestion)">Send Back To Review</button>
+        <button class="small-btn" onclick="ruleFromTicked()" title="A rule from the words the ticked lines share">Make A Rule</button>
         <button class="small-btn danger" onclick="bulkDo('delete')" title="Typed-in lines only">Delete</button>
         <button class="small-btn" onclick="TICKED.clear();drawLines()">Clear</button>`;
     }
@@ -276,7 +368,7 @@
       if (action === "delete" && !(await askDialog({ title: `Delete ${TICKED.size} line(s)?`, body: `<p>Only typed-in lines are deleted; statement lines are skipped (undo their import on Statements).</p>`, buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: false }] })).value) return;
       try {
         const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify(body) });
-        toast(`${r.done} done${r.skipped ? `, ${r.skipped} skipped (from a statement)` : ""}${r.filed_more ? ` · ${r.filed_more} more filed like them` : ""}`);
+        doneToast(`${r.done} done${r.skipped ? `, ${r.skipped} skipped (from a statement)` : ""}${r.filed_more ? ` · ${r.filed_more} more filed like them` : ""}`, r.change_id, reloadLines);
         TICKED.clear(); await reloadLines(); refreshCount();
       } catch (e) { alert(e.message); }
     }
@@ -290,13 +382,13 @@
     // after a person files a line: what AT-HUB filed like it, what went back for a look, and the look-alikes it isn't sure of
     let SESSION = { mine: 0, more: 0 };
     async function afterFile(r) {
-      if (!r.account_id && !(r.splits || []).length) { toast("Saved"); return; }
+      if (!r.account_id && !(r.splits || []).length) { doneToast("Saved", r.change_id, reloadLines); return; }
       SESSION.mine++; SESSION.more += r.filed_more || 0;
       drawSession();
       const bits = [`Filed in ${r.account || "a split"}`];
       if (r.filed_more) bits.push(`${r.filed_more} more like it filed too`);
       if (r.taken_back) bits.push(`${r.taken_back} of AT-HUB's picks like it went back to Review`);
-      toast(bits.join(" · "), null, 6000);
+      doneToast(bits.join(" · "), r.change_id, reloadLines);
       if (!(r.alike || []).length || !r.account_id) return;
       const lean = r.alike.filter(x => x.lean), other = r.alike.filter(x => !x.lean);
       const res = await pickLines({ title: `${r.alike.length} More Like This`,
@@ -306,7 +398,7 @@
         try {
           const b = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: res.ids, action: "file", account_id: r.account_id }) });
           SESSION.mine += b.done; SESSION.more += b.filed_more || 0; drawSession();
-          toast(`${b.done} filed in ${r.account}${b.filed_more ? ` · ${b.filed_more} more like them filed too` : ""}`);
+          doneToast(`${b.done} filed in ${r.account}${b.filed_more ? ` · ${b.filed_more} more like them filed too` : ""}`, b.change_id, reloadLines);
         } catch (e) { alert(e.message); }
         await reloadLines(); refreshCount();
       }
@@ -314,6 +406,17 @@
     function drawSession() {
       const el = document.getElementById("ac-session");
       if (el) el.innerHTML = SESSION.mine ? `This visit: you filed <strong>${SESSION.mine}</strong> · AT-HUB filed <strong>${SESSION.more}</strong> more like them by itself` : "";
+    }
+    function ruleFromTicked() {  // the words every ticked line shares (not numbers / reference codes / bank wording) -> a new rule
+      const rows = (TXDATA?.rows || []).filter(t => TICKED.has(t.id));
+      if (!rows.length) return;
+      const BANK = new Set(["ON", "TO", "FROM", "REF", "THE", "AND", "OF", "WF", "TRAN", "ID"]);
+      const wordsOf = t => (t.bank_description || t.description || "").toUpperCase().replace(/REF ?#\s?\S+|#\S+/g, " ").split(/[^A-Z&']+/).filter(w => w.length > 1 && !BANK.has(w));
+      const first = wordsOf(rows[0]);
+      const shared = first.filter((w, i) => first.indexOf(w) === i && rows.every(t => wordsOf(t).includes(w))).slice(0, 5);
+      if (!shared.length) { alert("The ticked lines share no words — tick lines that look alike"); return; }
+      const signs = new Set(rows.map(t => t.amount < 0)), accs = new Set(rows.map(t => t.account_id).filter(Boolean));
+      newRule({ contains: shared.join(" "), sign: signs.size === 1 ? (rows[0].amount < 0 ? "out" : "in") : null, account_id: accs.size === 1 ? [...accs][0] : null });
     }
     function ruleFromLine(id) {
       const t = TXDATA.rows.find(x => x.id === id);
@@ -328,7 +431,7 @@
     const TXF_KEYS = ["q", "source_id", "kind", "account_id", "status", "amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group"];
     function txParams(extra = {}) {
       const p = {};
-      if (LINES_MODE === "inbox") Object.assign(p, { status: "review", all_dates: true });
+      if (LINES_MODE === "inbox") Object.assign(p, { status: "review", all_dates: true }, TXF.sort ? { sort: TXF.sort } : {});
       else {
         for (const k of TXF_KEYS) if (TXF[k] !== undefined && TXF[k] !== "" && TXF[k] !== false && TXF[k] !== null) p[k] = TXF[k];
         if (!p.all_dates && !p.date_from && !p.date_to) Object.assign(p, { start: PERIOD.start, end: PERIOD.end });
@@ -366,12 +469,29 @@
           <span>average ${fmtMoney(st.average)}</span><span>per month ${fmtMoney(st.per_month)} (${st.months} mo)</span>${d.has_balance ? `<span>balance shown under each amount</span>` : ""}</div>` : ""}
         ${groupsHtml}
         <div id="ac-bulk" class="ac-bulk" style="display:none"></div>
-        <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th><th>Date</th><th>Payee / Description</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
+        <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th>${sortTh("date", "Date")}${sortTh("payee", "Payee / Description")}${sortTh("account", "Account")}${sortTh("amount", "Amount", "num")}<th></th></tr></thead>
         <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="muted">${LINES_MODE === "inbox" ? "Nothing to review — every line is in an account." : "No lines match."}</td></tr>`}</tbody></table>
         <div class="muted small" style="margin-top:8px;">${d.rows.length} of ${d.total} shown
           ${d.total > (TXF.offset || 0) + d.rows.length ? ` · <a class="link" href="#" onclick="TXF.offset=(TXF.offset||0)+300;reloadLines();return false;">Next 300</a>` : ""}
           ${TXF.offset ? ` · <a class="link" href="#" onclick="TXF.offset=Math.max(0,TXF.offset-300);reloadLines();return false;">Previous</a>` : ""}</div>`;
       drawBulk();
+      stickUnder();
+    }
+    // click a header to sort every matching line (not just the page): newest / oldest, A-Z / Z-A, biggest / smallest
+    function sortTh(k, label, cls = "") {
+      const cur = TXF.sort || (LINES_MODE === "inbox" ? "" : "date_desc"), dir = cur.startsWith(k + "_") ? cur.split("_")[1] : "";
+      return `<th class="ac-sort ${cls}" data-dir="${dir}" onclick="sortBy('${k}')" title="Sort every matching line">${label}</th>`;
+    }
+    function sortBy(k) {
+      const cur = TXF.sort || "date_desc";
+      const first = k === "date" || k === "amount" ? "desc" : "asc";
+      TXF.sort = cur === `${k}_${first}` ? `${k}_${first === "desc" ? "asc" : "desc"}` : `${k}_${first}`;
+      if (LINES_MODE !== "inbox") saveTxf();
+      TXF.offset = 0; reloadLines();
+    }
+    function stickUnder() {  // frozen table headers sit under the sticky totals bar
+      const bar = document.querySelector(".ac-totbar");
+      document.documentElement.style.setProperty("--ac-stick", bar ? `${bar.offsetHeight + 2}px` : "0px");
     }
     function groupDrill(key) {
       const g = TXF.group;
@@ -391,15 +511,17 @@
       try {
         const r = await apiFetch("/api/accounting/txns/send-back", { method: "POST", body: JSON.stringify({ ids, reason: el.querySelector("#sb-why").value }) });
         TICKED.clear();
-        toast(`${r.done} sent back to Review`, { label: "Undo", run: async () => { await apiFetch("/api/accounting/txns/undo-send-back", { method: "POST", body: JSON.stringify({ ids }) }); await reloadLines(); refreshCount(); } }, 9000);
+        doneToast(`${r.done} sent back to Review`, r.change_id, reloadLines);
         await reloadLines(); refreshCount();
       } catch (e) { alert(e.message); }
     }
     async function tabInbox() {
       LINES_MODE = "inbox"; TICKED.clear(); TXF = {};
+      TXF = {};
       view().innerHTML = `<div class="card" id="sugg-card" style="display:none;"></div><div class="card"><h3 style="margin-top:0;">Review</h3>
-        <p class="ac-help">Lines with no account yet (every date). Click a suggestion to accept it, or pick an account — each one you file teaches AT-HUB, and the
-          look-alikes it's now sure about are filed for you. Lines AT-HUB filed by itself are marked <span class="ac-chip auto">Auto</span> on Transactions until someone looks.</p>
+        <p class="ac-help">Lines with no account yet, and lines waiting for a look even though they're filed — <span class="ac-chip flag">Rules Disagree</span>,
+          <span class="ac-chip check">Filed By Rule — Check</span>, <span class="ac-chip flag">Split In QuickBooks</span>, flagged from Reconcile — flagged ones first (every date).
+          Click a suggestion to accept it, or pick an account — each one you file teaches AT-HUB. A flagged line that's right: <strong>Looks Right</strong>.</p>
         <div class="btn-row" style="margin-bottom:10px;"><button onclick="acceptAll()">${icon("check")} Accept All Suggestions Shown</button>
           <button onclick="addLine()">${icon("plus")} Type In A Line</button><button onclick="TXF={status:'auto'};show('txns')">Review AT-HUB's Picks</button>
           <span class="ac-session" id="ac-session"></span></div>
@@ -409,14 +531,16 @@
       apiFetch("/api/accounting/rule-suggestions").then(x => { SUGG = x; const c = document.getElementById("sugg-card"); if (c && x.length) c.style.display = ""; redrawSugg(); }).catch(() => {});
     }
     async function acceptAll() {
-      const rows = (TXDATA?.rows || []).filter(t => t.suggest);
+      const rows = (TXDATA?.rows || []).filter(t => t.suggest && !t.suggest.split && t.suggest.account_id);
       if (!rows.length) { toast("No suggestions shown"); return; }
       if (!(await askDialog({ title: `Accept ${rows.length} suggestion(s)?`, body: `<p>Each line goes in the account shown on its green button.</p>`, buttons: [{ label: "Accept", value: true, cls: "primary" }, { label: "Cancel", value: false }] })).value) return;
       const by = {};
       rows.forEach(t => (by[t.suggest.account_id] = by[t.suggest.account_id] || []).push(t.id));
       let n = 0;
-      for (const [a, ids] of Object.entries(by)) { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: +a }) }); n += r.done + r.filed_more; }
-      toast(`${n} line(s) filed`); await reloadLines(); refreshCount();
+      const changes = [];
+      for (const [a, ids] of Object.entries(by)) { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: +a }) }); n += r.done + r.filed_more; if (r.change_id) changes.push(r.change_id); }
+      toast(`${n} line(s) filed`, changes.length ? { label: "Undo", run: async () => { for (const c of changes.reverse()) { try { await apiFetch(`/api/accounting/changes/${c}/undo`, { method: "POST" }); } catch (e) { alert(e.message); break; } } await reloadLines(); refreshCount(); } } : null, 10000);
+      await reloadLines(); refreshCount();
     }
     async function tabTxns() {
       LINES_MODE = "txns"; TICKED.clear();
@@ -477,29 +601,67 @@
           <label>Note</label><textarea id="el-note" rows="2">${escapeHtml(t.note || "")}</textarea>
         </div>
         <h4 style="margin:12px 0 6px;">Split Over Several Accounts</h4>
-        <p class="ac-help">The parts must add up to ${fmtMoney(t.amount)}. Leave empty to keep it in one account.</p>
+        <p class="ac-help">The parts must add up to ${fmtMoney(t.amount)} — type them with or without the minus sign, they follow the line. Leave empty to keep it in one account.</p>
         <div id="el-splits">${t.splits.map(splitRow).join("")}</div>
-        <button type="button" class="small-btn" id="el-addsplit">${icon("plus")} Add A Part</button>
+        <div id="el-sum" class="ac-splitsum"></div><div id="el-err" class="ac-err"></div>
+        <button type="button" class="small-btn" id="el-addsplit">${icon("plus")} Add A Part</button> <button type="button" class="small-btn" id="el-fill" title="The last part gets what's left">Fill The Rest</button>
+        ${t.qb_memo ? `<p class="ac-memo" style="margin-top:10px;">QuickBooks added: ${escapeHtml(t.qb_memo)}</p>` : ""}
+        ${t.flag ? `<p class="small" style="margin-top:8px;"><span class="ac-chip flag">${escapeHtml(FLAG_LABEL[t.flag] || "Flagged")}</span> ${escapeHtml((t.flag_info || {}).reason || "")}</p>` : ""}
         ${t.created_by ? `<p class="muted small" style="margin-top:10px;">${manual ? "Typed in" : "Brought in"} by ${escapeHtml(t.created_by)}${t.updated_by ? ` · last changed by ${escapeHtml(t.updated_by)}` : ""}</p>` : ""}`;
       const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
-      buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" });
+      buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" }, { label: "Rules For It", value: "rules" });
+      if (t.flag && (t.account_id || t.splits.length)) buttons.splice(1, 0, { label: "Looks Right", value: "ok" });
       if (t.account_id || t.splits.length) buttons.splice(2, 0, { label: "Send Back To Review", value: "back" });
       if (manual) buttons.push({ label: "Delete Line", value: "delete", cls: "danger" });
       const dlgP = askDialog({ title: manual ? "Typed-In Line" : "Statement Line", body, buttons, wide: true });
+      const signed = v => { const x = Math.abs(v); return t.amount < 0 ? -x : x; };  // a part typed without the minus follows the line
+      const partsNow = () => [...document.querySelectorAll("#el-splits .ac-split")].map(r => ({ r, a: r.querySelector(".sp-acc").value, v: parseFloat(r.querySelector(".sp-amt").value) }));
+      const sumUp = () => {
+        const box = document.getElementById("el-sum"); if (!box) return true;
+        const ps = partsNow().filter(x => !isNaN(x.v));
+        if (!ps.length) { box.textContent = ""; box.className = "ac-splitsum"; return true; }
+        const tot = Math.round(ps.reduce((a, x) => a + signed(x.v), 0) * 100) / 100, ok = Math.abs(tot - t.amount) < 0.005;
+        box.className = "ac-splitsum " + (ok ? "good" : "bad");
+        box.textContent = `Parts: ${fmtMoney(tot)} of ${fmtMoney(t.amount)}${ok ? " ✓" : ` — ${fmtMoney(Math.round((t.amount - tot) * 100) / 100)} left`}`;
+        return ok;
+      };
       setTimeout(() => {
         const add = document.getElementById("el-addsplit");
-        if (add) add.onclick = () => { document.getElementById("el-splits").insertAdjacentHTML("beforeend", splitRow()); document.getElementById("el-acc").disabled = true; };
+        if (add) add.onclick = () => { document.getElementById("el-splits").insertAdjacentHTML("beforeend", splitRow()); document.getElementById("el-acc").disabled = true; sumUp(); };
+        const fill = document.getElementById("el-fill");
+        if (fill) fill.onclick = () => {
+          let ps = partsNow();
+          if (!ps.length) { document.getElementById("el-splits").insertAdjacentHTML("beforeend", splitRow()); document.getElementById("el-acc").disabled = true; ps = partsNow(); }
+          const last = ps[ps.length - 1], others = ps.slice(0, -1).filter(x => !isNaN(x.v)).reduce((a, x) => a + signed(x.v), 0);
+          last.r.querySelector(".sp-amt").value = (Math.round((t.amount - others) * 100) / 100).toFixed(2); sumUp();
+        };
+        const box = [...document.querySelectorAll(".ask-dialog")].pop();
+        if (box) {
+          box.addEventListener("input", sumUp);
+          box.addEventListener("click", e => { if (e.target.closest(".ac-split .icon-only")) setTimeout(sumUp, 0); });
+          const save = box.querySelector('button[data-i="0"]');
+          save.addEventListener("click", e => {  // a split that doesn't add up stays open, with the reason in the window
+            const ps = partsNow().filter(x => x.a && x.a !== "new" && !isNaN(x.v));
+            const err = document.getElementById("el-err");
+            if (ps.length && !sumUp()) { e.stopPropagation(); err.textContent = "The parts don't add up to the line yet — fix an amount or use Fill The Rest."; return; }
+            if (partsNow().some(x => !isNaN(x.v) && (!x.a || x.a === "new"))) { e.stopPropagation(); err.textContent = "Pick an account for every part (or remove the empty part)."; return; }
+            if (ps.length === 1) { e.stopPropagation(); err.textContent = "A split needs two or more parts — or pick one account above."; return; }
+          }, true);
+        }
+        sumUp();
         document.querySelectorAll("#el-acc").forEach(s => s.onchange = async () => { if (s.value === "new") await pickNew(s, t.amount); });
       }, 0);
       const { value, el } = await dlgP;
       if (!value) return;
       try {
         if (value === "back") { await sendBack([t.id]); return; }
+        if (value === "rules") { await lineRules(t.id); return; }
+        if (value === "ok") { await clearFlag([t.id]); return; }
         if (value === "rule") { await newRule({ contains: ruleWords(t.bank_description || t.description), account_id: t.account_id, sign: t.amount < 0 ? "out" : "in" }); return; }
         if (value === "delete") { await apiFetch(`/api/accounting/txns/${id}`, { method: "DELETE" }); toast("Deleted"); }
         else {
           const q = s => el.querySelector(s);
-          const splits = [...el.querySelectorAll(".ac-split")].map(r => ({ account_id: r.querySelector(".sp-acc").value, amount: parseFloat(r.querySelector(".sp-amt").value), note: r.querySelector(".sp-note").value })).filter(s => s.account_id && s.account_id !== "new" && !isNaN(s.amount));
+          const splits = [...el.querySelectorAll(".ac-split")].map(r => ({ account_id: r.querySelector(".sp-acc").value, amount: signed(parseFloat(r.querySelector(".sp-amt").value)), note: r.querySelector(".sp-note").value })).filter(s => s.account_id && s.account_id !== "new" && !isNaN(s.amount));
           const body = { payee: q("#el-payee").value, note: q("#el-note").value };
           if (splits.length) body.splits = splits; else { const a = q("#el-acc").value; body.account_id = a && a !== "new" ? +a : null; body.splits = []; }
           if (manual) Object.assign(body, { date: q("#el-date").value, amount: parseFloat(q("#el-amt").value), description: q("#el-desc").value, source_id: +q("#el-src").value, expected: q("#el-exp").checked });
@@ -647,8 +809,9 @@
       <div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Rules</h3><span style="flex:1"></span>
           <button onclick="exportRules()">${icon("download")} Export</button><button onclick="newRule()">${icon("plus")} New Rule</button></div>
-        <p class="ac-help">Rules run top to bottom — the first one that matches a line wins, before anything AT-HUB learned. Drag (⋮⋮) or use ↑ ↓ to change the order.
-          A rule can file by itself or only suggest. Saving one shows every line it matches — tick all, some or one and apply.</p>
+        <p class="ac-help">Rules come before anything AT-HUB learned. When two rules match one line and say different things, <strong>neither files it</strong> — it waits in Review
+          with a red <span class="ac-chip flag">Rules Disagree</span> flag, unless one of them is set to win. A rule can file by itself, file but still be reviewed, or only suggest.
+          Saving one shows every line it matches — tick all, some or one and apply. Drag (⋮⋮) or ↑ ↓ to order them.</p>
         <table class="compact-table no-table-tools" id="rules-table"><thead><tr><th style="width:62px;">Order</th><th>On</th><th>Rule</th><th>Then</th><th class="num">Used</th><th></th></tr></thead><tbody>
         ${rules.map((r, i) => `<tr draggable="true" data-rule="${r.id}" ${r.enabled ? "" : 'style="opacity:.55"'}>
           <td class="nowrap"><span class="ac-grip" title="Drag to change the order">⋮⋮</span>${i + 1}
@@ -657,13 +820,16 @@
           <td>${r.name ? `<strong>${escapeHtml(r.name)}</strong><div class="small">${escapeHtml(r.summary)}</div>` : escapeHtml(r.summary)}</td>
           <td>${r.splits.length ? `Split: ${r.splits.map(x => `${escapeHtml(x.account)} ${x.pct != null ? x.pct + "%" : fmtMoney(x.amount)}`).join(", ")}${r.account ? `, rest ${escapeHtml(r.account)}` : ""}` : escapeHtml(r.account)}
             ${r.set_payee ? `<div class="muted small">payee: ${escapeHtml(r.set_payee)}</div>` : ""}${r.set_note ? `<div class="muted small">note: ${escapeHtml(r.set_note)}</div>` : ""}
-            ${r.action === "suggest" ? ` <span class="ac-chip">Suggests Only</span>` : ""}</td>
+            ${r.action === "suggest" ? ` <span class="ac-chip">Suggests Only</span>` : ""}${r.review ? ` <span class="ac-chip check" title="Files the line, but it waits in Review until someone says it's right">Still Reviewed</span>` : ""}${r.wins ? ` <span class="ac-chip" title="Wins when it disagrees with another rule">Wins</span>` : ""}</td>
           <td class="num">${r.filed_lines || r.hits}${r.filed_total ? `<div class="muted small">${fmtMoney(r.filed_total)}</div>` : ""}</td>
           <td class="nowrap"><button class="small-btn" onclick="rulePreview(${r.id})" title="See every line it matches and file the ones you pick">Apply…</button>
             <button class="small-btn icon-only" title="Change rule" onclick="newRule(RULES.find(x => x.id === ${r.id}))">${icon("pencil")}</button>
             <button class="small-btn icon-only" title="Copy rule" onclick="copyRule(${r.id})">${icon("layers")}</button>
             <button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${r.id})">${icon("trash")}</button></td></tr>`).join("")
           || `<tr><td colspan="6" class="muted">No rules — AT-HUB is going on what it learned.</td></tr>`}</tbody></table></div>
+      <div class="card" id="rc-card"><p class="muted small">Checking rules for conflicts…</p></div>
+      <div class="card" id="cb-card" style="display:none;"></div>
+      <div class="card" id="rh-card" style="display:none;"></div>
       <div class="card" id="sugg-card">${suggHtml()}</div>
       <div class="card"><details><summary><strong>What AT-HUB Learned</strong> <span class="muted small">${learnedRows.length} payee(s) — from every line a person filed</span></summary>
         <p class="ac-help" style="margin-top:8px;">Where people put each payee's lines. "Mixed" ones are told apart by the note words (Zelle to Niraj: MAALIKS → Richard).
@@ -678,6 +844,50 @@
       wireAccountDrag();
       wireRuleDrag();
       wireSuggPickers();
+      loadRuleCards();
+    }
+    async function loadRuleCards() {
+      const [conf, comb, health] = await Promise.all([apiFetch("/api/accounting/rule-conflicts"), apiFetch("/api/accounting/rule-combine"), apiFetch("/api/accounting/rule-health")]).catch(() => [[], [], []]);
+      const rc = $("rc-card"), cb = $("cb-card"), rh = $("rh-card"); if (!rc) return;
+      rc.innerHTML = `<div class="ac-filters"><h3 style="margin:0;">Rule Conflicts</h3><span class="muted small">${conf.length ? `${conf.length} pair(s) of rules disagree on some lines` : "none — no two rules fight over a line"}</span></div>
+        ${conf.length ? `<p class="ac-help">Each pair matches the same lines but says different things, so those lines wait in Review. Fix one rule (add a NOT, narrow it), set one to win, or switch one off.</p>
+        <table class="compact-table"><thead><tr><th>Rule</th><th>Rule</th><th class="num">Lines</th><th class="num">Amount</th><th>Now</th><th></th></tr></thead><tbody>
+        ${conf.map((c, i) => `<tr><td><strong>${escapeHtml(c.a.name)}</strong><div class="muted small">→ ${escapeHtml(c.a.account)}</div></td><td><strong>${escapeHtml(c.b.name)}</strong><div class="muted small">→ ${escapeHtml(c.b.account)}</div></td>
+          <td class="num">${c.lines}</td><td class="ac-amt">${money(c.total)}</td><td class="small">${escapeHtml(c.result)}<div class="ac-desc">e.g. ${escapeHtml((c.sample[0] || {}).description || "")}</div></td>
+          <td class="nowrap"><button class="small-btn" onclick='newRule(RULES.find(x => x.id === ${c.a.id}))'>Change First</button><button class="small-btn" onclick='newRule(RULES.find(x => x.id === ${c.b.id}))'>Change Second</button>
+            <button class="small-btn" onclick='conflictLines(${JSON.stringify(c.ids)})'>Lines</button></td></tr>`).join("")}</tbody></table>` : ""}`;
+      if (comb.length) {
+        cb.style.display = "";
+        cb.innerHTML = `<div class="ac-filters"><h3 style="margin:0;">Combine Rules</h3><span class="muted small">${comb.length} group(s) of rules that do the same thing</span></div>
+          <p class="ac-help">These rules all put lines in the same place and each looks for its own words — one rule with "contains any of" does the same job. The line counts show nothing changes. Undo splits them back.</p>
+          ${comb.map((g, i) => `<div class="ac-sugg-card" style="margin-bottom:8px;"><strong>${g.rule_ids.length} rules → ${escapeHtml(g.account)}</strong>
+            <div class="small">${g.rules.map(escapeHtml).join("<br>")}</div><div class="small" style="margin-top:4px;">As one: <strong>${escapeHtml(g.combined)}</strong></div>
+            <div class="small ${g.same_lines ? "pos" : "neg"}">${g.lines_before} line(s) now · ${g.lines_after} as one rule${g.same_lines ? " — the very same lines" : ` — ${g.only_before} only before, ${g.only_after} only after`}</div>
+            <div class="btn-row" style="margin-top:6px;"><button class="small-btn primary" onclick='combineRules(${JSON.stringify(g.rule_ids)})'>Combine Into One</button></div></div>`).join("")}`;
+      }
+      const sick = health.filter(h => h.issues.length);
+      if (sick.length) {
+        rh.style.display = "";
+        rh.innerHTML = `<details><summary><strong>Rule Health</strong> <span class="muted small">${sick.length} rule(s) worth a look</span></summary>
+          <table class="compact-table" style="margin-top:8px;"><thead><tr><th>Rule</th><th class="num">Matches</th><th class="num">Last 12 Mo.</th><th class="num">Filed</th><th class="num">Moved By A Person</th><th>Worth A Look</th><th></th></tr></thead><tbody>
+          ${sick.map(h => `<tr ${h.enabled ? "" : 'style="opacity:.6"'}><td><strong>${escapeHtml(h.name)}</strong><div class="muted small">→ ${escapeHtml(h.account)}</div></td><td class="num">${h.matches}</td><td class="num">${h.recent}</td>
+            <td class="num">${h.filed}</td><td class="num">${h.moved_by_person}</td><td class="small">${h.issues.map(escapeHtml).join("<br>")}</td>
+            <td class="nowrap"><button class="small-btn icon-only" title="Change rule" onclick="newRule(RULES.find(x => x.id === ${h.id}))">${icon("pencil")}</button>
+              <button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${h.id})">${icon("trash")}</button></td></tr>`).join("")}</tbody></table></details>`;
+      }
+    }
+    async function conflictLines(ids) {
+      const d = await apiFetch(`/api/accounting/txns?${new URLSearchParams({ all_dates: true, status: "review", limit: 2000 })}`);
+      const lines = d.rows.filter(t => ids.includes(t.id));
+      await pickLines({ title: "Lines The Two Rules Fight Over", intro: "They wait in Review. Open Review to pick a rule for each, or fix the rules.", groups: [{ label: "Lines", lines, ticked: null }], apply: "Open Review" })
+        .then(r => { if (r) show("review"); });
+    }
+    async function combineRules(ids) {
+      const { value, el } = await askDialog({ title: "Combine Into One Rule?", body: `<p>${ids.length} rules become one. Name it:</p><input id="cb-name" style="width:100%;" placeholder="e.g. Saul's pay">`,
+        buttons: [{ label: "Combine", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      try { const r = await apiFetch("/api/accounting/rule-combine", { method: "POST", body: JSON.stringify({ rule_ids: ids, name: el.querySelector("#cb-name").value }) }); doneToast("Combined into one rule", r.change_id); show("accounts"); }
+      catch (e) { alert(e.message); }
     }
     async function forgetPayee(key, on) {
       try { const r = await apiFetch("/api/accounting/learned/forget", { method: "POST", body: JSON.stringify({ key, forget: on }) }); toast(on ? `Forgotten — ${r.lines} line(s) no longer teach AT-HUB` : "Learning from these again"); show("accounts"); }
@@ -711,11 +921,11 @@
       const body = `<p>Put <strong>${escapeHtml(a.path)}</strong> under <strong>${escapeHtml(t.path)}</strong>. Its lines (${row.count} in this period, ${fmtMoney(row.net)}),
           rules and sub-accounts come with it, and it counts in ${escapeHtml(t.name)}'s totals.</p>
         ${a.kind !== t.kind ? `<p class="neg">It changes from ${escapeHtml(kl[a.kind])} to ${escapeHtml(kl[t.kind])} — in the P&L and the Excel too.</p>` : ""}
-        <p class="muted small">Or merge it: all its lines move onto ${escapeHtml(t.name)} itself and ${escapeHtml(a.name)} is removed (can't be undone).</p>`;
+        <p class="muted small">Or merge it: all its lines move onto ${escapeHtml(t.name)} itself and ${escapeHtml(a.name)} is removed (Undo brings it back).</p>`;
       const { value } = await askDialog({ title: "Move Account", body, buttons: [{ label: `Put Under ${t.name}`, value: "under", cls: "primary" }, { label: `Merge Into ${t.name}`, value: "merge" }, { label: "Cancel", value: null }] });
       if (value === "under") await moveAccount(id, { parent_id: targetId }, `${a.name} is now under ${t.name}`, { parent_id: a.parent_id || 0, kind: a.kind });
       else if (value === "merge") {
-        try { const r = await apiFetch(`/api/accounting/accounts/${id}/merge?into_id=${targetId}`, { method: "POST" }); toast(`${r.moved} line(s) moved into ${t.name}`); await loadMeta(); show("accounts"); }
+        try { const r = await apiFetch(`/api/accounting/accounts/${id}/merge?into_id=${targetId}`, { method: "POST" }); doneToast(`${r.moved} line(s) moved into ${t.name}`, r.change_id); await loadMeta(); show("accounts"); }
         catch (e) { alert(e.message); }
       }
     }
@@ -728,9 +938,9 @@
     }
     async function moveAccount(id, data, msg, old) {
       try {
-        await apiFetch(`/api/accounting/accounts/${id}`, { method: "PUT", body: JSON.stringify(data) });
+        const r = await apiFetch(`/api/accounting/accounts/${id}`, { method: "PUT", body: JSON.stringify(data) });
         await loadMeta(); show("accounts");
-        toast(msg, { label: "Undo", run: async () => { try { await apiFetch(`/api/accounting/accounts/${id}`, { method: "PUT", body: JSON.stringify(old) }); await loadMeta(); show("accounts"); } catch (e) { alert(e.message); } } }, 9000);
+        doneToast(msg, r.change_id);
       } catch (e) { alert(e.message); }
     }
 
@@ -757,12 +967,12 @@
       if (!value) return;
       const into = el.querySelector("#mg-into").value;
       if (!into) return;
-      try { const r = await apiFetch(`/api/accounting/accounts/${id}/merge?into_id=${into}`, { method: "POST" }); toast(`${r.moved} line(s) moved`); await loadMeta(); show("accounts"); }
+      try { const r = await apiFetch(`/api/accounting/accounts/${id}/merge?into_id=${into}`, { method: "POST" }); doneToast(`${r.moved} line(s) moved`, r.change_id); await loadMeta(); show("accounts"); }
       catch (e) { alert(e.message); }
     }
     async function deleteAccount(id) {
       if (!(await askDialog({ title: `Delete ${acc(id).name}?`, body: "", buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
-      try { await apiFetch(`/api/accounting/accounts/${id}`, { method: "DELETE" }); await loadMeta(); show("accounts"); } catch (e) { alert(e.message); }
+      try { const r = await apiFetch(`/api/accounting/accounts/${id}`, { method: "DELETE" }); doneToast("Account deleted", r.change_id); await loadMeta(); show("accounts"); } catch (e) { alert(e.message); }
     }
 
     // ---- pick lines: tick all / some / one, by group (rule Apply, "like this", Move Lines)
@@ -815,7 +1025,7 @@
       if (!res) { show(TAB); return; }
       if (!res.to) { alert("Pick where they go"); return; }
       if (!res.ids.length) return;
-      try { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: res.ids, action: "file", account_id: res.to }) }); toast(`${r.done} line(s) moved to ${acc(res.to).path}`); }
+      try { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: res.ids, action: "file", account_id: res.to }) }); doneToast(`${r.done} line(s) moved to ${acc(res.to).path}`, r.change_id); }
       catch (e) { alert(e.message); }
       show(TAB); refreshCount();
     }
@@ -826,9 +1036,9 @@
       return (desc || "").toUpperCase().replace(/REF ?#\s?\S+|#\S+/g, " ").split(/\s+/).filter(w => w && !/\d/.test(w) && !["ON", "TO", "FROM"].includes(w)).slice(0, 3).join(" ");
     }
     async function exportRules() { try { await downloadFile("/api/accounting/rules-export.xlsx", "Accounting Rules.xlsx"); } catch (e) { alert(e.message); } }
-    async function ruleOnOff(id, on) { await apiFetch(`/api/accounting/rules/${id}/enabled`, { method: "PUT", body: JSON.stringify({ enabled: on }) }); show("accounts"); }
+    async function ruleOnOff(id, on) { const r = await apiFetch(`/api/accounting/rules/${id}/enabled`, { method: "PUT", body: JSON.stringify({ enabled: on }) }); doneToast(on ? "Rule on" : "Rule off", r.change_id); show("accounts"); }
     async function copyRule(id) { const r = await apiFetch(`/api/accounting/rules/${id}/copy`, { method: "POST" }); toast("Copied — the copy starts switched off"); await show("accounts"); newRule((await apiFetch("/api/accounting/rules")).find(x => x.id === r.id)); }
-    async function saveRuleOrder(ids) { await apiFetch("/api/accounting/rules-order", { method: "PUT", body: JSON.stringify({ ids }) }); show("accounts"); }
+    async function saveRuleOrder(ids) { const r = await apiFetch("/api/accounting/rules-order", { method: "PUT", body: JSON.stringify({ ids }) }); doneToast("Order saved", r.change_id); show("accounts"); }
     function moveRule(id, step) {
       const ids = RULES.map(r => r.id), i = ids.indexOf(id), j = i + step;
       if (j < 0 || j >= ids.length) return;
@@ -855,17 +1065,25 @@
     // the rule builder: money in / out, bank accounts, ALL / ANY conditions, then account / split / payee / note, files or suggests
     async function newRule(r = {}) {
       const M = await ruleMeta();
-      const fields = { ...M.text_fields, ...M.num_fields };
+      const fields = { ...M.text_fields, ...M.num_fields, ...(M.date_fields || {}) };
       const conds = r.conditions && r.conditions.length ? r.conditions : [{ field: "text", op: "contains", value: r.contains || "" }];
-      const opsFor = f => f in M.num_fields ? M.num_ops : M.text_ops;
+      const opsFor = f => f in M.num_fields ? M.num_ops : (M.date_fields || {})[f] ? M.date_ops : M.text_ops;
+      const ph = f => f in M.num_fields ? "number" : f === "weekday" ? "MON, FRI" : f === "memo" ? "QuickBooks' pasted text" : 'words, or "a phrase"';
       const condRow = (c = { field: "text", op: "contains", value: "" }) => {
-        const between = c.op === "between", v = between && Array.isArray(c.value) ? c.value : [c.value ?? "", ""];
+        if (c.field === "group") return groupRow(c);
+        const between = c.op === "between", v = between && Array.isArray(c.value) ? c.value : [c.value ?? "", ""], typ = (M.date_fields || {})[c.field] ? "date" : "text";
         return `<div class="rb-cond"><select class="rb-f">${Object.entries(fields).map(([k, l]) => `<option value="${k}" ${k === c.field ? "selected" : ""}>${escapeHtml(l)}</option>`).join("")}</select>
           <select class="rb-op">${Object.entries(opsFor(c.field)).map(([k, l]) => `<option value="${k}" ${k === c.op ? "selected" : ""}>${escapeHtml(l)}</option>`).join("")}</select>
-          <input class="rb-v" value="${escapeHtml(between ? v[0] : (Array.isArray(c.value) ? "" : c.value ?? ""))}" placeholder="${c.field in M.num_fields ? "number" : 'words, or "a phrase"'}">
-          <input class="rb-v2" value="${escapeHtml(between ? v[1] : "")}" placeholder="and" style="${between ? "" : "visibility:hidden;"}">
+          <input class="rb-v" type="${typ}" value="${escapeHtml(between ? v[0] : (Array.isArray(c.value) ? "" : c.value ?? ""))}" placeholder="${ph(c.field)}">
+          <input class="rb-v2" type="${typ}" value="${escapeHtml(between ? v[1] : "")}" placeholder="and" style="${between ? "" : "visibility:hidden;"}">
           <button type="button" class="small-btn icon-only rb-x" title="Remove">${icon("x")}</button></div>`;
       };
+      const groupRow = (g = { field: "group", match: "any", conditions: [{ field: "text", op: "contains", value: "" }, { field: "text", op: "contains", value: "" }] }) =>
+        `<div class="rb-group"><div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+          <select class="rb-gnot" style="width:auto;"><option value="">Group —</option><option value="not" ${g.not ? "selected" : ""}>NOT this group —</option></select>
+          <select class="rb-gmatch" style="width:auto;"><option value="any" ${g.match !== "all" ? "selected" : ""}>ANY of these (or)</option><option value="all" ${g.match === "all" ? "selected" : ""}>ALL of these (and)</option></select>
+          <span style="flex:1"></span><button type="button" class="small-btn rb-gadd">${icon("plus")} Condition</button><button type="button" class="small-btn icon-only rb-x" title="Remove the group">${icon("x")}</button></div>
+          <div class="rb-gconds">${(g.conditions || []).map(condRow).join("")}</div></div>`;
       const splitRow = (x = {}) => `<div class="rb-split"><select class="rb-sa">${accountOptions(x.account_id || null)}</select>
         <input class="rb-sv" type="number" step="0.01" value="${x.pct ?? x.amount ?? ""}" placeholder="0"><select class="rb-st"><option value="pct" ${x.amount != null && x.pct == null ? "" : "selected"}>%</option><option value="amount" ${x.amount != null && x.pct == null ? "selected" : ""}>$</option></select>
         <button type="button" class="small-btn icon-only rb-x" title="Remove">${icon("x")}</button></div>`;
@@ -877,8 +1095,9 @@
           <label>When</label><select id="rb-match"><option value="all" ${r.match !== "any" ? "selected" : ""}>ALL of these are true (and)</option><option value="any" ${r.match === "any" ? "selected" : ""}>ANY of these is true (or)</option></select>
         </div>
         <div id="rb-conds" style="margin:8px 0 4px;">${conds.map(condRow).join("")}</div>
-        <button type="button" class="small-btn" id="rb-addc">${icon("plus")} Condition</button>
-        <p class="muted small" style="margin:6px 0 10px;">Whole words, any order — "SAUL" won't match "SAULT". Put words in "quotes" to need them side by side. "Contains any of" takes a comma list: SAUL, FAUSTINO.</p>
+        <button type="button" class="small-btn" id="rb-addc">${icon("plus")} Condition</button> <button type="button" class="small-btn" id="rb-addg" title="(A or B) and not C">${icon("plus")} Group</button>
+        <p class="muted small" style="margin:6px 0 10px;">Whole words, any order — "SAUL" won't match "SAULT". Put words in "quotes" to need them side by side. "Contains any of / none of" take a comma list:
+          SAUL, FAUSTINO. "Anywhere" and "Bank Description" never read QuickBooks' pasted text — pick <em>QuickBooks Memo</em> for that. A group has its own ANY / ALL (and can be a NOT).</p>
         <div class="ac-form">
           <label>Put It In</label><select id="rb-acc">${accountOptions(r.account_id || null)}</select>
           <label>Split</label><div><div id="rb-splits">${(r.splits || []).map(splitRow).join("")}</div><button type="button" class="small-btn" id="rb-adds">${icon("plus")} Split Part</button>
@@ -886,21 +1105,30 @@
           <label>Set Payee</label><input id="rb-payee" value="${escapeHtml(r.set_payee || "")}" placeholder="optional">
           <label>Add Note</label><input id="rb-note" value="${escapeHtml(r.set_note || "")}" placeholder="optional (only on lines without a note)">
           <label>Then</label><div><label class="inline-check"><input type="radio" name="rb-action" value="file" ${r.action !== "suggest" ? "checked" : ""}> File the line by itself</label>
-            <label class="inline-check" style="margin-left:12px;"><input type="radio" name="rb-action" value="suggest" ${r.action === "suggest" ? "checked" : ""}> Only suggest it (one click in Review)</label></div>
+            <label class="inline-check" style="margin-left:12px;"><input type="radio" name="rb-action" value="suggest" ${r.action === "suggest" ? "checked" : ""}> Only suggest it (one click in Review)</label>
+            <div><label class="inline-check"><input type="checkbox" id="rb-review" ${r.review ? "checked" : ""}> Still needs review — files it, but the line waits in Review until someone says it's right</label></div>
+            <div><label class="inline-check"><input type="checkbox" id="rb-wins" ${r.wins ? "checked" : ""}> Wins when rules disagree (otherwise those lines wait in Review)</label></div></div>
           <label></label><label class="inline-check"><input type="checkbox" id="rb-on" ${r.enabled === false ? "" : "checked"}> Rule switched on</label>
           <label></label><div id="rb-count" class="muted small">…</div>
         </div>`;
       const dlg = askDialog({ title: r.id ? "Change Rule" : "New Rule", body, buttons: [{ label: "Save & See Matches", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
+      const readCond = d => {
+        if (d.classList.contains("rb-group")) {
+          const subs = [...d.querySelector(".rb-gconds").children].map(readCond).filter(Boolean);
+          return subs.length ? { field: "group", match: d.querySelector(".rb-gmatch").value, not: d.querySelector(".rb-gnot").value === "not", conditions: subs } : null;
+        }
+        const f = d.querySelector(".rb-f").value, op = d.querySelector(".rb-op").value, v1 = d.querySelector(".rb-v").value.trim(), v2 = d.querySelector(".rb-v2").value.trim();
+        const c = { field: f, op, value: op === "between" ? (v1 && v2 ? [v1, v2] : "") : v1 };
+        return c.value !== "" ? c : null;
+      };
       const read = (root = document) => {
         const q = s => root.querySelector(s);
         const a = q("#rb-acc").value;
         return {
           name: q("#rb-name").value.trim(), match: q("#rb-match").value, sign: q("#rb-sign").value || null,
           source_ids: [...root.querySelectorAll(".rb-src:checked")].map(c => +c.value),
-          conditions: [...root.querySelectorAll(".rb-cond")].map(d => {
-            const f = d.querySelector(".rb-f").value, op = d.querySelector(".rb-op").value, v1 = d.querySelector(".rb-v").value.trim(), v2 = d.querySelector(".rb-v2").value.trim();
-            return { field: f, op, value: op === "between" ? (v1 && v2 ? [v1, v2] : "") : v1 };
-          }).filter(c => c.value !== ""),
+          conditions: [...q("#rb-conds").children].map(readCond).filter(Boolean),
+          review: q("#rb-review").checked, wins: q("#rb-wins").checked,
           account_id: a && a !== "new" ? +a : null,
           splits: [...root.querySelectorAll(".rb-split")].map(d => { const a2 = d.querySelector(".rb-sa").value, v = d.querySelector(".rb-sv").value, t = d.querySelector(".rb-st").value;
             return a2 && a2 !== "new" && v !== "" ? { account_id: +a2, [t]: parseFloat(v) } : null; }).filter(Boolean),
@@ -916,9 +1144,12 @@
           const b = read();
           if (!b.conditions.length) { box.textContent = "Add a condition to see how many lines match."; return; }
           try {
-            const d = await apiFetch("/api/accounting/rules/preview", { method: "POST", body: JSON.stringify(b) });
+            const d = await apiFetch("/api/accounting/rules/preview", { method: "POST", body: JSON.stringify({ ...b, id: r.id }) });
             const g = d.groups;
-            box.innerHTML = `<strong>${d.count}</strong> line(s) match: ${g.unfiled.length} not filed, ${g.auto.length} filed by AT-HUB, ${g.elsewhere.length} filed elsewhere by a person, ${g.here.length} already there${g.split.length ? `, ${g.split.length} split (left alone)` : ""}.`;
+            box.innerHTML = `<strong>${d.count}</strong> line(s) match: ${g.unfiled.length} not filed, ${g.auto.length} filed by AT-HUB, ${g.elsewhere.length} filed elsewhere by a person, ${g.here.length} already there${g.split.length ? `, ${g.split.length} split (left alone)` : ""}.`
+              + ((d.overlaps || []).filter(o => o.id !== r.id).length ? `<div class="ac-conflict" style="margin-top:6px;"><strong class="neg">Other rules also match some of these lines and say something else:</strong>
+                  ${d.overlaps.filter(o => o.id !== r.id).map(o => `<div>${escapeHtml(o.name)} → ${escapeHtml(o.account)} — ${o.lines} line(s)${o.wins ? " (that rule wins)" : ""}</div>`).join("")}
+                  <div class="muted">Those lines will wait in Review (red flag) unless one rule wins — add a "doesn't contain" here or there, or tick "Wins".</div></div>` : "");
           } catch (e) { box.textContent = e.message; }
         }, 350);
       };
@@ -927,14 +1158,17 @@
         if (!box) return;
         const wire = () => {
           box.querySelectorAll(".rb-cond").forEach(d => {
-            const f = d.querySelector(".rb-f"), op = d.querySelector(".rb-op"), v2 = d.querySelector(".rb-v2");
-            f.onchange = () => { op.innerHTML = Object.entries(opsFor(f.value)).map(([k, l]) => `<option value="${k}">${escapeHtml(l)}</option>`).join(""); d.querySelector(".rb-v").placeholder = f.value in M.num_fields ? "number" : 'words, or "a phrase"'; v2.style.visibility = "hidden"; count(); };
+            const f = d.querySelector(".rb-f"), op = d.querySelector(".rb-op"), v1 = d.querySelector(".rb-v"), v2 = d.querySelector(".rb-v2");
+            f.onchange = () => { op.innerHTML = Object.entries(opsFor(f.value)).map(([k, l]) => `<option value="${k}">${escapeHtml(l)}</option>`).join(""); v1.placeholder = ph(f.value);
+              const typ = (M.date_fields || {})[f.value] ? "date" : "text"; v1.type = v2.type = typ; v2.style.visibility = "hidden"; count(); };
             op.onchange = () => { v2.style.visibility = op.value === "between" ? "" : "hidden"; count(); };
           });
-          box.querySelectorAll(".rb-x").forEach(x => x.onclick = () => { x.parentNode.remove(); count(); });
+          box.querySelectorAll(".rb-gadd").forEach(b => b.onclick = () => { b.closest(".rb-group").querySelector(".rb-gconds").insertAdjacentHTML("beforeend", condRow()); wire(); });
+          box.querySelectorAll(".rb-x").forEach(x => x.onclick = () => { (x.closest(".rb-group") && !x.closest(".rb-cond") ? x.closest(".rb-group") : x.parentNode).remove(); count(); });
           box.querySelectorAll("select.rb-sa, #rb-acc").forEach(s => s.onchange = async () => { if (s.value === "new") await pickNew(s, -1); count(); });
         };
         box.querySelector("#rb-addc").onclick = () => { box.querySelector("#rb-conds").insertAdjacentHTML("beforeend", condRow()); wire(); };
+        box.querySelector("#rb-addg").onclick = () => { box.querySelector("#rb-conds").insertAdjacentHTML("beforeend", groupRow()); wire(); count(); };
         box.querySelector("#rb-adds").onclick = () => { box.querySelector("#rb-splits").insertAdjacentHTML("beforeend", splitRow()); wire(); };
         box.addEventListener("input", count);
         box.addEventListener("change", count);
@@ -944,6 +1178,7 @@
       if (!value) return;
       try {
         const out = await apiFetch(`/api/accounting/rules${r.id ? "/" + r.id : ""}`, { method: r.id ? "PUT" : "POST", body: JSON.stringify(read(el)) });
+        doneToast(r.id ? "Rule saved" : "Rule made", out.change_id);
         await rulePreview(out.id);
       } catch (e) { alert(e.message); newRule({ ...r, ...read(el) }); }
     }
@@ -961,7 +1196,7 @@
           { label: `Already ${rule.splits.length ? "Split This Way" : "In " + rule.account}`, lines: d.groups.here, ticked: null },
           { label: "Split Over Accounts (Left Alone)", lines: d.groups.split, ticked: null }], apply: "Apply To" });
       if (res && res.ids.length) {
-        try { const r = await apiFetch(`/api/accounting/rules/${ruleId}/apply`, { method: "POST", body: JSON.stringify({ ids: res.ids }) }); toast(`${r.filed} line(s) put in ${where}`); }
+        try { const r = await apiFetch(`/api/accounting/rules/${ruleId}/apply`, { method: "POST", body: JSON.stringify({ ids: res.ids }) }); doneToast(`${r.filed} line(s) put in ${where}`, r.change_id); }
         catch (e) { alert(e.message); }
       }
       refreshCount();
@@ -969,7 +1204,7 @@
     }
     async function deleteRule(id) {
       if (!(await askDialog({ title: "Delete this rule?", body: "<p>Lines it already filed stay where they are.</p>", buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
-      await apiFetch(`/api/accounting/rules/${id}`, { method: "DELETE" }); show("accounts");
+      const r = await apiFetch(`/api/accounting/rules/${id}`, { method: "DELETE" }); doneToast("Rule deleted", r.change_id); show("accounts");
     }
 
     // ---- suggested rules (repeated lines AT-HUB spotted, filed or not)
@@ -1011,8 +1246,8 @@
         ${rows.map(r => `<tr><td><a class="link" href="#" onclick="drill(${r.account_id});return false;">${escapeHtml(r.name)}</a></td><td class="ac-amt">${fmtMoney(r.opening)}</td>
           <td class="ac-amt">${money(r.borrowed)}</td><td class="ac-amt">${money(r.repaid)}</td><td class="ac-amt"><strong class="${r.owed > 0.004 ? "neg" : ""}">${fmtMoney(r.owed)}</strong></td>
           <td class="num">${r.count}</td><td>${day(r.last)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No loan accounts.</td></tr>`}
-        ${rows.length ? `<tr class="tot"><td><strong>Total</strong></td><td></td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.borrowed, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.repaid, 0))}</td>
-          <td class="ac-amt"><strong>${fmtMoney(rows.reduce((a, r) => a + r.owed, 0))}</strong></td><td colspan="2"></td></tr>` : ""}</tbody></table></div>`;
+        </tbody>${rows.length ? `<tfoot><tr class="tot"><td><strong>Total</strong></td><td></td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.borrowed, 0))}</td><td class="ac-amt">${money(rows.reduce((a, r) => a + r.repaid, 0))}</td>
+          <td class="ac-amt"><strong>${fmtMoney(rows.reduce((a, r) => a + r.owed, 0))}</strong></td><td></td><td></td></tr></tfoot>` : ""}</table></div>`;
       await loansCalcCard(rows);
     }
 
@@ -1165,10 +1400,62 @@
         ${imps.map(i => `<tr><td class="nowrap">${fmtWhen(i.created_at)}<div class="muted small">${escapeHtml(i.created_by || "")}</div></td><td>${escapeHtml(i.source)}</td>
           <td>${escapeHtml(i.filename || "")}${i.kind === "workbook" ? ` <span class="ac-chip">Workbook</span>` : ""}</td><td class="num">${i.rows}</td><td class="num">${i.added}</td>
           <td class="num">${i.skipped}</td><td class="num" title="Typed in earlier, found on the statement">${i.matched}</td><td class="num">${i.auto}</td>
-          <td>${i.still_there ? `<button class="small-btn" onclick="undoImport(${i.id}, ${i.still_there})">Undo</button>` : `<span class="muted small">undone</span>`}</td></tr>`).join("")
+          <td>${i.still_there ? (AuthGuard.can("accounting.undo_import") ? `<button class="small-btn" onclick="undoImport(${i.id}, ${i.still_there})">Undo</button>` : `<span class="muted small" title="Only a Super admin can undo a whole statement">—</span>`) : `<span class="muted small">undone</span>`}</td></tr>`).join("")
           || `<tr><td colspan="9" class="muted">Nothing brought in yet.</td></tr>`}</tbody></table>
-        <p class="ac-help" style="margin-top:8px;">Bringing in the same statement twice is safe: lines already in are skipped. A line you typed in ahead (same amount, within 7 days) is matched, not doubled.</p></div>`;
+        <p class="ac-help" style="margin-top:8px;">Bringing in the same statement twice is safe: lines already in are skipped. A line you typed in ahead (same amount, within 7 days) is matched, not doubled.
+          Undoing a whole statement is for a Super admin.</p></div>
+      <div class="card"><div class="ac-filters"><h3 style="margin:0;">QuickBooks' Pasted Text</h3><span style="flex:1"></span><button class="small-btn" onclick="tailsDialog()">Find It On Lines Already In</button></div>
+        <p class="ac-help">QuickBooks' bank rules paste the text of the line they were made from after the bank's own wording (e.g. "… WF Direct Pay-Payment- NIRAJ Share-Tran ID DPAAAC7JZT"
+          on lines that have nothing to do with Niraj). AT-HUB takes it off when a file comes in and keeps it greyed under the line — rules, search and learning don't read it.</p></div>
+      <div class="card" id="mem-card"><p class="muted small">Loading remembered filings…</p></div>`;
+      loadMemory();
     }
+    async function loadMemory() {
+      const box = $("mem-card"); if (!box) return;
+      const list = await apiFetch("/api/accounting/memory").catch(() => []);
+      const splits = list.filter(m => m.kind === "split");
+      box.innerHTML = `<div class="ac-filters"><h3 style="margin:0;">Remembered Filings</h3><span class="muted small">${splits.length} split(s)${list.length > splits.length ? `, ${list.length - splits.length} other filing(s)` : ""}</span><span style="flex:1"></span>
+          ${AuthGuard.can("accounting.start_fresh") ? `<button class="small-btn danger" onclick="startFresh()">Start Fresh…</button>` : ""}</div>
+        <p class="ac-help">Every line a person splits is remembered apart from the line — when the same bank line comes in again (a fresh start, a re-import), it's split the same way by itself.
+          ${AuthGuard.can("accounting.start_fresh") ? "Start Fresh clears every line to bring the statements in again; accounts, rules and these stay." : ""}</p>
+        ${list.length ? `<details><summary class="small">Show them</summary><table class="compact-table" style="margin-top:6px;"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th><th>Filed As</th><th class="num">Used</th><th></th></tr></thead><tbody>
+          ${list.map(m => `<tr><td class="nowrap">${day(m.date)}</td><td class="ac-amt">${money(m.amount)}</td><td class="small">${escapeHtml((m.description || "").slice(0, 80))}</td>
+            <td class="small">${m.splits.length ? m.splits.map(x => `${escapeHtml(x.account)} ${fmtMoney(x.amount)}`).join("<br>") : escapeHtml(m.account || "")}</td><td class="num">${m.used}</td>
+            <td><button class="small-btn icon-only" title="Forget it" onclick="forgetMemory(${m.id})">${icon("trash")}</button></td></tr>`).join("")}</tbody></table></details>` : ""}`;
+    }
+    async function forgetMemory(id) { const r = await apiFetch(`/api/accounting/memory/${id}`, { method: "DELETE" }); doneToast("Forgotten", r.change_id, loadMemory); loadMemory(); }
+    async function startFresh() {
+      const { value, el } = await askDialog({ title: "Start Fresh?", tone: "danger", wide: true, body: `<p>Every line comes out of the books — statement lines, typed-in lines, book entries, imports, the Ignored list —
+          so the statements can be brought in again cleanly. <strong>A backup of the whole database is made first.</strong></p>
+        <p>Staying: accounts and sub-accounts, rules, bank accounts, comments, projections, AP / AR notes, settings — and every split, remembered so the same lines come back split.</p>
+        <label class="inline-check"><input type="checkbox" id="sf-keep"> Also remember how a person filed each line (they come back filed the same way)</label>
+        <p style="margin-top:10px;">Type <strong>START FRESH</strong> to confirm:</p><input id="sf-confirm" style="width:100%;">`,
+        buttons: [{ label: "Start Fresh", value: true, cls: "danger" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      try {
+        const r = await apiFetch("/api/accounting/start-fresh", { method: "POST", body: JSON.stringify({ keep_filings: el.querySelector("#sf-keep").checked, confirm: el.querySelector("#sf-confirm").value }) });
+        await askDialog({ title: "Fresh Start", body: `<p>${r.lines} line(s) and ${r.imports} import(s) cleared. ${r.remembered_splits} split(s)${r.remembered_filings ? ` and ${r.remembered_filings} filing(s)` : ""} remembered
+          (${r.memory} remembered in all). Backup: <code>${escapeHtml(r.backup || "")}</code>.</p><p>Bring the statements in on this tab.</p>`, buttons: [{ label: "OK", value: null }] });
+        await loadMeta(); refreshCount(); show("statements");
+      } catch (e) { alert(e.message); }
+    }
+    async function tailsDialog() {
+      let list;
+      try { list = await apiFetch("/api/accounting/qb-tails"); } catch (e) { alert(e.message); return; }
+      if (!list.length) { await askDialog({ title: "QuickBooks' Pasted Text", body: "<p>No line in the books carries it.</p>", buttons: [{ label: "OK", value: null }] }); return; }
+      const back = list.filter(x => x.effect).length;
+      const { value, el } = await askDialog({ title: `QuickBooks' Text On ${list.length} ${list.length === 1 ? "Line" : "Lines"}`, wide: true, body: `<p class="ac-help">The pasted part comes off each ticked line (kept greyed under it).
+          ${back ? `<strong>${back}</strong> line(s) were filed by a rule / AT-HUB only because of that text — they go back to Review with their account as the top suggestion.` : ""} Undo puts it all back.</p>
+        <div style="max-height:56vh;overflow:auto;"><table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" id="tl-all" checked></th><th>Date</th><th class="num">Amount</th><th>Kept (the bank's)</th><th>Comes Off</th><th>Filed</th></tr></thead><tbody>
+        ${list.map(x => `<tr><td><input type="checkbox" class="tl-t" value="${x.id}" checked></td><td class="nowrap">${day(x.date)}</td><td class="ac-amt">${money(x.amount)}</td><td class="small">${escapeHtml(x.after)}</td>
+          <td class="ac-memo">${escapeHtml(x.removed)}</td><td class="small">${escapeHtml(x.account || "—")}${x.effect ? `<div class="neg">${escapeHtml(x.effect)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>`,
+        buttons: [{ label: "Take It Off The Ticked Lines", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      const ids = [...el.querySelectorAll(".tl-t:checked")].map(c => +c.value);
+      try { const r = await apiFetch("/api/accounting/qb-tails/apply", { method: "POST", body: JSON.stringify({ ids }) }); doneToast(`${r.cleaned} line(s) cleaned${r.back_to_review ? `, ${r.back_to_review} back to Review` : ""}`, r.change_id); refreshCount(); }
+      catch (e) { alert(e.message); }
+    }
+    document.addEventListener("change", e => { if (e.target.id === "tl-all") document.querySelectorAll(".tl-t").forEach(c => c.checked = e.target.checked); });
     async function sourceDialog(id) {
       const s = id ? META.sources.find(x => x.id === id) : null;
       const body = `<div class="ac-form">
@@ -1248,6 +1535,11 @@
           ${p.estimate ? `<div class="ac-tile"><div class="l">AR / AP Estimates</div><div class="v">${p.estimate}</div><div class="s">not brought in</div></div>` : ""}
           <div class="ac-tile"><div class="l">In / Out</div><div class="v" style="font-size:15px;"><span class="pos">${fmtMoney(p.money_in)}</span><br><span class="neg">${fmtMoney(p.money_out)}</span></div></div></div>
         ${p.hints ? `<p class="muted small">${p.hints} line(s) carry the file's own category — shown as a hint in Review.</p>` : ""}
+        ${p.memos ? `<details class="small" style="margin:6px 0;"><summary><strong>${p.memos}</strong> line(s) have QuickBooks' own text pasted after the bank's — it comes off (kept greyed under the line, not used by rules or search)</summary>
+          <table class="compact-table no-table-tools" style="margin-top:4px;"><tbody>${(p.memo_examples || []).map(x => `<tr><td class="nowrap">${x.date}</td><td>${escapeHtml(x.kept)}<div class="ac-memo">${escapeHtml(x.removed)}</div></td></tr>`).join("")}</tbody></table></details>` : ""}
+        ${p.qb_splits ? `<p class="small"><span class="ac-chip flag">Split In QuickBooks</span> ${p.qb_splits} line(s) have no single account in QuickBooks — they come in flagged, to be split the same way:
+          ${(p.split_lines || []).slice(0, 4).map(x => `${x.date} ${fmtMoney(x.amount)}`).join(", ")}</p>` : ""}
+        ${p.remembered ? `<p class="small pos">${p.remembered} line(s) were split / filed by a person before — they come in filed the same way.</p>` : ""}
         ${p.workbook ? `<p class="ac-help"><strong>Your workbook:</strong> every line comes in already filed under its Account. This also teaches AT-HUB how you file.</p>` : ""}
         ${p.bad_count ? `<p class="muted small">${p.bad_count} row(s) without a date or amount are left out: ${p.bad.slice(0, 3).map(escapeHtml).join(" · ")}</p>` : ""}
         <div class="table-scroll" style="max-height:220px;"><table class="compact-table ac-sample"><thead><tr><th>Date</th><th class="num">Amount</th><th>Description</th><th>Will Be</th></tr></thead>
@@ -1280,8 +1572,10 @@
         await askDialog({ title: "Brought In", body: `<p><strong>${r.added}</strong> new line(s)${r.replaced ? `, <strong>${r.replaced}</strong> replaced (filing kept)` : ""}${r.moved_to_book ? `, ${r.moved_to_book} not on the file moved to Book Entries` : ""}${r.skipped ? `, ${r.skipped} already in (ignored)` : ""}${r.matched ? `, ${r.matched} typed-in line(s) matched` : ""}${r.outside ? `, ${r.outside} outside the dates` : ""}.</p>
           ${r.possible ? `<p class="neg"><strong>${r.possible}</strong> look like lines already in — waiting on the <a class="link" href="#" onclick="document.querySelector('.ask-dialog button[data-i]').click();setTimeout(()=>show('ignored'),50);return false;">Ignored</a> tab for you to decide.</p>` : ""}
           ${r.estimates ? `<p>${r.estimates} AR / AP estimate row(s) weren't brought in (listed on Ignored).</p>` : ""}
+          ${r.remembered ? `<p class="pos">${r.remembered} filed the way a person filed them before (remembered splits / filings).</p>` : ""}
+          ${r.memos ? `<p>QuickBooks' pasted text taken off ${r.memos} line(s).</p>` : ""}${r.flagged ? `<p class="neg">${r.flagged} line(s) wait in Review with a flag (rules disagree / split in QuickBooks / a rule's check).</p>` : ""}
           ${r.auto ? `<p>${r.auto} filed by AT-HUB from earlier lines (marked Auto).</p>` : ""}${r.left ? `<p><strong>${r.left}</strong> to file.</p>` : ""}`,
-          buttons: [...(r.left ? [{ label: "File Them Now", value: "file", cls: "primary" }] : []), { label: "Close", value: null }] })
+          buttons: [...(r.left || r.flagged ? [{ label: "Review Them Now", value: "file", cls: "primary" }] : []), { label: "Close", value: null }] })
           .then(x => { if (x.value === "file") show("review"); else show("statements"); });
         IMP.from = IMP.to = ""; IMP.replace = false;
         await loadMeta(); refreshCount();
