@@ -49,7 +49,8 @@ CATEGORY = {"income": "Payments", "cogs": "COGS", "expense": "Expense", "loan": 
 SETTINGS_KEY = "acct_settings"
 DEFAULT_SETTINGS = {"fy_start_month": 4, "partners": [{"name": "Anuj", "share": 1 / 3}, {"name": "Niraj", "share": 1 / 3},
                                                       {"name": "Richard", "share": 1 / 3}],
-                    "years": {}, "apar_groups": {"open_orders": False}}
+                    "years": {}, "apar_groups": {"open_orders": False},
+                    "auto_limit": 5000}  # AT-HUB / rules never file a line bigger than this by themselves (user, 2026-10-12)
 
 
 # ---------------------------------------------------------------- settings, periods
@@ -290,7 +291,7 @@ def file_by_rule(db: Session, t: AcctTxn, r: dict, by: Optional[str], reviewed: 
     if r.get("review") and not reviewed:  # the rule files it, a person still looks
         t.flag = "check"
         t.flag_info = json.dumps({"reason": f"Filed by rule \"{r['name'] or acct_rules.describe(r)}\" -- check it", "rule_id": r.get("id")})
-    elif t.flag in ("check", "conflict"):
+    elif t.flag in ("check", "conflict", "over_limit"):
         t.flag = t.flag_info = None
     if by:
         t.updated_by = by
@@ -304,9 +305,17 @@ def autofill(db: Session, txns: Optional[List[AcctTxn]] = None, m=None) -> int:
     / amount as before). A rule set to "suggest" only suggests."""
     m = m or mapper(db)
     specs = rule_specs(db)
+    limit = float(settings(db).get("auto_limit") or 0)
     if txns is None:
         txns = db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.account_id.is_(None)).all()
     n = 0
+
+    def too_big(t, acc_id, why):
+        """Over the limit: never filed by itself -- the account stays a suggestion and the line waits in Review."""
+        if limit and abs(t.amount) > limit + 0.004:
+            t.flag, t.flag_info = "over_limit", json.dumps({"reason": f"Over ${limit:,.0f} -- AT-HUB doesn't file it by itself ({why})", "account_id": acc_id})
+            return True
+        return False
     for t in txns:
         if t.account_id or t.splits:
             continue
@@ -318,15 +327,27 @@ def autofill(db: Session, txns: Optional[List[AcctTxn]] = None, m=None) -> int:
         if t.flag == "conflict":
             t.flag = t.flag_info = None
         if r:
-            if r["action"] != "suggest":
+            if r["action"] != "suggest" and not too_big(t, r["account_id"], f"rule {r['name'] or acct_rules.describe(r)}"):
                 file_by_rule(db, t, r, None, False)
                 n += 1
             continue
         acc, conf, _why = m.suggest(t.bank_description or t.description, t.amount, day=t.date.day if t.date else None)
-        if conf == "sure" and acc:
+        if conf == "sure" and acc and not too_big(t, acc, "learned from earlier lines"):
             t.account_id, t.how, t.reviewed = acc, "auto", False
             n += 1
     return n
+
+
+def already_in(db: Session, t: AcctTxn, limit: int = 40) -> List[dict]:
+    """The same payee's lines already in the account this line just went into -- shown in the "like this" pop-up."""
+    if not t.account_id:
+        return []
+    accounts, sources = maps(db)
+    key = acct_mapper.payee(t.bank_description or t.description)
+    out = [txn_dict(x, accounts, sources) for x in db.query(AcctTxn).options(selectinload(AcctTxn.splits))
+           .filter(AcctTxn.account_id == t.account_id, AcctTxn.id != t.id).order_by(AcctTxn.date.desc()).all()
+           if acct_mapper.payee(x.bank_description or x.description) == key]
+    return out[:limit]
 
 
 def last_splits(db: Session) -> Dict[Tuple[str, bool], dict]:

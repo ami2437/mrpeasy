@@ -119,6 +119,8 @@ def search(db: Session, p: dict) -> dict:
         qy = qy.filter(AcctTxn.date <= A._dt(dto))
     if p.get("source_id"):
         qy = qy.filter(AcctTxn.source_id == int(p["source_id"]))
+    if p.get("ids"):  # "show them": the lines a bulk move just moved
+        qy = qy.filter(AcctTxn.id.in_([int(x) for x in str(p["ids"]).split(",") if x.strip().isdigit()]))
     only = None  # filtered to an account (or a type): a split line counts only its part(s) in it
     if p.get("account_id"):
         ids = [int(p["account_id"])] + A.descendants(int(p["account_id"]), accounts)
@@ -746,6 +748,34 @@ def partner_accounts(db: Session, start: date, end: date, fy_key: str) -> dict:
                     "share": sh["share"] if sh else None, "share_pct": sh["share_pct"] if sh else None,
                     "remaining": sh["remaining"] if sh else None, "adjust": sh["adjust"] if sh else 0})
     return {"partners": out, "to_share": pt["total"], "year": fy_key}
+
+
+def partner_lines(db: Session, name: str, start: Optional[date], end: Optional[date], what: str = "net") -> dict:
+    """The lines behind one figure of Partner Accounts (a month / a year / the period): withdrawn, invested, lent,
+    repaid or all -- a split line by the partner's part."""
+    accounts, sources = A.maps(db)
+    key = name.strip().lower()
+    accs = {a.id: a for a in accounts.values() if a.kind in ("owner", "loan")
+            and ((_partner_of(a, accounts) or (a.name if a.kind == "owner" else "")).strip().lower() == key)}
+    def keep(kind, amt):
+        return {"withdrawn": kind == "owner" and amt < 0, "invested": kind == "owner" and amt > 0, "lent": kind == "loan" and amt > 0,
+                "repaid": kind == "loan" and amt < 0, "net": kind == "owner", "loans": kind == "loan"}.get(what, True)
+    parts = defaultdict(float)
+    for l in A.lines(db, start, end):
+        a = accs.get(l["account_id"])
+        if a and keep(a.kind, l["amount"]):
+            parts[(l["txn_id"], l["account_id"])] += l["amount"]
+    ids = {k[0] for k in parts}
+    tx = {t.id: t for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.id.in_(ids)).all()} if ids else {}
+    rows = []
+    for (tid, aid), amt in parts.items():
+        t = tx.get(tid)
+        if t:
+            d = A.txn_dict(t, accounts, sources)
+            d["part"], d["part_account"] = cents(amt), A.path(accounts[aid], accounts)
+            rows.append(d)
+    rows.sort(key=lambda d: d["date"])
+    return {"rows": rows, "total": cents(sum(r["part"] for r in rows)), "count": len(rows)}
 
 
 def payees(db: Session, start: date, end: date) -> List[dict]:

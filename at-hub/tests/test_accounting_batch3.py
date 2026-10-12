@@ -34,6 +34,7 @@ def _up(client, h, src_id, data, fname="Register from QB.xlsx", path="/api/accou
 
 
 def test_quickbooks_pasted_memo_comes_off_and_rules_dont_read_it(api, client, admin_headers):
+    api.put("/api/accounting/settings", json={"auto_limit": 0})  # big lines filed by rules here; the limit has its own test
     y = 2060
     src = _source(api)
     nir = api.post("/api/accounting/accounts", json={"name": uid("Nir "), "kind": "owner"})
@@ -101,6 +102,7 @@ def test_qb_tails_on_lines_already_in_and_rule_filings_go_back(api, client, admi
 
 
 def test_rules_disagree_review_flag_wins_and_still_reviewed(api, client, admin_headers):
+    api.put("/api/accounting/settings", json={"auto_limit": 0})  # big lines filed by rules here; the limit has its own test
     y = 2062
     src = _source(api)
     a1 = api.post("/api/accounting/accounts", json={"name": uid("Rich "), "kind": "owner"})

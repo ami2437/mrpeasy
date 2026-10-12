@@ -94,6 +94,28 @@
     .rb-group { border: 1px dashed var(--border); border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; background: var(--surface-2); }
     .rb-group .rb-cond { grid-template-columns: 180px 150px 1fr 130px 34px; }
     .ac-x-ok { color: #16a34a; font-weight: 700; } .ac-x-no { color: #dc2626; font-weight: 700; }
+    .ac-how { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 9px; margin-left: 4px; vertical-align: 1px; }
+    .ac-how .ico { width: 11px; height: 11px; }
+    .ac-how.person { background: #dcfce7; color: #166534; } .ac-how.rule { background: #e0e7ff; color: #3730a3; } .ac-how.auto { background: #fef3c7; color: #92400e; }
+    .ac-how.workbook { background: #f3e8ff; color: #6b21a8; } .ac-how.split { background: #cffafe; color: #155e75; }
+    :root[data-theme="dark"] .ac-how.person { background: #14361f; color: #86efac; } :root[data-theme="dark"] .ac-how.rule { background: #23264d; color: #a5b4fc; }
+    :root[data-theme="dark"] .ac-how.auto { background: #4a3a10; color: #fcd34d; } :root[data-theme="dark"] .ac-how.workbook { background: #3b1f52; color: #d8b4fe; }
+    :root[data-theme="dark"] .ac-how.split { background: #123a42; color: #67e8f9; }
+    .ac-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+    .k-income { background: #16a34a; } .k-cogs { background: #ea580c; } .k-expense { background: #dc2626; } .k-loan { background: #7c3aed; }
+    .k-owner { background: #2563eb; } .k-transfer { background: #64748b; } .k-other { background: #a3a3a3; } .k-pending { background: #d4d4d4; }
+    tr.ac-ticked > td { background: color-mix(in srgb, var(--accent) 10%, transparent) !important; }
+    tr.ac-justmoved > td { background: color-mix(in srgb, #16a34a 14%, transparent) !important; transition: background 1s; }
+    .ac-result { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 12px; margin: 0 0 8px; border-radius: 8px;
+      background: color-mix(in srgb, #16a34a 12%, var(--surface)); border: 1px solid color-mix(in srgb, #16a34a 45%, transparent); font-size: 13px; }
+    .ac-lnote { margin-top: 4px; } .ac-lnote textarea { width: 100%; font-size: 12.5px; min-height: 30px; }
+    .ac-empty { text-align: center; padding: 22px 10px !important; color: var(--muted); } .ac-empty .ico { width: 26px; height: 26px; opacity: .55; display: block; margin: 0 auto 6px; }
+    .ac-pick-head { padding: 8px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); margin-bottom: 8px; font-size: 13px; }
+    .ac-pick-sum { position: sticky; bottom: 0; background: var(--surface); padding: 6px 0 2px; font-size: 12.5px; border-top: 1px solid var(--border); margin-top: 6px; }
+    th .ac-amtf { cursor: pointer; margin-left: 4px; font-size: 10px; color: var(--muted); } th .ac-amtf.on { color: var(--accent); font-weight: 700; }
+    .ac-amtpop { position: absolute; z-index: 60; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 8px; display: grid; gap: 6px; font-size: 12.5px; width: 210px; }
+    .ac-amtpop input, .ac-amtpop select { width: 100%; }
+    .pj-grid td:nth-child(2) { min-width: 200px; }
     .ac-totbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 7px 10px; margin: 0 0 8px;
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow); }
     .ac-totbar strong { font-size: 14px; }
@@ -127,7 +149,10 @@
   <script>
     AuthGuard.requirePerm("accounting");
     document.getElementById("sidebar").innerHTML = renderSidebar("accounting.html");
-    const TAB_ICONS = { Work: "inbox", Reports: "chart", Check: "check", Plan: "calendar", Setup: "sliders" };
+    const TAB_ICONS = { Work: "clipboard", Reports: "chart", Check: "checkCircle", Plan: "calendar", Setup: "gear" };
+    const TAB_ICON = { review: "listTodo", txns: "list", statements: "upload", ignored: "eyeOff", overview: "dashboard", pnl: "chart", cash: "dollar", payees: "users",
+      partneraccts: "user", partners: "scissors", loans: "anchor", apar: "receipt", tax: "fileCheck", recurring: "clock", check: "checkCircle", reconcile: "layers",
+      projections: "calendar", accounts: "sliders", notes: "notePen" };
     const TAB_GROUPS = [["Work", [["review", "Review"], ["txns", "Transactions"], ["statements", "Statements"], ["ignored", "Ignored"]]],
       ["Reports", [["overview", "Overview"], ["pnl", "P&L"], ["cash", "Cash Flow"], ["payees", "Payees"], ["partneraccts", "Partner Accounts"], ["partners", "Partners Split"],
         ["loans", "Loans"], ["apar", "AP / AR"], ["tax", "1099"], ["recurring", "Recurring"]]],
@@ -191,7 +216,7 @@
     async function loadMeta() { META = await apiFetch("/api/accounting/meta"); }
     function drawTabs() {
       $("ac-tabs").innerHTML = TAB_GROUPS.map(([g, tabs]) => `<div class="ac-tabbox ${tabs.some(([k]) => k === TAB) ? "has-active" : ""}"><span class="ac-tabgrp">${icon(TAB_ICONS[g] || "list")}${g}</span>
-        <div class="ac-tabrow">${tabs.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${l}${k === "review" && META.unfiled ? ` <span class="ac-chip ${META.flagged ? "flag" : "auto"}">${META.unfiled}</span>` : ""}</div>`).join("")}</div></div>`).join("");
+        <div class="ac-tabrow">${tabs.map(([k, l]) => `<div class="tab ${k === TAB ? "active" : ""}" onclick="show('${k}')">${icon(TAB_ICON[k] || "list")} ${l}${k === "review" && META.unfiled ? ` <span class="ac-chip ${META.flagged ? "flag" : "auto"}">${META.unfiled}</span>` : ""}</div>`).join("")}</div></div>`).join("");
     }
     // ---- Undo: every change to the books comes back with a change id; the toast and Recent Changes undo it
     function doneToast(msg, changeId, after) {
@@ -258,7 +283,7 @@
             <div class="ac-bars-lab">${d.months.map(m => `<span>${monthLabel(m.month).split(" ")[0]}</span>`).join("")}</div>
             <div class="rp-legend"><span><b style="background:#2f6fed"></b>Money In</span><span><b style="background:#eb6834"></b>Money Out</span></div>
           </div>
-          <div class="card"><div class="ac-filters"><h3 style="margin:0;">Where The Money Went</h3><span style="flex:1"></span><button class="small-btn" onclick="exportXlsx()">${icon("download")} Output Excel</button></div>
+          <div class="card"><div class="ac-filters"><h3 style="margin:0;">Where The Money Went</h3><span style="flex:1"></span><button class="small-btn primary" onclick="masterReport()" title="Everything: summary, P&L, every transaction, a tab per master account, partners, loans, not filed">${icon("download")} Master Report</button><button class="small-btn" onclick="exportXlsx()">${icon("download")} Output Excel</button></div>
             <table class="compact-table"><thead><tr><th>Account</th><th>Type</th><th class="num">Amount</th></tr></thead><tbody>
             ${d.top_spend.map(r => `<tr class="drill" style="cursor:pointer" onclick="drill(${r.account_id})"><td>${escapeHtml(r.name)}</td><td class="muted">${escapeHtml(KIND_LABEL()[r.kind] || "")}</td><td class="ac-amt">${money(r.amount)}</td></tr>`).join("")
               || `<tr><td colspan="3" class="muted">Nothing filed under cost of goods or expenses yet.</td></tr>`}</tbody></table>
@@ -276,7 +301,7 @@
     // ================================================================ lines (inbox + explorer)
     let TXF = {}, TXDATA = null, TICKED = new Set();
     function lineRow(t, { inbox = false } = {}) {
-      const chips = [!t.reviewed && t.account_id ? `<span class="ac-chip auto" title="${t.how === "rule" ? "Filed by your rule" : "AT-HUB filed it from earlier lines"} -- nobody has looked yet">Auto</span>` : "",
+      const chips = [howBadge(t), !t.reviewed && t.account_id ? `<span class="ac-chip auto" title="${t.how === "rule" ? "Filed by your rule" : "AT-HUB filed it from earlier lines"} -- nobody has looked yet">Not Looked At</span>` : "",
         t.origin === "manual" ? `<span class="ac-chip typed">Typed In</span>` : "", t.expected ? `<span class="ac-chip exp" title="Not on a statement yet -- matched when it comes in">Expected</span>` : "",
         t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : "",
         t.hint ? `<span class="ac-chip" title="The file's own category for this line">${escapeHtml(t.hint.slice(0, 40))}</span>` : "",
@@ -294,18 +319,39 @@
           <div style="margin-top:3px;"><a class="link" href="#" onclick="lineRules(${t.id});return false;">Why? See each rule</a></div></div>` : "";
       const looks = t.flag && (t.account_id || t.splits.length) ? `<div style="margin-top:4px;"><button class="small-btn" onclick="clearFlag([${t.id}])">${icon("check")} Looks Right</button>
         <span class="muted small">${escapeHtml((t.flag_info || {}).reason || "")}</span></div>` : "";
-      return `<tr data-id="${t.id}"><td class="tick"><input type="checkbox" ${TICKED.has(t.id) ? "checked" : ""} onchange="tick(${t.id}, this.checked)"></td>
+      const kd = t.kind || (t.splits[0] || {}).kind;
+      return `<tr data-id="${t.id}" class="${TICKED.has(t.id) ? "ac-ticked" : ""} ${JUST_MOVED.has(t.id) ? "ac-justmoved" : ""}"><td class="tick"><input type="checkbox" ${TICKED.has(t.id) ? "checked" : ""} onchange="tick(${t.id}, this.checked)"></td>
         <td class="nowrap">${day(t.date)}<div class="muted small">${escapeHtml(t.source)}</div></td>
         <td><span class="ac-who">${escapeHtml(t.payee || "")}</span>${chips}<div class="ac-desc">${escapeHtml(t.description)}</div>${t.qb_memo ? `<div class="ac-memo" title="Text QuickBooks pasted after the bank's wording — not the bank's, not used by rules or search">QuickBooks added: ${escapeHtml(t.qb_memo)}</div>` : ""}
           ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
-          ${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
-        <td style="min-width:200px;">${filed}${sugg}${clash}${looks}</td>
+          <div class="ac-lnote" style="${t.note ? "" : "display:none;"}"><textarea rows="1" placeholder="Note for this line…" data-id="${t.id}" onchange="saveLineNote(this)">${escapeHtml(t.note || "")}</textarea></div></td>
+        <td style="min-width:200px;">${kd ? `<span class="ac-dot k-${kd}" title="${escapeHtml(KIND_LABEL()[kd] || "")}"></span>` : ""}${filed}${sugg}${clash}${looks}</td>
         <td class="ac-amt">${money(t.amount)}${t.in_account != null ? `<div class="small" title="Only this part of the split line is in the account shown — that's what the totals count">in this account: <strong>${fmtMoney(t.in_account)}</strong></div>` : ""}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
-        <td class="nowrap">${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button><button class="small-btn icon-only" title="Which rules match this line, and why" onclick="lineRules(${t.id})">${icon("search")}</button>
+        <td class="nowrap"><button type="button" class="icon-btn note-btn ${t.note ? "has-note" : ""}" title="${t.note ? "Edit this line's note" : "Add a note to this line"}" onclick="toggleAcNote(this)">${icon("notePen")}</button>${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button><button class="small-btn icon-only" title="Which rules match this line, and why" onclick="lineRules(${t.id})">${icon("search")}</button>
           <button class="small-btn icon-only" title="Open: split, note${t.origin === "manual" ? ", change, delete" : ""}" onclick="editLine(${t.id})">${icon("pencil")}</button></td></tr>`;
     }
-    const FLAG_LABEL = { conflict: "Rules Disagree", check: "Filed By Rule — Check", qb_split: "Split In QuickBooks", reconcile: "Flagged", split_memory: "Check Split" };
-    function tick(id, on) { on ? TICKED.add(id) : TICKED.delete(id); drawBulk(); }
+    const FLAG_LABEL = { conflict: "Rules Disagree", check: "Filed By Rule — Check", qb_split: "Split In QuickBooks", reconcile: "Flagged", split_memory: "Check Split",
+      over_limit: "Over The Limit — Check" };
+    const HOW = { person: ["Person", "user", "A person filed it"], rule: ["Rule", "sliders", "Filed by a rule"], auto: ["Auto", "sparkles", "AT-HUB filed it from earlier lines"],
+      workbook: ["Workbook", "file", "From your workbook"] };
+    function howBadge(t) {
+      if (t.splits && t.splits.length) return `<span class="ac-how split" title="Split over ${t.splits.length} accounts">${icon("layers")}Split</span>`;
+      const h = HOW[t.how]; return h && t.account_id ? `<span class="ac-how ${t.how}" title="${h[2]}">${icon(h[1])}${h[0]}</span>` : "";
+    }
+    let JUST_MOVED = new Set();
+    function toggleAcNote(btn) {
+      const box = btn.closest("tr").querySelector(".ac-lnote"); if (!box) return;
+      const show = box.style.display === "none"; box.style.display = show ? "" : "none"; if (show) box.querySelector("textarea").focus();
+    }
+    async function saveLineNote(ta) {
+      try {
+        const r = await apiFetch(`/api/accounting/txns/${ta.dataset.id}`, { method: "PUT", body: JSON.stringify({ note: ta.value }) });
+        const row = (TXDATA?.rows || []).find(x => x.id === +ta.dataset.id); if (row) row.note = r.note;
+        const btn = ta.closest("tr").querySelector(".note-btn"); if (btn) btn.classList.toggle("has-note", !!(r.note || "").trim());
+        toast(r.note ? "Note saved" : "Note removed");
+      } catch (e) { alert(e.message); }
+    }
+    function tick(id, on) { on ? TICKED.add(id) : TICKED.delete(id); const tr = document.querySelector(`#ac-lines tr[data-id="${id}"]`); if (tr) tr.classList.toggle("ac-ticked", on); drawBulk(); }
     async function useRule(ruleId, txnId) {
       try { const r = await apiFetch(`/api/accounting/rules/${ruleId}/apply`, { method: "POST", body: JSON.stringify({ ids: [txnId] }) }); doneToast(`Filed by that rule`, r.change_id, reloadLines); await reloadLines(); refreshCount(); }
       catch (e) { alert(e.message); }
@@ -364,12 +410,15 @@
         }
         if (!v) { toast("Pick the account"); return; }
         body.account_id = +v;
+        if (!(await confirmMove(body.ids, +v))) return;
       }
       if (action === "delete" && !(await askDialog({ title: `Delete ${TICKED.size} line(s)?`, body: `<p>Only typed-in lines are deleted; statement lines are skipped (undo their import on Statements).</p>`, buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: false }] })).value) return;
       try {
         const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify(body) });
-        doneToast(`${r.done} done${r.skipped ? `, ${r.skipped} skipped (from a statement)` : ""}${r.filed_more ? ` · ${r.filed_more} more filed like them` : ""}`, r.change_id, reloadLines);
-        TICKED.clear(); await reloadLines(); refreshCount();
+        TICKED.clear();
+        if (action === "file") { await movedResult(r, body.ids, body.account_id); return; }
+        doneToast(`${r.done} done${r.skipped ? `, ${r.skipped} skipped (from a statement)` : ""}`, r.change_id, reloadLines);
+        await reloadLines(); refreshCount();
       } catch (e) { alert(e.message); }
     }
     async function fileTo(id, accountId) {
@@ -391,9 +440,11 @@
       doneToast(bits.join(" · "), r.change_id, reloadLines);
       if (!(r.alike || []).length || !r.account_id) return;
       const lean = r.alike.filter(x => x.lean), other = r.alike.filter(x => !x.lean);
-      const res = await pickLines({ title: `${r.alike.length} More Like This`,
+      const res = await pickLines({ title: `${r.alike.length} More Like This`, dest: r.account_id,
         intro: `These look like the line you just put in <strong>${escapeHtml(r.account)}</strong>, but AT-HUB isn't sure enough to file them by itself. Tick the ones that go there too.`,
-        groups: [{ label: `AT-HUB Leans To ${r.account}`, lines: lean, ticked: true }, { label: "Same Payee, Not Sure", lines: other, ticked: false }], apply: "File" });
+        groups: [{ label: `AT-HUB Leans To ${r.account}`, lines: lean, ticked: true, hint: "same payee + words / amount point there" },
+          { label: "Same Payee, Not Sure", lines: other, ticked: false, hint: "same payee, but other lines of it went elsewhere" },
+          { label: `Already In ${r.account}`, lines: r.alike_here || [], ticked: null, hint: "the same payee's lines already there — for comparison" }], apply: "File" });
       if (res && res.ids.length) {
         try {
           const b = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: res.ids, action: "file", account_id: r.account_id }) });
@@ -425,7 +476,54 @@
     async function fileOne(id, sel, amount) {
       let v = sel.value;
       if (v === "new") { v = await pickNew(sel, amount); if (!v) return; }
+      if (v && TICKED.size > 1 && TICKED.has(id)) {  // picked on one of several ticked lines: just this one, or all of them?
+        const a = acc(+v);
+        const { value } = await askDialog({ title: "Just This Line?", body: `<p>${TICKED.size} lines are ticked. Put <strong>all ${TICKED.size}</strong> in <strong>${escapeHtml(a.path)}</strong>, or only this one?</p>`,
+          buttons: [{ label: `All ${TICKED.size} Ticked`, value: "all", cls: "primary" }, { label: "Just This One", value: "one" }, { label: "Cancel", value: null }] });
+        if (!value) { sel.value = ""; return; }
+        if (value === "all") {
+          const ids = [...TICKED];
+          if (!(await confirmMove(ids, +v))) { sel.value = ""; return; }
+          try { const r = await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids, action: "file", account_id: +v }) }); TICKED.clear(); await movedResult(r, ids, +v); }
+          catch (e) { alert(e.message); }
+          return;
+        }
+      }
       fileTo(id, v ? +v : null);
+    }
+    // before a bulk move: exactly which lines go where; after it: what moved (and what AT-HUB filed like them), Show Them, Undo
+    async function confirmMove(ids, accountId) {
+      const a = acc(accountId), rows = (TXDATA?.rows || []).filter(t => ids.includes(t.id));
+      const tot = rows.reduce((x, t) => x + t.amount, 0);
+      const { value } = await askDialog({ title: `Move ${ids.length} ${ids.length === 1 ? "Line" : "Lines"}?`, wide: true,
+        body: `<div class="ac-pick-head"><span class="ac-dot k-${a.kind}"></span><strong>${ids.length}</strong> ${ids.length === 1 ? "line" : "lines"} (${fmtMoney(tot)}) go into <strong>${escapeHtml(a.path)}</strong>
+            <span class="ac-chip">${escapeHtml(KIND_LABEL()[a.kind] || "")}</span>. AT-HUB may then file look-alikes it's sure about too — you'll see them. Undo puts everything back.</div>
+          <div style="max-height:46vh;overflow:auto;"><table class="compact-table no-table-tools"><thead><tr><th>Date</th><th>Line</th><th>Now In</th><th class="num">Amount</th></tr></thead><tbody>
+          ${rows.map(t => `<tr><td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description.slice(0, 90))}</div></td>
+            <td class="small">${escapeHtml(t.account || (t.splits.length ? "split" : "not filed"))}${t.account_id === accountId ? ` <span class="ac-chip">already there</span>` : ""}</td><td class="ac-amt">${money(t.amount)}</td></tr>`).join("")
+            || `<tr><td colspan="4" class="muted">${ids.length} line(s) not on this page.</td></tr>`}</tbody></table></div>`,
+        buttons: [{ label: `Move ${ids.length} To ${a.name}`, value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      return !!value;
+    }
+    let LAST_MOVE = null;
+    async function movedResult(r, ids, accountId) {
+      const a = acc(accountId);
+      JUST_MOVED = new Set([...ids, ...(r.more_ids || [])]);
+      LAST_MOVE = { ids: [...JUST_MOVED], change_id: r.change_id, msg: `<strong>${r.done}</strong> ${r.done === 1 ? "line" : "lines"} moved to <strong>${escapeHtml(a.path)}</strong>${r.filed_more ? ` · AT-HUB filed <strong>${r.filed_more}</strong> more like them` : ""}${r.skipped ? ` · ${r.skipped} skipped` : ""}` };
+      toast(`${r.done} moved to ${a.path}${r.filed_more ? ` (+${r.filed_more} like them)` : ""}`, r.change_id ? { label: "Undo", run: () => undoChange(r.change_id, reloadLines) } : null, 10000);
+      await reloadLines(); refreshCount();
+      setTimeout(() => { JUST_MOVED = new Set(); document.querySelectorAll("tr.ac-justmoved").forEach(tr => tr.classList.remove("ac-justmoved")); }, 8000);
+    }
+    function moveBanner() {
+      if (!LAST_MOVE) return "";
+      return `<div class="ac-result">${icon("checkCircle")}<span>${LAST_MOVE.msg}</span><span style="flex:1"></span>
+        <button class="small-btn" onclick="showMoved()">Show Them</button>${LAST_MOVE.change_id ? `<button class="small-btn" onclick="undoChange(${LAST_MOVE.change_id}, () => { LAST_MOVE = null; return reloadLines(); })">${icon("undo")} Undo</button>` : ""}
+        <a class="link small" href="#" onclick="LAST_MOVE=null;drawLines();return false;">Dismiss</a></div>`;
+    }
+    async function showMoved() {
+      if (!LAST_MOVE) return;
+      const d = await apiFetch(`/api/accounting/txns?${new URLSearchParams({ ids: LAST_MOVE.ids.join(","), limit: 2000 })}`);
+      await pickLines({ title: "The Lines That Moved", intro: LAST_MOVE.msg, groups: [{ label: "Moved", lines: d.rows, ticked: null }], apply: "Close" });
     }
     let LINES_MODE = "txns";
     const TXF_KEYS = ["q", "source_id", "kind", "account_id", "status", "amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group"];
@@ -461,7 +559,7 @@
           ${d.groups.map(g => `<tr class="drill" style="cursor:pointer" onclick='groupDrill(${JSON.stringify(g.key)})'><td>${escapeHtml(TXF.group === "month" ? monthLabel(g.key) : g.key)}</td><td class="num">${g.count}</td>
             <td class="ac-amt">${g.in ? money(g.in) : ""}</td><td class="ac-amt">${g.out ? money(g.out) : ""}</td><td class="ac-amt"><strong>${money(g.net)}</strong></td></tr>`).join("")}
           <tr class="tot"><td>Total</td><td class="num">${d.count}</td><td class="ac-amt">${money(d.money_in)}</td><td class="ac-amt">${money(d.money_out)}</td><td class="ac-amt"><strong>${money(d.net)}</strong></td></tr></tbody></table>` : "";
-      el.innerHTML = `${chips ? `<div class="ac-chips">${chips}<span class="ac-fchip"><a onclick="TXF={};saveTxf();tabTxns()">Clear all</a></span></div>` : ""}
+      el.innerHTML = `${moveBanner()}${chips ? `<div class="ac-chips">${chips}<span class="ac-fchip"><a onclick="TXF={};saveTxf();tabTxns()">Clear all</a></span></div>` : ""}
         <div class="ac-totbar"><span><strong>${d.total}</strong> line(s)</span><span>in <strong class="pos">${fmtMoney(d.money_in)}</strong></span><span>out <strong class="neg">${fmtMoney(d.money_out)}</strong></span>
           <span>net <strong>${fmtMoney(d.net)}</strong></span><span style="flex:1"></span>
           ${LINES_MODE === "inbox" ? "" : `<a class="link" href="#" onclick="exportFound();return false;">${icon("download")} Excel</a>`}</div>
@@ -469,8 +567,8 @@
           <span>average ${fmtMoney(st.average)}</span><span>per month ${fmtMoney(st.per_month)} (${st.months} mo)</span>${d.has_balance ? `<span>balance shown under each amount</span>` : ""}</div>` : ""}
         ${groupsHtml}
         <div id="ac-bulk" class="ac-bulk" style="display:none"></div>
-        <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th>${sortTh("date", "Date")}${sortTh("payee", "Payee / Description")}${sortTh("account", "Account")}${sortTh("amount", "Amount", "num")}<th></th></tr></thead>
-        <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="muted">${LINES_MODE === "inbox" ? "Nothing to review — every line is in an account." : "No lines match."}</td></tr>`}</tbody></table>
+        <table class="compact-table ac-list no-table-tools"><thead><tr><th class="tick"><input type="checkbox" title="Tick all shown" onchange="tickAll(this.checked)"></th>${sortTh("date", "Date")}${sortTh("payee", "Payee / Description")}${sortTh("account", "Account")}${sortTh("amount", "Amount", "num").replace("</th>", `<span class="ac-amtf ${TXF.amin || TXF.amax || TXF.sign ? "on" : ""}" title="Amount range" onclick="event.stopPropagation();amtFilter(this)">▾</span></th>`)}<th></th></tr></thead>
+        <tbody>${d.rows.map(t => lineRow(t)).join("") || `<tr><td colspan="6" class="ac-empty">${icon(LINES_MODE === "inbox" ? "checkCircle" : "search")}${LINES_MODE === "inbox" ? "Nothing to review — every line is in an account." : "No lines match — loosen the search or the filters."}</td></tr>`}</tbody></table>
         <div class="muted small" style="margin-top:8px;">${d.rows.length} of ${d.total} shown
           ${d.total > (TXF.offset || 0) + d.rows.length ? ` · <a class="link" href="#" onclick="TXF.offset=(TXF.offset||0)+300;reloadLines();return false;">Next 300</a>` : ""}
           ${TXF.offset ? ` · <a class="link" href="#" onclick="TXF.offset=Math.max(0,TXF.offset-300);reloadLines();return false;">Previous</a>` : ""}</div>`;
@@ -489,6 +587,60 @@
       if (LINES_MODE !== "inbox") saveTxf();
       TXF.offset = 0; reloadLines();
     }
+    function amtFilter(el) {  // the lines' Amount header: from / to / in-out, searched over every line (not just the page)
+      document.querySelectorAll(".ac-amtpop").forEach(x => x.remove());
+      const pop = document.createElement("div"); pop.className = "ac-amtpop";
+      pop.innerHTML = `<strong>Amount</strong><label>From $<input type="number" step="0.01" id="af-min" value="${escapeHtml(TXF.amin || "")}"></label>
+        <label>To $<input type="number" step="0.01" id="af-max" value="${escapeHtml(TXF.amax || "")}"></label>
+        <select id="af-sign"><option value="">In or out</option><option value="out" ${TXF.sign === "out" ? "selected" : ""}>Money out</option><option value="in" ${TXF.sign === "in" ? "selected" : ""}>Money in</option></select>
+        <div class="btn-row"><button class="small-btn primary" id="af-go">Filter</button><button class="small-btn" id="af-clear">Clear</button></div>`;
+      document.body.appendChild(pop);
+      const r = el.getBoundingClientRect();
+      pop.style.top = `${window.scrollY + r.bottom + 4}px`; pop.style.left = `${Math.max(8, window.scrollX + r.right - 210)}px`;
+      const done = () => { TXF.offset = 0; if (LINES_MODE !== "inbox") saveTxf(); pop.remove(); reloadLines(); };
+      pop.querySelector("#af-go").onclick = () => { TXF.amin = pop.querySelector("#af-min").value; TXF.amax = pop.querySelector("#af-max").value; TXF.sign = pop.querySelector("#af-sign").value; done(); };
+      pop.querySelector("#af-clear").onclick = () => { TXF.amin = TXF.amax = TXF.sign = ""; done(); };
+      setTimeout(() => document.addEventListener("click", function off(e) { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("click", off); } }), 0);
+    }
+    // every other money column in Accounting tables (ones without the table tools): a min / max filter on the header
+    function moneyFilters(root = document) {
+      root.querySelectorAll("#ac-view table.no-table-tools, .ask-dialog table.no-table-tools").forEach(table => {
+        if (table.dataset.amtf || !table.tHead || table.classList.contains("ac-list")) return;
+        table.dataset.amtf = "1";
+        [...table.tHead.rows[0].cells].forEach((th, ci) => {
+          if (!th.classList.contains("num") || th.querySelector(".ac-amtf")) return;
+          const b = document.createElement("span"); b.className = "ac-amtf"; b.textContent = "▾"; b.title = "Filter by amount";
+          b.onclick = e => {
+            e.stopPropagation();
+            document.querySelectorAll(".ac-amtpop").forEach(x => x.remove());
+            const pop = document.createElement("div"); pop.className = "ac-amtpop";
+            const f = table._amtf && table._amtf[ci] || {};
+            pop.innerHTML = `<strong>${escapeHtml(th.textContent.replace("▾", "").trim())}</strong><label>Min (size) <input type="number" step="0.01" class="mn" value="${f.min ?? ""}"></label>
+              <label>Max (size) <input type="number" step="0.01" class="mx" value="${f.max ?? ""}"></label><div class="btn-row"><button class="small-btn primary">Filter</button><button class="small-btn">Clear</button></div>`;
+            document.body.appendChild(pop);
+            const r = th.getBoundingClientRect(); pop.style.top = `${window.scrollY + r.bottom + 4}px`; pop.style.left = `${Math.max(8, window.scrollX + r.right - 210)}px`;
+            const [go, clear] = pop.querySelectorAll("button");
+            const run = (mn, mx) => {
+              table._amtf = table._amtf || {}; if (mn == null && mx == null) delete table._amtf[ci]; else table._amtf[ci] = { min: mn, max: mx };
+              b.classList.toggle("on", !!table._amtf[ci]);
+              [...table.tBodies].forEach(tb => [...tb.rows].forEach(tr => {
+                if (tr.querySelector("td[colspan]") || tr.classList.contains("tot") || tr.classList.contains("sec")) return;
+                const ok = Object.entries(table._amtf).every(([c, g]) => { const cell = tr.cells[+c]; if (!cell) return true;
+                  const v = Math.abs(parseFloat((cell.textContent || "").replace(/[^0-9.\-]/g, "")) || 0);
+                  return (g.min == null || v >= g.min) && (g.max == null || v <= g.max); });
+                tr.style.display = ok ? "" : "none";
+              }));
+              pop.remove();
+            };
+            go.onclick = () => { const mn = pop.querySelector(".mn").value, mx = pop.querySelector(".mx").value; run(mn === "" ? null : Math.abs(+mn), mx === "" ? null : Math.abs(+mx)); };
+            clear.onclick = () => run(null, null);
+            setTimeout(() => document.addEventListener("click", function off(ev) { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", off); } }), 0);
+          };
+          th.appendChild(b);
+        });
+      });
+    }
+    new MutationObserver(() => moneyFilters()).observe(document.body, { childList: true, subtree: true });
     function stickUnder() {  // frozen table headers sit under the sticky totals bar
       const bar = document.querySelector(".ac-totbar");
       document.documentElement.style.setProperty("--ac-stick", bar ? `${bar.offsetHeight + 2}px` : "0px");
@@ -715,6 +867,7 @@
       view().innerHTML = `<div class="card">
         <div class="ac-filters"><h3 style="margin:0;">Profit &amp; Loss</h3><span style="flex:1"></span>
           <div class="tabs" style="margin:0;">${[["month", "By Month"], ["quarter", "By Quarter"], ["fy", "By Year"]].map(([k, l]) => `<div class="tab ${PNL_BY === k ? "active" : ""}" onclick="PNL_BY='${k}';store.set('pnlby','${k}');show('pnl')">${l}</div>`).join("")}</div>
+          <button class="primary" onclick="masterReport()" title="Everything: summary, P&L, every transaction, a tab per master account, partners, loans, not filed">${icon("download")} Master Report</button>
           <button onclick="exportXlsx()" title="Laid out like your Auto_Analyzed workbook: All Transactions, a tab per category, Summary">${icon("download")} Output Excel</button></div>
         <p class="ac-help">Click an account to see its lines. Whole dollars here — hover for cents.${d.unfiled_total ? ` <strong class="neg">${fmtMoney(d.unfiled_total)}</strong> isn't filed yet — <a class="link" href="#" onclick="show('review');return false;">Review</a>.` : ""}${asideNote(d.set_aside)}</p>
         <table class="ac-pnl no-table-tools"><thead><tr><th>Account</th>${cols.map(c => `<th class="num">${escapeHtml(colLabel(c))}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
@@ -807,7 +960,9 @@
           <td class="ac-amt">${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.in, 0))}</td><td class="ac-amt">${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.out, 0))}</td>
           <td class="ac-amt"><strong>${money(rows.filter(r => !r.depth).reduce((a, r) => a + r.net, 0))}</strong></td><td colspan="2"></td></tr>` : ""}</tbody></table></div>
       <div class="card">
-        <div class="ac-filters"><h3 style="margin:0;">Rules</h3><span style="flex:1"></span>
+        <div class="ac-filters"><h3 style="margin:0;">Rules</h3>
+          <label class="small" title="A line bigger than this is never filed by a rule or by AT-HUB by itself — it waits in Review with the account as a suggestion" style="display:inline-flex;gap:6px;align-items:center;margin-left:10px;">
+            Never file by itself over $ <input type="number" min="0" step="100" style="width:100px;" value="${META.settings.auto_limit ?? 5000}" onchange="saveAutoLimit(this.value)"></label><span style="flex:1"></span>
           <button onclick="exportRules()">${icon("download")} Export</button><button onclick="newRule()">${icon("plus")} New Rule</button></div>
         <p class="ac-help">Rules come before anything AT-HUB learned. When two rules match one line and say different things, <strong>neither files it</strong> — it waits in Review
           with a red <span class="ac-chip flag">Rules Disagree</span> flag, unless one of them is set to win. A rule can file by itself, file but still be reviewed, or only suggest.
@@ -887,6 +1042,16 @@
         buttons: [{ label: "Combine", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
       if (!value) return;
       try { const r = await apiFetch("/api/accounting/rule-combine", { method: "POST", body: JSON.stringify({ rule_ids: ids, name: el.querySelector("#cb-name").value }) }); doneToast("Combined into one rule", r.change_id); show("accounts"); }
+      catch (e) { alert(e.message); }
+    }
+    async function saveAutoLimit(v) {
+      try { await apiFetch("/api/accounting/settings", { method: "PUT", body: JSON.stringify({ auto_limit: Math.max(0, parseFloat(v || 0)) }) }); await loadMeta();
+        toast(+v ? `Lines over $${(+v).toLocaleString()} now always wait in Review` : "No limit — rules and AT-HUB file any size"); }
+      catch (e) { alert(e.message); }
+    }
+    async function masterReport() {
+      const name = PERIOD.key && PERIOD.key !== "custom" ? PERIOD.key : `${PERIOD.start} to ${PERIOD.end}`;
+      try { toast("Making the Master Report…"); await downloadFile(`/api/accounting/master.xlsx?${new URLSearchParams({ start: PERIOD.start, end: PERIOD.end })}`, `Accounting Master Report ${name}.xlsx`); }
       catch (e) { alert(e.message); }
     }
     async function forgetPayee(key, on) {
@@ -976,24 +1141,39 @@
     }
 
     // ---- pick lines: tick all / some / one, by group (rule Apply, "like this", Move Lines)
-    function pickLines({ title, intro = "", groups, apply = "Apply", target = null, search = false }) {
+    function pickLines({ title, intro = "", groups, apply = "Apply", target = null, search = false, dest = null }) {
+      const destAcc = dest ? acc(dest) : null;
+      const nowIn = t => t.splits && t.splits.length ? `<span class="ac-how split">${icon("layers")}Split</span> ${t.splits.map(x => escapeHtml(x.account)).join(" / ")}`
+        : t.account ? `${t.kind ? `<span class="ac-dot k-${t.kind}"></span>` : ""}${escapeHtml(t.account)} ${howBadge(t)}${dest && t.account_id === dest ? ` <span class="ac-chip">already there</span>` : ""}`
+        : `<span class="muted">not filed</span>`;
       const row = (t, tickable, on) => `<tr data-text="${escapeHtml(((t.payee || "") + " " + t.description + " " + (t.note || "")).toLowerCase())}">${tickable ? `<td><input type="checkbox" class="pl-tick" data-id="${t.id}" data-amt="${t.amount}" ${on ? "checked" : ""}></td>` : "<td></td>"}
-        <td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description)}</div>${t.why ? `<div class="muted small">${escapeHtml(t.why)}</div>` : ""}</td>
-        <td class="small" style="min-width:120px;">${escapeHtml(t.account || (t.splits && t.splits.length ? "split" : "—"))}</td><td class="ac-amt">${money(t.amount)}</td></tr>`;
+        <td class="nowrap">${day(t.date)}</td><td><span class="ac-who">${escapeHtml(t.payee || "")}</span><div class="ac-desc">${escapeHtml(t.description)}</div>${t.why ? `<div class="muted small">Why: ${escapeHtml(t.why)}</div>` : ""}${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
+        <td class="small" style="min-width:150px;">${nowIn(t)}</td><td class="ac-amt">${money(t.amount)}</td></tr>`;
       const shownGroups = groups.filter(g => g.lines.length);
-      const body = `${intro ? `<p class="ac-help">${intro}</p>` : ""}
+      const body = `${destAcc ? `<div class="ac-pick-head">Ticked lines go into <span class="ac-dot k-${destAcc.kind}"></span><strong>${escapeHtml(destAcc.path)}</strong>
+          <span class="ac-chip">${escapeHtml(KIND_LABEL()[destAcc.kind] || "")}</span>. Each line shows where it is now; ones already there can't be ticked.</div>` : ""}
+        ${intro ? `<p class="ac-help">${intro}</p>` : ""}
         ${target ? `<div class="ac-form" style="margin-bottom:8px;"><label>Move To</label><select id="pl-to">${accountOptions(target.selected || null)}</select></div>` : ""}
         <div class="ac-filters" style="margin-bottom:6px;">${search ? `<input type="search" id="pl-q" placeholder="Search these lines…">` : ""}
           <button type="button" class="small-btn" id="pl-all">Tick All${search ? " Shown" : ""}</button><button type="button" class="small-btn" id="pl-none">Tick None</button></div>
         <div style="max-height:52vh;overflow:auto;">${shownGroups.map((g, gi) => `
-          <h4 style="margin:10px 0 4px;">${g.ticked !== null ? `<input type="checkbox" class="pl-grp" data-g="${gi}" ${g.ticked ? "checked" : ""} title="Tick all in this group"> ` : ""}${escapeHtml(g.label)} <span class="muted small">${g.lines.length}${g.hint ? " · " + escapeHtml(g.hint) : ""}</span></h4>
-          <table class="compact-table no-table-tools" data-g="${gi}"><tbody>${g.lines.map(t => row(t, g.ticked !== null, g.ticked)).join("")}</tbody></table>`).join("") || `<p class="muted">No lines.</p>`}</div>`;
+          <h4 style="margin:10px 0 4px;">${g.ticked !== null ? `<input type="checkbox" class="pl-grp" data-g="${gi}" ${g.ticked ? "checked" : ""} title="Tick all in this group"> ` : ""}${escapeHtml(g.label)} <span class="muted small">${g.lines.length} ${g.lines.length === 1 ? "line" : "lines"} · ${fmtMoney(g.lines.reduce((a, t) => a + t.amount, 0))}${g.hint ? " · " + escapeHtml(g.hint) : ""}</span></h4>
+          <table class="compact-table no-table-tools" data-g="${gi}"><thead><tr><th></th><th>Date</th><th>Line</th><th>Now In</th><th class="num">Amount</th></tr></thead><tbody>${g.lines.map(t => row(t, g.ticked !== null, g.ticked)).join("")}</tbody></table>`).join("") || `<p class="muted">No lines.</p>`}</div>
+        <div class="ac-pick-sum" id="pl-sum"></div>`;
       const dlg = askDialog({ title, body, buttons: [{ label: apply, value: "apply", cls: "primary" }, { label: "Close", value: null }], wide: true });
       setTimeout(() => {
         const box = [...document.querySelectorAll(".ask-dialog")].pop();
         if (!box) return;
         const btn = box.querySelector('button[data-i="0"]');
-        const upd = () => { const t = [...box.querySelectorAll(".pl-tick:checked")]; const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0); btn.textContent = `${apply} ${t.length} Ticked · ${fmtMoney(sum)}`; btn.disabled = !t.length; };
+        const upd = () => {
+          const t = [...box.querySelectorAll(".pl-tick:checked")]; const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0);
+          const all = box.querySelectorAll(".pl-tick").length;
+          if (!all) { btn.textContent = apply; btn.disabled = false; }
+          else { btn.textContent = `${apply} ${t.length} Ticked · ${fmtMoney(sum)}`; btn.disabled = !t.length; }
+          const sel = box.querySelector("#pl-to"), d = sel && sel.value && sel.value !== "new" ? acc(+sel.value) : destAcc;
+          const s_ = box.querySelector("#pl-sum");
+          if (s_ && all) s_.innerHTML = `<strong>${t.length}</strong> of ${all} ticked · ${fmtMoney(sum)}${d ? ` → <span class="ac-dot k-${d.kind}"></span><strong>${escapeHtml(d.path)}</strong>` : ""}`;
+        };
         const visible = () => [...box.querySelectorAll("tr[data-text]")].filter(r => r.style.display !== "none");
         box.querySelectorAll(".pl-tick").forEach(c => c.onchange = upd);
         box.querySelectorAll(".pl-grp").forEach(g => g.onchange = () => { box.querySelectorAll(`table[data-g="${g.dataset.g}"] .pl-tick`).forEach(c => c.checked = g.checked); upd(); });
@@ -1003,6 +1183,7 @@
         if (q) q.oninput = () => { const s = q.value.trim().toLowerCase(); box.querySelectorAll("tr[data-text]").forEach(r => r.style.display = !s || r.dataset.text.includes(s) ? "" : "none"); };
         const sel = box.querySelector("#pl-to");
         if (sel) sel.onchange = async () => {
+          upd();
           if (sel.value !== "new") return;
           const a = await accountDialog(null, target.kind || "expense", target.under || null);
           if (a) { await loadMeta(); sel.innerHTML = accountOptions(a.id); } else sel.value = "";
@@ -1188,7 +1369,7 @@
       try { [d, rule] = await Promise.all([apiFetch(`/api/accounting/rules/${ruleId}/lines`), apiFetch("/api/accounting/rules").then(rs => rs.find(x => x.id === ruleId))]); }
       catch (e) { alert(e.message); return; }
       const where = rule.splits.length ? "the rule's split" : rule.account;
-      const res = await pickLines({ title: "Apply Rule",
+      const res = await pickLines({ title: "Apply Rule", dest: rule.splits.length ? null : rule.account_id,
         intro: `${rule.name ? `<strong>${escapeHtml(rule.name)}</strong> · ` : ""}${escapeHtml(rule.summary)} → <strong>${escapeHtml(where)}</strong> · ${d.count} line(s) match (every date).
           Tick the ones to put there.${rule.enabled ? "" : " <span class='neg'>This rule is switched off — new lines won't be filed by it.</span>"}`,
         groups: [{ label: "Not Filed", lines: d.groups.unfiled, ticked: true }, { label: "Filed By AT-HUB, Not Looked At", lines: d.groups.auto, ticked: true },

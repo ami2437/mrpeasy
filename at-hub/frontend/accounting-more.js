@@ -53,14 +53,19 @@ async function deleteComment(id, section) {
 // ================================================================ Partner Accounts
 async function tabPartnerAccounts() {
   const d = await apiFetch(`/api/accounting/partner-accounts?${qs()}`);
-  const t = x => `<td class="ac-amt">${money(x.withdrawn)}</td><td class="ac-amt">${money(x.invested)}</td><td class="ac-amt"><strong>${money(x.net)}</strong></td><td class="ac-amt">${x.lent ? money(x.lent) : ""}</td><td class="ac-amt">${x.repaid ? money(x.repaid) : ""}</td>`;
+  // every figure opens the lines behind it (who, which dates, what)
+  const cell = (who, a, b, what, v, strong) => !v ? `<td class="ac-amt"></td>` : `<td class="ac-amt"><a class="link" href="#" title="See the lines behind this" onclick='partnerCell(${JSON.stringify(who)}, ${JSON.stringify(a)}, ${JSON.stringify(b)}, "${what}");return false;'>${strong ? "<strong>" : ""}${money(v)}${strong ? "</strong>" : ""}</a></td>`;
+  const t = (x, who, a, b) => !who ? `<td class="ac-amt">${money(x.withdrawn)}</td><td class="ac-amt">${money(x.invested)}</td><td class="ac-amt"><strong>${money(x.net)}</strong></td><td class="ac-amt">${x.lent ? money(x.lent) : ""}</td><td class="ac-amt">${x.repaid ? money(x.repaid) : ""}</td>`
+    : cell(who, a, b, "withdrawn", x.withdrawn) + cell(who, a, b, "invested", x.invested) + cell(who, a, b, "net", x.net, true) + cell(who, a, b, "lent", x.lent) + cell(who, a, b, "repaid", x.repaid);
+  const monthEnd = m => { const [y, mo] = m.split("-").map(Number); return `${m}-${String(new Date(y, mo, 0).getDate()).padStart(2, "0")}`; };
+  const fyRange = fy => { const y = META.years.find(x => x.label === fy); return y ? [y.start, y.end] : [null, null]; };
   const head = `<th class="num">Withdrawn</th><th class="num">Invested</th><th class="num">Net</th><th class="num">Lent To Co.</th><th class="num">Repaid</th>`;
   view().innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">Partner Accounts — ${escapeHtml(d.year)}</h3><span style="flex:1"></span>
       <button onclick="downloadFile('/api/accounting/partner-accounts/export.xlsx?${qs()}', 'Partner Accounts.xlsx').catch(e => alert(e.message))">${icon("download")} Excel</button></div>
     <p class="ac-help">Who took how much out (withdrawn: money out of their partner accounts), who put money in (invested), and money a partner lent the company
-      (loan accounts tagged with the partner). To get a partner's lines here, file them in an account of type Partner Draws with that partner (or a loan with the partner set).</p>
+      (loan accounts tagged with the partner). <strong>Click any figure</strong> to see the lines behind it. To get a partner's lines here, file them in an account of type Partner Draws with that partner (or a loan with the partner set).</p>
     <table class="compact-table no-table-tools"><thead><tr><th>Partner</th>${head}<th class="num">Share</th><th class="num">Remaining</th></tr></thead><tbody>
-    ${d.partners.map(p => `<tr><td><strong>${escapeHtml(p.name)}</strong>${p.share_pct != null ? `<div class="muted small">${(p.share_pct * 100).toFixed(1)}%</div>` : ""}</td>${t(p.period)}
+    ${d.partners.map(p => `<tr><td><strong>${escapeHtml(p.name)}</strong>${p.share_pct != null ? `<div class="muted small">${(p.share_pct * 100).toFixed(1)}%</div>` : ""}</td>${t(p.period, p.name, PERIOD.start, PERIOD.end)}
       <td class="ac-amt">${p.share != null ? fmtMoney(p.share) : ""}</td><td class="ac-amt">${p.remaining != null ? money(p.remaining) : ""}</td></tr>`).join("")}
     <tr class="tot"><td><strong>Total</strong></td>${t(d.partners.reduce((a, p) => { for (const k of ["withdrawn", "invested", "net", "lent", "repaid"]) a[k] += p.period[k]; return a; }, { withdrawn: 0, invested: 0, net: 0, lent: 0, repaid: 0 }))}
       <td class="ac-amt">${fmtMoney(d.to_share)}</td><td></td></tr></tbody></table></div>
@@ -70,11 +75,25 @@ async function tabPartnerAccounts() {
         <div class="ac-tile"><div class="l">Invested</div><div class="v pos">${fmtMoney(p.period.invested)}</div><div class="s">all time ${fmtMoney(p.all_time.invested)}</div></div>
         <div class="ac-tile"><div class="l">Lent To The Company</div><div class="v">${fmtMoney(p.all_time.loan_owed)}</div><div class="s">still owed to them (all time)</div></div></div>
       <div class="muted small">${p.accounts.length ? "Accounts: " + p.accounts.map(escapeHtml).join(", ") : "No accounts for this partner yet."}</div>
-      ${p.by_fy.length ? `<h4 style="margin:10px 0 4px;">By Fiscal Year</h4><table class="compact-table no-table-tools"><thead><tr><th>Year</th>${head}</tr></thead><tbody>${p.by_fy.map(x => `<tr><td>${escapeHtml(x.fy)}</td>${t(x)}</tr>`).join("")}</tbody></table>` : ""}
-      ${p.by_month.length ? `<h4 style="margin:10px 0 4px;">By Month (This Period)</h4><table class="compact-table no-table-tools"><thead><tr><th>Month</th>${head}</tr></thead><tbody>${p.by_month.map(x => `<tr><td>${monthLabel(x.month)}</td>${t(x)}</tr>`).join("")}</tbody></table>` : ""}
+      ${p.by_fy.length ? `<h4 style="margin:10px 0 4px;">By Fiscal Year</h4><table class="compact-table no-table-tools"><thead><tr><th>Year</th>${head}</tr></thead><tbody>${p.by_fy.map(x => `<tr><td>${escapeHtml(x.fy)}</td>${t(x, p.name, ...fyRange(x.fy))}</tr>`).join("")}</tbody></table>` : ""}
+      ${p.by_month.length ? `<h4 style="margin:10px 0 4px;">By Month (This Period)</h4><table class="compact-table no-table-tools"><thead><tr><th>Month</th>${head}</tr></thead><tbody>${p.by_month.map(x => `<tr><td>${monthLabel(x.month)}</td>${t(x, p.name, x.month + "-01", monthEnd(x.month))}</tr>`).join("")}</tbody></table>` : ""}
     </div>`).join("")}</div>`;
 }
 function partnerLines(ids) { TXF = { account_id: ids[0] }; show("txns"); }
+async function partnerCell(who, start, end, what) {
+  let d;
+  try { d = await apiFetch(`/api/accounting/partner-lines?${new URLSearchParams({ name: who, start: start || "", end: end || "", what })}`); } catch (e) { alert(e.message); return; }
+  const label = { withdrawn: "Withdrawn", invested: "Invested", net: "Net (draws)", lent: "Lent To The Company", repaid: "Repaid To Them" }[what] || what;
+  const { value } = await askDialog({ title: `${who} — ${label}`, wide: true, body: `<p class="ac-help">${day(start)} – ${day(end)} · <strong>${d.count}</strong> ${d.count === 1 ? "line" : "lines"} ·
+      total <strong>${fmtMoney(d.total)}</strong>. A split line counts only ${escapeHtml(who)}'s part (the line's full amount is shown beside it).</p>
+    <div style="max-height:58vh;overflow:auto;"><table class="compact-table no-table-tools"><thead><tr><th>Date</th><th>Line</th><th>Account</th><th class="num">${escapeHtml(who)}'s Part</th><th class="num">Line</th></tr></thead><tbody>
+    ${d.rows.map(r => `<tr><td class="nowrap">${day(r.date)}</td><td><span class="ac-who">${escapeHtml(r.payee || "")}</span><div class="ac-desc">${escapeHtml(r.description)}</div>${r.note ? `<div class="small">${icon("notePen")} ${escapeHtml(r.note)}</div>` : ""}</td>
+      <td class="small">${escapeHtml(r.part_account)}${r.splits.length ? ` <span class="ac-how split">${icon("layers")}Split</span>` : ""}</td><td class="ac-amt"><strong>${money(r.part)}</strong></td>
+      <td class="ac-amt muted">${r.splits.length ? fmtMoney(r.amount) : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="ac-empty">No lines.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td></td><td>Total</td><td></td><td class="ac-amt"><strong>${fmtMoney(d.total)}</strong></td><td></td></tr></tfoot></table></div>`,
+    buttons: [{ label: "Open In Transactions", value: "txns" }, { label: "Close", value: null }] });
+  if (value === "txns") { TXF = { date_from: start, date_to: end, account_id: (META.accounts.find(a => (a.partner || "").toLowerCase() === who.toLowerCase() && a.kind === "owner" && !a.parent_id) || {}).id || "" }; saveTxf(); show("txns"); }
+}
 
 // ================================================================ Payees
 async function tabPayees() {

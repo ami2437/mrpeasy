@@ -67,6 +67,7 @@ class SettingsIn(BaseModel):
     notes: Optional[str] = None
     adjust: Optional[dict] = None
     open_orders_counted: Optional[bool] = None
+    auto_limit: Optional[float] = None  # AT-HUB / rules never file a line bigger than this by themselves (0 = no limit)
 
 
 @router.put("/settings")
@@ -92,6 +93,10 @@ def put_settings(body: SettingsIn, db: Session = Depends(get_db), user: User = D
         s.setdefault("years", {})[body.year] = y
     if body.open_orders_counted is not None:
         s.setdefault("apar_groups", {})["open_orders"] = body.open_orders_counted
+    if body.auto_limit is not None:
+        if body.auto_limit < 0:
+            raise HTTPException(status_code=400, detail="The limit can't be below zero")
+        s["auto_limit"] = cents(body.auto_limit)
     return A.save_settings(db, s, _who(user))
 
 
@@ -325,16 +330,18 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
          kind: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None, all_dates: bool = False,
          date_from: Optional[str] = None, date_to: Optional[str] = None, amin: Optional[str] = None, amax: Optional[str] = None,
          amt: Optional[str] = None, sign: Optional[str] = None, has_note: bool = False, how: Optional[str] = None,
-         sort: Optional[str] = None, group: Optional[str] = None, limit: int = 300, offset: int = 0, db: Session = Depends(get_db)):
+         sort: Optional[str] = None, group: Optional[str] = None, ids: Optional[str] = None, limit: int = 300, offset: int = 0, db: Session = Depends(get_db)):
     """Bank-style search (services/acct_more.py): status unfiled|review / auto / expected / typed / split / sent_back;
     q understands amounts ("1072.50", ">500", "500-1000", "-300"), words and "phrases". Totals, stats and groups are for
     EVERYTHING that matches, the rows for the page asked for."""
-    if not all_dates and not (date_from or date_to):
+    if not all_dates and not (date_from or date_to) and not ids:
         a, b = _period(db, start, end)
         start, end = a.isoformat(), b.isoformat()
+    if ids:
+        all_dates = True
     r = M.search(db, _search_params(start, end, source_id=source_id, account_id=account_id, kind=kind, status=status, q=q,
                                     all_dates=all_dates, date_from=date_from, date_to=date_to, amin=amin, amax=amax, amt=amt,
-                                    sign=sign, has_note=has_note, how=how, sort=sort, group=group, limit=limit, offset=offset))
+                                    sign=sign, has_note=has_note, how=how, sort=sort, group=group, ids=ids, limit=limit, offset=offset))
     rows = r.pop("rows_obj")
     r.pop("all_rows")
     accounts, sources = A.maps(db)
@@ -504,7 +511,7 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
     if "note" in fields:
         t.note = (body.note or "").strip() or None
     filed_more = taken_back = 0
-    alike = []
+    alike, alike_here = [], []
     if "account_id" in fields or "splits" in fields:
         old, was_auto = t.account_id, (t.how in ("auto", "rule") and not t.reviewed)
         splits = body.splits
@@ -518,6 +525,7 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
             filed_more = A.autofill(db)
             db.flush()
             alike = A.look_alikes(db, t)
+            alike_here = A.already_in(db, t) if alike else []
     t.updated_by = _who(user)
     accounts, sources = A.maps(db)
     cid = None
@@ -527,7 +535,7 @@ def edit_txn(txn_id: int, body: TxnIn, db: Session = Depends(get_db), user: User
         cid = CH.finish(db, snap, what + (f" (+{filed_more} like it)" if filed_more else ""), "file", _who(user))
     else:
         db.commit()
-    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more, "taken_back": taken_back, "alike": alike, "change_id": cid}
+    return {**A.txn_dict(t, accounts, sources), "filed_more": filed_more, "taken_back": taken_back, "alike": alike, "alike_here": alike_here, "change_id": cid}
 
 
 class BulkIn(BaseModel):
@@ -562,12 +570,16 @@ def bulk(body: BulkIn, db: Session = Depends(get_db), user: User = Depends(get_c
             raise HTTPException(status_code=400, detail="Unknown action")
         n += 1
     db.flush()
+    before_auto = {x for (x,) in db.query(AcctTxn.id).filter(AcctTxn.account_id.isnot(None)).all()} if body.action == "file" else set()
     more = A.autofill(db) if body.action == "file" else 0
+    db.flush()
+    more_ids = [x for (x,) in db.query(AcctTxn.id).filter(AcctTxn.account_id.isnot(None), AcctTxn.how.in_(("auto", "rule"))).all()
+                if x not in before_auto and x not in body.ids] if more else []
     accounts, _ = A.maps(db)
     what = {"file": f"{n} line(s) filed in {A.path(accounts[body.account_id], accounts) if body.account_id in accounts else '?'}",
             "review": f"{n} line(s) marked looked at", "unfile": f"{n} line(s) taken out of their account", "delete": f"{n} typed-in line(s) deleted"}.get(body.action, body.action)
     cid = CH.finish(db, snap, what + (f" (+{more} like them)" if more else ""), "bulk", _who(user))
-    return {"done": n, "skipped": skipped, "filed_more": more, "change_id": cid}
+    return {"done": n, "skipped": skipped, "filed_more": more, "more_ids": more_ids, "change_id": cid}
 
 
 @router.delete("/txns/{txn_id}")
@@ -1077,6 +1089,21 @@ def check_ok(body: CheckOkIn, db: Session = Depends(get_db), user: User = Depend
 def partner_accounts(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
     a, b = _period(db, start, end)
     return M.partner_accounts(db, a, b, _fy_key(db, a))
+
+
+@router.get("/partner-lines")
+def partner_lines(name: str, start: Optional[str] = None, end: Optional[str] = None, what: str = "net", db: Session = Depends(get_db)):
+    """The lines behind a Partner Accounts figure (a month, a year, the period)."""
+    return M.partner_lines(db, name, A.parse_day(start), A.parse_day(end), what)
+
+
+@router.get("/master.xlsx")
+def master_report(start: Optional[str] = None, end: Optional[str] = None, db: Session = Depends(get_db)):
+    """Everything in one Excel: summary, P&L, every transaction, a tab per master account, partners, loans, not filed."""
+    from app.services.acct_report import master_xlsx
+    a, b = _period(db, start, end)
+    return Response(master_xlsx(db, a, b, _fy_key(db, a)), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Accounting Master Report {a.isoformat()} to {b.isoformat()}.xlsx"'})
 
 
 @router.get("/payees")

@@ -47,6 +47,7 @@ def _txns(api, **q):
 
 
 def test_workbook_then_statement_learns_and_files(api, client, admin_headers):
+    api.put("/api/accounting/settings", json={"auto_limit": 0})  # big lines filed by rules here; the limit has its own test
     y = 2031  # FY2031-32 (April - March)
     zelle = "ZELLE TO SHAH NIRAJ ON 0{m}/1{d} REF #RP0Y{m}{d}QQ{tail}"
     wb_rows = [
