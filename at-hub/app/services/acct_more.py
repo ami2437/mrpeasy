@@ -119,11 +119,14 @@ def search(db: Session, p: dict) -> dict:
         qy = qy.filter(AcctTxn.date <= A._dt(dto))
     if p.get("source_id"):
         qy = qy.filter(AcctTxn.source_id == int(p["source_id"]))
+    only = None  # filtered to an account (or a type): a split line counts only its part(s) in it
     if p.get("account_id"):
         ids = [int(p["account_id"])] + A.descendants(int(p["account_id"]), accounts)
+        only = set(ids)
         qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
     if p.get("kind"):
         ids = [a.id for a in accounts.values() if a.kind == p["kind"]]
+        only = set(ids) if only is None else only & set(ids)
         qy = qy.filter(or_(AcctTxn.account_id.in_(ids), AcctTxn.splits.any(AcctSplit.account_id.in_(ids))))
     st = p.get("status")
     if st == "unfiled":
@@ -182,9 +185,14 @@ def search(db: Session, p: dict) -> dict:
            "account_asc": lambda t: (acc_name(t), t.date), "account_desc": lambda t: (acc_name(t), t.date),
            "flag_first": lambda t: (0 if t.flag else 1, -t.date.toordinal(), -t.id)}.get(sort, lambda t: (t.date, t.id))
     rows.sort(key=key, reverse=sort in ("date_desc", "amount_desc", "payee_desc", "account_desc"))
-    # totals / stats / groups for everything that matched
-    ins = [t.amount for t in rows if t.amount > 0]
-    outs = [t.amount for t in rows if t.amount < 0]
+    # totals / stats / groups for everything that matched -- a split line, when the list is one account's, by its part there
+    def part(t):
+        if only is None or not t.splits:
+            return t.amount
+        return cents(sum(x.amount for x in t.splits if x.account_id in only))
+    amts = [part(t) for t in rows]
+    ins = [a_ for a_ in amts if a_ > 0]
+    outs = [a_ for a_ in amts if a_ < 0]
     tot = {"count": len(rows), "money_in": cents(sum(ins)), "money_out": cents(sum(outs)), "net": cents(sum(ins) + sum(outs))}
     stats = {}
     if rows:
@@ -198,10 +206,15 @@ def search(db: Session, p: dict) -> dict:
     if gmode in ("account", "payee", "month", "source"):
         g = defaultdict(lambda: {"count": 0, "in": 0.0, "out": 0.0})
         for t in rows:
-            if gmode == "account":
-                a = accounts.get(t.account_id)
-                k = A.path(a, accounts) if a else ("Split" if t.splits else "Not filed")
-            elif gmode == "payee":
+            if gmode == "account":  # a split line: each part under its own account
+                ps = [(x.account_id, x.amount) for x in t.splits if only is None or x.account_id in only] if t.splits else [(t.account_id, t.amount)]
+                for aid, v in ps:
+                    a = accounts.get(aid)
+                    x = g[A.path(a, accounts) if a else "Not filed"]
+                    x["count"] += 1
+                    x["in" if v > 0 else "out"] += v
+                continue
+            if gmode == "payee":
                 k = t.payee or acct_mapper.payee_label(t.bank_description or t.description)
             elif gmode == "month":
                 k = t.date.strftime("%Y-%m")
@@ -209,7 +222,8 @@ def search(db: Session, p: dict) -> dict:
                 k = sources[t.source_id].name if t.source_id in sources else "?"
             x = g[k]
             x["count"] += 1
-            x["in" if t.amount > 0 else "out"] += t.amount
+            v = part(t)
+            x["in" if v > 0 else "out"] += v
         groups = [{"key": k, "count": v["count"], "in": cents(v["in"]), "out": cents(v["out"]), "net": cents(v["in"] + v["out"])} for k, v in g.items()]
         groups.sort(key=(lambda x: x["key"]) if gmode == "month" else (lambda x: -abs(x["net"])))
     # running balance (one bank account, by date): the bank's balance after each line
@@ -227,26 +241,29 @@ def search(db: Session, p: dict) -> dict:
     off, lim = int(p.get("offset") or 0), min(int(p.get("limit") or 300), 5000)
     page = rows[off:off + lim]
     return {"rows_obj": page, "all_rows": rows, "total": len(rows), **tot, "stats": stats, "groups": groups,
+            "in_account": {t.id: part(t) for t in rows if only is not None and t.splits},
             "balance": {k: v for k, v in balance.items() if k in {t.id for t in page}}, "has_balance": bool(balance)}
 
 
-def found_xlsx(db: Session, rows: List[AcctTxn]) -> bytes:
+def found_xlsx(db: Session, rows: List[AcctTxn], in_account: Optional[Dict[int, float]] = None) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font
     accounts, sources = A.maps(db)
     wb = Workbook()
     ws = wb.active
     ws.title = "Found"
-    ws.append(["Date", "Amount", "Description", "Payee", "Account", "Bank Account", "Note"])
+    in_account = in_account or {}
+    ws.append(["Date", "Amount", "Description", "Payee", "Account", "Bank Account", "Note"] + (["In This Account"] if in_account else []))
     for c in ws[1]:
         c.font = Font(bold=True)
     for t in rows:
         a = accounts.get(t.account_id)
         acc = A.path(a, accounts) if a else (", ".join(f"{A.path(accounts[x.account_id], accounts)} {x.amount:.2f}" for x in t.splits if x.account_id in accounts) or "Not filed")
-        ws.append([t.date.date(), t.amount, t.bank_description or t.description, t.payee or "", acc, sources[t.source_id].name if t.source_id in sources else "", t.note or ""])
+        ws.append([t.date.date(), t.amount, t.bank_description or t.description, t.payee or "", acc, sources[t.source_id].name if t.source_id in sources else "", t.note or ""]
+                  + ([in_account.get(t.id, t.amount)] if in_account else []))
         ws.cell(ws._current_row, 2).number_format = "#,##0.00;[Red]-#,##0.00"
     ws.append([])
-    ws.append(["Total", cents(sum(t.amount for t in rows)), f"{len(rows)} line(s)"])
+    ws.append(["Total", cents(sum(t.amount for t in rows)), f"{len(rows)} line(s)"] + (["", "", "", "", cents(sum(in_account.get(t.id, t.amount) for t in rows))] if in_account else []))
     ws.cell(ws._current_row, 1).font = Font(bold=True)
     for col, w in zip("ABCDEFG", (12, 13, 70, 26, 28, 20, 30)):
         ws.column_dimensions[col].width = w

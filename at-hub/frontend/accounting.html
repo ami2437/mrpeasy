@@ -300,7 +300,7 @@
           ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
           ${t.note ? `<div class="small">${icon("notePen")} ${escapeHtml(t.note)}</div>` : ""}</td>
         <td style="min-width:200px;">${filed}${sugg}${clash}${looks}</td>
-        <td class="ac-amt">${money(t.amount)}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
+        <td class="ac-amt">${money(t.amount)}${t.in_account != null ? `<div class="small" title="Only this part of the split line is in the account shown — that's what the totals count">in this account: <strong>${fmtMoney(t.in_account)}</strong></div>` : ""}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
         <td class="nowrap">${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button><button class="small-btn icon-only" title="Which rules match this line, and why" onclick="lineRules(${t.id})">${icon("search")}</button>
           <button class="small-btn icon-only" title="Open: split, note${t.origin === "manual" ? ", change, delete" : ""}" onclick="editLine(${t.id})">${icon("pencil")}</button></td></tr>`;
     }

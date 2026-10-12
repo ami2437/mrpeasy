@@ -289,3 +289,25 @@ def test_combine_rules_health_and_workbook_split_cell(api, client, admin_headers
     _import(client, admin_headers, wsrc["id"], "wb.xlsx", data)
     t = _txns(api, all_dates="true", source_id=wsrc["id"])["rows"][0]
     assert sorted(s["amount"] for s in t["splits"]) == [-71472.0, -69259.0]
+
+
+def test_a_split_line_counts_only_its_part_in_each_partners_account(api, client, admin_headers):
+    """Transactions filtered to one partner: the totals, groups and Excel count that partner's part of a split line, not
+    the whole line (the reports -- P&L, Accounts, Partner Accounts -- always did)."""
+    src = _source(api)
+    n_ = api.post("/api/accounting/accounts", json={"name": uid("NirajP "), "kind": "owner"})
+    r_ = api.post("/api/accounting/accounts", json={"name": uid("RichP "), "kind": "owner"})
+    _import(client, admin_headers, src["id"], "p.csv", _csv([("04/09/2070", -140731.0, f"WT FED BANK OF AMERICA {name('SPLITP')}"),
+                                                             ("04/10/2070", -1000.0, f"ZELLE TO {name('NIRP')}")]))
+    big, small = sorted(_txns(api, all_dates="true", source_id=src["id"])["rows"], key=lambda t: t["amount"])
+    api.put(f"/api/accounting/txns/{big['id']}", json={"splits": [{"account_id": n_["id"], "amount": -71472}, {"account_id": r_["id"], "amount": -69259}], "learn": False})
+    api.put(f"/api/accounting/txns/{small['id']}", json={"account_id": n_["id"], "learn": False})
+    niraj = _txns(api, all_dates="true", account_id=n_["id"])
+    assert niraj["net"] == -72472.0 and niraj["total"] == 2
+    assert next(t for t in niraj["rows"] if t["id"] == big["id"])["in_account"] == -71472.0
+    rich = _txns(api, all_dates="true", account_id=r_["id"], group="account")
+    assert rich["net"] == -69259.0 and [g["net"] for g in rich["groups"]] == [-69259.0]
+    allg = {g["key"]: g["net"] for g in _txns(api, all_dates="true", source_id=src["id"], group="account")["groups"]}
+    assert sorted(allg.values()) == [-72472.0, -69259.0]
+    summ = {a["id"]: a["net"] for a in api.get("/api/accounting/accounts-summary?start=2070-01-01&end=2070-12-31")}
+    assert summ[n_["id"]] == -72472.0 and summ[r_["id"]] == -69259.0

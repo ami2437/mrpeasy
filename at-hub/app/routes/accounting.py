@@ -357,8 +357,11 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
                 d["suggest"] = {**sg, "account": A.path(accounts[sg["account_id"]], accounts) if sg["account_id"] in accounts else ""}
         if t.id in r["balance"]:
             d["balance"] = r["balance"][t.id]
+        if t.id in r["in_account"]:
+            d["in_account"] = r["in_account"][t.id]
         out.append(d)
     r.pop("balance")
+    r.pop("in_account")
     return {**r, "rows": out}
 
 
@@ -374,7 +377,7 @@ def txns_export(start: Optional[str] = None, end: Optional[str] = None, source_i
     r = M.search(db, _search_params(start, end, source_id=source_id, account_id=account_id, kind=kind, status=status, q=q,
                                     all_dates=all_dates, date_from=date_from, date_to=date_to, amin=amin, amax=amax, amt=amt,
                                     sign=sign, has_note=has_note, how=how, sort=sort, limit=1, offset=0))
-    return Response(M.found_xlsx(db, r["all_rows"]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return Response(M.found_xlsx(db, r["all_rows"], r["in_account"]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="Transactions.xlsx"'})
 
 
