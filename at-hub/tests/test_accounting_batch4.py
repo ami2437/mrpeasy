@@ -27,12 +27,12 @@ def test_master_report_has_a_tab_per_master_account_and_split_parts(api, client,
     assert x.status_code == 200 and x.content[:2] == b"PK"
     wb = load_workbook(io.BytesIO(x.content))
     names = wb.sheetnames
-    assert names[:3] == ["Summary", "P&L", "All Transactions"] and {"Partner Accounts", "Loans", "Not Filed", "Comments"} <= set(names)
-    lab = wb[next(n for n in names if n.startswith(labor["name"][:25]))]
-    vals = [[c.value for c in r] for r in lab.iter_rows()]
-    assert any(r[0] == f"Total {labor['name']}" and r[4] == -150.0 for r in vals)          # the account + its sub-account
-    assert any(r[0] and str(r[0]).startswith("Subtotal") and r[4] == -100.0 for r in vals)
-    assert any(r[6] == "May pay" for r in vals)
+    assert names[:3] == ["Summary", "P&L", "All Transactions"] and {"Expenses", "Partner Draws", "Loans", "Not Filed"} <= set(names) and len(names) == 10
+    vals = [[c.value for c in r] for r in wb["Expenses"].iter_rows()]
+    mine = [r for r in vals if r[1] == labor["name"]]                                         # the flat table: master / sub on every row
+    assert len(mine) == 2 and any(r[2] == saul["name"] and r[9] == "May pay" for r in mine)
+    assert any(r[14] == labor["name"] and r[17] == -150.0 for r in vals)                     # subtotal block: the account + its sub-account
+    assert any(r[15] == saul["name"] and r[17] == -100.0 for r in vals)
     alltx = [[c.value for c in r] for r in wb["All Transactions"].iter_rows(min_row=2)]
     split_rows = [r for r in alltx if r[9] == "yes"]
     assert sorted(r[7] for r in split_rows) == [-600.0, -400.0]                                # one row per part

@@ -20,7 +20,12 @@ Words match whole words ("SAUL" doesn't hit "SAULT"); "contains" needs every wor
 them side by side. Every text test has its NOT (doesn't contain, isn't, doesn't start with, contains none of) and a
 pattern (regular expression) for power use. When two switched-on rules match one line and say different things, neither
 files it -- it waits in Review ("rules disagree") -- unless one of them is marked to win. Rules made before this (one
-"contains" + amount range) read as the same thing (spec())."""
+"contains" + amount range) read as the same thing (spec()).
+
+A rule can have BRANCHES (user, 2026-10-12: "JASON or PESO -> Jason, but SUPPLIES -> Supplies"): its own conditions (if
+any) must hold, then the first branch whose conditions match decides the account / split / note; the last branch may be
+"otherwise" (no conditions -- only allowed when the rule has conditions of its own). effective() gives the rule as it
+applies to one line, and everything that files or compares rules uses that."""
 import json
 import re
 from datetime import date, datetime
@@ -169,30 +174,67 @@ def spec(r) -> dict:
     srcs = g("source_ids")
     if isinstance(srcs, str):
         srcs = json.loads(srcs or "[]")
+    branches = g("branches")
+    if isinstance(branches, str):
+        branches = json.loads(branches or "[]")
     return {"id": g("id"), "name": g("name") or "", "match": g("match_mode") or g("match") or "all", "conditions": conds,
             "sign": g("sign") or None, "source_ids": [int(x) for x in (srcs or [])], "account_id": g("account_id"),
             "splits": splits or [], "set_payee": g("set_payee") or None, "set_note": g("set_note") or None,
             "action": g("action") or "file", "enabled": g("enabled") is not False, "priority": g("priority") or 0,
-            "review": bool(g("review")), "wins": bool(g("wins"))}
+            "review": bool(g("review")), "wins": bool(g("wins")),
+            "branches": [{"label": b.get("label") or "", "match": b.get("match") or "all", "conditions": b.get("conditions") or [],
+                          "account_id": int(b["account_id"]) if b.get("account_id") else None, "splits": b.get("splits") or [],
+                          "set_note": b.get("set_note") or None} for b in (branches or [])]}
 
 
-def matches(s: dict, line: dict) -> bool:
+def _base_ok(s: dict, line: dict, need_conditions: bool) -> bool:
     if s["sign"] == "in" and line["amount"] < 0 or s["sign"] == "out" and line["amount"] >= 0:
         return False
     if s["source_ids"] and line.get("source_id") not in s["source_ids"]:
         return False
     conds = [c for c in s["conditions"] if _filled(c)]
     if not conds:
-        return False
+        return not need_conditions
     ok = [cond_ok(c, line) for c in conds]
     return all(ok) if s["match"] != "any" else any(ok)
 
 
+def _branch_ok(b: dict, line: dict) -> Optional[bool]:
+    """None = an "otherwise" branch (no conditions)."""
+    conds = [c for c in b.get("conditions") or [] if _filled(c)]
+    if not conds:
+        return None
+    ok = [cond_ok(c, line) for c in conds]
+    return any(ok) if b.get("match") == "any" else all(ok)
+
+
+def effective(s: dict, line: dict) -> Optional[dict]:
+    """The rule as it applies to this line (None = it doesn't): itself, or -- a rule with branches -- the first branch
+    that matches (its account / split / note)."""
+    br = s.get("branches") or []
+    if not br:
+        return s if _base_ok(s, line, True) else None
+    if not _base_ok(s, line, False):
+        return None
+    for i, b in enumerate(br):
+        ok = _branch_ok(b, line)
+        if ok or (ok is None and i == len(br) - 1):
+            return {**s, "account_id": b.get("account_id"), "splits": b.get("splits") or [], "set_note": b.get("set_note") or s.get("set_note"),
+                    "branch": i, "branch_label": b.get("label") or (f"branch {i + 1}" if ok else "otherwise")}
+    return None
+
+
+def matches(s: dict, line: dict) -> bool:
+    return effective(s, line) is not None
+
+
 def first_match(specs: List[dict], line: dict) -> Optional[dict]:
-    """Rules in order; the first switched-on one that matches."""
+    """Rules in order; the first switched-on one that matches (as it applies to the line)."""
     for s in specs:
-        if s["enabled"] and matches(s, line):
-            return s
+        if s["enabled"]:
+            e = effective(s, line)
+            if e:
+                return e
     return None
 
 
@@ -205,7 +247,7 @@ def outcome(s: dict) -> tuple:
 def decide_rules(specs: List[dict], line: dict) -> Tuple[Optional[dict], List[dict]]:
     """(the rule that decides, the rules that disagree): every switched-on rule that matches; if they don't all say the
     same thing, the first one marked "wins" decides -- else nobody does and the line waits in Review."""
-    hits = [s for s in specs if s["enabled"] and matches(s, line)]
+    hits = [e for e in (effective(s, line) for s in specs if s["enabled"]) if e]
     if not hits:
         return None, []
     if len({outcome(s) for s in hits}) == 1:
@@ -219,15 +261,21 @@ def decide_rules(specs: List[dict], line: dict) -> Tuple[Optional[dict], List[di
 def explain(s: dict, line: dict) -> dict:
     """Why a rule does / doesn't match one line: each condition true / false, money in / out, the bank account."""
     def one(c):
-        d = {"text": describe({**s, "match": "all", "conditions": [c], "sign": None, "source_ids": []}),
+        d = {"text": describe({**s, "branches": [], "match": "all", "conditions": [c], "sign": None, "source_ids": []}),
              "ok": cond_ok(c, line) if _filled(c) else None}
         if c.get("field") == "group":
             d["parts"] = [one(x) for x in c.get("conditions") or [] if _filled(x)]
         return d
     sign_ok = not (s["sign"] == "in" and line["amount"] < 0 or s["sign"] == "out" and line["amount"] >= 0)
     src_ok = not s["source_ids"] or line.get("source_id") in s["source_ids"]
-    return {"matches": matches(s, line), "enabled": s["enabled"], "sign_ok": sign_ok, "source_ok": src_ok,
-            "match": s["match"], "conditions": [one(c) for c in s["conditions"] if _filled(c)]}
+    e = effective(s, line)
+    out = {"matches": e is not None, "enabled": s["enabled"], "sign_ok": sign_ok, "source_ok": src_ok,
+           "match": s["match"], "conditions": [one(c) for c in s["conditions"] if _filled(c)]}
+    if s.get("branches"):
+        out["branches"] = [{"label": b.get("label") or f"branch {i + 1}", "ok": _branch_ok(b, line), "account_id": b.get("account_id"),
+                            "conditions": [one(c) for c in b.get("conditions") or [] if _filled(c)]} for i, b in enumerate(s["branches"])]
+        out["branch"] = e.get("branch") if e else None
+    return out
 
 
 def parts(s: dict, amount: float) -> List[Tuple[int, float]]:
@@ -262,7 +310,7 @@ def describe(s: dict, names: Optional[Dict[int, str]] = None) -> str:
     for c in s["conditions"]:
         f, op, v = c.get("field") or "text", c.get("op") or "contains", c.get("value")
         if f == "group":
-            inner = describe({**s, "match": c.get("match") or "all", "conditions": c.get("conditions") or [], "sign": None, "source_ids": []})
+            inner = describe({**s, "branches": [], "match": c.get("match") or "all", "conditions": c.get("conditions") or [], "sign": None, "source_ids": []})
             bits.append(f"{'not ' if c.get('not') else ''}({inner})")
             continue
         if f in DATE_FIELDS:
@@ -275,6 +323,12 @@ def describe(s: dict, names: Optional[Dict[int, str]] = None) -> str:
         else:
             bits.append(f"{FIELDS.get(f, f)} {TEXT_OPS.get(op, op)} {v}")
     joined = (" and " if s["match"] != "any" else " or ").join(bits)
+    if s.get("branches"):
+        bs = []
+        for i, b in enumerate(s["branches"]):
+            inner = describe({**s, "branches": [], "match": b.get("match") or "all", "conditions": b.get("conditions") or [], "sign": None, "source_ids": []})
+            bs.append(f"{'if' if i == 0 else 'else if'} {inner}" if inner else "otherwise")
+        joined = (joined + " · then " if joined else "") + "; ".join(bs)
     pre = {"in": "Money in · ", "out": "Money out · "}.get(s["sign"] or "", "")
     if s["source_ids"] and names:
         pre += ", ".join(names.get(i, "?") for i in s["source_ids"]) + " · "
@@ -284,11 +338,24 @@ def describe(s: dict, names: Optional[Dict[int, str]] = None) -> str:
 def check(s: dict) -> Optional[str]:
     """What's wrong with a rule before saving it (None = fine)."""
     conds = [c for c in s["conditions"] if _filled(c)]
-    if not conds:
+    br = s.get("branches") or []
+    if not conds and not br:
         return "Add at least one condition with a value"
     err = _check_conds(conds)
     if err:
         return err
+    if br:
+        for i, b in enumerate(br):
+            bc = [c for c in b.get("conditions") or [] if _filled(c)]
+            if not bc and (i != len(br) - 1 or not conds):
+                return ("Only the last branch can be \"otherwise\"" if i != len(br) - 1
+                        else "An \"otherwise\" branch needs conditions on the rule itself (else it would take every line)")
+            err = _check_conds(bc)
+            if err:
+                return f"Branch {i + 1}: {err}"
+            if not b.get("account_id") and not b.get("splits"):
+                return f"Branch {i + 1}: pick the account"
+        return None
     if not s["account_id"] and not s["splits"]:
         return "Pick the account"
     pcts = [float(p["pct"]) for p in s["splits"] if p.get("pct") not in (None, "")]

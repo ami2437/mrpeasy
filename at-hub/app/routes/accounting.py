@@ -347,6 +347,8 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
     accounts, sources = A.maps(db)
     unfiled = [t for t in rows if (not t.account_id and not t.splits) or t.flag == "conflict"]
     sugg = A.suggestions(db, unfiled) if unfiled else {}
+    from app.services import acct_asks
+    asks = acct_asks.asks_for(db, [t.id for t in rows])
     out = []
     for t in rows:
         d = A.txn_dict(t, accounts, sources)
@@ -366,6 +368,8 @@ def txns(start: Optional[str] = None, end: Optional[str] = None, source_id: Opti
             d["balance"] = r["balance"][t.id]
         if t.id in r["in_account"]:
             d["in_account"] = r["in_account"][t.id]
+        if t.id in asks:
+            d["asks"] = asks[t.id]
         out.append(d)
     r.pop("balance")
     r.pop("in_account")
@@ -613,6 +617,9 @@ class RuleIn(BaseModel):
     enabled: Optional[bool] = True
     review: Optional[bool] = False  # files, but the line still waits in Review for a person
     wins: Optional[bool] = False  # wins when it disagrees with another rule
+    branches: Optional[List[dict]] = None  # [{label, match, conditions, account_id, splits, set_note}] -- the first that matches decides
+    replaces: Optional[List[int]] = None  # saving this rule replaces these (Combine Ticked)
+    id: Optional[int] = None  # the rule being changed (preview / story leave it out of "other rules")
 
 
 def _spec_in(body: RuleIn) -> dict:
@@ -627,6 +634,10 @@ def _spec_in(body: RuleIn) -> dict:
         s_["sign"] = None
     if s_["action"] not in ("file", "suggest"):
         s_["action"] = "file"
+    for b in s_["branches"]:
+        b["splits"] = [{"account_id": int(x["account_id"]), **({"pct": float(x["pct"])} if x.get("pct") not in (None, "") else {"amount": abs(float(x.get("amount") or 0))})}
+                       for x in (b.get("splits") or []) if x.get("account_id")]
+    s_["id"] = body.id
     return s_
 
 
@@ -645,8 +656,17 @@ def _rule_row(db: Session, r: AcctRule, s_: dict) -> None:
     r.set_payee, r.set_note = s_["set_payee"], s_["set_note"]
     r.action, r.enabled, r.sign = s_["action"], s_["enabled"], s_["sign"]
     r.review, r.wins = bool(s_.get("review")), bool(s_.get("wins"))
-    r.account_id = s_["account_id"] or s_["splits"][0]["account_id"]
-    r.contains = " / ".join(str(c["value"]) for c in s_["conditions"] if c.get("field") in acct_rules.TEXT_FIELDS)[:200]
+    r.branches = json.dumps(s_["branches"]) if s_.get("branches") else None
+    for b in s_.get("branches") or []:
+        for aid in [b.get("account_id")] + [x["account_id"] for x in b.get("splits") or []]:
+            if aid and not db.get(AcctAccount, aid):
+                raise HTTPException(status_code=400, detail="Account not found")
+    first_b = (s_.get("branches") or [{}])[0]
+    r.account_id = s_["account_id"] or (s_["splits"][0]["account_id"] if s_["splits"] else None) or first_b.get("account_id") or \
+        ((first_b.get("splits") or [{}])[0].get("account_id"))
+    texts = [str(c["value"]) for c in s_["conditions"] if c.get("field") in acct_rules.TEXT_FIELDS]
+    texts += [str(c["value"]) for b in s_.get("branches") or [] for c in b.get("conditions") or [] if c.get("field") in acct_rules.TEXT_FIELDS]
+    r.contains = " / ".join(texts)[:200]
     r.min_amount = r.max_amount = None  # the conditions say it now
 
 
@@ -654,6 +674,7 @@ def _rule_out(r: AcctRule, accounts, sources) -> dict:
     s_ = acct_rules.spec(r)
     return {**s_, "id": r.id, "hits": r.hits, "created_by": r.created_by, "contains": r.contains,
             "account": A.path(accounts[r.account_id], accounts) if r.account_id in accounts else "",
+            "branches": [{**b, "account": A.path(accounts[b["account_id"]], accounts) if b.get("account_id") in accounts else "split"} for b in s_.get("branches") or []],
             "splits": [{**x, "account": A.path(accounts[x["account_id"]], accounts) if x["account_id"] in accounts else "?"} for x in s_["splits"]],
             "summary": acct_rules.describe(s_, {k: v.name for k, v in sources.items()})}
 
@@ -687,6 +708,25 @@ def preview_rule(body: RuleIn, db: Session = Depends(get_db)):
     return res
 
 
+@router.post("/rules/story")
+def rule_story(body: RuleIn, db: Session = Depends(get_db)):
+    """What a rule (saved or not) will do -- in words, with counts per outcome and real example lines."""
+    s_ = _spec_in(body)
+    if not [c for c in s_["conditions"] if acct_rules._filled(c)] and not s_.get("branches"):
+        raise HTTPException(status_code=400, detail="Add a condition")
+    return M.rule_story(db, s_)
+
+
+class TickIn(BaseModel):
+    rule_ids: List[int]
+
+
+@router.post("/rule-combine-draft")
+def rule_combine_draft(body: TickIn, db: Session = Depends(get_db)):
+    """Ticked rules as one draft rule (ANY of their conditions; branches when they go to different accounts)."""
+    return M.combine_draft(db, body.rule_ids)
+
+
 class ExplainIn(BaseModel):
     rule: RuleIn
     txn_id: int
@@ -714,7 +754,14 @@ def add_rule(body: RuleIn, db: Session = Depends(get_db), user: User = Depends(g
     _rule_row(db, r, _spec_in(body))
     db.add(r)
     db.flush()
-    cid = CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" made", "rule", _who(user))
+    if body.replaces:  # Combine Ticked: the old rules go, their filed lines now belong to this one
+        old = [x for x in body.replaces if x != r.id]
+        db.query(AcctTxn).filter(AcctTxn.rule_id.in_(old)).update({AcctTxn.rule_id: r.id}, synchronize_session=False)
+        for x in db.query(AcctRule).filter(AcctRule.id.in_(old)).all():
+            r.hits = (r.hits or 0) + (x.hits or 0)
+            db.delete(x)
+        db.flush()
+    cid = CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" made" + (f" (replaces {len(body.replaces)})" if body.replaces else ""), "rule", _who(user))
     return {"id": r.id, "change_id": cid}
 
 
@@ -725,6 +772,14 @@ def edit_rule(rule_id: int, body: RuleIn, db: Session = Depends(get_db), user: U
         raise HTTPException(status_code=404, detail="Rule not found")
     snap = CH.start(db)
     _rule_row(db, r, _spec_in(body))
+    db.flush()
+    if body.replaces:  # Combine Ticked: the old rules go, their filed lines now belong to this one
+        old = [x for x in body.replaces if x != r.id]
+        db.query(AcctTxn).filter(AcctTxn.rule_id.in_(old)).update({AcctTxn.rule_id: r.id}, synchronize_session=False)
+        for x in db.query(AcctRule).filter(AcctRule.id.in_(old)).all():
+            r.hits = (r.hits or 0) + (x.hits or 0)
+            db.delete(x)
+        db.flush()
     cid = CH.finish(db, snap, f"Rule \"{r.name or r.contains}\" changed", "rule", _who(user))
     return {"id": r.id, "change_id": cid}
 
@@ -1248,6 +1303,7 @@ class ReconcileIn(BaseModel):
     tol_days: int = 5
     name: Optional[str] = None
     save: bool = True
+    register_rows: Optional[List[dict]] = None  # the full QuickBooks register (optional): where QuickBooks has an Only-In-AT-HUB line
 
 
 @router.get("/reconcile/map")
@@ -1267,11 +1323,12 @@ def reconcile_run(body: ReconcileIn, db: Session = Depends(get_db), user: User =
         else:
             mapping.pop(M._norm(k), None)
     M._save_setting(db, M.QB_MAP_KEY, mapping, _who(user))
-    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)))
+    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)), body.register_rows)
     rid = None
     if body.save:
         r = AcctReconcile(name=(body.name or "").strip() or None, account_ids=json.dumps(body.account_ids), start=A._dt(a), end=A._dt(b),
-                          qb_rows=json.dumps(body.rows), result=json.dumps({"counts": res["counts"], "totals": res["totals"]}), created_by=_who(user))
+                          qb_rows=json.dumps(body.rows), register_rows=json.dumps(body.register_rows) if body.register_rows else None,
+                          result=json.dumps({"counts": res["counts"], "totals": res["totals"]}), created_by=_who(user))
         db.add(r)
     db.commit()
     if body.save:
@@ -1295,7 +1352,7 @@ def reconcile_export(body: ReconcileIn, db: Session = Depends(get_db)):
     for k, v in (body.mapping or {}).items():
         if v:
             mapping[M._norm(k)] = int(v)
-    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)))
+    res = M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)), body.register_rows)
     return Response(M.reconcile_xlsx(res), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="Reconcile {a.isoformat()} to {b.isoformat()}.xlsx"'})
 
@@ -1304,12 +1361,12 @@ def reconcile_export(body: ReconcileIn, db: Session = Depends(get_db)):
 def reconcile_history(db: Session = Depends(get_db)):
     accounts, _ = A.maps(db)
     out = []
-    for r in db.query(AcctReconcile).order_by(AcctReconcile.id.desc()).limit(50).all():
+    for r in db.query(AcctReconcile).filter(AcctReconcile.deleted_at.is_(None)).order_by(AcctReconcile.id.desc()).limit(50).all():
         res = json.loads(r.result or "{}")
         out.append({"id": r.id, "name": r.name, "accounts": [A.path(accounts[i], accounts) for i in json.loads(r.account_ids or "[]") if i in accounts],
                     "account_ids": json.loads(r.account_ids or "[]"), "start": r.start.date().isoformat() if r.start else None,
                     "end": r.end.date().isoformat() if r.end else None, "counts": res.get("counts", {}), "lines": len(json.loads(r.qb_rows or "[]")),
-                    "created_by": r.created_by, "created_at": r.created_at})
+                    "register": bool(r.register_rows), "created_by": r.created_by, "created_at": r.created_at})
     return out
 
 
@@ -1319,7 +1376,83 @@ def reconcile_get(rec_id: int, db: Session = Depends(get_db)):
     if not r:
         raise HTTPException(status_code=404, detail="Not found")
     return {"id": r.id, "name": r.name, "account_ids": json.loads(r.account_ids or "[]"), "start": r.start.date().isoformat() if r.start else None,
-            "end": r.end.date().isoformat() if r.end else None, "rows": json.loads(r.qb_rows or "[]")}
+            "end": r.end.date().isoformat() if r.end else None, "rows": json.loads(r.qb_rows or "[]"),
+            "register_rows": json.loads(r.register_rows or "null")}
+
+
+class RecIdsIn(BaseModel):
+    ids: Optional[List[int]] = None
+    keep_newest: bool = False  # delete all but the newest check
+    name: Optional[str] = None
+
+
+@router.post("/reconcile/delete")
+def reconcile_delete(body: RecIdsIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Earlier checks out of the list (kept so Undo can bring them back); decisions on lines stay."""
+    q = db.query(AcctReconcile).filter(AcctReconcile.deleted_at.is_(None))
+    rows = q.order_by(AcctReconcile.id.desc()).all()
+    pick = rows[1:] if body.keep_newest else [r for r in rows if r.id in set(body.ids or [])]
+    for r in pick:
+        r.deleted_at, r.deleted_by = datetime.utcnow(), _who(user)
+    db.commit()
+    return {"deleted": [r.id for r in pick]}
+
+
+@router.post("/reconcile/restore")
+def reconcile_restore(body: RecIdsIn, db: Session = Depends(get_db)):
+    n = 0
+    for r in db.query(AcctReconcile).filter(AcctReconcile.id.in_(body.ids or [])).all():
+        r.deleted_at = r.deleted_by = None
+        n += 1
+    db.commit()
+    return {"restored": n}
+
+
+@router.put("/reconcile/{rec_id}")
+def reconcile_rename(rec_id: int, body: RecIdsIn, db: Session = Depends(get_db)):
+    r = db.get(AcctReconcile, rec_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Not found")
+    r.name = (body.name or "").strip() or None
+    db.commit()
+    return {"ok": True}
+
+
+class RecAddIn(BaseModel):
+    rows: List[dict]
+    source_id: Optional[int] = None
+
+
+@router.post("/reconcile/add")
+def reconcile_add(body: RecAddIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    """Only-in-QuickBooks lines into AT-HUB, all in one go (one Undo)."""
+    snap = CH.start(db)
+    ids = M.reconcile_add(db, body.rows, body.source_id, _who(user))
+    return {"added": len(ids), "ids": ids, "change_id": CH.finish(db, snap, f"{len(ids)} line(s) added from QuickBooks", "reconcile", _who(user))}
+
+
+def _rec_result(db: Session, body: "ReconcileIn"):
+    a, b = _period(db, body.start, body.end)
+    mapping = M.qb_map(db)
+    for k, v in (body.mapping or {}).items():
+        if v:
+            mapping[M._norm(k)] = int(v)
+    return a, b, M.reconcile(db, body.account_ids, a, b, body.rows, mapping, max(0, min(body.tol_days, 30)), body.register_rows)
+
+
+@router.post("/reconcile/fix")
+def reconcile_fix(body: ReconcileIn, db: Session = Depends(get_db)):
+    """The "Fix In QuickBooks" list: what to change in QuickBooks, one action per row."""
+    a, b, res = _rec_result(db, body)
+    acts = M.fix_actions(db, res)
+    return {"actions": acts, "labels": M.FIX_LABEL, "start": a.isoformat(), "end": b.isoformat()}
+
+
+@router.post("/reconcile/fix.xlsx")
+def reconcile_fix_xlsx(body: ReconcileIn, db: Session = Depends(get_db)):
+    a, b, res = _rec_result(db, body)
+    return Response(M.fix_xlsx(M.fix_actions(db, res), a, b), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Fix In QuickBooks {a.isoformat()} to {b.isoformat()}.xlsx"'})
 
 
 def _xlsx(sheets: list, filename: str) -> Response:
@@ -1431,3 +1564,92 @@ def qb_tails_apply(body: IdsIn, db: Session = Depends(get_db), user: User = Depe
     snap = CH.start(db)
     r = A.clean_tails(db, body.ids, _who(user))
     return {**r, "change_id": CH.finish(db, snap, f"QuickBooks' pasted text taken off {r['cleaned']} line(s)", "tails", _who(user))}
+
+
+# ---------------------------------------------------------------- Loans (services/acct_loans.py) -- first round, built up as the user tests
+from app.services import acct_loans as L  # noqa: E402
+
+
+@router.get("/loans-overview")
+def loans_overview(db: Session = Depends(get_db)):
+    return {"loans": L.overview(db), "kinds": {k: v[0] for k, v in L.KINDS.items()}, "moves_money": [k for k, v in L.KINDS.items() if v[1]]}
+
+
+@router.get("/loans/{account_id}")
+def loan_statement(account_id: int, db: Session = Depends(get_db)):
+    return {**L.statement(db, account_id), "schedule": L.schedule(db, account_id)}
+
+
+@router.put("/loans/{account_id}/details")
+def loan_details(account_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    snap = CH.start(db)
+    d = L.set_details(db, account_id, body)
+    return {"details": d, "change_id": CH.finish(db, snap, "Loan details changed", "loan", _who(user))}
+
+
+@router.post("/loans/{account_id}/events")
+def loan_event(account_id: int, body: dict, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    snap = CH.start(db)
+    e = L.add_event(db, account_id, body, _who(user))
+    label = L.KINDS.get(e.kind, (e.kind,))[0]
+    return {"id": e.id, "change_id": CH.finish(db, snap, f"Loan: {label}" + (f" {e.amount:,.2f}" if e.amount else ""), "loan", _who(user))}
+
+
+@router.delete("/loan-events/{event_id}")
+def loan_event_delete(event_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    snap = CH.start(db)
+    n = L.delete_event(db, event_id)
+    return {"removed_lines": n, "change_id": CH.finish(db, snap, "Loan event deleted", "loan", _who(user))}
+
+
+@router.get("/loans/{account_id}/interest")
+def loan_interest(account_id: int, to: Optional[str] = None, db: Session = Depends(get_db)):
+    return L.interest(db, account_id, A.parse_day(to) or A.today())
+
+
+@router.post("/loans/{account_id}/verify")
+async def loan_verify(account_id: int, file: UploadFile = File(...), tol_days: int = Form(5), db: Session = Depends(get_db)):
+    data = await _read(file)
+    return L.verify(db, account_id, data, file.filename, max(0, min(tol_days, 30)))
+
+
+@router.get("/loans/{account_id}/export.xlsx")
+def loan_export(account_id: int, db: Session = Depends(get_db)):
+    st = L.statement(db, account_id)
+    return Response(L.statement_xlsx(db, account_id), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="Loan {st["account"]["name"]}.xlsx"'})
+
+
+# ---------------------------------------------------------------- ask a partner to check a line (services/acct_asks.py)
+from app.services import acct_asks as Q  # noqa: E402
+
+
+@router.get("/ask/users")
+def ask_users(db: Session = Depends(get_db)):
+    return Q.who_can_answer(db)
+
+
+class AskIn(BaseModel):
+    ids: List[int]
+    to_user: str
+    text: Optional[str] = None
+
+
+@router.post("/txns/ask")
+def ask_partner(body: AskIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return {"asked": Q.ask(db, body.ids, body.to_user, body.text, _who(user))}
+
+
+class AnswerIn(BaseModel):
+    status: str  # yes | no | replied | withdrawn
+    reply: Optional[str] = None
+
+
+@router.post("/asks/{ask_id}/answer")
+def ask_answer(ask_id: int, body: AnswerIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return Q.answer(db, ask_id, body.status, body.reply, user)
+
+
+@router.get("/asks/waiting")
+def asks_waiting(mine: bool = True, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return Q.waiting(db, user, mine)

@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
   <script src="accounting-more.js"></script>
+  <script src="accounting-loans.js"></script>
   <style>
     .ac-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .ac-top .tabs { margin: 0; flex-wrap: wrap; order: 3; flex-basis: 100%; width: auto; max-width: 100%; box-sizing: border-box; }
@@ -116,6 +117,11 @@
     .ac-amtpop { position: absolute; z-index: 60; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 8px; display: grid; gap: 6px; font-size: 12.5px; width: 210px; }
     .ac-amtpop input, .ac-amtpop select { width: 100%; }
     .pj-grid td:nth-child(2) { min-width: 200px; }
+    .ac-ask { margin-top: 4px; font-size: 12px; } .ac-chip.ok { background: #dcfce7; color: #166534; } :root[data-theme="dark"] .ac-chip.ok { background: #14361f; color: #86efac; }
+    .rb-branch { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 8px; margin-bottom: 8px; background: var(--surface-2); }
+    .rb-branch .rb-cond { grid-template-columns: 180px 150px 1fr 130px 34px; }
+    .ac-story { margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); font-size: 12.5px; }
+    .ac-story mark { padding: 0 2px; border-radius: 3px; }
     .ac-totbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 7px 10px; margin: 0 0 8px;
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow); }
     .ac-totbar strong { font-size: 14px; }
@@ -242,10 +248,13 @@
       e.stopPropagation(); const id = +b.dataset.i.slice(1);
       b.closest(".modal-backdrop").remove(); undoChange(id);
     }, true);
-    async function show(tab) {
+    async function show(tab, fromBack = false) {
       if (tab === "inbox") tab = "review";  // the old name ("To File")
       if (!LOADERS[tab]) tab = "overview";
-      TAB = tab; store.set("tab", tab); history.replaceState(null, "", "#" + tab); drawTabs();
+      if (tab !== "loans") LOAN_OPEN = null;
+      // Back walks the tabs (each tab is its own history entry), then leaves the page
+      if (!fromBack) { if (location.hash === "#" + tab) history.replaceState({ tab }, "", "#" + tab); else history.pushState({ tab }, "", "#" + tab); }
+      TAB = tab; store.set("tab", tab); drawTabs();
       view().innerHTML = `<div class="card"><p class="muted">Loading…</p></div>`;
       try {
         await LOADERS[tab]();
@@ -306,7 +315,8 @@
         t.origin === "workbook" ? `<span class="ac-chip">Workbook</span>` : "",
         t.hint ? `<span class="ac-chip" title="The file's own category for this line">${escapeHtml(t.hint.slice(0, 40))}</span>` : "",
         t.sent_back ? `<span class="ac-chip back" title="Sent back by ${escapeHtml(t.sent_back_by || "")}${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason) : ""}">Sent Back${t.sent_back_reason ? ": " + escapeHtml(t.sent_back_reason.slice(0, 40)) : ""}</span>` : "",
-        t.flag ? `<span class="ac-chip ${t.flag === "check" ? "check" : "flag"}" title="${escapeHtml((t.flag_info || {}).reason || "")}">${escapeHtml(FLAG_LABEL[t.flag] || "Flagged")}</span>` : ""].join("");
+        t.flag ? `<span class="ac-chip ${t.flag === "check" ? "check" : "flag"}" title="${escapeHtml((t.flag_info || {}).reason || "")}">${escapeHtml(FLAG_LABEL[t.flag] || "Flagged")}</span>` : "",
+        askChip(t)].join("");
       const filed = t.splits.length ? t.splits.map(s => `<div>${escapeHtml(s.account)} <span class="muted">${fmtMoney(s.amount)}</span></div>`).join("")
         : `<select class="ac-pick" onchange="fileOne(${t.id}, this, ${t.amount})">${accountOptions(t.account_id, { blank: t.account_id ? "— None —" : "— Pick an account —", sign: t.amount })}</select>`;
       const sugg = !t.account_id && !t.splits.length && t.suggest ? (t.suggest.split
@@ -324,7 +334,7 @@
         <td class="nowrap">${day(t.date)}<div class="muted small">${escapeHtml(t.source)}</div></td>
         <td><span class="ac-who">${escapeHtml(t.payee || "")}</span>${chips}<div class="ac-desc">${escapeHtml(t.description)}</div>${t.qb_memo ? `<div class="ac-memo" title="Text QuickBooks pasted after the bank's wording — not the bank's, not used by rules or search">QuickBooks added: ${escapeHtml(t.qb_memo)}</div>` : ""}
           ${t.bank_description && t.bank_description !== t.description ? `<div class="ac-desc">Bank: ${escapeHtml(t.bank_description)}</div>` : ""}
-          <div class="ac-lnote" style="${t.note ? "" : "display:none;"}"><textarea rows="1" placeholder="Note for this line…" data-id="${t.id}" onchange="saveLineNote(this)">${escapeHtml(t.note || "")}</textarea></div></td>
+          ${(t.asks || []).filter(a => a.reply).slice(-1).map(a => `<div class="ac-ask">${icon("user")} <strong>${escapeHtml(a.to_name)}:</strong> ${escapeHtml(a.reply)}</div>`).join("")}<div class="ac-lnote" style="${t.note ? "" : "display:none;"}"><textarea rows="1" placeholder="Note for this line…" data-id="${t.id}" onchange="saveLineNote(this)">${escapeHtml(t.note || "")}</textarea></div></td>
         <td style="min-width:200px;">${kd ? `<span class="ac-dot k-${kd}" title="${escapeHtml(KIND_LABEL()[kd] || "")}"></span>` : ""}${filed}${sugg}${clash}${looks}</td>
         <td class="ac-amt">${money(t.amount)}${t.in_account != null ? `<div class="small" title="Only this part of the split line is in the account shown — that's what the totals count">in this account: <strong>${fmtMoney(t.in_account)}</strong></div>` : ""}${t.balance != null ? `<div class="muted small" title="Bank balance after this line">${fmtMoney(t.balance)}</div>` : ""}</td>
         <td class="nowrap"><button type="button" class="icon-btn note-btn ${t.note ? "has-note" : ""}" title="${t.note ? "Edit this line's note" : "Add a note to this line"}" onclick="toggleAcNote(this)">${icon("notePen")}</button>${t.account_id || t.splits.length ? `<button class="small-btn icon-only" title="Send back to Review" onclick="sendBack([${t.id}])">${icon("undo")}</button>` : ""}<button class="small-btn icon-only" title="Make a rule from this line" onclick="ruleFromLine(${t.id})">${icon("sliders")}</button><button class="small-btn icon-only" title="Which rules match this line, and why" onclick="lineRules(${t.id})">${icon("search")}</button>
@@ -339,6 +349,45 @@
       const h = HOW[t.how]; return h && t.account_id ? `<span class="ac-how ${t.how}" title="${h[2]}">${icon(h[1])}${h[0]}</span>` : "";
     }
     let JUST_MOVED = new Set();
+    function askChip(t) {
+      const a = (t.asks || []).slice(-1)[0]; if (!a) return "";
+      const cls = { open: "check", yes: "ok", no: "flag", replied: "", withdrawn: "" }[a.status] || "";
+      const label = a.status === "open" ? `Asked ${a.to_name}` : a.status === "yes" ? `${a.to_name}: Received ✓` : a.status === "no" ? `${a.to_name}: No` : a.status === "replied" ? `${a.to_name} Replied` : "Ask Withdrawn";
+      const tip = (t.asks || []).map(x => `${x.asked_by} asked ${x.to_name}: ${x.text || ""}${x.reply ? ` — ${x.to_name}: ${x.reply}` : ""} (${x.status_label})`).join("\n");
+      return `<span class="ac-chip ${cls}" title="${escapeHtml(tip)}">${icon("user")} ${escapeHtml(label)}</span>`;
+    }
+    async function askPartner(ids) {
+      if (!ids.length) return;
+      let users = [];
+      try { users = await apiFetch("/api/accounting/ask/users"); } catch (e) { alert(e.message); return; }
+      const me = (AuthGuard.getUser && AuthGuard.getUser()) || {};
+      const { value, el } = await askDialog({ title: `Ask A Partner To Check ${ids.length === 1 ? "This Line" : ids.length + " Lines"}`, body: `<div class="ac-form">
+          <label>Ask</label><select id="ak-to">${users.filter(u => u.username !== me.username).map(u => `<option value="${escapeHtml(u.username)}">${escapeHtml(u.name)}</option>`).join("")}</select>
+          <label>Note To Them</label><textarea id="ak-text" rows="3" placeholder="e.g. Did you receive this 6,200 wire? What was it for?"></textarea></div>
+        <p class="muted small">They get it on their To-Do and under <strong>Waiting For You</strong> on Accounting, and answer Received / No / with a note. The line shows the answer.</p>`,
+        buttons: [{ label: "Ask", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+      if (!value) return;
+      try { const r = await apiFetch("/api/accounting/txns/ask", { method: "POST", body: JSON.stringify({ ids, to_user: el.querySelector("#ak-to").value, text: el.querySelector("#ak-text").value }) });
+        toast(`Asked about ${r.asked} line(s)`); TICKED.clear(); await reloadLines(); } catch (e) { alert(e.message); }
+    }
+    async function waitingCard() {
+      const box = document.getElementById("ask-card"); if (!box) return;
+      let rows = [];
+      try { rows = await apiFetch("/api/accounting/asks/waiting"); } catch { return; }
+      if (!rows.length) { box.style.display = "none"; return; }
+      box.style.display = "";
+      box.innerHTML = `<div class="ac-filters"><h3 style="margin:0;">${icon("user")} Waiting For You</h3><span class="ac-chip flag">${rows.length}</span><span class="muted small">your partner asked you to check these</span></div>
+        <table class="compact-table no-table-tools"><thead><tr><th>Date</th><th>Line</th><th class="num">Amount</th><th>Their Note</th><th>Your Answer</th></tr></thead><tbody>
+        ${rows.map(a => `<tr><td class="nowrap">${day(a.txn.date)}</td><td><span class="ac-who">${escapeHtml(a.txn.payee || "")}</span><div class="ac-desc">${escapeHtml(a.txn.description)}</div><div class="muted small">${escapeHtml(a.txn.account || "not filed")}</div></td>
+          <td class="ac-amt">${money(a.txn.amount)}</td><td class="small"><strong>${escapeHtml(a.asked_by || "")}:</strong> ${escapeHtml(a.text || "")}</td>
+          <td class="nowrap"><input id="ar-${a.id}" placeholder="a note back (optional)" style="width:170px;"><div class="btn-row" style="margin-top:4px;">
+            <button class="small-btn primary" onclick="answerAsk(${a.id}, 'yes')">Yes, Received</button><button class="small-btn" onclick="answerAsk(${a.id}, 'no')">No</button>
+            <button class="small-btn" onclick="answerAsk(${a.id}, 'replied')">Just Reply</button></div></td></tr>`).join("")}</tbody></table>`;
+    }
+    async function answerAsk(id, status) {
+      try { await apiFetch(`/api/accounting/asks/${id}/answer`, { method: "POST", body: JSON.stringify({ status, reply: (document.getElementById("ar-" + id) || {}).value || "" }) }); toast("Answered — thank you"); waitingCard(); reloadLines(); }
+      catch (e) { alert(e.message); }
+    }
     function toggleAcNote(btn) {
       const box = btn.closest("tr").querySelector(".ac-lnote"); if (!box) return;
       const show = box.style.display === "none"; box.style.display = show ? "" : "none"; if (show) box.querySelector("textarea").focus();
@@ -394,6 +443,7 @@
         <button class="small-btn" onclick="bulkDo('review')" title="Keep the account AT-HUB / a rule picked (and take the flag off)">Looks Right</button>
         <button class="small-btn" onclick="sendBack([...TICKED])" title="Out of its account, back to Review (where it was is kept as the suggestion)">Send Back To Review</button>
         <button class="small-btn" onclick="ruleFromTicked()" title="A rule from the words the ticked lines share">Make A Rule</button>
+        <button class="small-btn" onclick="askPartner([...TICKED])" title="Ask a partner to check them (did you receive this?)">${icon("user")} Ask A Partner…</button>
         <button class="small-btn danger" onclick="bulkDo('delete')" title="Typed-in lines only">Delete</button>
         <button class="small-btn" onclick="TICKED.clear();drawLines()">Clear</button>`;
     }
@@ -523,10 +573,11 @@
     async function showMoved() {
       if (!LAST_MOVE) return;
       const d = await apiFetch(`/api/accounting/txns?${new URLSearchParams({ ids: LAST_MOVE.ids.join(","), limit: 2000 })}`);
-      await pickLines({ title: "The Lines That Moved", intro: LAST_MOVE.msg, groups: [{ label: "Moved", lines: d.rows, ticked: null }], apply: "Close" });
+      const r = await pickLines({ title: "The Lines That Moved", intro: LAST_MOVE.msg, groups: [{ label: "Moved", lines: d.rows, ticked: null }], apply: "Open In Transactions" });
+      if (r) { TXF = { ids: LAST_MOVE.ids.join(","), all_dates: true }; show("txns"); }
     }
     let LINES_MODE = "txns";
-    const TXF_KEYS = ["q", "source_id", "kind", "account_id", "status", "amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group"];
+    const TXF_KEYS = ["q", "source_id", "kind", "account_id", "status", "amin", "amax", "amt", "sign", "date_from", "date_to", "all_dates", "has_note", "how", "sort", "group", "ids"];
     function txParams(extra = {}) {
       const p = {};
       if (LINES_MODE === "inbox") Object.assign(p, { status: "review", all_dates: true }, TXF.sort ? { sort: TXF.sort } : {});
@@ -541,13 +592,14 @@
       drawLines();
     }
     const FILTER_LABELS = { q: "Search", source_id: "Bank", kind: "Type", account_id: "Account", status: "Status", amin: "From $", amax: "To $", amt: "Exactly $", sign: "Money",
-      date_from: "From", date_to: "To", all_dates: "All dates", has_note: "Has a note", how: "Filed by", group: "Grouped by" };
+      date_from: "From", date_to: "To", all_dates: "All dates", has_note: "Has a note", how: "Filed by", group: "Grouped by", ids: "Just these lines" };
     function filterValue(k, v) {
       if (k === "source_id") return (META.sources.find(s => s.id == v) || {}).name || v;
       if (k === "account_id") return (acc(+v) || {}).path || v;
       if (k === "kind") return KIND_LABEL()[v] || v;
       if (k === "sign") return v === "in" ? "in" : "out";
       if (k === "all_dates" || k === "has_note") return "yes";
+      if (k === "ids") return `${String(v).split(",").length}`;
       return v;
     }
     function drawLines() {
@@ -670,7 +722,7 @@
     async function tabInbox() {
       LINES_MODE = "inbox"; TICKED.clear(); TXF = {};
       TXF = {};
-      view().innerHTML = `<div class="card" id="sugg-card" style="display:none;"></div><div class="card"><h3 style="margin-top:0;">Review</h3>
+      view().innerHTML = `<div class="card" id="ask-card" style="display:none;"></div><div class="card" id="sugg-card" style="display:none;"></div><div class="card"><h3 style="margin-top:0;">Review</h3>
         <p class="ac-help">Lines with no account yet, and lines waiting for a look even though they're filed — <span class="ac-chip flag">Rules Disagree</span>,
           <span class="ac-chip check">Filed By Rule — Check</span>, <span class="ac-chip flag">Split In QuickBooks</span>, flagged from Reconcile — flagged ones first (every date).
           Click a suggestion to accept it, or pick an account — each one you file teaches AT-HUB. A flagged line that's right: <strong>Looks Right</strong>.</p>
@@ -680,6 +732,7 @@
         <div id="ac-lines"><p class="muted">Loading…</p></div></div>`;
       drawSession();
       await reloadLines();
+      waitingCard();
       apiFetch("/api/accounting/rule-suggestions").then(x => { SUGG = x; const c = document.getElementById("sugg-card"); if (c && x.length) c.style.display = ""; redrawSugg(); }).catch(() => {});
     }
     async function acceptAll() {
@@ -761,7 +814,7 @@
         ${t.flag ? `<p class="small" style="margin-top:8px;"><span class="ac-chip flag">${escapeHtml(FLAG_LABEL[t.flag] || "Flagged")}</span> ${escapeHtml((t.flag_info || {}).reason || "")}</p>` : ""}
         ${t.created_by ? `<p class="muted small" style="margin-top:10px;">${manual ? "Typed in" : "Brought in"} by ${escapeHtml(t.created_by)}${t.updated_by ? ` · last changed by ${escapeHtml(t.updated_by)}` : ""}</p>` : ""}`;
       const buttons = [{ label: "Save", value: "save", cls: "primary" }, { label: "Cancel", value: null }];
-      buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" }, { label: "Rules For It", value: "rules" });
+      buttons.splice(1, 0, { label: "Make A Rule…", value: "rule" }, { label: "Rules For It", value: "rules" }, { label: "Ask A Partner…", value: "ask" });
       if (t.flag && (t.account_id || t.splits.length)) buttons.splice(1, 0, { label: "Looks Right", value: "ok" });
       if (t.account_id || t.splits.length) buttons.splice(2, 0, { label: "Send Back To Review", value: "back" });
       if (manual) buttons.push({ label: "Delete Line", value: "delete", cls: "danger" });
@@ -808,6 +861,7 @@
       try {
         if (value === "back") { await sendBack([t.id]); return; }
         if (value === "rules") { await lineRules(t.id); return; }
+        if (value === "ask") { await askPartner([t.id]); return; }
         if (value === "ok") { await clearFlag([t.id]); return; }
         if (value === "rule") { await newRule({ contains: ruleWords(t.bank_description || t.description), account_id: t.account_id, sign: t.amount < 0 ? "out" : "in" }); return; }
         if (value === "delete") { await apiFetch(`/api/accounting/txns/${id}`, { method: "DELETE" }); toast("Deleted"); }
@@ -967,13 +1021,17 @@
         <p class="ac-help">Rules come before anything AT-HUB learned. When two rules match one line and say different things, <strong>neither files it</strong> — it waits in Review
           with a red <span class="ac-chip flag">Rules Disagree</span> flag, unless one of them is set to win. A rule can file by itself, file but still be reviewed, or only suggest.
           Saving one shows every line it matches — tick all, some or one and apply. Drag (⋮⋮) or ↑ ↓ to order them.</p>
-        <table class="compact-table no-table-tools" id="rules-table"><thead><tr><th style="width:62px;">Order</th><th>On</th><th>Rule</th><th>Then</th><th class="num">Used</th><th></th></tr></thead><tbody>
-        ${rules.map((r, i) => `<tr draggable="true" data-rule="${r.id}" ${r.enabled ? "" : 'style="opacity:.55"'}>
+        <div class="ac-filters"><input type="search" id="rule-q" placeholder="Search rules — e.g. jason (words, names, accounts)" oninput="filterRules()" style="flex:1;max-width:420px;">
+          <button class="small-btn" id="rule-comb" onclick="combineTicked()" disabled title="One rule from the ticked ones: ANY of their words; branches if they go to different accounts">Combine Ticked</button>
+          <span class="muted small" id="rule-n"></span></div>
+        <table class="compact-table no-table-tools" id="rules-table"><thead><tr><th><input type="checkbox" title="Tick all shown" onchange="document.querySelectorAll('#rules-table tr[data-rule]').forEach(tr => { if (tr.style.display !== 'none') tr.querySelector('.rl-t').checked = this.checked; });ruleTicks()"></th><th style="width:62px;">Order</th><th>On</th><th>Rule</th><th>Then</th><th class="num">Used</th><th></th></tr></thead><tbody>
+        ${rules.map((r, i) => `<tr draggable="true" data-rule="${r.id}" data-text="${escapeHtml(((r.name || "") + " " + r.summary + " " + r.account + " " + (r.branches || []).map(b => b.account).join(" ")).toLowerCase())}" ${r.enabled ? "" : 'style="opacity:.55"'}>
+          <td><input type="checkbox" class="rl-t" value="${r.id}" onchange="ruleTicks()"></td>
           <td class="nowrap"><span class="ac-grip" title="Drag to change the order">⋮⋮</span>${i + 1}
             <button class="small-btn icon-only" title="Up" onclick="moveRule(${r.id}, -1)" ${i ? "" : "disabled"}>↑</button><button class="small-btn icon-only" title="Down" onclick="moveRule(${r.id}, 1)" ${i < rules.length - 1 ? "" : "disabled"}>↓</button></td>
           <td><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="ruleOnOff(${r.id}, this.checked)" title="Switch the rule on / off"></td>
           <td>${r.name ? `<strong>${escapeHtml(r.name)}</strong><div class="small">${escapeHtml(r.summary)}</div>` : escapeHtml(r.summary)}</td>
-          <td>${r.splits.length ? `Split: ${r.splits.map(x => `${escapeHtml(x.account)} ${x.pct != null ? x.pct + "%" : fmtMoney(x.amount)}`).join(", ")}${r.account ? `, rest ${escapeHtml(r.account)}` : ""}` : escapeHtml(r.account)}
+          <td>${(r.branches || []).length ? r.branches.map((b, k) => `<div class="small">${k + 1}. → <strong>${escapeHtml(b.account)}</strong></div>`).join("") : r.splits.length ? `Split: ${r.splits.map(x => `${escapeHtml(x.account)} ${x.pct != null ? x.pct + "%" : fmtMoney(x.amount)}`).join(", ")}${r.account ? `, rest ${escapeHtml(r.account)}` : ""}` : escapeHtml(r.account)}
             ${r.set_payee ? `<div class="muted small">payee: ${escapeHtml(r.set_payee)}</div>` : ""}${r.set_note ? `<div class="muted small">note: ${escapeHtml(r.set_note)}</div>` : ""}
             ${r.action === "suggest" ? ` <span class="ac-chip">Suggests Only</span>` : ""}${r.review ? ` <span class="ac-chip check" title="Files the line, but it waits in Review until someone says it's right">Still Reviewed</span>` : ""}${r.wins ? ` <span class="ac-chip" title="Wins when it disagrees with another rule">Wins</span>` : ""}</td>
           <td class="num">${r.filed_lines || r.hits}${r.filed_total ? `<div class="muted small">${fmtMoney(r.filed_total)}</div>` : ""}</td>
@@ -981,7 +1039,7 @@
             <button class="small-btn icon-only" title="Change rule" onclick="newRule(RULES.find(x => x.id === ${r.id}))">${icon("pencil")}</button>
             <button class="small-btn icon-only" title="Copy rule" onclick="copyRule(${r.id})">${icon("layers")}</button>
             <button class="small-btn icon-only" title="Delete rule" onclick="deleteRule(${r.id})">${icon("trash")}</button></td></tr>`).join("")
-          || `<tr><td colspan="6" class="muted">No rules — AT-HUB is going on what it learned.</td></tr>`}</tbody></table></div>
+          || `<tr><td colspan="7" class="muted">No rules — AT-HUB is going on what it learned.</td></tr>`}</tbody></table></div>
       <div class="card" id="rc-card"><p class="muted small">Checking rules for conflicts…</p></div>
       <div class="card" id="cb-card" style="display:none;"></div>
       <div class="card" id="rh-card" style="display:none;"></div>
@@ -1160,7 +1218,9 @@
           <h4 style="margin:10px 0 4px;">${g.ticked !== null ? `<input type="checkbox" class="pl-grp" data-g="${gi}" ${g.ticked ? "checked" : ""} title="Tick all in this group"> ` : ""}${escapeHtml(g.label)} <span class="muted small">${g.lines.length} ${g.lines.length === 1 ? "line" : "lines"} · ${fmtMoney(g.lines.reduce((a, t) => a + t.amount, 0))}${g.hint ? " · " + escapeHtml(g.hint) : ""}</span></h4>
           <table class="compact-table no-table-tools" data-g="${gi}"><thead><tr><th></th><th>Date</th><th>Line</th><th>Now In</th><th class="num">Amount</th></tr></thead><tbody>${g.lines.map(t => row(t, g.ticked !== null, g.ticked)).join("")}</tbody></table>`).join("") || `<p class="muted">No lines.</p>`}</div>
         <div class="ac-pick-sum" id="pl-sum"></div>`;
-      const dlg = askDialog({ title, body, buttons: [{ label: apply, value: "apply", cls: "primary" }, { label: "Close", value: null }], wide: true });
+      const tickable = groups.some(g => g.ticked !== null && g.lines.length) || !!target;
+      const btns = tickable || (apply && apply !== "Close") ? [{ label: apply, value: "apply", cls: "primary" }, { label: "Close", value: null }] : [{ label: "Close", value: null }];
+      const dlg = askDialog({ title, body, buttons: btns, wide: true });
       setTimeout(() => {
         const box = [...document.querySelectorAll(".ask-dialog")].pop();
         if (!box) return;
@@ -1168,7 +1228,7 @@
         const upd = () => {
           const t = [...box.querySelectorAll(".pl-tick:checked")]; const sum = t.reduce((a, c) => a + (+c.dataset.amt || 0), 0);
           const all = box.querySelectorAll(".pl-tick").length;
-          if (!all) { btn.textContent = apply; btn.disabled = false; }
+          if (!all) { if (btn && btn.textContent !== "Close") { btn.textContent = apply; btn.disabled = false; } }
           else { btn.textContent = `${apply} ${t.length} Ticked · ${fmtMoney(sum)}`; btn.disabled = !t.length; }
           const sel = box.querySelector("#pl-to"), d = sel && sel.value && sel.value !== "new" ? acc(+sel.value) : destAcc;
           const s_ = box.querySelector("#pl-sum");
@@ -1217,6 +1277,26 @@
       return (desc || "").toUpperCase().replace(/REF ?#\s?\S+|#\S+/g, " ").split(/\s+/).filter(w => w && !/\d/.test(w) && !["ON", "TO", "FROM"].includes(w)).slice(0, 3).join(" ");
     }
     async function exportRules() { try { await downloadFile("/api/accounting/rules-export.xlsx", "Accounting Rules.xlsx"); } catch (e) { alert(e.message); } }
+    function filterRules() {
+      const q = (document.getElementById("rule-q").value || "").trim().toLowerCase(), words = q.split(/\s+/).filter(Boolean);
+      let n = 0;
+      document.querySelectorAll("#rules-table tr[data-rule]").forEach(tr => { const ok = words.every(w => tr.dataset.text.includes(w)); tr.style.display = ok ? "" : "none"; if (ok) n++; });
+      document.getElementById("rule-n").textContent = q ? `${n} of ${RULES.length} rules` : "";
+    }
+    function ruleTicks() {
+      const n = document.querySelectorAll("#rules-table .rl-t:checked").length, b = document.getElementById("rule-comb");
+      if (b) { b.disabled = n < 2; b.textContent = n >= 2 ? `Combine ${n} Ticked` : "Combine Ticked"; }
+    }
+    async function combineTicked() {
+      const ids = [...document.querySelectorAll("#rules-table .rl-t:checked")].map(c => +c.value);
+      try {
+        const d = await apiFetch("/api/accounting/rule-combine-draft", { method: "POST", body: JSON.stringify({ rule_ids: ids }) });
+        await newRule({ ...d.draft, replaces: d.replaces, _intro: `<div class="ac-pick-head"><strong>Combining ${d.replaces.length} rules</strong> into this one —
+          ${d.same_account ? "they all go to the same account, so it's ANY of their words." : "they go to different accounts, so each is a branch (the first branch that matches decides)."}
+          Lines now: <strong>${d.lines_before}</strong> · with this rule: <strong>${d.lines_after}</strong>${d.only_before || d.only_after ? ` <span class="neg">(${d.only_before} only before, ${d.only_after} only after)</span>` : " — the very same lines"}.
+          Saving replaces the ${d.replaces.length} rules (Undo brings them back).</div>` });
+      } catch (e) { alert(e.message); }
+    }
     async function ruleOnOff(id, on) { const r = await apiFetch(`/api/accounting/rules/${id}/enabled`, { method: "PUT", body: JSON.stringify({ enabled: on }) }); doneToast(on ? "Rule on" : "Rule off", r.change_id); show("accounts"); }
     async function copyRule(id) { const r = await apiFetch(`/api/accounting/rules/${id}/copy`, { method: "POST" }); toast("Copied — the copy starts switched off"); await show("accounts"); newRule((await apiFetch("/api/accounting/rules")).find(x => x.id === r.id)); }
     async function saveRuleOrder(ids) { const r = await apiFetch("/api/accounting/rules-order", { method: "PUT", body: JSON.stringify({ ids }) }); doneToast("Order saved", r.change_id); show("accounts"); }
@@ -1269,7 +1349,16 @@
         <input class="rb-sv" type="number" step="0.01" value="${x.pct ?? x.amount ?? ""}" placeholder="0"><select class="rb-st"><option value="pct" ${x.amount != null && x.pct == null ? "" : "selected"}>%</option><option value="amount" ${x.amount != null && x.pct == null ? "selected" : ""}>$</option></select>
         <button type="button" class="small-btn icon-only rb-x" title="Remove">${icon("x")}</button></div>`;
       const banks = META.sources.filter(s => s.kind !== "book");
-      const body = `<div class="ac-form">
+      const branchRow = (b = { match: "all", conditions: [{ field: "text", op: "contains", value: "" }] }) => `<div class="rb-branch">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;"><strong class="rb-bno"></strong>
+            <select class="rb-bmatch" style="width:auto;"><option value="all" ${b.match !== "any" ? "selected" : ""}>ALL of these</option><option value="any" ${b.match === "any" ? "selected" : ""}>ANY of these</option></select>
+            <label class="inline-check small"><input type="checkbox" class="rb-other" ${(b.conditions || []).length ? "" : "checked"}> Otherwise (everything else the rule catches)</label>
+            <span style="flex:1"></span><button type="button" class="small-btn icon-only rb-bup" title="Move up">↑</button><button type="button" class="small-btn rb-badd">${icon("plus")} Condition</button>
+            <button type="button" class="small-btn icon-only rb-bx" title="Remove branch">${icon("x")}</button></div>
+          <div class="rb-bconds">${(b.conditions || []).map(condRow).join("")}</div>
+          <div class="ac-form" style="margin-top:6px;"><label>Then Put It In</label><select class="rb-bacc">${accountOptions(b.account_id || null)}</select>
+            <label>Add Note</label><input class="rb-bnote" value="${escapeHtml(b.set_note || "")}" placeholder="optional"></div></div>`;
+      const body = `${r._intro || ""}<div class="ac-form">
           <label>Name</label><input id="rb-name" value="${escapeHtml(r.name || "")}" placeholder="optional, e.g. Saul's pay">
           <label>Money</label><select id="rb-sign"><option value="">In or out</option><option value="out" ${r.sign === "out" ? "selected" : ""}>Money out</option><option value="in" ${r.sign === "in" ? "selected" : ""}>Money in</option></select>
           <label>Bank Accounts</label><div>${banks.map(s => `<label class="inline-check" style="margin-right:10px;"><input type="checkbox" class="rb-src" value="${s.id}" ${(r.source_ids || []).includes(s.id) ? "checked" : ""}> ${escapeHtml(s.name)}</label>`).join("")}<span class="muted small">none ticked = all</span></div>
@@ -1279,10 +1368,15 @@
         <button type="button" class="small-btn" id="rb-addc">${icon("plus")} Condition</button> <button type="button" class="small-btn" id="rb-addg" title="(A or B) and not C">${icon("plus")} Group</button>
         <p class="muted small" style="margin:6px 0 10px;">Whole words, any order — "SAUL" won't match "SAULT". Put words in "quotes" to need them side by side. "Contains any of / none of" take a comma list:
           SAUL, FAUSTINO. "Anywhere" and "Bank Description" never read QuickBooks' pasted text — pick <em>QuickBooks Memo</em> for that. A group has its own ANY / ALL (and can be a NOT).</p>
-        <div class="ac-form">
+        <div style="margin:4px 0 10px;"><strong>Branches</strong> <span class="muted small">— different accounts for different words: the first branch that matches decides
+            (e.g. SUPPLIES → Supplies, otherwise → Jason). Without branches the rule puts everything in "Put It In".</span>
+          <div id="rb-branches" style="margin-top:6px;">${(r.branches || []).map(branchRow).join("")}</div>
+          <button type="button" class="small-btn" id="rb-addb">${icon("plus")} Branch</button></div>
+        <div class="ac-form" id="rb-plain" style="${(r.branches || []).length ? "display:none;" : ""}">
           <label>Put It In</label><select id="rb-acc">${accountOptions(r.account_id || null)}</select>
           <label>Split</label><div><div id="rb-splits">${(r.splits || []).map(splitRow).join("")}</div><button type="button" class="small-btn" id="rb-adds">${icon("plus")} Split Part</button>
             <span class="muted small">% or $ of the line; the rest goes in "Put It In"</span></div>
+        </div><div class="ac-form">
           <label>Set Payee</label><input id="rb-payee" value="${escapeHtml(r.set_payee || "")}" placeholder="optional">
           <label>Add Note</label><input id="rb-note" value="${escapeHtml(r.set_note || "")}" placeholder="optional (only on lines without a note)">
           <label>Then</label><div><label class="inline-check"><input type="radio" name="rb-action" value="file" ${r.action !== "suggest" ? "checked" : ""}> File the line by itself</label>
@@ -1290,8 +1384,7 @@
             <div><label class="inline-check"><input type="checkbox" id="rb-review" ${r.review ? "checked" : ""}> Still needs review — files it, but the line waits in Review until someone says it's right</label></div>
             <div><label class="inline-check"><input type="checkbox" id="rb-wins" ${r.wins ? "checked" : ""}> Wins when rules disagree (otherwise those lines wait in Review)</label></div></div>
           <label></label><label class="inline-check"><input type="checkbox" id="rb-on" ${r.enabled === false ? "" : "checked"}> Rule switched on</label>
-          <label></label><div id="rb-count" class="muted small">…</div>
-        </div>`;
+        </div><div id="rb-count" class="muted small">…</div><div id="rb-story"></div>`;
       const dlg = askDialog({ title: r.id ? "Change Rule" : "New Rule", body, buttons: [{ label: "Save & See Matches", value: true, cls: "primary" }, { label: "Cancel", value: null }], wide: true });
       const readCond = d => {
         if (d.classList.contains("rb-group")) {
@@ -1315,15 +1408,32 @@
             return a2 && a2 !== "new" && v !== "" ? { account_id: +a2, [t]: parseFloat(v) } : null; }).filter(Boolean),
           set_payee: q("#rb-payee").value.trim() || null, set_note: q("#rb-note").value.trim() || null,
           action: (root.querySelector('input[name="rb-action"]:checked') || {}).value || "file", enabled: q("#rb-on").checked,
+          branches: [...root.querySelectorAll("#rb-branches .rb-branch")].map(b => {
+            const other = b.querySelector(".rb-other").checked, a2 = b.querySelector(".rb-bacc").value;
+            return { match: b.querySelector(".rb-bmatch").value, conditions: other ? [] : [...b.querySelector(".rb-bconds").children].map(readCond).filter(Boolean),
+                     account_id: a2 && a2 !== "new" ? +a2 : null, set_note: b.querySelector(".rb-bnote").value.trim() || null };
+          }),
+          replaces: r.replaces || null, id: r.id || null,
         };
       };
+      const hl = (text, words) => { let h = escapeHtml(text); (words || []).forEach(w => { h = h.replace(new RegExp(`\\b(${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})\\b`, "gi"), "<mark>$1</mark>"); }); return h; };
       let timer = null;
       const count = () => {
         clearTimeout(timer);
         timer = setTimeout(async () => {
           const box = document.getElementById("rb-count"); if (!box) return;
           const b = read();
-          if (!b.conditions.length) { box.textContent = "Add a condition to see how many lines match."; return; }
+          document.getElementById("rb-plain").style.display = b.branches.length ? "none" : "";
+          document.querySelectorAll("#rb-branches .rb-branch").forEach((x, k) => { x.querySelector(".rb-bno").textContent = `${k === 0 ? "If" : "Else If"} ${k + 1}`; x.querySelector(".rb-bconds").style.display = x.querySelector(".rb-other").checked ? "none" : ""; });
+          if (!b.conditions.length && !b.branches.length) { box.textContent = "Add a condition to see how many lines match."; document.getElementById("rb-story").innerHTML = ""; return; }
+          apiFetch("/api/accounting/rules/story", { method: "POST", body: JSON.stringify(b) }).then(st => {
+            const sb = document.getElementById("rb-story"); if (!sb) return;
+            sb.innerHTML = `<div class="ac-story"><div><strong>What it will do:</strong> ${escapeHtml(st.sentence)}</div>
+              <div style="margin-top:4px;">${st.counts.map(c_ => `<span class="ac-chip ${c_.key === "conflict" || c_.key === "over_limit" ? "flag" : c_.key === "filed" ? "ok" : ""}">${c_.count} ${escapeHtml(c_.label)}</span>`).join(" ") || "No line matches yet."}</div>
+              ${st.examples.length ? `<table class="compact-table no-table-tools" style="margin-top:6px;"><thead><tr><th>Example Line</th><th class="num">Amount</th><th>What Happens</th></tr></thead><tbody>
+                ${st.examples.map(x => `<tr><td><span class="muted small">${day(x.date)}</span> ${hl(x.description, x.hit_words)}${x.branch ? `<div class="muted small">${escapeHtml(x.branch)} → ${escapeHtml(x.goes_to)}</div>` : ""}</td>
+                  <td class="ac-amt">${money(x.amount)}</td><td class="small">${escapeHtml(x.outcome_label)}${x.account ? `<div class="muted">now: ${escapeHtml(x.account)}</div>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}</div>`;
+          }).catch(() => {});
           try {
             const d = await apiFetch("/api/accounting/rules/preview", { method: "POST", body: JSON.stringify({ ...b, id: r.id }) });
             const g = d.groups;
@@ -1345,9 +1455,13 @@
             op.onchange = () => { v2.style.visibility = op.value === "between" ? "" : "hidden"; count(); };
           });
           box.querySelectorAll(".rb-gadd").forEach(b => b.onclick = () => { b.closest(".rb-group").querySelector(".rb-gconds").insertAdjacentHTML("beforeend", condRow()); wire(); });
-          box.querySelectorAll(".rb-x").forEach(x => x.onclick = () => { (x.closest(".rb-group") && !x.closest(".rb-cond") ? x.closest(".rb-group") : x.parentNode).remove(); count(); });
-          box.querySelectorAll("select.rb-sa, #rb-acc").forEach(s => s.onchange = async () => { if (s.value === "new") await pickNew(s, -1); count(); });
+          box.querySelectorAll(".rb-x").forEach(x => x.onclick = () => { (x.closest(".rb-cond") ? x.closest(".rb-cond") : x.closest(".rb-group")).remove(); count(); });
+          box.querySelectorAll("select.rb-sa, #rb-acc, select.rb-bacc").forEach(s => s.onchange = async () => { if (s.value === "new") await pickNew(s, -1); count(); });
+          box.querySelectorAll(".rb-badd").forEach(b => b.onclick = () => { const br = b.closest(".rb-branch"); br.querySelector(".rb-other").checked = false; br.querySelector(".rb-bconds").insertAdjacentHTML("beforeend", condRow()); wire(); count(); });
+          box.querySelectorAll(".rb-bx").forEach(b => b.onclick = () => { b.closest(".rb-branch").remove(); count(); });
+          box.querySelectorAll(".rb-bup").forEach(b => b.onclick = () => { const br = b.closest(".rb-branch"); if (br.previousElementSibling) br.parentNode.insertBefore(br, br.previousElementSibling); count(); });
         };
+        box.querySelector("#rb-addb").onclick = () => { box.querySelector("#rb-branches").insertAdjacentHTML("beforeend", branchRow()); wire(); count(); };
         box.querySelector("#rb-addc").onclick = () => { box.querySelector("#rb-conds").insertAdjacentHTML("beforeend", condRow()); wire(); };
         box.querySelector("#rb-addg").onclick = () => { box.querySelector("#rb-conds").insertAdjacentHTML("beforeend", groupRow()); wire(); count(); };
         box.querySelector("#rb-adds").onclick = () => { box.querySelector("#rb-splits").insertAdjacentHTML("beforeend", splitRow()); wire(); };
@@ -1368,9 +1482,12 @@
       let d, rule;
       try { [d, rule] = await Promise.all([apiFetch(`/api/accounting/rules/${ruleId}/lines`), apiFetch("/api/accounting/rules").then(rs => rs.find(x => x.id === ruleId))]); }
       catch (e) { alert(e.message); return; }
-      const where = rule.splits.length ? "the rule's split" : rule.account;
-      const res = await pickLines({ title: "Apply Rule", dest: rule.splits.length ? null : rule.account_id,
-        intro: `${rule.name ? `<strong>${escapeHtml(rule.name)}</strong> · ` : ""}${escapeHtml(rule.summary)} → <strong>${escapeHtml(where)}</strong> · ${d.count} line(s) match (every date).
+      const where = (rule.branches || []).length ? "each line's branch account" : rule.splits.length ? "the rule's split" : rule.account;
+      let story = null;
+      try { story = await apiFetch("/api/accounting/rules/story", { method: "POST", body: JSON.stringify({ ...rule, splits: rule.splits.map(x => ({ account_id: x.account_id, pct: x.pct, amount: x.amount })) }) }); } catch {}
+      const res = await pickLines({ title: "Apply Rule", dest: rule.splits.length || (rule.branches || []).length ? null : rule.account_id,
+        intro: `${story ? `<div class="ac-story" style="margin:0 0 8px;"><strong>What it does:</strong> ${escapeHtml(story.sentence)}<div style="margin-top:4px;">${story.counts.map(c_ => `<span class="ac-chip ${c_.key === "conflict" || c_.key === "over_limit" ? "flag" : c_.key === "filed" ? "ok" : ""}">${c_.count} ${escapeHtml(c_.label)}</span>`).join(" ")}</div></div>` : ""}
+          ${rule.name ? `<strong>${escapeHtml(rule.name)}</strong> · ` : ""}${escapeHtml(rule.summary)} → <strong>${escapeHtml(where)}</strong> · ${d.count} line(s) match (every date).
           Tick the ones to put there.${rule.enabled ? "" : " <span class='neg'>This rule is switched off — new lines won't be filed by it.</span>"}`,
         groups: [{ label: "Not Filed", lines: d.groups.unfiled, ticked: true }, { label: "Filed By AT-HUB, Not Looked At", lines: d.groups.auto, ticked: true },
           { label: "Filed Elsewhere By A Person", lines: d.groups.elsewhere, ticked: false, hint: "someone put these in another account — tick only the ones this rule should move" },
@@ -1763,6 +1880,7 @@
       } catch (e) { alert(e.message); }
     }
 
+    window.addEventListener("popstate", () => { const h = location.hash.slice(1); if (h && LOADERS[h]) show(h, true); });
     const LOADERS = { overview: tabOverview, review: tabInbox, inbox: tabInbox, txns: tabTxns, pnl: tabPnl, accounts: tabAccounts, loans: tabLoans, partners: tabPartners,
       apar: tabApar, cash: tabCash, statements: tabStatements, ...(window.MORE_LOADERS || {}) };
     (async () => {

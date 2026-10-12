@@ -1633,8 +1633,45 @@ class AcctAccount(Base):
     external_id = Column(String, nullable=True)  # id in QuickBooks (later)
     note = Column(Text, nullable=True)
     opening_balance = Column(Float, nullable=False, default=0.0)  # loans: what was owed before the first line here
+    loan_info = Column(Text, nullable=True)  # loans: JSON {lender, original, start, rate, rate_type, payment, due_day, term_months, secured_by, partner, role}
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctLoanEvent(Base):
+    """Something that happened to a loan, written down by a person: took it, rate changed, a partner paid it off, moved to
+    another account, closed, reopened, a call with the lender ... An event with an amount also made book entries (txn_ids)
+    so the balance follows; a move links both loans (other_account_id, pair_id)."""
+    __tablename__ = "acct_loan_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("acct_accounts.id"), nullable=False, index=True)
+    date = Column(DateTime, nullable=False)  # calendar date
+    kind = Column(String, nullable=False, default="note")  # note | took | rate | terms | call | closed | reopened | moved_out | moved_in | paid_by_partner | interest | adjust
+    text = Column(Text, nullable=True)
+    amount = Column(Float, nullable=True)
+    other_account_id = Column(Integer, nullable=True)
+    pair_id = Column(Integer, nullable=True)  # the other loan's event of a move
+    txn_ids = Column(Text, nullable=True)  # JSON [AcctTxn.id] -- book entries this event made
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AcctAsk(Base):
+    """A line a person asked another user (a partner) to check -- "did you receive this?" -- and the answer."""
+    __tablename__ = "acct_asks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    txn_id = Column(Integer, nullable=False, index=True)
+    to_user = Column(String, nullable=False, index=True)  # username
+    text = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="open")  # open | yes | no | replied | withdrawn
+    reply = Column(Text, nullable=True)
+    todo_item_id = Column(Integer, nullable=True)
+    asked_by = Column(String, nullable=True)
+    asked_at = Column(DateTime, default=datetime.utcnow)
+    answered_by = Column(String, nullable=True)
+    answered_at = Column(DateTime, nullable=True)
 
 
 class AcctSource(Base):
@@ -1739,6 +1776,7 @@ class AcctRule(Base):
     set_note = Column(String, nullable=True)
     action = Column(String, nullable=True)  # file (by itself) | suggest (one-click suggestion only); None = file
     review = Column(Boolean, nullable=True)  # files the line but it still waits in Review until a person says it's right
+    branches = Column(Text, nullable=True)  # JSON [{label, match, conditions, account_id, splits, set_note}] -- the first branch that matches decides
     wins = Column(Boolean, nullable=True)  # when two rules disagree on a line, this one wins (otherwise the line goes to Review)
     enabled = Column(Boolean, nullable=True, default=True)
     priority = Column(Integer, nullable=True)  # lower runs first
@@ -1888,6 +1926,9 @@ class AcctReconcile(Base):
     start = Column(DateTime, nullable=True)
     end = Column(DateTime, nullable=True)
     qb_rows = Column(Text, nullable=True)  # JSON: the QuickBooks lines as read
+    register_rows = Column(Text, nullable=True)  # JSON: the full QuickBooks register (optional) -- where QuickBooks has a line
     result = Column(Text, nullable=True)  # JSON
+    deleted_at = Column(DateTime, nullable=True)  # deleted from Earlier Checks (Undo brings it back)
+    deleted_by = Column(String, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

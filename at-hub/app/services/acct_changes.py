@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AcctChange
 
-TABLES = ("acct_accounts", "acct_rules", "acct_txns", "acct_ignored", "acct_check_ok", "acct_memory")
+TABLES = ("acct_accounts", "acct_rules", "acct_txns", "acct_ignored", "acct_check_ok", "acct_memory", "acct_loan_events")
 IGNORE = {"updated_at", "updated_by", "hits", "used", "last_used"}  # bookkeeping, not part of what a person changed
 
 
@@ -85,7 +85,7 @@ def undo(db: Session, change_id: int, by: str) -> dict:
         lines = [i for t, i in changed if t == "acct_txns"]
         raise HTTPException(status_code=409, detail=(f"Can't undo: {len(changed)} of the rows it changed were changed again since"
                                                      + (f" (lines {', '.join(map(str, lines[:8]))})" if lines else "") + ". Undo the later changes first."))
-    order = ["acct_accounts", "acct_rules", "acct_memory", "acct_txns", "acct_ignored", "acct_check_ok"]
+    order = ["acct_accounts", "acct_rules", "acct_memory", "acct_txns", "acct_loan_events", "acct_ignored", "acct_check_ok"]
     for t in order:  # put back / update first (parents before children) ...
         cols = set(_cols(db, t))
         for i, row in (before.get(t) or {}).items():

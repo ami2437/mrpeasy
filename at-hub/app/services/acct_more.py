@@ -446,7 +446,7 @@ def check_books(db: Session, start: Optional[date], end: Optional[date]) -> dict
         if not t.account_id or t.splits:
             continue
         line = acct_rules.line_of(t)
-        hits = [s for s in specs if acct_rules.matches(s, line)]
+        hits = [e for e in (acct_rules.effective(s_, line) for s_ in specs) if e]
         if hits and hits[0]["account_id"] and t.account_id != hits[0]["account_id"] and not hits[0]["splits"] and t.rule_id != hits[0]["id"]:
             add("rule_says", t, f"Rule \"{hits[0]['name'] or acct_rules.describe(hits[0])}\" puts lines like this in "
                                 f"{A.path(accounts[hits[0]['account_id']], accounts) if hits[0]['account_id'] in accounts else '?'}", hits[0]["account_id"])
@@ -541,7 +541,7 @@ def rule_conflicts(db: Session) -> List[dict]:
     specs = [x for x in A.rule_specs(db) if x["enabled"]]
     pairs = {}
     for t, line in _rule_lines(db):
-        hits = [x for x in specs if acct_rules.matches(x, line)]
+        hits = [e for e in (acct_rules.effective(x, line) for x in specs) if e]
         for a, b in itertools.combinations(hits, 2):
             if acct_rules.outcome(a) == acct_rules.outcome(b):
                 continue
@@ -569,15 +569,114 @@ def rule_overlaps(db: Session, spec_: dict) -> List[dict]:
     others = [x for x in A.rule_specs(db) if x["enabled"] and x["id"] != spec_.get("id")]
     hits = defaultdict(list)
     for t, line in _rule_lines(db):
-        if not acct_rules.matches(spec_, line):
+        mine = acct_rules.effective(spec_, line)
+        if not mine:
             continue
         for x in others:
-            if acct_rules.outcome(x) != acct_rules.outcome(spec_) and acct_rules.matches(x, line):
+            e = acct_rules.effective(x, line)
+            if e and acct_rules.outcome(e) != acct_rules.outcome(mine):
                 hits[x["id"]].append(t)
     by_id = {x["id"]: x for x in others}
     return [{"id": k, "name": by_id[k]["name"] or acct_rules.describe(by_id[k]), "wins": by_id[k]["wins"],
              "account": A.path(accounts[by_id[k]["account_id"]], accounts) if by_id[k]["account_id"] in accounts else "?",
              "lines": len(v), "sample": [t.bank_description or t.description for t in v[:2]]} for k, v in sorted(hits.items(), key=lambda x: -len(x[1]))]
+
+
+def _rule_words(conds: List[dict]) -> List[str]:
+    out = []
+    for c in conds or []:
+        if c.get("field") == "group":
+            if not c.get("not"):
+                out += _rule_words(c.get("conditions"))
+            continue
+        if c.get("op") in ("contains", "any_of", "is", "starts", "ends") and isinstance(c.get("value"), str):
+            out += [w for part in c["value"].split(",") for w in re.findall(r"[A-Za-z0-9&']+", part)]
+    return list(dict.fromkeys(w.upper() for w in out))
+
+
+def rule_story(db: Session, spec_: dict) -> dict:
+    """What a rule will do, in words + real lines: per matched line what happens when it's saved (new lines) / applied."""
+    accounts, sources = A.maps(db)
+    others = [x for x in A.rule_specs(db) if x["enabled"] and x["id"] != spec_.get("id")]
+    limit = float(A.settings(db).get("auto_limit") or 0)
+    name = lambda aid: A.path(accounts[aid], accounts) if aid in accounts else "?"
+    sign = {"in": "Money-in lines", "out": "Money-out lines"}.get(spec_.get("sign") or "", "Lines")
+    words = _rule_words(spec_["conditions"]) + [w for b in spec_.get("branches") or [] for w in _rule_words(b.get("conditions"))]
+    if spec_.get("branches"):
+        parts_ = []
+        for i, b in enumerate(spec_["branches"]):
+            dest = name(b["account_id"]) if b.get("account_id") else "a split"
+            inner = acct_rules.describe({**spec_, "branches": [], "match": b.get("match") or "all", "conditions": b.get("conditions") or [], "sign": None, "source_ids": []})
+            parts_.append(f"{'if' if i == 0 else 'else if'} {inner} → {dest}" if inner else f"otherwise → {dest}")
+        top = acct_rules.describe({**spec_, "branches": [], "sign": None, "source_ids": []})
+        sentence = f"{sign}{(' where ' + top) if top else ''}: " + "; ".join(parts_)
+    else:
+        dest = name(spec_["account_id"]) if not spec_["splits"] else "a split (" + ", ".join(f"{name(int(x['account_id']))} {x.get('pct', '')}{'%' if x.get('pct') not in (None, '') else ''}" for x in spec_["splits"]) + ")"
+        sentence = f"{sign} where {acct_rules.describe({**spec_, 'sign': None, 'source_ids': []})} go to {dest}"
+    if spec_.get("source_ids"):
+        sentence += " (only " + ", ".join(sources[i].name for i in spec_["source_ids"] if i in sources) + ")"
+    sentence += " — only suggested, a person clicks to file." if spec_["action"] == "suggest" else (
+        " — filed by themselves" + (f" up to ${limit:,.0f} (bigger ones wait in Review)" if limit else "") + (", and they still wait in Review for a look." if spec_.get("review") else "."))
+    cats = {"filed": [], "suggest": [], "over_limit": [], "conflict": [], "here": [], "auto_elsewhere": [], "person_elsewhere": [], "split": []}
+    for t, line in _rule_lines(db):
+        e = acct_rules.effective(spec_, line)
+        if not e:
+            continue
+        dest_id = e["account_id"]
+        if t.splits and not e["splits"]:
+            k = "split"
+        elif not e["splits"] and dest_id and t.account_id == dest_id:
+            k = "here"
+        elif t.account_id or t.splits:
+            k = "person_elsewhere" if t.how in ("person", "workbook") else "auto_elsewhere"
+        else:
+            clash = [x for x in (acct_rules.effective(o, line) for o in others) if x and acct_rules.outcome(x) != acct_rules.outcome(e) and not e.get("wins") and not x.get("wins")]
+            k = "conflict" if clash else "suggest" if spec_["action"] == "suggest" else "over_limit" if limit and abs(t.amount) > limit + 0.004 else "filed"
+        d = A.txn_dict(t, accounts, sources)
+        d["goes_to"] = name(dest_id) if dest_id else "split"
+        d["branch"] = e.get("branch_label")
+        text_ = ((t.bank_description or t.description) + " " + (t.payee or "") + " " + (t.note or "")).upper()
+        d["hit_words"] = [w for w in words if re.search(rf"\b{re.escape(w)}\b", text_)]
+        cats[k].append(d)
+    label = {"filed": "filed by itself", "suggest": "suggested (one click)", "over_limit": "over the limit — waits in Review",
+             "conflict": "another rule disagrees — waits in Review", "here": "already there", "auto_elsewhere": "filed elsewhere by AT-HUB / a rule — Apply moves it",
+             "person_elsewhere": "a person filed it elsewhere — Apply moves it only if you tick it", "split": "split — left alone"}
+    examples = []
+    for k in ("filed", "conflict", "over_limit", "person_elsewhere", "auto_elsewhere", "suggest", "here", "split"):
+        for d in cats[k][:2]:
+            if len(examples) < 6:
+                examples.append({**d, "outcome": k, "outcome_label": label[k]})
+    return {"sentence": sentence, "counts": [{"key": k, "label": label[k], "count": len(v), "total": cents(sum(x["amount"] for x in v))} for k, v in cats.items() if v],
+            "examples": examples, "total": sum(len(v) for v in cats.values()), "words": words}
+
+
+def combine_draft(db: Session, rule_ids: List[int]) -> dict:
+    """Ticked rules -> one rule: the same account -> an ANY group of each rule's conditions; different accounts -> a rule
+    with a branch per rule (in their order). Lines matched by the old rules vs the draft."""
+    specs = {x["id"]: x for x in A.rule_specs(db)}
+    rs = [specs[i] for i in sorted(rule_ids, key=lambda i: list(specs).index(i) if i in specs else 10 ** 6) if i in specs]
+    if len(rs) < 2:
+        raise HTTPException(status_code=400, detail="Tick two or more rules")
+    def as_group(x):
+        cs = [c for c in x["conditions"] if acct_rules._filled(c)]
+        return cs[0] if len(cs) == 1 else {"field": "group", "match": x["match"], "conditions": cs}
+    signs = {x["sign"] for x in rs}
+    srcs = sorted({i for x in rs for i in x["source_ids"]}) if all(x["source_ids"] for x in rs) else []
+    same = len({acct_rules.outcome(x) for x in rs}) == 1 and not any(x.get("branches") for x in rs)
+    draft = {"id": None, "name": " / ".join(x["name"] or acct_rules.describe(x)[:30] for x in rs)[:120], "sign": signs.pop() if len(signs) == 1 else None,
+             "source_ids": srcs, "action": rs[0]["action"], "enabled": True, "review": any(x["review"] for x in rs), "wins": any(x["wins"] for x in rs),
+             "set_payee": rs[0]["set_payee"], "set_note": rs[0]["set_note"], "splits": [], "priority": 0}
+    if same:
+        draft.update(match="any", conditions=[as_group(x) for x in rs], account_id=rs[0]["account_id"], splits=rs[0]["splits"], branches=[])
+    else:
+        draft.update(match="any", conditions=[as_group(x) for x in rs], account_id=rs[0]["account_id"],
+                     branches=[{"label": x["name"] or "", "match": x["match"], "conditions": [c for c in x["conditions"] if acct_rules._filled(c)],
+                                "account_id": x["account_id"], "splits": x["splits"], "set_note": x["set_note"]} for x in rs if not x.get("branches")])
+    lines = _rule_lines(db)
+    old = {t.id for t, line in lines if any(acct_rules.matches(x, line) for x in rs)}
+    new = {t.id for t, line in lines if acct_rules.matches(draft, line)}
+    return {"draft": draft, "replaces": [x["id"] for x in rs], "same_account": same, "lines_before": len(old), "lines_after": len(new),
+            "only_before": len(old - new), "only_after": len(new - old)}
 
 
 def rule_health(db: Session) -> List[dict]:
@@ -604,10 +703,13 @@ def rule_health(db: Session) -> List[dict]:
     out = []
     for x in specs:
         ids = matched[x["id"]]
-        moved = [i for i in ids if tx[i].how == "person" and not x["splits"] and (tx[i].account_id or tx[i].splits) and tx[i].account_id != x["account_id"]]
+        def goes(i):
+            e = acct_rules.effective(x, acct_rules.line_of(tx[i]))
+            return (e or x)["account_id"]
+        moved = [i for i in ids if tx[i].how == "person" and not x["splits"] and (tx[i].account_id or tx[i].splits) and tx[i].account_id != goes(i)]
         by_person = [i for i in ids if tx[i].how == "person"]
-        covered = next((y for y in specs if y["id"] != x["id"] and y["enabled"] and ids and ids <= matched[y["id"]]
-                        and acct_rules.outcome(y) == acct_rules.outcome(x)), None)
+        covered = None if x.get("branches") else next((y for y in specs if y["id"] != x["id"] and y["enabled"] and not y.get("branches") and ids
+                                                       and ids <= matched[y["id"]] and acct_rules.outcome(y) == acct_rules.outcome(x)), None)
         issues = []
         if not x["enabled"]:
             issues.append("switched off")
@@ -630,7 +732,7 @@ _COMBINE_FIELDS = ("text", "description", "payee")
 
 def _combinable(x: dict) -> bool:
     cs = x["conditions"]
-    return len(cs) == 1 and cs[0].get("field") in _COMBINE_FIELDS and cs[0].get("op") in ("contains", "any_of") and isinstance(cs[0].get("value"), str)
+    return not x.get("branches") and len(cs) == 1 and cs[0].get("field") in _COMBINE_FIELDS and cs[0].get("op") in ("contains", "any_of") and isinstance(cs[0].get("value"), str)
 
 
 def _parts(x: dict) -> List[str]:
@@ -947,7 +1049,8 @@ def sheet_xlsx(name: str, doc: dict) -> bytes:
 QB_MAP_KEY = "acct_qb_map"
 QB_HEADS = {"date": ("date", "transaction date", "txn date"), "amount": ("amount",), "debit": ("debit",), "credit": ("credit",),
             "name": ("name", "payee", "vendor", "customer"), "memo": ("memo/description", "memo", "description"),
-            "account": ("account", "account full name", "account name"), "type": ("transaction type", "type"), "num": ("num", "no.", "ref no.")}
+            "account": ("account", "account full name", "account name"), "type": ("transaction type", "type"), "num": ("num", "no.", "ref no."),
+            "deposit": ("deposit",)}
 
 
 def _norm(s: str) -> str:
@@ -982,7 +1085,10 @@ def parse_qb(data: Optional[bytes], filename: Optional[str], text: Optional[str]
     for r in rows[head_i + 1:]:
         cell = lambda k: (r[cols[k]] if k in cols and cols[k] < len(r) else None)
         d = A.parse_day(cell("date"))
-        if cols.get("amount") is not None:
+        if cols.get("amount") is not None and cols.get("deposit") is not None:  # a QuickBooks register: Amount = money out, Deposit = in
+            out_, in_ = A.parse_money(cell("amount")), A.parse_money(cell("deposit"))
+            amt = -abs(out_) if out_ is not None else in_
+        elif cols.get("amount") is not None:
             amt = A.parse_money(cell("amount"))
         else:
             dr, cr = A.parse_money(cell("debit")), A.parse_money(cell("credit"))
@@ -1059,7 +1165,11 @@ def _words(s: str) -> set:
     return set(re.findall(r"[a-z0-9]+", (s or "").lower())) - {"to", "on", "ref", "from", "the", "of", "and"}
 
 
-def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_rows: List[dict], mapping: Dict[str, int], tol_days: int = 5) -> dict:
+DECIDED = ("athub_right", "ignore", "fixed_in_qb")
+
+
+def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_rows: List[dict], mapping: Dict[str, int], tol_days: int = 5,
+              register_rows: Optional[List[dict]] = None) -> dict:
     """Each QuickBooks line against AT-HUB's lines (any account -- that's how a line in the wrong account is found).
 
     Matched by size of amount + date within tol_days (closest date, most shared words); each match says WHY (same bank
@@ -1151,7 +1261,7 @@ def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_ro
         else:
             agree = any(in_tree(x.account_id, mapped) and abs(abs(x.amount) - abs(rr["amount"])) < 0.01 for x in t.splits) if mapped else None
         rr["agree"] = agree
-        if rr["decision"] in ("athub_right", "ignore"):
+        if rr["decision"] in DECIDED:
             out["decided"].append(rr)
         elif not mapped:
             out["unmapped"].append(rr)
@@ -1229,7 +1339,7 @@ def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_ro
         def alike(t):
             desc = t.bank_description or t.description
             return bool(qrefs and qrefs & A._plain_refs(desc.upper())) or bool(rr.get("memo") and A.starts_same(rr["memo"], desc))
-        if rr["decision"] in ("ignore", "athub_right"):
+        if rr["decision"] in DECIDED:
             out["decided"].append(rr)
             continue
         amt = next((t for t in free_lines if abs((t.date.date() - d).days) <= max(1, tol_days) and abs(abs(t.amount) - abs(rr["amount"])) > 0.005 and alike(t)), None)
@@ -1260,10 +1370,17 @@ def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_ro
             continue
         if t.account_id in picked or any(x.account_id in picked for x in t.splits):
             d_ = A.txn_dict(t, accounts, sources)
-            if (decisions.get(f"athub:{t.id}") or {}).get("d") == "ok":
-                d_["decision"] = "ok"
-                out["decided"].append({"athub_only": True, "athub": d_, "decision": "ok", "date": d_["date"], "amount": t.amount})
+            dd_ = (decisions.get(f"athub:{t.id}") or {}).get("d")
+            if dd_ in ("ok", "fixed_in_qb"):
+                d_["decision"] = dd_
+                out["decided"].append({"athub_only": True, "athub": d_, "decision": dd_, "date": d_["date"], "amount": t.amount})
                 continue
+            reg = register_find(register_rows, t, tol_days) if register_rows else None
+            if reg:
+                rm = eff.get(_norm(reg["account"])) or guess_map(reg["account"], accounts)
+                d_["qb_register"] = {**reg, "mapped_account_id": rm, "mapped_account": A.path(accounts[rm], accounts) if rm in accounts else None}
+            elif register_rows:
+                d_["qb_register"] = {"missing": True}
             d_["closest"] = [{"key": r["key"], "date": r["date"], "amount": r["amount"], "name": r.get("name"), "memo": r.get("memo"), "account": r["account"]}
                              for r in sorted((r for r in out["qb_only"] if abs(abs(r["amount"]) - abs(t.amount)) < 0.005 or abs((A.parse_day(r["date"]) - t.date.date()).days) <= 3),
                                              key=lambda r: (abs(abs(r["amount"]) - abs(t.amount)) > 0.005, abs((A.parse_day(r["date"]) - t.date.date()).days)))[:3]]
@@ -1326,6 +1443,150 @@ def reconcile(db: Session, account_ids: List[int], start: date, end: date, qb_ro
             "unmapped_names": [{"name": n_, "count": c_, "guess": guess_map(n_, accounts),
                                 "guess_account": A.path(accounts[guess_map(n_, accounts)], accounts) if guess_map(n_, accounts) in accounts else None}
                                for n_, c_ in unmapped_names.most_common()]}
+
+
+def register_find(rows: List[dict], t: AcctTxn, tol_days: int) -> Optional[dict]:
+    """The QuickBooks register line that is this AT-HUB line: same size of amount, date within tol_days, the same bank
+    reference / start of the text first."""
+    desc = t.bank_description or t.description
+    best = None
+    for r in rows:
+        if abs(abs(r["amount"]) - abs(t.amount)) > 0.005:
+            continue
+        d = A.parse_day(r["date"])
+        days = abs((d - t.date.date()).days) if d else 99
+        if days > tol_days:
+            continue
+        text = (r.get("memo") or "") + " " + (r.get("name") or "")
+        rr, tr = A._plain_refs(text.upper()), A._plain_refs(desc.upper())
+        score = (0 if (rr and tr and rr & tr) or A.starts_same(text, desc) else 1, days)
+        if best is None or score < best[0]:
+            best = (score, r)
+    return best[1] if best else None
+
+
+def reconcile_add(db: Session, rows: List[dict], source_id: Optional[int], by: str) -> List[int]:
+    """Only-in-QuickBooks lines typed into AT-HUB in one go (Book Entries, or a bank account as expected lines)."""
+    src = db.get(AcctSource, source_id) if source_id else A.book_source(db)
+    if not src:
+        raise HTTPException(status_code=400, detail="Account not found")
+    accounts, _ = A.maps(db)
+    ids = []
+    for r in rows:
+        d = A.parse_day(r.get("date"))
+        if not d or not r.get("amount"):
+            continue
+        desc = " -- ".join(x for x in (r.get("name"), r.get("memo")) if x) or r.get("account") or "From QuickBooks"
+        aid = r.get("mapped_account_id") if r.get("mapped_account_id") in accounts else None
+        t = AcctTxn(source_id=src.id, date=A._dt(d), amount=cents(float(r["amount"])), description=desc[:250], payee=acct_mapper.payee_label(desc),
+                    note=f"from QuickBooks ({r.get('account') or ''})", origin="manual", expected=src.kind != "book",
+                    account_id=aid, how="person" if aid else None, reviewed=True, created_by=by, updated_by=by)
+        db.add(t)
+        db.flush()
+        ids.append(t.id)
+    return ids
+
+
+def _qb_name_for(account_id: Optional[int], res: dict, accounts) -> str:
+    """The QuickBooks account that maps to an AT-HUB account (or its nearest parent)."""
+    if not account_id or account_id not in accounts:
+        return "?"
+    chain = [account_id] + [x.id for x in A.ancestors(accounts[account_id], accounts)]
+    for aid in chain:
+        hit = next((m["name"] for m in res.get("mapping", []) if m.get("account_id") == aid and m.get("name")), None)
+        if hit:
+            return hit
+    return f"(the QuickBooks account for {A.path(accounts[account_id], accounts)})"
+
+
+def fix_actions(db: Session, res: dict) -> List[dict]:
+    """What to change in QuickBooks, one row per action, in plain words (the "Fix In QuickBooks" report)."""
+    accounts, _ = A.maps(db)
+    out = []
+
+    def add(kind, what, r=None, athub=None, should=None, why=None, key=None):
+        a = athub or (r or {}).get("athub") or {}
+        out.append({"kind": kind, "what": what, "key": key or (r or {}).get("key") or (f"athub:{a['id']}" if a.get("id") else None),
+                    "qb_date": (r or {}).get("date"), "qb_num": (r or {}).get("num"), "qb_name": (r or {}).get("name"), "qb_memo": (r or {}).get("memo"),
+                    "qb_amount": (r or {}).get("amount"), "qb_account": (r or {}).get("account"), "should_be": should,
+                    "athub_date": a.get("date"), "athub_description": a.get("description"), "athub_account": a.get("account") or ("split" if a.get("splits") else None),
+                    "athub_amount": a.get("amount"), "bank_ref": " ".join(sorted(A._plain_refs((a.get("description") or "").upper()))), "why": why})
+    for r in res.get("different", []) + [x for x in res.get("weak", []) if x.get("agree") is False] + \
+            [x for x in res.get("decided", []) if x.get("decision") == "athub_right" and x.get("athub") and x.get("agree") is not True]:
+        a = r.get("athub") or {}
+        aid = (r.get("athub_part") or {}).get("account_id") or a.get("account_id")
+        should = _qb_name_for(aid, res, accounts) if aid else             "split: " + " + ".join(f"{_qb_name_for(x['account_id'], res, accounts)} {abs(x['amount']):,.2f}" for x in a.get("splits") or [])
+        if r.get("account") and should == r.get("account"):
+            continue  # already where it should be
+        add("move", f"Move this QuickBooks line from \"{r.get('account')}\" to \"{should}\"", r, should=should,
+            why=f"AT-HUB has it in {(r.get('athub_part') or {}).get('account') or a.get('account') or 'split'} ({r.get('reason') or 'you said AT-HUB is right'})")
+    for r in [x for x in res.get("weak", []) if x.get("agree") is not False]:
+        add("check", "Check it's the same line (matched on the amount only) -- nothing to change if it is", r, why=r.get("reason"))
+    for a in res.get("athub_only", []):
+        reg = a.get("qb_register") or {}
+        should = _qb_name_for(a.get("account_id"), res, accounts)
+        if reg and not reg.get("missing"):
+            add("move", f"QuickBooks has it in \"{reg.get('account')}\" -- move it to \"{should}\"",
+                {"date": reg.get("date"), "num": reg.get("num"), "name": reg.get("name"), "memo": reg.get("memo"), "amount": reg.get("amount"), "account": reg.get("account")},
+                athub=a, should=should, why="found in the QuickBooks register, in another account")
+        else:
+            add("add", f"Add to QuickBooks in \"{should}\"" + (" (not in the QuickBooks register at all)" if reg.get("missing") else ""), athub=a, should=should,
+                why="in AT-HUB's account, not in the QuickBooks lines checked")
+    for r in res.get("qb_only", []):
+        add("delete", "Not in the bank / AT-HUB -- check it, delete it in QuickBooks if it isn't real", r, why="no AT-HUB line with that amount near that date")
+    for r in res.get("amount_differs", []):
+        add("amount", f"Change the amount in QuickBooks to the bank's {abs(r['athub']['amount']):,.2f}", r, should=f"{r['athub']['amount']:,.2f}",
+            why=f"QuickBooks {r['amount']:,.2f} vs the bank {r['athub']['amount']:,.2f}")
+    for r in res.get("date_differs", []):
+        add("date", f"Change the date in QuickBooks to the bank's {r['athub']['date']}", r, should=r["athub"]["date"], why=f"{r.get('days')} days apart")
+    for sp in res.get("split", []):
+        if not sp.get("already_same"):
+            add("split_athub", "QuickBooks has it split -- nothing to fix in QuickBooks; split it in AT-HUB the same way", athub=sp["athub"],
+                should=" + ".join(f"{p['account']} {p['amount']:,.2f}" for p in sp["parts"]), why="the QuickBooks parts add up to the bank line")
+    out.sort(key=lambda x: (x["qb_date"] or x["athub_date"] or ""))
+    return out
+
+
+FIX_LABEL = {"move": "Move To Another Account", "add": "Add To QuickBooks", "delete": "Check / Delete In QuickBooks", "amount": "Change The Amount",
+             "date": "Change The Date", "check": "Check The Match", "split_athub": "Split In AT-HUB (not a QuickBooks fix)"}
+
+
+def fix_xlsx(actions: List[dict], start: date, end: date) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    ws.append(["Fix In QuickBooks", f"{start.isoformat()} to {end.isoformat()}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(["Action", "Lines", "Amount"])
+    for c in ws[ws._current_row]:
+        c.font = Font(bold=True)
+    for k, label in FIX_LABEL.items():
+        xs = [a for a in actions if a["kind"] == k]
+        if xs:
+            ws.append([label, len(xs), cents(sum(abs(a["qb_amount"] if a["qb_amount"] is not None else a["athub_amount"] or 0) for a in xs))])
+            ws.cell(ws._current_row, 3).number_format = "#,##0.00"
+    ws.column_dimensions["A"].width = 40
+    ws = wb.create_sheet("To Do")
+    head = ["#", "Done", "Action", "What To Do", "QB Date", "QB Num", "QB Name", "QB Memo", "QB Amount", "QB Account Now", "Should Be",
+            "AT-HUB Date", "AT-HUB Description", "AT-HUB Account", "AT-HUB Amount", "Bank Ref", "Why"]
+    ws.append(head)
+    for c in ws[1]:
+        c.font, c.fill = Font(bold=True), PatternFill("solid", fgColor="DCE6F1")
+    for n, a in enumerate(actions, start=1):
+        ws.append([n, "", FIX_LABEL.get(a["kind"], a["kind"]), a["what"], a["qb_date"], a["qb_num"], a["qb_name"], a["qb_memo"], a["qb_amount"], a["qb_account"],
+                   a["should_be"], a["athub_date"], a["athub_description"], a["athub_account"], a["athub_amount"], a["bank_ref"], a["why"]])
+        for col in (9, 15):
+            ws.cell(ws._current_row, col).number_format = "#,##0.00;[Red]-#,##0.00"
+    ws.freeze_panes = "C2"
+    ws.auto_filter.ref = f"A1:Q{max(2, ws._current_row)}"
+    for col, w in zip("ABCDEFGHIJKLMNOPQ", (5, 6, 22, 60, 11, 8, 20, 36, 12, 28, 28, 11, 50, 24, 12, 18, 40)):
+        ws.column_dimensions[col].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def reconcile_xlsx(res: dict) -> bytes:

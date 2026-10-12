@@ -71,8 +71,10 @@ async function tabPartnerAccounts() {
       <td class="ac-amt">${fmtMoney(d.to_share)}</td><td></td></tr></tbody></table></div>
     <div class="ac-grid2">${d.partners.map(p => `<div class="card"><div class="ac-filters"><h3 style="margin:0;">${escapeHtml(p.name)}</h3><span style="flex:1"></span>
         ${p.account_ids.length ? `<button class="small-btn" onclick='partnerLines(${JSON.stringify(p.account_ids)})'>Lines</button>` : ""}</div>
-      <div class="ac-tiles"><div class="ac-tile"><div class="l">Withdrawn</div><div class="v neg">${fmtMoney(p.period.withdrawn)}</div><div class="s">all time ${fmtMoney(p.all_time.withdrawn)}</div></div>
+      <div class="ac-tiles"><div class="ac-tile click" onclick='partnerCell(${JSON.stringify(p.name)}, PERIOD.start, PERIOD.end, "withdrawn")'><div class="l">Withdrawn</div><div class="v neg">${fmtMoney(p.period.withdrawn)}</div><div class="s">all time ${fmtMoney(p.all_time.withdrawn)}</div></div>
         <div class="ac-tile"><div class="l">Invested</div><div class="v pos">${fmtMoney(p.period.invested)}</div><div class="s">all time ${fmtMoney(p.all_time.invested)}</div></div>
+        <div class="ac-tile click" title="Withdrawn + invested (their draws, net) — click for the lines" onclick='partnerCell(${JSON.stringify(p.name)}, PERIOD.start, PERIOD.end, "net")'><div class="l">Net</div>
+          <div class="v ${p.period.net < 0 ? "neg" : "pos"}">${fmtMoney(p.period.net)}</div><div class="s">all time ${fmtMoney(p.all_time.net)}</div></div>
         <div class="ac-tile"><div class="l">Lent To The Company</div><div class="v">${fmtMoney(p.all_time.loan_owed)}</div><div class="s">still owed to them (all time)</div></div></div>
       <div class="muted small">${p.accounts.length ? "Accounts: " + p.accounts.map(escapeHtml).join(", ") : "No accounts for this partner yet."}</div>
       ${p.by_fy.length ? `<h4 style="margin:10px 0 4px;">By Fiscal Year</h4><table class="compact-table no-table-tools"><thead><tr><th>Year</th>${head}</tr></thead><tbody>${p.by_fy.map(x => `<tr><td>${escapeHtml(x.fy)}</td>${t(x, p.name, ...fyRange(x.fy))}</tr>`).join("")}</tbody></table>` : ""}
@@ -253,14 +255,40 @@ async function tabReconcile() {
           <label>Days Apart</label><input type="number" id="rec-tol" value="${store.get("rec.tol", 5)}" min="0" max="30" style="width:80px;" title="How many days apart the same line can be in the two books"></div></div>
       <div><h4 style="margin:0 0 6px;">QuickBooks Lines</h4>
         <textarea id="rec-text" rows="10" style="width:100%;font-family:monospace;font-size:12px;" placeholder="Paste here (with the header row: Date, Transaction Type, Num, Name, Memo/Description, Amount …)"></textarea>
-        <div class="btn-row" style="margin-top:6px;"><button onclick="recParse()">${icon("check")} Read Lines</button><button onclick="recFile()">${icon("upload")} Pick A File</button><span id="rec-read" class="muted small"></span></div></div></div>
+        <div class="btn-row" style="margin-top:6px;"><button onclick="recParse()">${icon("check")} Read Lines</button><button onclick="recFile()">${icon("upload")} Pick A File</button><span id="rec-read" class="muted small"></span></div>
+        <details style="margin-top:8px;" ${REC.register ? "open" : ""}><summary class="small"><strong>QuickBooks Register</strong> (optional) — the full register / all accounts, so a line only in AT-HUB shows where QuickBooks has it</summary>
+          <textarea id="rec-reg" rows="4" style="width:100%;font-family:monospace;font-size:12px;margin-top:6px;" placeholder="Paste the whole QuickBooks register here (Date, Description, Amount, Deposit, Account …)"></textarea>
+          <div class="btn-row" style="margin-top:6px;"><button class="small-btn" onclick="recReg()">Read Register</button><button class="small-btn" onclick="recRegFile()">${icon("upload")} Register File</button>
+            <span id="rec-reg-read" class="muted small">${REC.register ? `${REC.register.length} register line(s) loaded` : ""}</span></div></details></div></div>
     <div id="rec-map"></div><div class="btn-row" style="margin-top:10px;"><button class="primary" id="rec-run" onclick="recRun()" disabled>${icon("check")} Match Them</button></div></div>
     <div id="rec-out"></div>
-    ${hist.length ? `<div class="card"><h4 style="margin-top:0;">Earlier Checks</h4><table class="compact-table no-table-tools"><thead><tr><th>When</th><th>Accounts</th><th>Dates</th><th class="num">Lines</th><th>Result</th><th></th></tr></thead><tbody>
-      ${hist.map(h => `<tr><td class="nowrap">${fmtWhen(h.created_at)}<div class="muted small">${escapeHtml(h.created_by || "")}</div></td><td class="small">${h.accounts.map(escapeHtml).join(", ")}</td>
+    ${hist.length ? `<div class="card"><div class="ac-filters"><h4 style="margin:0;">Earlier Checks</h4><span class="muted small">${hist.length}</span><span style="flex:1"></span>
+        <button class="small-btn" onclick="recDelTicked()">Delete Ticked</button>${hist.length > 1 ? `<button class="small-btn" onclick="recDelOld()">Delete All But The Newest</button>` : ""}</div>
+      <table class="compact-table no-table-tools"><thead><tr><th></th><th>When</th><th>Name / Accounts</th><th>Dates</th><th class="num">Lines</th><th>Result</th><th></th></tr></thead><tbody>
+      ${hist.map(h => `<tr><td><input type="checkbox" class="rh-t" value="${h.id}"></td><td class="nowrap">${fmtWhen(h.created_at)}<div class="muted small">${escapeHtml(h.created_by || "")}</div></td>
+        <td class="small">${h.name ? `<strong>${escapeHtml(h.name)}</strong><br>` : ""}${h.accounts.map(escapeHtml).join(", ")}${h.register ? ` <span class="ac-chip">+ register</span>` : ""}</td>
         <td class="nowrap small">${day(h.start)} – ${day(h.end)}</td><td class="num">${h.lines}</td>
         <td class="small">${h.counts.same || 0} match · <span class="${h.counts.different ? "neg" : ""}">${h.counts.different || 0} different</span> · ${h.counts.qb_only || 0} QB only · ${h.counts.athub_only || 0} AT-HUB only</td>
-        <td><button class="small-btn" onclick="recLoad(${h.id})">Open</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
+        <td class="nowrap"><button class="small-btn" onclick="recLoad(${h.id})">Open</button><button class="small-btn icon-only" title="Name it" onclick="recRename(${h.id}, ${escapeHtml(JSON.stringify(h.name || ""))})">${icon("pencil")}</button>
+          <button class="small-btn icon-only" title="Delete" onclick="recDel([${h.id}])">${icon("trash")}</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
+}
+async function recDel(ids, keepNewest = false) {
+  if (!keepNewest && !ids.length) { toast("Tick some checks"); return; }
+  try {
+    const r = await apiFetch("/api/accounting/reconcile/delete", { method: "POST", body: JSON.stringify(keepNewest ? { keep_newest: true } : { ids }) });
+    toast(`${r.deleted.length} earlier check(s) deleted`, { label: "Undo", run: async () => { await apiFetch("/api/accounting/reconcile/restore", { method: "POST", body: JSON.stringify({ ids: r.deleted }) }); show("reconcile"); } }, 10000);
+    show("reconcile");
+  } catch (e) { alert(e.message); }
+}
+function recDelTicked() { recDel([...document.querySelectorAll(".rh-t:checked")].map(c => +c.value)); }
+async function recDelOld() {
+  if (!(await askDialog({ title: "Delete All But The Newest?", body: "<p>Every earlier check except the newest goes from the list (Undo brings them back). What you decided about lines stays.</p>", buttons: [{ label: "Delete", value: true, cls: "danger" }, { label: "Cancel", value: null }] })).value) return;
+  recDel([], true);
+}
+async function recRename(id, cur) {
+  const { value, el } = await askDialog({ title: "Name This Check", body: `<input id="rn-n" style="width:100%;" value="${escapeHtml(cur)}" placeholder="e.g. Partner draws vs QB, Oct 2026">`, buttons: [{ label: "Save", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+  if (!value) return;
+  await apiFetch(`/api/accounting/reconcile/${id}`, { method: "PUT", body: JSON.stringify({ name: el.querySelector("#rn-n").value }) }); show("reconcile");
 }
 async function recParse(file) {
   const fd = new FormData();
@@ -279,6 +307,18 @@ async function recParse(file) {
     document.querySelectorAll(".rec-m").forEach(s => { const v = saved[(s.dataset.name || "").trim().toLowerCase().replace(/\s+/g, " ")]; if (v) s.value = v; });
   } catch (e) { alert(e.message); }
 }
+async function recReg(file) {
+  const fd = new FormData();
+  if (file) fd.append("file", file); else fd.append("text", document.getElementById("rec-reg").value);
+  try { const r = await apiUpload("/api/accounting/reconcile/parse", fd); REC.register = r.rows; document.getElementById("rec-reg-read").textContent = `${r.rows.length} register line(s) read — used on the next Match.`; }
+  catch (e) { alert(e.message); }
+}
+function recRegFile() { const p = Object.assign(document.createElement("input"), { type: "file", accept: ".csv,.xlsx,.xlsm,.txt" }); p.onchange = () => p.files[0] && recReg(p.files[0]); p.click(); }
+function recBody(extra = {}) {
+  const account_ids = [...document.querySelectorAll(".rec-acc:checked")].map(c => +c.value);
+  const mapping = {}; document.querySelectorAll(".rec-m").forEach(s => { if (s.value) mapping[s.dataset.name] = +s.value; });
+  return { account_ids, start: PERIOD.start, end: PERIOD.end, rows: REC.rows, mapping, tol_days: +(document.getElementById("rec-tol") || {}).value || store.get("rec.tol", 5), register_rows: REC.register || null, ...extra };
+}
 function recFile() { const p = Object.assign(document.createElement("input"), { type: "file", accept: ".csv,.xlsx,.xlsm,.txt" }); p.onchange = () => p.files[0] && recParse(p.files[0]); p.click(); }
 async function recRun() {
   const account_ids = [...document.querySelectorAll(".rec-acc:checked")].map(c => +c.value);
@@ -287,12 +327,14 @@ async function recRun() {
   const tol = +document.getElementById("rec-tol").value || 0; store.set("rec.tol", tol);
   const mapping = {}; document.querySelectorAll(".rec-m").forEach(s => { if (s.value) mapping[s.dataset.name] = +s.value; });
   Object.assign(mapping, REC.extraMap || {}); REC.extraMap = null;
-  try { REC.res = await apiFetch("/api/accounting/reconcile/run", { method: "POST", body: JSON.stringify({ account_ids, start: PERIOD.start, end: PERIOD.end, rows: REC.rows, mapping, tol_days: tol }) }); drawRec(); }
+  try { REC.res = await apiFetch("/api/accounting/reconcile/run", { method: "POST", body: JSON.stringify({ account_ids, start: PERIOD.start, end: PERIOD.end, rows: REC.rows, mapping, tol_days: tol, register_rows: REC.register || null }) }); drawRec(); }
   catch (e) { alert(e.message); }
 }
 async function recLoad(id) {
   const r = await apiFetch(`/api/accounting/reconcile/${id}`);
   REC.rows = r.rows;
+  REC.register = r.register_rows || null;
+  if (document.getElementById("rec-reg-read")) document.getElementById("rec-reg-read").textContent = REC.register ? `${REC.register.length} register line(s) from the earlier check` : "";
   document.querySelectorAll(".rec-acc").forEach(c => c.checked = r.account_ids.includes(+c.value));
   document.getElementById("rec-read").textContent = `${r.rows.length} QuickBooks line(s) from the earlier check (dates ${r.start} – ${r.end}).`;
   document.getElementById("rec-run").disabled = false;
@@ -339,7 +381,10 @@ function drawRec() {
     const tick = id || k === "qb_only" ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="rec-t" data-k="${k}" data-i="${i}" data-amt="${r.amount}" onchange="recTick()"></td>` : "<td></td>";
     if (k === "athub_only") return `<tr class="drill" onclick="recCompare('${k}', ${i})">${tick}<td class="nowrap">${day(r.date)}</td><td><span class="ac-who">${escapeHtml(r.payee || "")}</span><div class="ac-desc">${escapeHtml(r.description)}</div></td>
       <td class="small">${escapeHtml(r.account || (r.splits.length ? "split" : ""))}</td><td class="ac-amt">${money(r.amount)}</td>
-      <td class="small">${(r.closest || []).map(c => `<div>${day(c.date)} ${fmtMoney(c.amount)} ${escapeHtml((c.name || c.memo || "").slice(0, 30))} <a class="link" href="#" onclick='event.stopPropagation();recDecide([{key: ${JSON.stringify(c.key)}, decision: "pair", txn_id: ${r.id}}]);return false;'>Pair</a></div>`).join("") || `<span class="muted">—</span>`}</td>
+      <td class="small">${r.qb_register ? (r.qb_register.missing ? `<div class="neg"><strong>Not in the QuickBooks register at all</strong></div>`
+        : `<div><strong>QuickBooks has it in ${escapeHtml(r.qb_register.account)}</strong>${r.qb_register.memo ? ` — ${escapeHtml(r.qb_register.memo.slice(0, 50))}` : ""}</div>
+           ${r.qb_register.mapped_account_id ? `<button class="small-btn" onclick='event.stopPropagation();recMove([${r.id}], ${r.qb_register.mapped_account_id})'>Move To ${escapeHtml((r.qb_register.mapped_account || "").split(" › ").pop())}</button>` : `<span class="muted">(that QuickBooks account isn't mapped)</span>`}`) : ""}
+        ${(r.closest || []).map(c => `<div>${day(c.date)} ${fmtMoney(c.amount)} ${escapeHtml((c.name || c.memo || "").slice(0, 30))} <a class="link" href="#" onclick='event.stopPropagation();recDecide([{key: ${JSON.stringify(c.key)}, decision: "pair", txn_id: ${r.id}}]);return false;'>Pair</a></div>`).join("") || `<span class="muted">—</span>`}</td>
       <td class="nowrap" onclick="event.stopPropagation()">${actions(k, r, i)}</td></tr>`;
     if (k === "split") return `<tr class="drill" onclick="recCompare('${k}', ${i})"><td></td><td class="nowrap">${day(r.date)}</td><td>${r.parts.map(p => `<div>${escapeHtml(p.name || p.memo || "")} <span class="muted">${fmtMoney(p.amount)}</span></div>`).join("")}</td>
       <td class="small">${r.parts.map(p => `<div>${escapeHtml(p.account)}${p.mapped_account ? ` → ${escapeHtml(p.mapped_account)}` : ` <span class="neg">(not mapped)</span>`}</div>`).join("")}</td><td class="ac-amt">${fmtMoney(r.amount)}</td>
@@ -354,6 +399,7 @@ function drawRec() {
     <p class="ac-help" style="margin-top:6px;">${help}</p>${(d[k] || []).length ? `<div class="btn-row" style="margin-bottom:4px;"><a class="link small" href="#" onclick="document.querySelectorAll('#rec-${k} .rec-t').forEach(c => c.checked = true);recTick();return false;">Tick all in this section</a></div>` : ""}
     <table class="compact-table"><thead>${head(k)}</thead><tbody>${(d[k] || []).map((r, i) => rowHtml(k, r, i)).join("") || `<tr><td colspan="10" class="muted">None.</td></tr>`}</tbody></table></details>`;
   document.getElementById("rec-out").innerHTML = `<div class="card"><div class="ac-filters"><h3 style="margin:0;">Result</h3><span style="flex:1"></span>
+      <button class="small-btn primary" onclick="recFix()" title="Only what needs changing in QuickBooks, one action per line, to tick off">${icon("listTodo")} Fix In QuickBooks…</button>
       <button class="small-btn" onclick="recExport()">${icon("download")} Excel</button></div>
     <div class="ac-tiles">${REC_BUCKETS.filter(b => b[0] !== "decided" || d.counts.decided).map(([k, t]) => `<div class="ac-tile click" onclick="const x=document.getElementById('rec-${k}');x.open=true;x.scrollIntoView({behavior:'smooth'})"><div class="l">${t}</div>
       <div class="v ${["different", "weak", "split", "amount_differs", "date_differs"].includes(k) && d.counts[k] ? "neg" : k === "same" ? "pos" : ""}">${d.counts[k] || 0}</div></div>`).join("")}</div>
@@ -383,6 +429,8 @@ function recTick() {
     <select id="rec-acc" style="width:auto;max-width:240px;">${accountOptions(null, { blank: "— Move to account —" })}</select><button class="small-btn" onclick="recBulk('move')">Move</button>
     <button class="small-btn" onclick="recBulk('qb')" title="Each AT-HUB line to the account QuickBooks has it in">Each To QuickBooks' Account</button>
     <button class="small-btn" onclick="recBulk('flag')">Flag For Review</button><button class="small-btn" onclick="recBulk('right')">AT-HUB Is Right</button>
+    <button class="small-btn" onclick="recBulk('add')" title="Only-in-QuickBooks lines: type them into AT-HUB, all in one go">Add Ticked To AT-HUB</button>
+    <button class="small-btn" onclick="recBulk('register')" title="Only-in-AT-HUB lines: each to the account QuickBooks' register has it in">Each To Where QuickBooks Has It</button>
     <button class="small-btn" onclick="recBulk('ok')" title="Only-in-AT-HUB lines that are fine">OK</button><button class="small-btn" onclick="document.querySelectorAll('.rec-t').forEach(c => c.checked = false);recTick()">Clear</button>`;
   const sel = document.getElementById("rec-acc");
   sel.onchange = async () => { if (sel.value === "new") await pickNew(sel, -1); };
@@ -400,6 +448,13 @@ async function recBulk(what) {
     return recRun();
   }
   if (what === "flag") return recFlag(ids, "Reconcile: check against QuickBooks");
+  if (what === "add") return recAddMany(t.filter(x => x.k === "qb_only").map(x => x.r));
+  if (what === "register") {
+    const by = {}; t.filter(x => x.k === "athub_only" && x.r.qb_register && x.r.qb_register.mapped_account_id).forEach(x => (by[x.r.qb_register.mapped_account_id] = by[x.r.qb_register.mapped_account_id] || []).push(x.r.id));
+    if (!Object.keys(by).length) { toast("None of the ticked lines has a mapped QuickBooks account in the register"); return; }
+    for (const [a, ids_] of Object.entries(by)) await apiFetch("/api/accounting/txns/bulk", { method: "POST", body: JSON.stringify({ ids: ids_, action: "file", account_id: +a }) });
+    toast(`${Object.values(by).flat().length} line(s) moved to where QuickBooks has them (Recent Changes to undo)`); return recRun();
+  }
   if (what === "right") return recDecide(t.filter(x => x.k !== "athub_only").map(x => ({ key: x.r.key, decision: "athub_right", txn_id: recTxnId(x.k, x.r) })));
   if (what === "ok") return recDecide(t.filter(x => x.k === "athub_only").map(x => ({ txn_id: x.r.id, decision: "ok" })));
 }
@@ -423,7 +478,29 @@ async function recDecide(items) {
   try { await apiFetch("/api/accounting/reconcile/decide", { method: "POST", body: JSON.stringify({ items }) }); toast(`${items.length} remembered`); recRun(); }
   catch (e) { alert(e.message); }
 }
+async function recAddMany(rows) {
+  if (!rows.length) { toast("Tick lines in Only In QuickBooks"); return; }
+  const src = META.sources.filter(s => s.is_active);
+  const unm = rows.filter(r => !r.mapped_account_id).length;
+  const { value, el } = await askDialog({ title: `Add ${rows.length} ${rows.length === 1 ? "Line" : "Lines"} To AT-HUB?`, wide: true, body: `<div class="ac-form"><label>Into</label>
+      <select id="ra-src">${src.map(s => `<option value="${s.id}" ${s.kind === "book" ? "selected" : ""}>${escapeHtml(s.name)}${s.kind === "book" ? " (not on a statement)" : " (expected on the statement)"}</option>`).join("")}</select></div>
+    ${unm ? `<p class="neg small">${unm} line(s) have a QuickBooks account that isn't mapped — they come in not filed (Review).</p>` : ""}
+    <div style="max-height:46vh;overflow:auto;"><table class="compact-table no-table-tools"><thead><tr><th>Date</th><th>QuickBooks</th><th class="num">Amount</th><th>Goes Into</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${day(r.date)}</td><td class="small">${escapeHtml(r.name || "")} ${escapeHtml(r.memo || "")}<div class="muted">${escapeHtml(r.account)}</div></td><td class="ac-amt">${fmtMoney(r.amount)}</td>
+      <td class="small">${r.mapped_account ? escapeHtml(r.mapped_account) : `<span class="neg">not mapped</span>`}</td></tr>`).join("")}</tbody></table></div>`,
+    buttons: [{ label: `Add ${rows.length}`, value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+  if (!value) return;
+  try { const r = await apiFetch("/api/accounting/reconcile/add", { method: "POST", body: JSON.stringify({ rows, source_id: +el.querySelector("#ra-src").value }) });
+    doneToast(`${r.added} line(s) added to AT-HUB`, r.change_id, recRun); recRun(); refreshCount(); } catch (e) { alert(e.message); }
+}
 async function recAdd(i) {
+  const ticked = recTicked().filter(x => x.k === "qb_only");
+  if (ticked.length > 1 && ticked.some(x => x.r === REC.res.qb_only[i])) {
+    const { value } = await askDialog({ title: "Just This One?", body: `<p>${ticked.length} lines in Only In QuickBooks are ticked. Add all of them, or just this one?</p>`,
+      buttons: [{ label: `All ${ticked.length} Ticked`, value: "all", cls: "primary" }, { label: "Just This One", value: "one" }, { label: "Cancel", value: null }] });
+    if (!value) return;
+    if (value === "all") return recAddMany(ticked.map(x => x.r));
+  }
   const r = REC.res.qb_only[i];
   const t = await addLinePrefilled({ amount: r.amount, description: [r.name, r.memo].filter(Boolean).join(" — ") || r.account, note: `from QuickBooks (${r.account})`, account_id: r.mapped_account_id, date: r.date });
   if (t) recRun();
@@ -443,9 +520,37 @@ function recMonth(m) {
   const [y, mo] = m.split("-").map(Number), last = new Date(y, mo, 0).getDate();
   TXF = { date_from: `${m}-01`, date_to: `${m}-${String(last).padStart(2, "0")}`, account_id: (store.get("rec.accounts", []) || [])[0] || "" }; saveTxf(); show("txns");
 }
+async function recFix() {
+  let d;
+  try { d = await apiFetch("/api/accounting/reconcile/fix", { method: "POST", body: JSON.stringify(recBody()) }); } catch (e) { alert(e.message); return; }
+  const by = {}; d.actions.forEach((a, i) => (by[a.kind] = by[a.kind] || []).push({ ...a, i }));
+  const { value, el } = await askDialog({ title: `Fix In QuickBooks — ${d.actions.length} ${d.actions.length === 1 ? "Action" : "Actions"}`, wide: true, body: `<p class="ac-help">Everything that needs changing in QuickBooks, in plain words.
+      Tick the ones you've fixed and <strong>Mark Fixed</strong> — they won't show again. The Excel has a Done column to print and work from.</p>
+    <div style="max-height:56vh;overflow:auto;">${Object.entries(by).map(([k, xs]) => `<h4 style="margin:10px 0 4px;">${escapeHtml(d.labels[k] || k)} <span class="muted small">${xs.length}</span></h4>
+      <table class="compact-table no-table-tools"><thead><tr><th></th><th>QuickBooks Line</th><th class="num">Amount</th><th>What To Do</th><th>AT-HUB</th></tr></thead><tbody>
+      ${xs.map(a => `<tr><td>${a.key && k !== "split_athub" ? `<input type="checkbox" class="fx-t" data-key="${escapeHtml(a.key)}">` : ""}</td>
+        <td class="small">${a.qb_date ? day(a.qb_date) : ""} ${escapeHtml(a.qb_name || "")} ${escapeHtml((a.qb_memo || "").slice(0, 60))}<div class="muted">${escapeHtml(a.qb_account || "")}</div></td>
+        <td class="ac-amt">${a.qb_amount != null ? fmtMoney(a.qb_amount) : a.athub_amount != null ? fmtMoney(a.athub_amount) : ""}</td>
+        <td class="small"><strong>${escapeHtml(a.what)}</strong>${a.why ? `<div class="muted">${escapeHtml(a.why)}</div>` : ""}</td>
+        <td class="small">${a.athub_date ? day(a.athub_date) : ""} ${escapeHtml((a.athub_description || "").slice(0, 50))}<div class="muted">${escapeHtml(a.athub_account || "")}</div></td></tr>`).join("")}</tbody></table>`).join("")
+      || `<p class="ac-empty">${icon("checkCircle")}Nothing to fix in QuickBooks for these accounts.</p>`}</div>`,
+    buttons: [{ label: "Mark Ticked Fixed", value: "fixed", cls: "primary" }, { label: "Excel", value: "xlsx" }, { label: "Close", value: null }] });
+  if (value === "xlsx") {
+    try {
+      const res = await fetch(`${API_BASE}/api/accounting/reconcile/fix.xlsx`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` }, body: JSON.stringify(recBody()) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(await res.blob()), download: `Fix In QuickBooks ${PERIOD.start} to ${PERIOD.end}.xlsx` });
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) { alert(e.message); }
+  }
+  if (value === "fixed") {
+    const keys = [...el.querySelectorAll(".fx-t:checked")].map(c => c.dataset.key);
+    if (keys.length) { await apiFetch("/api/accounting/reconcile/decide", { method: "POST", body: JSON.stringify({ items: keys.map(key => ({ key, decision: "fixed_in_qb" })) }) }); toast(`${keys.length} marked fixed in QuickBooks`); recRun(); }
+  }
+}
 async function recExport() {
   try {
-    const body = JSON.stringify({ account_ids: store.get("rec.accounts", []), start: PERIOD.start, end: PERIOD.end, rows: REC.rows, tol_days: store.get("rec.tol", 5) });
+    const body = JSON.stringify(recBody({ account_ids: store.get("rec.accounts", []) }));
     const res = await fetch(`${API_BASE}/api/accounting/reconcile/export.xlsx`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` }, body });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
     const blob = await res.blob(), a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `Reconcile ${PERIOD.start} to ${PERIOD.end}.xlsx` });
@@ -643,7 +748,7 @@ function drawProjections() {
       ${[["banks", "Bank Balances"], ["loans", "Loan Balances"], ["ar", "AR"], ["ap", "AP"], ["monthly", "Monthly Averages"], ["recurring", "Recurring Payments"]].map(([k, l]) => `<button class="small-btn" onclick="pjFill('${k}')">${l}</button>`).join("")}</div>
     <table class="compact-table no-table-tools pj-grid"><thead><tr><th>#</th><th>Group</th><th>Name</th><th>Amount / Formula</th><th class="num">Value</th><th>Month</th><th>Note</th><th></th></tr></thead><tbody>
     ${doc.rows.map((r, k) => `<tr><td class="muted">R${k + 1}</td>
-      <td><input list="pj-groups" value="${escapeHtml(r.group || "")}" onchange="pjSetGroup(${k}, this.value)" title="Pick a group, or type a new one"></td>
+      <td><select onchange="pjPickGroup(${k}, this)">${pjGroups(doc).map(x => `<option ${x === r.group ? "selected" : ""}>${escapeHtml(x)}</option>`).join("")}<option value="__new">+ New Group…</option></select></td>
       <td><input value="${escapeHtml(r.name || "")}" onchange="pjSet(${k}, 'name', this.value)" placeholder="${r.group === "Vendors We Owe (AP)" ? "vendor" : r.group === "Customers Owe Us (AR)" ? "customer" : ""}"></td>
       <td><input value="${escapeHtml(r.a ?? "")}" onchange="pjSet(${k}, 'a', this.value)" style="font-family:monospace;"></td>
       <td class="ac-amt">${vals[k].err ? `<span class="neg small" title="${escapeHtml(vals[k].err)}">error</span>` : pjMoney(r.group, vals[k].v)}</td>
@@ -682,6 +787,13 @@ function drawProjections() {
 }
 function pjDirty() { PJ.dirty = true; drawProjections(); }
 function pjSet(k, f, v) { PJ.cur.doc.rows[k][f] = v; pjDirty(); }
+async function pjPickGroup(k, sel) {
+  if (sel.value !== "__new") return pjSetGroup(k, sel.value);
+  const { value, el } = await askDialog({ title: "New Group", body: `<input id="pj-ng" style="width:100%;" placeholder="e.g. Equipment, Taxes, Customer Deposits">
+    <p class="muted small">Counted as typed: + money in, − money out.</p>`, buttons: [{ label: "Add", value: true, cls: "primary" }, { label: "Cancel", value: null }] });
+  const v = value ? el.querySelector("#pj-ng").value.trim() : "";
+  if (v) pjSetGroup(k, v); else drawProjections();
+}
 function pjSetGroup(k, v) {
   v = (v || "").trim() || "Other";
   PJ.cur.doc.rows[k].group = PJ_GROUPS.find(x => x.toLowerCase() === v.toLowerCase()) || v;

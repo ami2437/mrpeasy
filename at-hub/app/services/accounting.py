@@ -394,13 +394,15 @@ def rule_lines(db: Session, rule: dict, account_id: Optional[int] = None) -> dic
     accounts, sources = maps(db)
     groups = {"unfiled": [], "auto": [], "elsewhere": [], "here": [], "split": []}
     for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).order_by(AcctTxn.date.desc(), AcctTxn.id.desc()).all():
-        if not acct_rules.matches(s_, acct_rules.line_of(t)):
+        e = acct_rules.effective(s_, acct_rules.line_of(t))  # a rule with branches: the branch that takes this line
+        if not e:
             continue
-        if t.splits and not s_["splits"]:
+        acc_here = e["account_id"] if s_.get("branches") else account_id
+        if t.splits and not e["splits"]:
             g = "split"
-        elif not s_["splits"] and account_id and t.account_id == account_id:
+        elif not e["splits"] and acc_here and t.account_id == acc_here:
             g = "here"
-        elif s_["splits"] and t.how == "rule" and t.reviewed and sorted((x.account_id, x.amount) for x in t.splits) == sorted(acct_rules.parts(s_, t.amount)):
+        elif e["splits"] and t.how == "rule" and t.reviewed and sorted((x.account_id, x.amount) for x in t.splits) == sorted(acct_rules.parts(e, t.amount)):
             g = "here"
         elif not t.account_id and not t.splits:
             g = "unfiled"
@@ -408,7 +410,11 @@ def rule_lines(db: Session, rule: dict, account_id: Optional[int] = None) -> dic
             g = "auto"
         else:
             g = "elsewhere"
-        groups[g].append(txn_dict(t, accounts, sources))
+        d = txn_dict(t, accounts, sources)
+        if s_.get("branches"):
+            d["branch"] = e.get("branch_label")
+            d["why"] = f"{e.get('branch_label')} → " + (path(accounts[e["account_id"]], accounts) if e["account_id"] in accounts else "split")
+        groups[g].append(d)
     return {"groups": groups, "count": sum(len(v) for v in groups.values()),
             "can_apply": len(groups["unfiled"]) + len(groups["auto"]) + len(groups["elsewhere"])}
 
@@ -418,9 +424,10 @@ def apply_rule(db: Session, r: AcctRule, ids: List[int], by: str) -> int:
     s_ = acct_rules.spec(r)
     n = 0
     for t in db.query(AcctTxn).options(selectinload(AcctTxn.splits)).filter(AcctTxn.id.in_(ids)).all():
-        if (t.splits and not s_["splits"]) or not acct_rules.matches(s_, acct_rules.line_of(t)):
+        e = acct_rules.effective(s_, acct_rules.line_of(t))
+        if not e or (t.splits and not e["splits"]):
             continue
-        file_by_rule(db, t, s_, by, True)  # counts a hit on the rule
+        file_by_rule(db, t, e, by, True)  # counts a hit on the rule
         n += 1
     db.commit()
     return n

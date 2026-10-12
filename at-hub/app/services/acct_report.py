@@ -1,6 +1,9 @@
-"""The Master Report (user, 2026-10-12): one Excel workbook with everything for a period -- Summary, P&L by month, every
-transaction, then one tab per master (top-level) account with every line in it or its sub-accounts (subtotal per
-sub-account, total at the foot), Partner Accounts by month, Loans, Not Filed, Comments. Split lines: one row per part.
+"""The Master Report (user, 2026-10-12): one Excel workbook with everything for a period, in 10 tabs -- Summary (+ the
+comments), P&L by month, All Transactions, then one tab per type: Income, Cost Of Goods, Expenses, Partner Draws, Loans,
+Transfers & Other, Not Filed. Each type tab is ONE flat Excel table (Master Account / Sub-Account / Partner on every
+row -- ready for filters and pivot tables); the per-account subtotals sit in their own block to the right so a pivot
+never counts them twice (Partner Draws adds each partner by month, Loans each loan's balance). Split lines: one row per
+part.
 The user's Auto_Analyzed-style "Output Excel" (accounting.export_xlsx) stays as it is."""
 import io
 import json
@@ -12,6 +15,7 @@ from typing import Dict, List
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import AcctAccount, AcctComment, AcctTxn
@@ -148,59 +152,96 @@ def master_xlsx(db: Session, start: date, end: date, fy_key: str) -> bytes:
                   t.qb_memo or "", t.flag or ""], (8, 9))
     ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{ws._current_row}"
     _row(ws, ["Total", "", f"{len(txns)} line(s)", "", "", "", "", cents(sum(p_["amount"] for p_ in parts))], (8,), bold=True, fill=TOTAL_FILL)
-    # ---- one tab per master account
-    for m in masters:
-        ws = wb.create_sheet(_sheet_name(m.name, used))
-        mine = [p_ for p_ in parts if p_["master"] and p_["master"].id == m.id]
-        ws.append([f"{m.name} -- {A.KINDS.get(m.kind, A.KINDS['other'])[0]}", "", f"{start.isoformat()} to {end.isoformat()}"])
-        ws.cell(ws._current_row, 1).font = Font(bold=True, size=13)
-        _head(ws, ["Date", "Sub-Account", "Description", "Payee", "Amount", "Line Amount", "Note", "Filed By", "Bank Account"], [11, 26, 60, 24, 14, 14, 30, 10, 18])
-        groups = defaultdict(list)
-        for p_ in mine:
-            groups[p_["account"]].append(p_)
-        multi = len(groups) > 1
-        for acc_name in sorted(groups, key=lambda k: (k != m.name, k.lower())):
-            rows = groups[acc_name]
-            if multi:
-                _row(ws, [acc_name if acc_name != m.name else f"{m.name} (itself)"], bold=True, fill=SUB_FILL)
-            for p_ in rows:
-                t = p_["t"]
-                _row(ws, [t.date.date(), p_["account"], t.bank_description or t.description, t.payee or "", cents(p_["amount"]),
-                          t.amount if t.splits else "", " · ".join(x for x in (t.note, p_["part_note"]) if x), t.how or "",
-                          sources[t.source_id].name if t.source_id in sources else ""], (5, 6))
-            if multi:
-                _row(ws, [f"Subtotal {acc_name}", "", f"{len(rows)} line(s)", "", cents(sum(p_["amount"] for p_ in rows))], (5,), bold=True)
-        _row(ws, [f"Total {m.name}", "", f"{len(mine)} line(s)", "", cents(sum(p_["amount"] for p_ in mine))], (5,), bold=True, fill=TOTAL_FILL)
-    # ---- Partner Accounts by month
+    # ---- one tab per type: a flat table (pivot-ready) + the subtotals in their own block to the right
     from app.services import acct_more as M
     pa = M.partner_accounts(db, start, end, fy_key)
-    ws = wb.create_sheet(_sheet_name("Partner Accounts", used))
-    _head(ws, ["Partner", "Month", "Withdrawn", "Invested", "Net", "Lent To Company", "Repaid To Them", "Lines"], [18, 10, 14, 14, 14, 16, 16, 8])
-    for p_ in pa["partners"]:
-        for x in p_["by_month"]:
-            _row(ws, [p_["name"], x["month"], x["withdrawn"], x["invested"], x["net"], x["lent"], x["repaid"], x["count"]], (3, 4, 5, 6, 7))
-        t_ = p_["period"]
-        _row(ws, [f"Total {p_['name']}", "", t_["withdrawn"], t_["invested"], t_["net"], t_["lent"], t_["repaid"], t_["count"]], (3, 4, 5, 6, 7), bold=True, fill=SUB_FILL)
-    # ---- Loans
-    ws = wb.create_sheet(_sheet_name("Loans", used))
-    _head(ws, ["Lender", "Owed At Start", "Borrowed", "Repaid", "Still Owed", "Lines"], [30, 14, 14, 14, 14, 8])
-    for l_ in A.loans(db, end):
-        _row(ws, [l_["name"], l_["opening"], l_["borrowed"], l_["repaid"], l_["owed"], l_["count"]], (2, 3, 4, 5))
-    # ---- Not Filed
-    ws = wb.create_sheet(_sheet_name("Not Filed", used))
-    _head(ws, ["Date", "Description", "Payee", "Amount", "Flag", "Note"], [11, 60, 24, 14, 16, 30])
-    for p_ in parts:
-        if not p_["account_id"]:
+    partner_of = {}
+    for a in accounts.values():
+        if a.kind in ("owner", "loan"):
+            pn = M._partner_of(a, accounts)
+            if pn:
+                partner_of[a.id] = pn
+    tabs = [("Income", ("income",)), ("Cost Of Goods", ("cogs",)), ("Expenses", ("expense",)), ("Partner Draws", ("owner",)),
+            ("Loans", ("loan",)), ("Transfers & Other", ("transfer", "other", "pending")), ("Not Filed", (None,))]
+    cols = ["Date", "Master Account", "Sub-Account", "Partner", "Description", "Payee", "Amount", "Line Amount", "Split", "Note", "Filed By", "Bank Account", "Flag"]
+    widths = [11, 24, 28, 12, 60, 24, 14, 14, 6, 30, 10, 18, 12]
+    n_tab = 0
+    for title, kinds in tabs:
+        rows = [p_ for p_ in parts if (p_["kind"] in kinds if kinds != (None,) else not p_["account_id"])]
+        ws = wb.create_sheet(_sheet_name(title, used))
+        _head(ws, cols, widths)
+        rows.sort(key=lambda p_: ((p_["master"].name.lower() if p_["master"] else ""), p_["account"].lower(), p_["t"].date, p_["t"].id))
+        for p_ in rows:
             t = p_["t"]
-            _row(ws, [t.date.date(), t.bank_description or t.description, t.payee or "", t.amount, t.flag or "", t.note or ""], (4,))
-    # ---- Comments
+            sub = p_["account"].split(A.SEP, 1)[1] if p_["master"] and A.SEP in p_["account"] else ""
+            _row(ws, [t.date.date(), p_["master"].name if p_["master"] else "Not Filed", sub, partner_of.get(p_["account_id"], ""), t.bank_description or t.description,
+                      t.payee or "", cents(p_["amount"]), t.amount, "yes" if t.splits else "", " · ".join(x for x in (t.note, p_["part_note"]) if x),
+                      t.how or "", sources[t.source_id].name if t.source_id in sources else "", t.flag or ""], (7, 8))
+        last = ws._current_row
+        if rows:
+            n_tab += 1
+            tab = Table(displayName=f"T{n_tab}_{re.sub(r'[^A-Za-z]', '', title)[:20]}", ref=f"A1:{get_column_letter(len(cols))}{last}")
+            tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+            ws.add_table(tab)
+        # subtotals: per master account, then per sub-account -- beside the data, never inside it
+        c0 = len(cols) + 2
+        def put(r, vals, bold=False, fill=None, money=()):
+            for k, v in enumerate(vals):
+                cell = ws.cell(r, c0 + k, v)
+                if bold:
+                    cell.font = BOLD
+                if fill:
+                    cell.fill = fill
+                if k in money:
+                    cell.number_format = MONEY
+        for k, (h, w) in enumerate((("Account", 30), ("Sub-Account", 26), ("Lines", 7), ("Total", 14))):
+            ws.cell(1, c0 + k, h).font, ws.cell(1, c0 + k).fill = BOLD, HEAD_FILL
+            ws.column_dimensions[get_column_letter(c0 + k)].width = w
+        r = 2
+        by_m = defaultdict(list)
+        for p_ in rows:
+            by_m[p_["master"].name if p_["master"] else "Not Filed"].append(p_)
+        for mname in sorted(by_m, key=str.lower):
+            ps = by_m[mname]
+            put(r, [mname, "", len(ps), cents(sum(x["amount"] for x in ps))], bold=True, fill=SUB_FILL, money=(3,))
+            r += 1
+            subs = defaultdict(list)
+            for x in ps:
+                subs[x["account"].split(A.SEP, 1)[1] if A.SEP in x["account"] else "(itself)"].append(x)
+            if len(subs) > 1 or "(itself)" not in subs:
+                for sname in sorted(subs, key=str.lower):
+                    put(r, ["", sname, len(subs[sname]), cents(sum(x["amount"] for x in subs[sname]))], money=(3,))
+                    r += 1
+        put(r, ["Total " + title, "", len(rows), cents(sum(x["amount"] for x in rows))], bold=True, fill=TOTAL_FILL, money=(3,))
+        r += 2
+        if kinds == ("owner",):  # each partner by month
+            for k, h in enumerate(("Partner", "Month", "Withdrawn", "Invested", "Net", "Lines")):
+                ws.cell(r, c0 + k, h).font, ws.cell(r, c0 + k).fill = BOLD, HEAD_FILL
+            r += 1
+            for p2 in pa["partners"]:
+                for x in p2["by_month"]:
+                    put(r, [p2["name"], x["month"], x["withdrawn"], x["invested"], x["net"], x["count"]], money=(2, 3, 4))
+                    r += 1
+                t_ = p2["period"]
+                put(r, [f"Total {p2['name']}", "", t_["withdrawn"], t_["invested"], t_["net"], t_["count"]], bold=True, fill=SUB_FILL, money=(2, 3, 4))
+                r += 1
+        if kinds == ("loan",):  # each loan: owed at the end of the period
+            for k, h in enumerate(("Lender", "Owed At Start", "Borrowed", "Repaid", "Still Owed", "Lines")):
+                ws.cell(r, c0 + k, h).font, ws.cell(r, c0 + k).fill = BOLD, HEAD_FILL
+            r += 1
+            for l_ in A.loans(db, end):
+                put(r, [l_["name"], l_["opening"], l_["borrowed"], l_["repaid"], l_["owed"], l_["count"]], money=(1, 2, 3, 4))
+                r += 1
+    # ---- the comments, on the Summary
     from app.services.acct_more import period_key
-    ws = wb.create_sheet(_sheet_name("Comments", used))
-    _head(ws, ["Section", "Comment", "By", "When", "Period"], [16, 80, 18, 18, 24])
+    ws = wb["Summary"]
+    ws.append([])
+    ws.append(["Comments"])
+    ws.cell(ws._current_row, 1).font = Font(bold=True, size=12)
     pk = period_key(start, end)
     for c in db.query(AcctComment).order_by(AcctComment.section, AcctComment.created_at).all():
         if c.period_key in (None, pk):
-            _row(ws, [c.section, c.text, c.created_by or "", c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "", c.period_key or "every period"])
+            ws.append([c.section, c.text, c.created_by or "", c.created_at.strftime("%Y-%m-%d") if c.created_at else ""])
             ws.cell(ws._current_row, 2).alignment = Alignment(wrap_text=True)
     buf = io.BytesIO()
     wb.save(buf)
