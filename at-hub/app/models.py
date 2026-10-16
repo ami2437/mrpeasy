@@ -1932,3 +1932,74 @@ class AcctReconcile(Base):
     deleted_by = Column(String, nullable=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---- Vendor Accounts (wire + cash vendors) -- services/vendor_accounts.py ----
+# A vendor paid partly by wire and partly in cash, who later collects cash by adding it to other invoices. The account
+# is its own ledger: bills at their TRUE amount (split into wire due / cash due), every real money movement, and what
+# each one paid. Keyed by codes (vendor code, SO #, invoice #) -- nothing points at MRPeasy row ids, so a fresh import
+# keeps it whole (importers/mrpeasy/keep.py keeps every vacct_* table) and sync_all() puts its PO payments back.
+
+class VacctAccount(Base):
+    __tablename__ = "vacct_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vendor_code = Column(String, nullable=False, unique=True, index=True)
+    vendor_name = Column(String, nullable=True)  # as it was when the account was opened (shown if the vendor is gone)
+    cash_share = Column(Float, nullable=False, default=50.0)  # % of the goods paid in cash, unless a bill says otherwise
+    note = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VacctBill(Base):
+    """One vendor invoice at its true amount. paper_amount = what the invoice says when he added old cash to it."""
+    __tablename__ = "vacct_bills"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("vacct_accounts.id"), nullable=False, index=True)
+    so_number = Column(String, nullable=True)      # the vendor's SO # (= our PO's vendor SO #)
+    so_amount = Column(Float, nullable=True)
+    po_code = Column(String, nullable=True)        # picked by hand; otherwise found by SO # / invoice #
+    bill_number = Column(String, nullable=True)
+    bill_date = Column(DateTime, nullable=True)
+    goods = Column(Float, nullable=False, default=0.0)
+    freight = Column(Float, nullable=False, default=0.0)
+    customs = Column(Float, nullable=False, default=0.0)
+    other = Column(Float, nullable=False, default=0.0)
+    paper_amount = Column(Float, nullable=True)
+    wire_due = Column(Float, nullable=False, default=0.0)
+    cash_due = Column(Float, nullable=False, default=0.0)
+    note = Column(Text, nullable=True)
+    source = Column(String, nullable=True)  # manual | sheet
+    position = Column(Integer, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VacctPayment(Base):
+    """A real money movement: a wire (with its wire #) or cash handed over."""
+    __tablename__ = "vacct_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("vacct_accounts.id"), nullable=False, index=True)
+    kind = Column(String, nullable=False, default="wire")  # wire | cash
+    paid_date = Column(DateTime, nullable=True)
+    amount = Column(Float, nullable=False)
+    reference = Column(String, nullable=True)  # wire #
+    came_with_bill_id = Column(Integer, nullable=True)  # the (inflated) invoice this wire was sent for
+    note = Column(Text, nullable=True)
+    source = Column(String, nullable=True)  # manual | sheet
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VacctAlloc(Base):
+    """Part of a payment applied to the wire part or the cash part of a bill. A wire applied to cash = a recovery."""
+    __tablename__ = "vacct_allocs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    payment_id = Column(Integer, ForeignKey("vacct_payments.id"), nullable=False, index=True)
+    bill_id = Column(Integer, ForeignKey("vacct_bills.id"), nullable=False, index=True)
+    part = Column(String, nullable=False, default="wire")  # wire | cash
+    amount = Column(Float, nullable=False)

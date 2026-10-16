@@ -408,6 +408,8 @@ from app.routes import email_settings  # noqa: E402
 app.include_router(email_settings.router)
 from app.routes import accounting  # noqa: E402
 app.include_router(accounting.router)
+from app.routes import vendor_accounts  # noqa: E402
+app.include_router(vendor_accounts.router)
 
 
 def _mail_loop():

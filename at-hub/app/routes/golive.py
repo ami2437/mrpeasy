@@ -65,3 +65,36 @@ class RestoreIn(BaseModel):
 @router.post("/restore")
 def restore(data: RestoreIn, db: Session = Depends(get_db)):
     return {"restored": golive.restore(db, data.ids)}
+
+
+# ---- close-out: receive old open POs, deliver paid shipments (services/golive_closeout.py) ----
+class CloseoutIn(BaseModel):
+    months: int = 3
+    po_ids: Optional[List[int]] = None
+    shipment_ids: Optional[List[int]] = None
+
+
+@router.get("/closeout")
+def closeout_preview(months: int = 3, db: Session = Depends(get_db)):
+    from app.services import golive_closeout
+    if months < 1 or months > 60:
+        raise HTTPException(status_code=400, detail="Months: 1 to 60")
+    return golive_closeout.preview(db, months)
+
+
+@router.post("/closeout")
+def closeout_apply(data: CloseoutIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    from app.services import backups, golive_closeout
+    if data.months < 1 or data.months > 60:
+        raise HTTPException(status_code=400, detail="Months: 1 to 60")
+    try:
+        backups.backup_now("before-golive-closeout")
+    except Exception:
+        pass
+    return golive_closeout.apply(db, data.months, user.username, data.po_ids, data.shipment_ids)
+
+
+@router.post("/closeout/undo")
+def closeout_undo(db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    from app.services import golive_closeout
+    return golive_closeout.undo(db, user.username)

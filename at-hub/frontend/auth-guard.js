@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, accounting: 3, "accounting.undo_import": 4, "accounting.start_fresh": 4, emails: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, accounting: 3, "accounting.undo_import": 4, "accounting.start_fresh": 4, emails: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, vendor_accounts: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -1833,6 +1833,7 @@ const NAV_GROUPS = [
     ["vendors.html", "Vendors", "vendors"],
     ["purchase-orders.html", "Purchase Orders", "purchasing"],
     ["landed-costs.html", "Landed Costs", "landed_costs"],
+    ["vendor-accounts.html", "Vendor Accounts", "vendor_accounts"],
   ] },
   { label: "Warehouse", links: [["stock-items.html", "Stock Items", "stock.view"], ["lots.html", "Lots", "stock.view"], ["mtrs.html", "MTR Library", "stock.view"]] },
   { label: null, links: [["reports.html", "Reports", "reports"], ["accounting.html", "Accounting", "accounting"], ["simulate.html", "Simulate", "simulate"], ["company.html", "Company Settings", "company"],
@@ -2784,7 +2785,7 @@ function icon(name, cls = "") {
 const NAV_ICONS = {
   "dashboard.html": "dashboard", "customers.html": "users", "customer-orders.html": "clipboard", "shipments.html": "truck",
   "pack-shipments.html": "package", "pod.html": "checkCircle", "labels.html": "tag", "invoices.html": "receipt",
-  "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "stock-items.html": "layers",
+  "vendors.html": "factory", "purchase-orders.html": "cart", "landed-costs.html": "anchor", "vendor-accounts.html": "dollar", "stock-items.html": "layers",
   "lots.html": "barcode", "mtrs.html": "fileCheck", "reports.html": "chart", "company.html": "building",
   "users.html": "shield", "account.html": "user", "recycle-bin.html": "trash", "file-matcher.html": "paperclip", "tasks.html": "checkCircle", "ai-desk.html": "sparkles", "mrp-payments.html": "dollar", "golive.html": "sliders", "todo.html": "listTodo", "notes.html": "sticky", "simulate.html": "flask", "activity.html": "clock", "backups.html": "save", "designer.html": "palette", "reconcile.html": "list", "emails.html": "mail", "accounting.html": "dollar",
 };

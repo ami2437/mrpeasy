@@ -27,6 +27,19 @@
       <span class="muted small">Migration tool: keeps Needs Attention about work done in AT-HUB. Nothing is deleted. Clear the date and everything shows again.</span></div>
 
     <div class="card">
+      <h3 style="margin-top:0;">Close Out Old Records</h3>
+      <p class="muted small" style="margin-top:0;">Run once, right after the final MRPeasy import. <strong>Old purchase orders</strong> still open and ordered more than
+        the months below are <strong>received</strong> (stock goes up through normal receiving: lots, costs, the stock ledger) and close with a note.
+        <strong>Shipments</strong> that shipped, are paid in full and whose order is fully invoiced get <strong>delivered on their ship date</strong>, with a note.
+        A backup is made first, and Undo puts it all back.</p>
+      <div class="row" style="align-items:flex-end; gap:12px; flex-wrap:wrap;">
+        <div style="flex:0 0 auto;"><label>POs ordered more than (months) ago</label><input type="number" id="co-months" value="3" min="1" max="60" style="width:110px;"></div>
+        <button class="secondary" style="flex:0 0 auto;" onclick="closeoutPreview()">Show What Would Change</button>
+      </div>
+      <div id="co-out" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
       <h3 style="margin-top:0;">Go-live cut-off</h3>
       <p class="muted small" style="margin-top:0;">Rows dated <strong>before</strong> this date drop out of the ticked sections on the Dashboard and Reports.
         A shipment is dated by its ship date, an invoice by its invoice date, an order or PO by the day it was entered, a vendor invoice by its date.
@@ -129,6 +142,54 @@
       load();
     }
     load();
+
+    // ---- close out old records ----
+    async function closeoutPreview() {
+      const out = document.getElementById("co-out");
+      out.innerHTML = `<p class="muted">Checking…</p>`;
+      try {
+        const months = parseInt(document.getElementById("co-months").value) || 3;
+        const r = await apiFetch(`/api/golive/closeout?months=${months}`);
+        const done = r.done && !r.done.undone_at ? r.done : null;
+        if (done) {
+          out.innerHTML = `<p>Done ${fmtWhen(done.at + "Z")} by ${escapeHtml(done.by)}: <strong>${done.pos.length}</strong> POs received and closed,
+            <strong>${done.shipments.length}</strong> shipments delivered.${done.problems.length ? `<br><span class="error">Not done: ${done.problems.map(escapeHtml).join("; ")}</span>` : ""}</p>
+            <button class="secondary" onclick="closeoutUndo()">Undo The Close-Out</button>`;
+          return;
+        }
+        out.innerHTML = `
+          <h4 style="margin:6px 0;">${r.pos.length} Purchase Orders To Receive And Close <span class="muted small">— ${fmtQty(r.po_quantity)} units, ${fmtMoney(r.po_value)}${r.non_stock_value > 0.005 ? ` (${fmtMoney(r.non_stock_value)} of it services / non-stock)` : ""}</span></h4>
+          ${r.pos.length ? `<div class="table-scroll" style="max-height:260px; overflow-y:auto;"><table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" checked onchange="document.querySelectorAll('.co-po').forEach(c => c.checked = this.checked)"></th>
+            <th>PO</th><th>Vendor</th><th>Their SO #</th><th>Ordered</th><th>Status</th><th class="num">Open Lines</th><th class="num">Units</th><th class="num">Value</th></tr></thead><tbody>
+            ${r.pos.map(p => `<tr><td><input type="checkbox" class="co-po" value="${p.po_id}" checked></td><td><a class="link" href="purchase-orders.html?code=${encodeURIComponent(p.code)}">${escapeHtml(p.code)}</a></td>
+              <td>${escapeHtml(p.vendor)}${p.non_stock ? ` <span class="tag">Services</span>` : ""}</td><td>${escapeHtml(p.vendor_so || "")}</td><td>${p.ordered ? fmtDate(p.ordered) : ""}</td><td>${escapeHtml(p.status.replace("_", " "))}</td>
+              <td class="num">${p.lines.length}</td><td class="num">${fmtQty(p.quantity)}</td><td class="num">${fmtMoney(p.value)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">None.</p>`}
+          <h4 style="margin:12px 0 6px;">${r.shipments.length} Shipments To Mark Delivered On Their Ship Date</h4>
+          ${r.shipments.length ? `<div class="table-scroll" style="max-height:260px; overflow-y:auto;"><table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" checked onchange="document.querySelectorAll('.co-sh').forEach(c => c.checked = this.checked)"></th>
+            <th>Shipment</th><th>Order</th><th>Customer</th><th>Shipped</th><th>Invoices (Paid)</th></tr></thead><tbody>
+            ${r.shipments.map(s => `<tr><td><input type="checkbox" class="co-sh" value="${s.shipment_id}" checked></td><td>${escapeHtml(s.code)}</td><td>${escapeHtml(s.order || "")}</td>
+              <td>${escapeHtml(s.customer)}</td><td>${fmtDate(s.ship_date)}</td><td>${s.invoices.map(escapeHtml).join(", ")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">None.</p>`}
+          <div class="btn-row" style="margin-top:10px;"><button onclick="closeoutApply(${months})">Receive, Close And Deliver The Ticked Ones</button></div>`;
+      } catch (e) { out.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+    }
+    async function closeoutApply(months) {
+      const po_ids = [...document.querySelectorAll(".co-po:checked")].map(c => parseInt(c.value));
+      const shipment_ids = [...document.querySelectorAll(".co-sh:checked")].map(c => parseInt(c.value));
+      if (!confirm(`Receive and close ${po_ids.length} POs (stock goes up) and mark ${shipment_ids.length} shipments delivered? A backup is made first; Undo puts it back.`)) return;
+      try {
+        const r = await apiFetch("/api/golive/closeout", { method: "POST", body: JSON.stringify({ months, po_ids, shipment_ids }) });
+        toast(`${r.pos.length} POs received and closed, ${r.shipments.length} shipments delivered.` + (r.problems.length ? ` ${r.problems.length} couldn't be done -- see the card.` : ""));
+        closeoutPreview();
+      } catch (e) { alert(e.message); }
+    }
+    async function closeoutUndo() {
+      if (!confirm("Undo the close-out? The receipts are taken back out of stock and the shipments lose their delivery date.")) return;
+      try {
+        const r = await apiFetch("/api/golive/closeout/undo", { method: "POST" });
+        toast("Close-out undone." + (r.undo_problems.length ? ` Not undone: ${r.undo_problems.join("; ")}` : ""));
+        closeoutPreview();
+      } catch (e) { alert(e.message); }
+    }
   </script>
 </body>
 </html>

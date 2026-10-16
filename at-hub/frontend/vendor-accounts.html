@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AT-HUB — Vendor Accounts</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="auth-guard.js"></script>
+  <style>
+    .va-head { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+    .va-head select { min-width: 260px; }
+    .va-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+    .va-table td.num, .va-table th.num { white-space: nowrap; }
+    .va-table tr.va-open-row td { background: var(--accent-soft, #eef4ff); }
+    .va-detail td { background: var(--surface-2, #f8fafc); font-size: 13px; }
+    .va-detail ul { margin: 4px 0; padding-left: 18px; }
+    .va-rec { color: #b45309; font-weight: 600; }
+    .va-credit { color: #15803d; font-weight: 600; }
+    .va-owed { color: #b91c1c; font-weight: 600; }
+    .va-modal .modal { max-width: 900px; width: calc(100% - 32px); max-height: 88vh; overflow-y: auto; }
+    .va-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .va-grid .wide { grid-column: span 2; }
+    .va-grid .full { grid-column: 1 / -1; }
+    @media (max-width: 760px) { .va-grid { grid-template-columns: 1fr 1fr; } }
+    .va-ok { color: #15803d; font-weight: 700; }
+    .va-bad { color: #b91c1c; font-weight: 700; }
+    .va-note { background: #fff7e6; border: 1px solid #f5d38a; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+  <div id="sidebar"></div>
+  <main>
+    <div class="card">
+      <div class="va-head">
+        <div style="flex:1; min-width:260px;">
+          <h3 style="margin:0;">Vendor Accounts</h3>
+          <p class="muted" style="margin:4px 0 0;">For vendors paid partly by wire and partly in cash. Each invoice is kept at its <strong>true amount</strong>;
+            when an invoice of theirs includes old cash, that part is a <strong>recovery</strong> that pays the cash of the invoice it was for — never a cost.
+            Every wire and cash payment shows exactly what it paid, and the balance always adds up.</p>
+        </div>
+        <div><label>Account</label><select id="acc-pick" onchange="pick(this.value)"></select></div>
+        <div><button onclick="newAccount()">+ New Vendor Account</button></div>
+      </div>
+    </div>
+
+    <div id="acc-view"></div>
+  </main>
+  </div>
+
+  <script>
+    AuthGuard.requirePerm("vendor_accounts");
+    document.getElementById("sidebar").innerHTML = renderSidebar("vendor-accounts.html");
+
+    let accounts = [], V = null, TAB = "invoices", OPEN = new Set();
+    const store = { get: k => { try { return localStorage.getItem("va." + k); } catch { return null; } },
+                    set: (k, v) => { try { localStorage.setItem("va." + k, v); } catch {} } };
+    const m = n => fmtMoney(n || 0);
+    const esc = escapeHtml;
+
+    async function loadList(selectId) {
+      accounts = await apiFetch("/api/vendor-accounts/");
+      const sel = document.getElementById("acc-pick");
+      sel.innerHTML = accounts.length ? accounts.map(a => `<option value="${a.id}">${esc(a.vendor_name || a.vendor_code)} — owed ${m(a.totals.owed)}</option>`).join("")
+                                      : `<option value="">No Vendor Accounts Yet</option>`;
+      const want = selectId || new URLSearchParams(location.search).get("id") || store.get("acc");
+      const id = accounts.find(a => String(a.id) === String(want)) ? want : (accounts[0] && accounts[0].id);
+      if (id) { sel.value = id; await pick(id); }
+      else document.getElementById("acc-view").innerHTML = `<div class="card"><p class="muted">Start one with <strong>+ New Vendor Account</strong>: pick the vendor
+        and how much of each invoice is usually paid in cash. Then load your spreadsheet as the starting history, or add invoices and payments one by one.</p></div>`;
+    }
+
+    async function pick(id) {
+      if (!id) return;
+      store.set("acc", id);
+      V = await apiFetch(`/api/vendor-accounts/${id}`);
+      render();
+    }
+
+    function setView(v) { V = v; render(); loadListQuiet(); }
+    async function loadListQuiet() {
+      accounts = await apiFetch("/api/vendor-accounts/");
+      const sel = document.getElementById("acc-pick");
+      const cur = sel.value;
+      sel.innerHTML = accounts.map(a => `<option value="${a.id}">${esc(a.vendor_name || a.vendor_code)} — owed ${m(a.totals.owed)}</option>`).join("");
+      sel.value = cur;
+    }
+
+    function render() {
+      const t = V.totals, a = V.account;
+      const tile = (label, value, sub, cls = "") => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value ${cls}">${value}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ""}</div>`;
+      document.getElementById("acc-view").innerHTML = `
+        <div class="card">
+          <div class="row" style="align-items:center;">
+            <h3 style="margin:0; flex:1;">${esc(a.vendor_name || a.vendor_code)} <span class="muted small">${esc(a.vendor_code)} · cash share ${a.cash_share}%</span></h3>
+            <div style="flex:0; white-space:nowrap;"><a class="link" onclick="settings()">Settings</a></div>
+          </div>
+          <div class="stat-row">
+            ${tile("Total Owed", m(t.owed), "Wire + Cash − Credit", t.owed > 0.005 ? "va-owed" : "")}
+            ${tile("Wire Owed", m(t.wire_left))}
+            ${tile("Cash Owed", m(t.cash_left), V.open_cash.length ? `On ${V.open_cash.length} Invoice${V.open_cash.length === 1 ? "" : "s"}` : "")}
+            ${tile("Credit With Them", m(t.credit), "Paid Ahead / Over-Collected", t.credit > 0.005 ? "va-credit" : "")}
+            ${tile("True Billed", m(t.total), t.recovery_in > 0.005 ? `Their Invoices Say ${m(t.paper)}` : "")}
+            ${tile("Paid", m(t.paid), `Wire ${m(t.wire_sent)} · Cash ${m(t.cash_handed)}`)}
+            ${tile("Old Cash Collected Via Invoices", m(t.recovered))}
+          </div>
+          <div class="va-tools">
+            <button onclick="billForm()">+ Invoice</button>
+            <button onclick="payForm('wire')">+ Wire</button>
+            <button onclick="payForm('cash')">+ Cash</button>
+            <button class="secondary" onclick="openPdf('/api/vendor-accounts/${a.id}/statement.pdf' + (openOnly() ? '?open_only=true' : ''))" data-icon="printer">Statement PDF</button>
+            <button class="secondary" onclick="statementXlsx()" data-icon="download">Statement Excel</button>
+            <label class="inline-check"><input type="checkbox" id="open-only" ${store.get("open") === "1" ? "checked" : ""} onchange="store.set('open', this.checked ? '1' : '0')"> Open Invoices Only</label>
+            <span style="flex:1"></span>
+            <button class="secondary" onclick="compareForm()">Compare Their Sheet</button>
+            <button class="secondary" onclick="sheetForm()">Load Spreadsheet</button>
+          </div>
+          <div class="tabs">${[["invoices", `Invoices (${V.bills.length})`], ["payments", `Payments (${V.payments.length})`], ["cash", `Open Cash (${V.open_cash.length})`]]
+            .map(([k, l]) => `<div class="tab ${TAB === k ? "active" : ""}" onclick="TAB='${k}';render()">${l}</div>`).join("")}</div>
+          <div id="va-tab">${TAB === "invoices" ? invoicesHtml() : TAB === "payments" ? paymentsHtml() : openCashHtml()}</div>
+        </div>`;
+      decorateIcons(document.getElementById("acc-view"));
+    }
+    function openOnly() { const el = document.getElementById("open-only"); return el && el.checked; }
+
+    function invoicesHtml() {
+      if (!V.bills.length) return `<p class="muted">No Invoices Yet. Add them with <strong>+ Invoice</strong> or load your spreadsheet.</p>`;
+      let lastSo = null;
+      const rows = V.bills.map(b => {
+        const so = b.so_number !== lastSo ? esc(b.so_number || "") : "";
+        lastSo = b.so_number;
+        const open = OPEN.has(b.id);
+        const paper = b.paper_amount != null ? b.paper_amount : b.total;
+        return `<tr class="${open ? "va-open-row" : ""}" style="cursor:pointer;" onclick="toggle(${b.id})">
+            <td>${so}</td><td class="nowrap">${esc(b.bill_number || "—")}</td>
+            <td>${b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}" onclick="event.stopPropagation()">${esc(b.po_code)}</a>` : `<span class="muted small">No PO</span>`}</td>
+            <td class="num">${m(paper)}</td>
+            <td class="num">${b.recovery_in > 0.005 ? `<span class="va-rec" title="Old cash he added to this invoice">${m(b.recovery_in)}</span>` : ""}</td>
+            <td class="num">${m(b.wire_due)}</td><td class="num">${m(b.cash_due)}</td>
+            <td class="num">${m(b.wire_paid)}</td><td class="num">${m(b.cash_paid)}</td>
+            <td class="num ${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</td>
+          </tr>${open ? `<tr class="va-detail"><td colspan="10">${billDetail(b)}</td></tr>` : ""}`;
+      }).join("");
+      const t = V.totals;
+      return `<div class="table-scroll"><table class="compact-table va-table">
+        <thead><tr><th>SO #</th><th>Invoice</th><th>PO</th><th class="num">Invoice Total</th><th class="num">Old Cash Incl.</th><th class="num">Wire Due</th>
+          <th class="num">Cash Due</th><th class="num">Wire Paid</th><th class="num">Cash Paid</th><th class="num">Balance</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><th colspan="3">Totals</th><th class="num">${m(t.paper)}</th><th class="num">${m(t.recovery_in)}</th><th class="num">${m(t.wire_due)}</th>
+          <th class="num">${m(t.cash_due)}</th><th class="num">${m(t.wire_paid)}</th><th class="num">${m(t.cash_paid)}</th><th class="num">${m(t.balance)}</th></tr></tfoot>
+      </table></div>
+      <p class="muted small">Click an invoice to see what paid it. Invoice Total is what their invoice says; the true amount is Wire Due + Cash Due.</p>`;
+    }
+
+    function billDetail(b) {
+      const parts = [`Goods ${m(b.goods)}`];
+      if (b.freight) parts.push(`Freight ${m(b.freight)}`);
+      if (b.customs) parts.push(`Customs ${m(b.customs)}`);
+      if (b.other) parts.push(`Other ${m(b.other)}`);
+      const paid = b.paid_by.length ? `<ul>${b.paid_by.map(r => `<li>${r.paid_date ? fmtDate(r.paid_date) + " · " : ""}${r.kind === "wire" ? `Wire${r.reference ? " " + esc(r.reference) : ""}` : "Cash"}
+          → ${r.part} part ${m(r.amount)}${r.recovery ? ` <span class="va-rec">old cash${r.came_with ? ", came with " + esc(r.came_with) : ""}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">Nothing paid yet.</p>`;
+      return `<div class="row" style="align-items:flex-start;">
+          <div style="flex:2;"><strong>True amount ${m(b.total)}</strong> — ${parts.join(" · ")}${b.paper_amount != null ? ` · <span class="va-rec">their invoice says ${m(b.paper_amount)}</span>` : ""}
+            ${b.bill_date ? `<br><span class="muted">Invoice date ${fmtDate(b.bill_date)}</span>` : ""}
+            ${b.note ? `<div class="muted" style="white-space:pre-line; margin-top:4px;">${esc(b.note)}</div>` : ""}</div>
+          <div style="flex:2;"><strong>Paid by</strong>${paid}
+            ${b.wire_left > 0.005 ? `<span class="va-owed">Wire still open ${m(b.wire_left)}</span> ` : ""}${b.cash_left > 0.005 ? `<span class="va-owed">Cash still open ${m(b.cash_left)}</span>` : ""}</div>
+          <div style="flex:0; white-space:nowrap;"><a class="link" onclick="billForm(${b.id})">Edit</a> · <a class="link" onclick="deleteBill(${b.id})">Delete</a></div>
+        </div>`;
+    }
+    function toggle(id) { OPEN.has(id) ? OPEN.delete(id) : OPEN.add(id); render(); }
+
+    function paymentsHtml() {
+      if (!V.payments.length) return `<p class="muted">No Payments Yet. Record one with <strong>+ Wire</strong> or <strong>+ Cash</strong>.</p>`;
+      return `<div class="table-scroll"><table class="compact-table va-table">
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Amount</th><th>Wire #</th><th>Sent With</th><th>What It Paid</th><th class="num">Credit</th><th></th></tr></thead>
+        <tbody>${V.payments.map(p => `<tr>
+            <td>${p.paid_date ? fmtDate(p.paid_date) : `<span class="muted">—</span>`}</td><td>${p.kind === "wire" ? "Wire" : "Cash"}</td>
+            <td class="num">${m(p.amount)}</td><td>${esc(p.reference || "")}</td><td>${esc(p.came_with || "")}</td>
+            <td class="small">${p.parts.map(r => `${esc(r.bill_number || "SO " + (r.so_number || ""))} ${r.part} ${m(r.amount)}${r.recovery ? ` <span class="va-rec">(old cash)</span>` : ""}`).join("<br>") || `<span class="muted">Nothing yet</span>`}</td>
+            <td class="num">${p.credit > 0.005 ? `<span class="va-credit">${m(p.credit)}</span>` : ""}</td>
+            <td class="nowrap"><a class="link" onclick="payForm('${p.kind}', ${p.id})">Edit</a> · <a class="link" onclick="deletePayment(${p.id})">Delete</a></td>
+          </tr>`).join("")}</tbody>
+      </table></div>
+      <p class="muted small">A payment's Credit is money not applied to any invoice yet — Edit it to apply the credit to an open invoice.</p>`;
+    }
+
+    function openCashHtml() {
+      if (!V.open_cash.length) return `<p class="muted">No Cash Owed.</p>`;
+      return `<table class="compact-table va-table">
+        <thead><tr><th>SO #</th><th>Invoice</th><th>Invoice Date</th><th class="num">Cash Due</th><th class="num">Cash Paid</th><th class="num">Cash Still Owed</th><th class="num">Days</th></tr></thead>
+        <tbody>${V.open_cash.map(b => `<tr><td>${esc(b.so_number || "")}</td><td>${esc(b.bill_number || "—")}</td><td>${b.bill_date ? fmtDate(b.bill_date) : ""}</td>
+          <td class="num">${m(b.cash_due)}</td><td class="num">${m(b.cash_paid)}</td><td class="num va-owed">${m(b.cash_left)}</td><td class="num">${b.days_open ?? ""}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><th colspan="5">Total cash owed</th><th class="num">${m(V.totals.cash_left)}</th><th></th></tr></tfoot>
+      </table><p class="muted small">Oldest first — the order a wire's old cash is applied in, unless you pick otherwise.</p>`;
+    }
+
+    // ---- pop-ups ----
+    function modal(html) {
+      const back = document.createElement("div");
+      back.className = "modal-backdrop va-modal";
+      back.innerHTML = `<div class="modal">${html}</div>`;
+      let downOnBack = false;
+      back.addEventListener("mousedown", e => { downOnBack = e.target === back; });
+      back.addEventListener("click", e => { if (e.target === back && downOnBack) back.remove(); });
+      document.body.appendChild(back);
+      decorateIcons(back);
+      return back;
+    }
+    const val = (el, id) => el.querySelector("#" + id).value;
+    const num = (el, id) => { const v = val(el, id); return v === "" ? null : parseFloat(v); };
+
+    async function newAccount() {
+      const vendors = await apiFetch("/api/vendors/");
+      const have = new Set(accounts.map(a => a.vendor_code));
+      const el = modal(`<h3 style="margin-top:0;">New Vendor Account</h3>
+        <div class="va-grid"><div class="wide"><label>Vendor</label><select id="n-vendor"><option value="">— pick a vendor —</option>
+          ${vendors.filter(v => !have.has(v.code)).map(v => `<option value="${v.id}">${esc(v.name)}${v.code ? ` (${esc(v.code)})` : ""}</option>`).join("")}</select></div>
+          <div><label>Usual Cash Share (%)</label><input type="number" id="n-share" value="50" min="0" max="100" step="1"></div></div>
+        <p class="muted small">The part of an invoice's goods usually paid in cash. Freight and customs are always by wire. Each invoice can be changed.</p>
+        <div id="n-err" class="error"></div>
+        <div class="btn-row"><button id="n-save">Create</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button></div>`);
+      el.querySelector("#n-save").onclick = async () => {
+        if (!val(el, "n-vendor")) { el.querySelector("#n-err").textContent = "Pick the vendor."; return; }
+        try {
+          const v = await apiFetch("/api/vendor-accounts/", { method: "POST", body: JSON.stringify({ vendor_id: parseInt(val(el, "n-vendor")), cash_share: num(el, "n-share") }) });
+          el.remove();
+          await loadList(v.account.id);
+        } catch (e) { el.querySelector("#n-err").textContent = e.message; }
+      };
+    }
+
+    function settings() {
+      const a = V.account;
+      const el = modal(`<h3 style="margin-top:0;">Settings — ${esc(a.vendor_name)}</h3>
+        <div class="va-grid"><div><label>Usual Cash Share (%)</label><input type="number" id="s-share" value="${a.cash_share}" min="0" max="100"></div>
+        <div class="full"><label>Note</label><input type="text" id="s-note" value="${esc(a.note || "")}"></div></div>
+        <p class="muted small">Changing the share affects new invoices only.</p>
+        <div id="s-err" class="error"></div>
+        <div class="btn-row"><button id="s-save">Save</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+          <span style="flex:1"></span><button class="danger" id="s-del">Delete This Account</button></div>`);
+      el.querySelector("#s-save").onclick = async () => {
+        try { setView(await apiFetch(`/api/vendor-accounts/${a.id}`, { method: "PUT", body: JSON.stringify({ cash_share: num(el, "s-share"), note: val(el, "s-note") }) })); el.remove(); }
+        catch (e) { el.querySelector("#s-err").textContent = e.message; }
+      };
+      el.querySelector("#s-del").onclick = async () => {
+        if (!confirm(`Delete the vendor account for ${a.vendor_name}? Its invoices and payments here are removed (the POs keep their own invoices; their payments from this account are taken off).`)) return;
+        try { await apiFetch(`/api/vendor-accounts/${a.id}`, { method: "DELETE" }); el.remove(); store.set("acc", ""); await loadList(); }
+        catch (e) { el.querySelector("#s-err").textContent = e.message; }
+      };
+    }
+
+    function billForm(id) {
+      const b = id ? V.bills.find(x => x.id === id) : null;
+      const f = (k, d = "") => b && b[k] != null ? b[k] : d;
+      const el = modal(`<h3 style="margin-top:0;">${b ? "Edit Invoice " + esc(b.bill_number || "") : "New Invoice"}</h3>
+        <div class="va-grid">
+          <div><label>Their SO #</label><input type="text" id="b-so" value="${esc(f("so_number"))}"></div>
+          <div><label>Invoice #</label><input type="text" id="b-no" value="${esc(f("bill_number"))}"></div>
+          <div><label>Invoice Date</label><input type="date" id="b-date" value="${f("bill_date")}"></div>
+          <div><label>PO (Blank = Find By SO #)</label><input type="text" id="b-po" value="${esc(f("po_picked"))}" placeholder="${esc(f("po_code"))}"></div>
+          <div><label>Goods</label><input type="number" step="0.01" id="b-goods" value="${f("goods")}" oninput="billCheck(this)"></div>
+          <div><label>Freight</label><input type="number" step="0.01" id="b-freight" value="${f("freight")}" oninput="billCheck(this)"></div>
+          <div><label>Customs</label><input type="number" step="0.01" id="b-customs" value="${f("customs")}" oninput="billCheck(this)"></div>
+          <div><label>Other Charges</label><input type="number" step="0.01" id="b-other" value="${f("other")}" oninput="billCheck(this)"></div>
+          <div><label>Their Invoice Says</label><input type="number" step="0.01" id="b-paper" value="${f("paper_amount")}" placeholder="Same As True Amount" oninput="billCheck(this)"></div>
+          <div><label>Cash Due</label><input type="number" step="0.01" id="b-cash" value="${b ? b.cash_due : ""}" placeholder="${V.account.cash_share}% Of Goods" oninput="billCheck(this)"></div>
+          <div class="wide"><label>Note</label><input type="text" id="b-note" value="${esc(f("note"))}"></div>
+        </div>
+        <div id="b-check"></div>
+        <div id="b-err" class="error"></div>
+        <div class="btn-row"><button id="b-save">${b ? "Save" : "Add Invoice"}</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button></div>`);
+      billCheck(el.querySelector("#b-goods"));
+      el.querySelector("#b-save").onclick = async () => {
+        const body = { so_number: val(el, "b-so"), bill_number: val(el, "b-no"), bill_date: val(el, "b-date") || null, po_code: val(el, "b-po") || null,
+          goods: num(el, "b-goods") || 0, freight: num(el, "b-freight") || 0, customs: num(el, "b-customs") || 0, other: num(el, "b-other") || 0,
+          paper_amount: num(el, "b-paper"), cash_due: num(el, "b-cash"), note: val(el, "b-note") };
+        try {
+          setView(await apiFetch(b ? `/api/vendor-accounts/${V.account.id}/bills/${b.id}` : `/api/vendor-accounts/${V.account.id}/bills`,
+                                 { method: b ? "PUT" : "POST", body: JSON.stringify(body) }));
+          el.remove();
+        } catch (e) { el.querySelector("#b-err").textContent = e.message; }
+      };
+    }
+    // the question the old sheet never asked: is the extra old cash, or a real charge?
+    function billCheck(input) {
+      const el = input.closest(".modal");
+      const n = id => parseFloat(el.querySelector("#" + id).value) || 0;
+      const total = n("b-goods") + n("b-freight") + n("b-customs") + n("b-other");
+      const paper = el.querySelector("#b-paper").value === "" ? null : n("b-paper");
+      const cash = el.querySelector("#b-cash").value === "" ? Math.round(n("b-goods") * V.account.cash_share) / 100 : n("b-cash");
+      let html = `<p class="muted small">True amount <strong>${m(total)}</strong> = wire <strong>${m(total - cash)}</strong> + cash <strong>${m(cash)}</strong>.</p>`;
+      if (paper != null && paper > total + 0.005) {
+        html += `<div class="va-note">Their invoice says <strong>${m(paper)}</strong> — <strong>${m(paper - total)}</strong> more than the charges.
+          If that extra is <strong>freight or customs</strong>, enter it above (it's a real cost). If it's <strong>old cash</strong> he's collecting,
+          leave it: when you record the wire for this invoice, choose <em>Sent With</em> = this invoice and that ${m(paper - total)} goes to the oldest open cash.</div>`;
+      } else if (paper != null && paper < total - 0.005) {
+        html += `<div class="va-note va-bad">The charges add up to more than their invoice — check the numbers.</div>`;
+      }
+      el.querySelector("#b-check").innerHTML = html;
+    }
+
+    async function deleteBill(id) {
+      const b = V.bills.find(x => x.id === id);
+      if (!confirm(`Delete invoice ${b.bill_number || ""}?`)) return;
+      try { setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/bills/${id}`, { method: "DELETE" })); }
+      catch (e) { alert(e.message); }
+    }
+
+    let PARTS = [];
+    function payForm(kind, id) {
+      const p = id ? V.payments.find(x => x.id === id) : null;
+      PARTS = p ? p.parts.map(r => ({ bill_id: r.bill_id, part: r.part, amount: r.amount })) : [];
+      const billOpts = sel => V.bills.map(b => `<option value="${b.id}" ${sel === b.id ? "selected" : ""}>${esc(b.bill_number || "SO " + (b.so_number || ""))}${b.wire_left > 0.005 ? ` · wire open ${m(b.wire_left)}` : ""}${b.cash_left > 0.005 ? ` · cash open ${m(b.cash_left)}` : ""}</option>`).join("");
+      const el = modal(`<h3 style="margin-top:0;">${p ? "Edit" : "Record"} ${kind === "wire" ? "Wire" : "Cash Payment"}</h3>
+        <div class="va-grid">
+          <div><label>Amount</label><input type="number" step="0.01" min="0" id="p-amount" value="${p ? p.amount : ""}"></div>
+          <div><label>Date</label><input type="date" id="p-date" value="${p ? (p.paid_date || "") : todayISO()}"></div>
+          ${kind === "wire" ? `<div><label>Wire #</label><input type="text" id="p-ref" value="${esc(p ? p.reference || "" : "")}" placeholder="OW000…"></div>
+          <div><label>Sent With Invoice</label><select id="p-came"><option value="">— none —</option>${billOpts(p ? p.came_with_bill_id : null)}</select></div>`
+          : `<div class="wide"><label>Where / Who</label><input type="text" id="p-ref" value="${esc(p ? p.reference || "" : "")}" placeholder="E.g. Paid In India"></div>`}
+          <div class="full"><label>Note</label><input type="text" id="p-note" value="${esc(p ? p.note || "" : "")}"></div>
+        </div>
+        <h4 style="margin:14px 0 4px;">What It Pays</h4>
+        <p class="muted small" style="margin:0 0 6px;">${kind === "wire" ? "The wire part of the invoice it was sent with (or the invoices you add), then old cash — oldest first. Change any line." : "Cash owed, oldest first. Change any line."}</p>
+        <div class="btn-row" style="margin:0 0 6px;"><button class="secondary small-btn" id="p-suggest">Fill In For Me</button>
+          <button class="secondary small-btn" id="p-add">+ Line</button></div>
+        <div id="p-parts"></div>
+        <div id="p-sum" class="small"></div>
+        <div id="p-err" class="error"></div>
+        <div class="btn-row"><button id="p-save">${p ? "Save" : "Record"}</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button></div>`);
+      const drawParts = () => {
+        el.querySelector("#p-parts").innerHTML = PARTS.length ? `<table class="compact-table no-table-tools"><thead><tr><th>Invoice</th><th>Part</th><th class="num">Apply</th><th></th></tr></thead><tbody>
+          ${PARTS.map((r, i) => `<tr><td><select data-i="${i}" data-k="bill_id">${billOpts(r.bill_id)}</select></td>
+            <td><select data-i="${i}" data-k="part"><option value="wire" ${r.part === "wire" ? "selected" : ""}>Wire Part</option><option value="cash" ${r.part === "cash" ? "selected" : ""}>Cash Part${kind === "wire" ? " (Old Cash)" : ""}</option></select></td>
+            <td class="num"><input type="number" step="0.01" min="0" data-i="${i}" data-k="amount" value="${r.amount}" style="width:120px;"></td>
+            <td><a class="link" data-del="${i}">Remove</a></td></tr>`).join("")}</tbody></table>` : `<p class="muted small">Nothing applied yet — it would all be a credit.</p>`;
+        sumUp();
+      };
+      const sumUp = () => {
+        const amt = parseFloat(val(el, "p-amount")) || 0, used = PARTS.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+        const left = Math.round((amt - used) * 100) / 100;
+        el.querySelector("#p-sum").innerHTML = `Applied <strong>${m(used)}</strong> of ${m(amt)}` +
+          (left > 0.005 ? ` · <span class="va-credit">${m(left)} stays a credit with them</span>` : left < -0.005 ? ` · <span class="va-bad">${m(-left)} more than the payment</span>` : " · <span class=\"va-ok\">all applied</span>");
+      };
+      el.querySelector("#p-parts").addEventListener("input", e => {
+        const t = e.target; if (t.dataset.i == null) return;
+        const r = PARTS[+t.dataset.i];
+        r[t.dataset.k] = t.dataset.k === "bill_id" ? parseInt(t.value) : t.dataset.k === "amount" ? (parseFloat(t.value) || 0) : t.value;
+        sumUp();
+      });
+      el.querySelector("#p-parts").addEventListener("change", e => { if (e.target.tagName === "SELECT") el.querySelector("#p-parts").dispatchEvent(new Event("input")); });
+      el.querySelector("#p-parts").addEventListener("click", e => { const d = e.target.closest("[data-del]"); if (d) { PARTS.splice(+d.dataset.del, 1); drawParts(); } });
+      el.querySelector("#p-amount").addEventListener("input", sumUp);
+      el.querySelector("#p-add").onclick = () => { PARTS.push({ bill_id: (V.open_cash[0] || V.bills[0] || {}).id, part: kind === "wire" ? "wire" : "cash", amount: 0 }); drawParts(); };
+      el.querySelector("#p-suggest").onclick = async () => {
+        const amount = parseFloat(val(el, "p-amount"));
+        if (!amount) { el.querySelector("#p-err").textContent = "Enter the amount first."; return; }
+        const came = kind === "wire" ? val(el, "p-came") : "";
+        try {
+          const s = await apiFetch(`/api/vendor-accounts/${V.account.id}/suggest`, { method: "POST", body: JSON.stringify({ kind, amount, came_with_bill_id: came ? parseInt(came) : null, payment_id: p ? p.id : null }) });
+          PARTS = s.parts.map(r => ({ bill_id: r.bill_id, part: r.part, amount: r.amount }));
+          el.querySelector("#p-err").textContent = "";
+          drawParts();
+        } catch (e) { el.querySelector("#p-err").textContent = e.message; }
+      };
+      if (kind === "wire") el.querySelector("#p-came").addEventListener("change", () => { if (parseFloat(val(el, "p-amount"))) el.querySelector("#p-suggest").click(); });
+      drawParts();
+      el.querySelector("#p-save").onclick = async () => {
+        const amount = parseFloat(val(el, "p-amount"));
+        if (!amount) { el.querySelector("#p-err").textContent = "Enter the amount paid."; return; }
+        const body = { kind, amount, paid_date: val(el, "p-date") || null, reference: val(el, "p-ref") || null, note: val(el, "p-note") || null,
+          came_with_bill_id: kind === "wire" && val(el, "p-came") ? parseInt(val(el, "p-came")) : null,
+          parts: PARTS.filter(r => (parseFloat(r.amount) || 0) > 0).map(r => ({ bill_id: r.bill_id, part: r.part, amount: parseFloat(r.amount) })) };
+        try {
+          setView(await apiFetch(p ? `/api/vendor-accounts/${V.account.id}/payments/${p.id}` : `/api/vendor-accounts/${V.account.id}/payments`,
+                                 { method: p ? "PUT" : "POST", body: JSON.stringify(body) }));
+          el.remove();
+          TAB = "payments"; render();
+        } catch (e) { el.querySelector("#p-err").textContent = e.message; }
+      };
+    }
+
+    async function deletePayment(id) {
+      const p = V.payments.find(x => x.id === id);
+      if (!confirm(`Delete this ${p.kind} of ${m(p.amount)}? What it paid becomes open again.`)) return;
+      try { setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/payments/${id}`, { method: "DELETE" })); }
+      catch (e) { alert(e.message); }
+    }
+
+    async function statementXlsx() {
+      const name = `Statement - ${V.account.vendor_name || V.account.vendor_code} - ${todayISO()}.xlsx`;
+      try { await downloadFile(`/api/vendor-accounts/${V.account.id}/statement.xlsx${openOnly() ? "?open_only=true" : ""}`, name); }
+      catch (e) { alert(e.message); }
+    }
+
+    function fileModal(title, intro, onFile) {
+      const el = modal(`<h3 style="margin-top:0;">${title}</h3><p class="muted">${intro}</p>
+        <input type="file" id="f-file" accept=".xlsx,.xlsm,.csv,.tsv,.txt">
+        <div id="f-out" style="margin-top:12px;"></div><div id="f-err" class="error"></div>
+        <div class="btn-row" id="f-btns"><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`);
+      el.querySelector("#f-file").onchange = async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        el.querySelector("#f-err").textContent = "";
+        el.querySelector("#f-out").innerHTML = `<p class="muted">Reading ${esc(file.name)}…</p>`;
+        try { await onFile(el, file); } catch (err) { el.querySelector("#f-out").innerHTML = ""; el.querySelector("#f-err").textContent = err.message; }
+      };
+      return el;
+    }
+
+    function sheetForm() {
+      fileModal("Load Spreadsheet", `Your shared sheet with ${esc(V.account.vendor_name)} — one row per invoice under its SO, with Wire Due / Cash Due / Wire Recd / Cash Recd
+        and comments. AT-HUB reads it, works out where each recovery went from the comments, and checks it ends at the same balance. Nothing is saved until you press Load.`,
+        async (el, file) => {
+          const fd = new FormData(); fd.append("file", file);
+          const r = await apiUpload(`/api/vendor-accounts/${V.account.id}/sheet/preview`, fd);
+          const c = r.check;
+          el.querySelector("#f-out").innerHTML = `
+            <div class="stat-row">
+              <div class="stat"><div class="stat-label">Sheet Says Owed</div><div class="stat-value">${m(c.sheet_owed)}</div><div class="stat-sub">Wire ${m(c.sheet_wire)} · Cash ${m(c.sheet_cash)}</div></div>
+              <div class="stat"><div class="stat-label">AT-HUB Will Show</div><div class="stat-value">${m(c.owed)}</div><div class="stat-sub">Wire ${m(c.wire_owed)} · Cash ${m(c.cash_owed)} · Credit ${m(c.credit)}</div></div>
+              <div class="stat"><div class="stat-label">Check</div><div class="stat-value ${c.matches ? "va-ok" : "va-bad"}">${c.matches ? "Same ✓" : "Differs " + m(c.difference)}</div></div>
+              <div class="stat"><div class="stat-label">True Billed</div><div class="stat-value">${m(c.true_billed)}</div><div class="stat-sub">Sheet Total ${m(c.sheet_billed)} counts ${m(c.double_counted)} twice</div></div>
+            </div>
+            <p><strong>${r.bills.length}</strong> invoices · <strong>${r.payments.length}</strong> payments${r.replaces ? ` · <span class="va-bad">replaces the ${r.replaces} invoices / payments already in this account</span>` : ""}</p>
+            ${r.notes.length ? `<h4>What AT-HUB Understood</h4><ul class="small">${r.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+            ${r.warnings.length ? `<h4>Check These</h4><ul class="small va-bad">${r.warnings.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+            ${r.no_po.length ? `<p class="small muted">No PO in AT-HUB yet for: ${r.no_po.map(esc).join(", ")}. They're kept in the account and link up once those POs exist.</p>` : ""}
+            <details><summary class="link">Every payment AT-HUB will record</summary><table class="compact-table no-table-tools small"><thead><tr><th>Row</th><th>Type</th><th class="num">Amount</th><th>Date</th><th>Wire #</th><th>Pays</th></tr></thead><tbody>
+              ${r.payments.map(p => `<tr><td>${p.row}</td><td>${p.kind}</td><td class="num">${m(p.amount)}</td><td>${p.date || ""}</td><td>${esc(p.reference || "")}</td>
+                <td>${p.parts.map(x => `row ${x.row} ${x.part} ${m(x.amount)}`).join(", ")}${p.credit > 0.005 ? ` <span class="va-credit">credit ${m(p.credit)}</span>` : ""}</td></tr>`).join("")}</tbody></table></details>`;
+          el.querySelector("#f-btns").innerHTML = `<button id="f-apply">Load Into ${esc(V.account.vendor_name)}</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>`;
+          el.querySelector("#f-apply").onclick = async () => {
+            if (r.replaces && !confirm("This replaces everything already in this account with the sheet. A backup of the database is made first. Go ahead?")) return;
+            try {
+              const fd2 = new FormData(); fd2.append("file", file);
+              const res = await apiUpload(`/api/vendor-accounts/${V.account.id}/sheet/apply`, fd2);
+              el.remove();
+              setView(res.view);
+              toast(`Loaded ${res.bills} invoices and ${res.payments} payments — owed ${m(res.owed)}${res.matches ? " (same as the sheet)" : ""}. ${res.pos} POs now show these payments.`);
+            } catch (e) { el.querySelector("#f-err").textContent = e.message; }
+          };
+        });
+    }
+
+    function compareForm() {
+      fileModal("Compare Their Sheet", `The statement they sent back (or their own sheet). AT-HUB matches it invoice by invoice and lists what's different, plus anything they wrote under Their Notes.`,
+        async (el, file) => {
+          const fd = new FormData(); fd.append("file", file);
+          const r = await apiUpload(`/api/vendor-accounts/${V.account.id}/compare`, fd);
+          const label = { differs: "Different", only_theirs: "Only On Theirs", only_ours: "Only In AT-HUB", note: "Their Note", same: "Same" };
+          const order = ["differs", "only_theirs", "only_ours", "note", "same"];
+          const rows = r.rows.slice().sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+          el.querySelector("#f-out").innerHTML = `
+            <div class="stat-row">
+              <div class="stat"><div class="stat-label">They Show Owed</div><div class="stat-value">${m(r.their_owed)}</div></div>
+              <div class="stat"><div class="stat-label">AT-HUB Shows</div><div class="stat-value">${m(r.our_owed)}</div></div>
+              <div class="stat"><div class="stat-label">Difference</div><div class="stat-value ${Math.abs(r.difference) < 0.05 ? "va-ok" : "va-bad"}">${Math.abs(r.difference) < 0.05 ? "None ✓" : m(r.difference)}</div></div>
+              ${order.filter(k => r.counts[k]).map(k => `<div class="stat"><div class="stat-label">${label[k]}</div><div class="stat-value">${r.counts[k]}</div></div>`).join("")}
+            </div>
+            <table class="compact-table no-table-tools small"><thead><tr><th>Invoice</th><th></th><th class="num">Theirs</th><th class="num">AT-HUB</th><th>What Differs / Their Note</th></tr></thead><tbody>
+              ${rows.filter(x => x.status !== "same").map(x => `<tr><td>${esc(x.invoice)}</td><td><span class="tag ${x.status === "differs" ? "cancelled" : ""}">${label[x.status]}</span></td>
+                <td class="num">${x.their_balance != null ? m(x.their_balance) : ""}</td><td class="num">${x.our_balance != null ? m(x.our_balance) : ""}</td>
+                <td>${(x.differences || []).map(esc).join("<br>")}${x.their_notes ? `<br><em>${esc(x.their_notes)}</em>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="va-ok">Every invoice is the same.</td></tr>`}
+            </tbody></table><p class="muted small">Balances per invoice. Same invoices aren't listed (${r.counts.same || 0}).</p>`;
+        });
+    }
+
+    loadList();
+  </script>
+</body>
+</html>

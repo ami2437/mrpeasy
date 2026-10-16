@@ -888,12 +888,13 @@
     async function createVendorPayment() {
       const err = document.getElementById("vp-error");
       err.textContent = "";
+      if (!document.getElementById("vp-vendor").value) { err.textContent = "Pick the vendor this payment went to."; return; }
       try {
         await apiFetch("/api/vendor-payments/", { method: "POST", body: JSON.stringify({
           vendor_id: parseInt(document.getElementById("vp-vendor").value), amount: parseFloat(document.getElementById("vp-amount").value) || 0,
           paid_date: document.getElementById("vp-date").value || null, method: document.getElementById("vp-method").value || null,
           reference: document.getElementById("vp-ref").value || null, note: document.getElementById("vp-note").value || null }) });
-        ["vp-amount", "vp-method", "vp-ref", "vp-note"].forEach(id => document.getElementById(id).value = "");
+        ["vp-vendor", "vp-amount", "vp-method", "vp-ref", "vp-note"].forEach(id => document.getElementById(id).value = "");
         loadVendorPayments();
       } catch (e) { err.textContent = e.message; }
     }
@@ -1701,7 +1702,7 @@ Thank you.</textarea>
       nonStockGroups = new Set(groups.filter(g => g.non_stock).map(g => g.name));
       const vendorOptions = vendors.map(v => `<option value="${v.id}">${escapeHtml(v.name)}${v.code ? ` (${escapeHtml(v.code)})` : ""}</option>`).join("");
       document.getElementById("f-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
-      document.getElementById("vp-vendor").innerHTML = vendorOptions;
+      document.getElementById("vp-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
       TypeLists.load("payment_method").then(() => {
         document.getElementById("vp-method").innerHTML = TypeLists.optionsHtml("payment_method", null, "", { blank: "—" });
       }).catch(() => {});

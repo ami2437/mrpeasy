@@ -19,7 +19,7 @@
       <div class="row toolbar-row users-only">
         <input type="text" id="search" placeholder="Search username, name, or email...">
         <select id="role-filter" style="max-width:180px;"><option value="">All roles</option></select>
-        <label class="inline-check"><input type="checkbox" id="show-inactive"> Show deactivated</label>
+        <label class="inline-check"><input type="checkbox" id="hide-inactive"> Hide deactivated</label>
         <button onclick="toggleForm(true)">+ New User</button>
       </div>
     </div>
@@ -103,7 +103,7 @@
     function renderUsers() {
       const q = document.getElementById("search").value.trim().toLowerCase();
       const role = document.getElementById("role-filter").value;
-      const showInactive = document.getElementById("show-inactive").checked;
+      const showInactive = !document.getElementById("hide-inactive").checked;  // deactivated accounts stay listed (greyed, last)
       const filtered = users.filter(u => (showInactive || u.is_active) && (!role || u.role === role) && (!q ||
         [u.username, u.full_name, u.email].some(v => (v || "").toLowerCase().includes(q))));
       const tbody = document.getElementById("users-body");
@@ -356,7 +356,7 @@
 
     document.getElementById("search").addEventListener("input", renderUsers);
     document.getElementById("role-filter").addEventListener("change", renderUsers);
-    document.getElementById("show-inactive").addEventListener("change", renderUsers);
+    document.getElementById("hide-inactive").addEventListener("change", renderUsers);
     if (me) load().then(() => { let t = "users"; try { t = localStorage.getItem("users_tab") || "users"; } catch {} setTab(t); });
   </script>
   </div>
