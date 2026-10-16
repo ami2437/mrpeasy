@@ -2549,3 +2549,4 @@ html[data-theme="dark"] .em-alert { background: #450a0a; color: #fecaca; border-
 
 /* Vendor Accounts hints (vendor-accounts.html, purchase-orders.html) */
 .va-note { background: #fff7e6; border: 1px solid #f5d38a; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; color: #3b2f12; }
+html[data-theme="dark"] .va-note { background: #2a2413; border-color: #6b5418; color: #f3e7c4; }

@@ -6,38 +6,50 @@
   <link rel="stylesheet" href="style.css">
   <script src="auth-guard.js"></script>
   <style>
+    :root { --va-hl: #fff4d6; --va-hl-edge: #f59e0b; --va-on-bg: #fde68a; --va-on-fg: #3b2f12; --va-rec: #b45309; --va-credit: #15803d;
+            --va-owed: #b91c1c; --va-ok: #15803d; --va-paid-bg: #fffbeb; --va-paid-border: #f59e0b; --va-note-bg: #fff7e6; --va-note-border: #f5d38a;
+            --va-note-fg: #3b2f12; }
+    html[data-theme="dark"] { --va-hl: #3b3115; --va-hl-edge: #f59e0b; --va-on-bg: #f59e0b; --va-on-fg: #111827; --va-rec: #fbbf24; --va-credit: #4ade80;
+            --va-owed: #f87171; --va-ok: #4ade80; --va-paid-bg: #2a2413; --va-paid-border: #b7791f; --va-note-bg: #2a2413; --va-note-border: #6b5418;
+            --va-note-fg: #f3e7c4; }
     .va-head { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
     .va-head select { min-width: 260px; }
     .va-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; align-items: center; }
     .va-table td.num, .va-table th.num { white-space: nowrap; }
-    .va-table tr.va-open-row td { background: var(--accent-soft, #eef4ff); }
-    .va-table tr.va-hl td { background: #fff4d6; }
-    .va-table tr.va-hl td:first-child { box-shadow: inset 4px 0 0 #f59e0b; }
-    .va-detail td { background: var(--surface-2, #f8fafc); font-size: 13px; }
+    .va-table tr.va-open-row td { background: var(--accent-soft); }
+    .va-table tr.va-hl td { background: var(--va-hl); color: var(--text); }
+    .va-table tr.va-hl td:first-child { box-shadow: inset 4px 0 0 var(--va-hl-edge); }
+    /* frozen headers: each list scrolls in its own box under its header row */
+    .va-scroll { max-height: calc(100vh - 150px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .va-scroll table { margin: 0; }
+    .va-scroll thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-3); box-shadow: inset 0 -1px 0 var(--border); }
+    .va-scroll tfoot th { position: sticky; bottom: 0; z-index: 3; background: var(--surface-3); box-shadow: inset 0 1px 0 var(--border); }
+    .va-detail td { background: var(--surface-2); color: var(--text); font-size: 13px; }
     .va-detail ul { margin: 4px 0; padding-left: 18px; }
-    .va-rec { color: #b45309; font-weight: 600; }
-    .va-credit { color: #15803d; font-weight: 600; }
-    .va-owed { color: #b91c1c; font-weight: 600; }
+    .va-rec { color: var(--va-rec); font-weight: 600; }
+    .va-credit { color: var(--va-credit); font-weight: 600; }
+    .va-owed { color: var(--va-owed); font-weight: 600; }
     .va-modal .modal { max-width: 940px; width: calc(100% - 32px); max-height: 88vh; overflow-y: auto; }
     .va-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
     .va-grid .wide { grid-column: span 2; }
     .va-grid .full { grid-column: 1 / -1; }
     @media (max-width: 760px) { .va-grid { grid-template-columns: 1fr 1fr; } }
-    .va-ok { color: #15803d; font-weight: 700; }
-    .va-bad { color: #b91c1c; font-weight: 700; }
-    .va-note { background: #fff7e6; border: 1px solid #f5d38a; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; }
+    .va-ok { color: var(--va-ok); font-weight: 700; }
+    .va-bad { color: var(--va-owed); font-weight: 700; }
+    .va-note { background: var(--va-note-bg); border: 1px solid var(--va-note-border); color: var(--va-note-fg); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; }
     .va-chip { display: inline-block; padding: 1px 7px; margin: 1px 2px 1px 0; border-radius: 10px; font-size: 12px; font-weight: 600; cursor: pointer;
-               background: var(--surface-2, #eef2f7); border: 1px solid var(--border, #d7dde5); white-space: nowrap; }
-    .va-chip:hover, .va-chip.on { background: #fde68a; border-color: #f59e0b; }
-    .va-chip.rec { color: #b45309; }
+               background: var(--surface-2); color: var(--text); border: 1px solid var(--border); white-space: nowrap; }
+    .va-chip:hover, .va-chip.on { background: var(--va-on-bg); color: var(--va-on-fg); border-color: var(--va-hl-edge); }
+    .va-chip.rec { color: var(--va-rec); }
+    .va-chip.rec.on, .va-chip.rec:hover { color: var(--va-on-fg); }
     .va-so { max-width: 150px; overflow-wrap: anywhere; }
     .va-chip { font-size: 11px; padding: 0 6px; }
     .va-so .muted { font-size: 12px; }
-    .va-paid { border: 2px solid #f59e0b; background: #fffbeb; border-radius: 10px; padding: 10px 14px; margin: 0 0 12px; }
+    .va-paid { border: 2px solid var(--va-paid-border); background: var(--va-paid-bg); color: var(--text); border-radius: 10px; padding: 10px 14px; margin: 0 0 12px; }
     .va-paid h4 { margin: 0 0 6px; }
-    .va-pay-head td { background: var(--surface-2, #f3f6fa); font-weight: 600; border-top: 2px solid var(--border, #d7dde5); }
+    .va-pay-head td { background: var(--surface-2); font-weight: 600; border-top: 2px solid var(--border); }
     .va-pay-part td:first-child { padding-left: 26px; }
-    .va-hlbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: #fffbeb; border: 1px solid #f5d38a; border-radius: 8px;
+    .va-hlbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--va-paid-bg); color: var(--text); border: 1px solid var(--va-note-border); border-radius: 8px;
                 padding: 6px 10px; margin: 0 0 8px; font-size: 13px; }
   </style>
 </head>
@@ -191,8 +203,10 @@
 
     function soCell(b, repeat) {
       const so = esc(b.so_number || "—");
+      const x = V.sos.find(s => s.so_number === b.so_number);
       const link = b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}" title="Open ${esc(b.po_code)}" onclick="event.stopPropagation()">${so}</a>` : so;
-      return `<td class="va-so ${repeat ? "muted" : ""}">${link}<br><span class="muted">${b.po_code ? esc(b.po_code) : "No PO yet"}</span></td>`;
+      const amt = x && x.so_amount != null ? `<br><span class="small" title="SO amount${x.so_amount_from === "po" ? " (the PO's total)" : ""}">SO ${m(x.so_amount)}</span>${x.not_invoiced > 0.005 ? ` <span class="small va-rec" title="Not invoiced yet">· ${m(x.not_invoiced)} to bill</span>` : ""}` : "";
+      return `<td class="va-so ${repeat ? "muted" : ""}">${link}${amt}<br><span class="muted">${b.po_code ? esc(b.po_code) : "No PO yet"}</span></td>`;
     }
 
     function invoicesHtml() {
@@ -217,8 +231,8 @@
           </tr>${open ? `<tr class="va-detail"><td colspan="10">${billDetail(b)}</td></tr>` : ""}`;
       }).join("");
       const t = V.totals;
-      return `<div class="table-scroll"><table class="compact-table va-table">
-        <thead><tr><th>SO # / PO</th><th>Invoice</th><th class="num">Their Invoice</th><th class="num">Old Cash</th><th class="num">Wire Due</th>
+      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
+        <thead><tr><th>SO # / SO Amount / PO</th><th>Invoice</th><th class="num">Their Invoice</th><th class="num">Old Cash</th><th class="num">Wire Due</th>
           <th class="num">Cash Due</th><th class="num">Wire Paid</th><th class="num">Cash Paid</th><th class="num">Balance</th><th>Paid By</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot><tr><th colspan="2">Totals</th><th class="num">${m(t.paper)}</th><th class="num">${m(t.recovery_in)}</th><th class="num">${m(t.wire_due)}</th>
@@ -248,7 +262,7 @@
     function sosHtml() {
       if (!V.sos.length) return `<p class="muted">No SOs yet.</p>`;
       const t = V.totals;
-      return `<div class="table-scroll"><table class="compact-table va-table">
+      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
         <thead><tr><th>SO # / PO</th><th class="num">SO Amount</th><th>Invoices</th><th class="num">Invoiced (Goods)</th><th class="num">Freight / Customs</th>
           <th class="num">Not Invoiced Yet</th><th class="num">Owed On Its Invoices</th></tr></thead>
         <tbody>${V.sos.map(x => `<tr>
@@ -282,7 +296,7 @@
           <td class="num">${r.recovery ? `<span class="va-rec" title="old cash">${m(r.amount)} cash</span>` : `${m(r.amount)} <span class="muted small">${r.part}</span>`}</td><td></td></tr>`; }).join("");
         return head + parts;
       }).join("");
-      return `<div class="table-scroll"><table class="compact-table va-table">
+      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
         <thead><tr><th>Payment</th><th>Date</th><th>Type / Wire #</th><th class="num">Amount</th><th>Invoice</th><th>SO # / PO</th><th class="num">Applied</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <p class="muted small">Each payment with every invoice it paid underneath. A payment's credit is money not applied yet — Edit it to apply it to an open invoice.
