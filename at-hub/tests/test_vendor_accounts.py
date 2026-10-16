@@ -89,7 +89,7 @@ def test_the_pos_follow_the_account(api, make):
     api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 600, "reference": "OW9", "for_bill_ids": [b["id"]]})
     db = SessionLocal()
     pays = db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == pos["S7/26-27"]["id"]).all()
-    assert [(round(p.amount, 2), p.reference) for p in pays] == [(600, "vendor-account")] and "OW9" in pays[0].note
+    assert [(round(p.amount, 2), p.reference, p.created_by) for p in pays] == [(600, "OW9", "vendor-account")] and "P-001" in pays[0].note
     bills = db.query(VendorBill).filter(VendorBill.po_id == pos["S7/26-27"]["id"]).all()
     assert [(x.bill_number, x.amount) for x in bills] == [("47", 1000)] and pays[0].vendor_bill_id == bills[0].id
     assert [p.amount for p in db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == other["id"])] == [999]  # not in the account
@@ -161,7 +161,7 @@ def test_their_sheet_loads_with_every_recovery_worked_out(api, make, client, adm
     x = client.get(f"/api/vendor-accounts/{aid}/statement.xlsx", headers=admin_headers)
     assert x.status_code == 200 and x.headers["content-type"].startswith("application/vnd.openxml")
     wb = load_workbook(io.BytesIO(x.content))
-    assert wb.sheetnames == ["Statement", "Payments"]
+    assert wb.sheetnames == ["Statement", "Payments", "SO Summary"]
     ws = wb["Statement"]
     head = [c.value for c in next(r for r in ws.iter_rows(min_row=1, max_row=10) if r[0].value == "SO #")]
     assert "Their Notes" in head and "Old Cash Included" in head
@@ -198,31 +198,37 @@ def test_fresh_import_keeps_vendor_payments_and_vendor_accounts(tmp_path):
     live_p, new_p = tmp_path / "live.db", tmp_path / "import.db"
     e1, live = _db(live_p)
     e2, new = _db(new_p)
-    live.add_all([Vendor(id=1, code="V00005", name="Akbar"), Vendor(id=2, code="V00009", name="Gone Vendor"),
-                  PurchaseOrder(id=7, code="PO-7", vendor_id=1, vendor_so_number="90/25-26"), PurchaseOrder(id=8, code="PO-GONE", vendor_id=1)])
-    live.add_all([VendorPayment(id=1, code="VP-0001", vendor_id=1, amount=5000, paid_date=datetime(2026, 10, 14), method="wire", reference="OW5"),
-                  VendorPayment(id=2, code="VP-0002", vendor_id=2, amount=10)])
-    live.add_all([PurchaseOrderPayment(po_id=7, amount=1200, vendor_payment_id=1), PurchaseOrderPayment(po_id=8, amount=300, vendor_payment_id=1)])
+    live.add_all([Vendor(id=1, code="V00005", name="Akbar"), Vendor(id=2, code="V00009", name="Gone Vendor"), Vendor(id=3, code="V00007", name="Plain"),
+                  PurchaseOrder(id=7, code="PO-7", vendor_id=1, vendor_so_number="90/25-26"), PurchaseOrder(id=9, code="PO-9", vendor_id=3),
+                  PurchaseOrder(id=8, code="PO-GONE", vendor_id=3)])
+    # a plain vendor's payment (no Vendor Account): stays a vendor payment, re-pointed by code
+    live.add_all([VendorPayment(id=1, code="VP-0001", vendor_id=3, amount=5000, paid_date=datetime(2026, 10, 14), method="wire", reference="OW5"),
+                  VendorPayment(id=2, code="VP-0002", vendor_id=2, amount=10),
+                  VendorPayment(id=3, code="VP-0003", vendor_id=1, amount=250, method="Wire", reference="OW8")])  # Akbar: goes to the account
+    live.add_all([PurchaseOrderPayment(po_id=9, amount=1200, vendor_payment_id=1), PurchaseOrderPayment(po_id=8, amount=300, vendor_payment_id=1)])
     live.add(VacctAccount(id=1, vendor_code="V00005", vendor_name="Akbar", cash_share=50))
     live.add(VacctBill(id=1, account_id=1, so_number="90/25-26", bill_number="IF/47/25-26", goods=1000, wire_due=500, cash_due=500))
     live.add(VacctPayment(id=1, account_id=1, kind="wire", amount=500, reference="OW7"))
     live.add(VacctAlloc(payment_id=1, bill_id=1, part="wire", amount=500))
     live.commit()
-    # the import: same vendor / PO under new ids, MRPeasy's lump payment, no vendor payments
-    new.add_all([Vendor(id=11, code="V00005", name="Akbar"), PurchaseOrder(id=70, code="PO-7", vendor_id=11, vendor_so_number="90/25-26")])
+    # the import: same vendors / POs under new ids, MRPeasy's lump payment, no vendor payments
+    new.add_all([Vendor(id=11, code="V00005", name="Akbar"), Vendor(id=13, code="V00007", name="Plain"),
+                 PurchaseOrder(id=70, code="PO-7", vendor_id=11, vendor_so_number="90/25-26"), PurchaseOrder(id=90, code="PO-9", vendor_id=13)])
     new.add(PurchaseOrderPayment(po_id=70, amount=777, reference="mrpeasy-po-export"))
     new.commit()
     live.close(); new.close(); e1.dispose(); e2.dispose()
 
     kept = keep_independent(new_p, live_p)
-    assert kept["vendor_payments"] == 1 and kept["vacct_bills"] == 1 and kept["vacct_payments"] == 1
+    assert kept["vendor_payments"] == 2 and kept["vacct_bills"] == 1 and kept["vacct_payments"] == 1   # VP-0002's vendor is gone
     e3, chk = _db(new_p)
-    vp = chk.query(VendorPayment).one()
-    assert vp.code == "VP-0001" and vp.vendor_id == 11 and vp.reference == "OW5"
-    pays = sorted((p.amount, p.reference, p.vendor_payment_id) for p in chk.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == 70))
-    assert pays == [(500.0, "vendor-account", None), (1200.0, None, 1)]    # lump replaced; the applied part re-pointed; PO-GONE's part unapplied
+    vp = chk.query(VendorPayment).one()   # VP-0003 became an account payment
+    assert vp.code == "VP-0001" and vp.vendor_id == 13 and vp.reference == "OW5"
+    assert [(p.amount, p.vendor_payment_id) for p in chk.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == 90)] == [(1200.0, 1)]
+    acc_pays = sorted((p.amount, p.reference, p.picked_from) for p in chk.query(VacctPayment).all())
+    assert acc_pays == [(250.0, "OW8", "Vendor Payments VP-0003"), (500.0, "OW7", None)]
+    pays = sorted((p.amount, p.reference, p.created_by) for p in chk.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == 70))
+    assert pays == [(500.0, "OW7", "vendor-account")]    # MRPeasy's lump replaced by what the account paid
     assert chk.query(VendorBill).filter(VendorBill.po_id == 70).one().amount == 1000
-    assert counts(new_p)["vendor_payments"] == 1
     chk.close(); e3.dispose()
 
 
@@ -266,3 +272,82 @@ def test_golive_closeout_receives_old_pos_and_delivers_paid_shipments(api, make)
     db = SessionLocal()
     assert db.get(Shipment, sh["id"]).delivered_at is None
     db.close()
+
+
+def test_one_wire_for_several_rows_and_dates_from_comments(api, make, client, admin_headers):
+    """Rows paid by ONE wire -- the same wire # on each, or the same total written on each -- load as one payment with
+    every part; a date written in the comment is used when the date column is empty."""
+    v, pos, aid = _account(api, make)
+    rows = [
+        ["20/26-27", 1000, "CD/1/26-27", 1000, 0, 1000, 1000, 0, 1000, None, None, 0, None, "Wire sent 10/16/2026\nOW00000000009999 - $1500 = 1000 + 500"],
+        ["21/26-27", 500, "CD/2/26-27", 500, 0, 500, 500, 0, 500, None, None, 0, None, "Wire sent 10/16/2026\nOW00000000009999 - $1500 = 1000 + 500"],
+        ["22/26-27", 300, "CD/3/26-27", 300, 0, 300, 300, 0, 300, None, None, 0, "Dec 15 2025", "Wire sent for 700 covering 2 invoices"],
+        ["23/26-27", 400, "CD/4/26-27", 400, 0, 400, 400, 0, 400, None, None, 0, "Dec 15 2025", "Wire sent for 700 covering 2 invoices"],
+        ["24/26-27", 900, "CD/5/26-27", 900, 0, 900, 900, 0, 900, None, None, 0, "Dec 16 2025", "Wire sent for 900"],
+    ]
+    data = _sheet(rows)
+    r = client.post(f"/api/vendor-accounts/{aid}/sheet/preview", headers=admin_headers,
+                    files={"file": ("s.xlsx", io.BytesIO(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    plan = r.json()
+    pays = sorted(((p["amount"], p["reference"], p["date"], sorted(x["row"] for x in p["parts"])) for p in plan["payments"]), key=str)
+    assert pays == sorted([(1500, "OW00000000009999", "2026-10-16", [1, 2]), (700, None, "2025-12-15", [3, 4]), (900, None, "2025-12-16", [5])], key=str)
+    assert plan["check"]["matches"]
+
+
+def test_so_view_payment_numbers_and_the_mapped_statement(api, make, client, admin_headers):
+    """An SO partly invoiced shows what's not invoiced yet; every payment has a number; the statement maps each payment
+    to every invoice it paid."""
+    v, pos, aid = _account(api, make, ["GR/17/26-27"])
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR/17/26-27", "so_amount": 36365, "bill_number": "GR1/61/26-27",
+                                                        "goods": 2250, "cash_due": 0})
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR/18/26-27", "bill_number": "GR1/62/26-27", "goods": 736, "cash_due": 0})
+    so = next(x for x in view["sos"] if x["so_number"] == "GR/17/26-27")
+    assert so["not_invoiced"] == 34115 and so["expected_cash"] == 17057.5 and so["po_code"] == pos["GR/17/26-27"]["code"]
+    assert next(x for x in view["sos"] if x["so_number"] == "GR/18/26-27")["not_invoiced"] is None   # no SO amount, no PO
+    assert view["totals"]["not_invoiced"] == 34115
+    b61, b62 = _bill(view, "GR1/61/26-27"), _bill(view, "GR1/62/26-27")
+    view = api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 3000, "reference": "OW7", "paid_date": "2026-10-16",
+                    "parts": [{"bill_id": b61["id"], "part": "wire", "amount": 2250}, {"bill_id": b62["id"], "part": "wire", "amount": 736}]})
+    p = view["payments"][0]
+    assert p["code"] == "P-001" and p["credit"] == 14
+    assert [r["payment_code"] for r in _bill(view, "GR1/61/26-27")["paid_by"]] == ["P-001"]
+    x = client.get(f"/api/vendor-accounts/{aid}/statement.xlsx", headers=admin_headers)
+    wb = load_workbook(io.BytesIO(x.content))
+    ps = [[c.value for c in r] for r in wb["Payments"].iter_rows(min_row=2)]
+    assert ps[0][0] == "P-001" and ps[0][5] == "GR1/61/26-27" and ps[1][5] == "GR1/62/26-27" and "credit" in ps[2][5]
+    assert str(ps[3][8]).startswith("=SUM(")
+    st = wb["Statement"]
+    paid_by = [r[14].value for r in st.iter_rows() if r[2].value == "GR1/61/26-27"][0]
+    assert paid_by.startswith("P-001")
+
+
+def test_payments_recorded_on_the_po_screens_come_into_the_account(api, make):
+    """A vendor payment (Purchase Orders > Vendor Payments) and a PO's own Record Payment, for a vendor with an account,
+    become account payments mapped to that PO's invoices -- and the PO doesn't count them twice."""
+    from app.config.database import SessionLocal
+    v, pos, aid = _account(api, make, ["30/26-27", "31/26-27"])
+    po30, po31 = pos["30/26-27"], pos["31/26-27"]
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "30/26-27", "bill_number": "EF/30/26-27", "goods": 1000, "cash_due": 500})
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "31/26-27", "bill_number": "EF/31/26-27", "goods": 400, "cash_due": 0})
+    vp = api.post("/api/vendor-payments/", json={"vendor_id": v["id"], "amount": 700, "method": "Wire", "reference": "OW55", "paid_date": "2026-10-10T00:00:00"})
+    api.post(f"/api/vendor-payments/{vp['id']}/apply", json={"po_id": po30["id"], "amount": 700})
+    api.post(f"/api/purchase-orders/{po31['id']}/payments", json={"amount": 400, "method": "Check", "reference": "1234"})
+    view = api.get(f"/api/vendor-accounts/{aid}")
+    picked = {p["picked_from"]: p for p in view["payments"]}
+    w = picked[f"Vendor Payments {vp['code']}"]
+    assert w["kind"] == "wire" and w["reference"] == "OW55" and not w["review"]
+    assert sorted((r["part"], r["amount"]) for r in w["parts"]) == [("cash", 200), ("wire", 500)]   # wire part, then cash
+    c = picked[f"{po31['code']} Record Payment"]
+    assert c["review"] and [(r["bill_number"], r["amount"]) for r in c["parts"]] == [("EF/31/26-27", 400)]   # a check: is it a wire?
+    assert view["totals"]["review"] == 1 and view["totals"]["owed"] == 300
+    assert api.get("/api/vendor-payments/", params={"vendor_id": v["id"]}) == []          # it lives in the account now
+    db = SessionLocal()
+    for po, paid in ((po30, 700), (po31, 400)):
+        rows = db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == po["id"]).all()
+        assert round(sum(r.amount for r in rows), 2) == paid and all(r.created_by == "vendor-account" for r in rows)
+    db.close()
+    # checked and saved by a person: no longer flagged
+    view = api.put(f"/api/vendor-accounts/{aid}/payments/{c['id']}", json={"kind": "wire", "amount": 400,
+                   "parts": [{"bill_id": c["parts"][0]["bill_id"], "part": "wire", "amount": 400}]})
+    assert view["totals"]["review"] == 0
+    assert api.get("/api/vendor-accounts/by-vendor")[v["code"]] == aid

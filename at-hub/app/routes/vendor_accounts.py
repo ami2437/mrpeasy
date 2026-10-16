@@ -85,7 +85,17 @@ async def _read(file: UploadFile) -> bytes:
 
 @router.get("/")
 def list_accounts(db: Session = Depends(get_db)):
+    from app.models import VacctAccount
+    for acc in db.query(VacctAccount).all():  # payments recorded on the PO screens since: into their accounts
+        VA.pickup(db, acc)
     return VA.list_accounts(db)
+
+
+@router.get("/by-vendor")
+def by_vendor(db: Session = Depends(get_db)):
+    """{vendor_code: account id} -- the PO screens send this vendor's payments to its account."""
+    from app.models import VacctAccount
+    return {a.vendor_code: a.id for a in db.query(VacctAccount).all()}
 
 
 @router.post("/")
@@ -96,6 +106,7 @@ def create_account(data: AccountIn, db: Session = Depends(get_db), user: User = 
 
 @router.get("/{account_id}")
 def get_account(account_id: int, db: Session = Depends(get_db)):
+    VA.pickup(db, VA._account(db, account_id))
     return VA.view(db, account_id)
 
 

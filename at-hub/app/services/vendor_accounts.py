@@ -27,8 +27,8 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import (PurchaseOrder, PurchaseOrderPayment, VacctAccount, VacctAlloc, VacctBill, VacctPayment, Vendor,
-                        VendorBill)
+from app.models import (PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, VacctAccount, VacctAlloc, VacctBill, VacctPayment,
+                        Vendor, VendorBill, VendorPayment)
 from app.services.money import cents
 
 TOL = 0.005
@@ -122,6 +122,7 @@ def view(db: Session, account_id: int) -> dict:
     acc = _account(db, account_id)
     vendor = _vendor(db, acc)
     bills, pays = _bills(db, acc), _payments(db, acc)
+    ensure_codes(db, acc, pays)
     allocs = _allocs(db, [p.id for p in pays])
     pay_by_id = {p.id: p for p in pays}
     bill_by_id = {b.id: b for b in bills}
@@ -131,7 +132,8 @@ def view(db: Session, account_id: int) -> dict:
     for a in allocs:
         paid[a.bill_id][a.part] += a.amount
         p, b = pay_by_id.get(a.payment_id), bill_by_id.get(a.bill_id)
-        row = {"id": a.id, "payment_id": a.payment_id, "bill_id": a.bill_id, "part": a.part, "amount": cents(a.amount),
+        row = {"id": a.id, "payment_id": a.payment_id, "payment_code": p.code if p else None, "bill_id": a.bill_id, "part": a.part,
+               "amount": cents(a.amount), "payment_amount": cents(p.amount) if p else None,
                "bill_number": b.bill_number if b else None, "so_number": b.so_number if b else None,
                "kind": p.kind if p else None, "reference": p.reference if p else None,
                "paid_date": p.paid_date.date().isoformat() if p and p.paid_date else None,
@@ -163,7 +165,8 @@ def view(db: Session, account_id: int) -> dict:
     for p in pays:
         applied = cents(sum(r["amount"] for r in by_pay.get(p.id, [])))
         out_pays.append({
-            "id": p.id, "kind": p.kind, "paid_date": p.paid_date.date().isoformat() if p.paid_date else None,
+            "id": p.id, "code": p.code, "review": bool(p.review), "picked_from": p.picked_from,
+            "kind": p.kind, "paid_date": p.paid_date.date().isoformat() if p.paid_date else None,
             "amount": cents(p.amount), "reference": p.reference, "note": p.note, "source": p.source,
             "came_with_bill_id": p.came_with_bill_id,
             "came_with": bill_by_id[p.came_with_bill_id].bill_number if p.came_with_bill_id in bill_by_id else None,
@@ -178,12 +181,62 @@ def view(db: Session, account_id: int) -> dict:
     t["cash_handed"] = cents(sum(p["amount"] for p in out_pays if p["kind"] == "cash"))
     t["recovered"] = cents(sum(r["amount"] for p in out_pays for r in p["parts"] if r["recovery"]))
     t["owed"] = cents(t["wire_left"] + t["cash_left"] - t["credit"])
+    sos = so_view(db, acc, bills, out_bills, pos)
+    t["not_invoiced"] = cents(sum(x["not_invoiced"] or 0 for x in sos))
+    t["review"] = sum(1 for p in out_pays if p["review"])
     return {
         "account": {"id": acc.id, "vendor_code": acc.vendor_code, "vendor_name": vendor.name if vendor else acc.vendor_name,
                     "vendor_id": vendor.id if vendor else None, "cash_share": acc.cash_share, "note": acc.note},
-        "bills": out_bills, "payments": out_pays, "totals": t,
+        "bills": out_bills, "payments": out_pays, "totals": t, "sos": sos,
         "open_cash": sorted([b for b in out_bills if b["cash_left"] > TOL], key=lambda b: (b["bill_date"] or "9999", b["row"])),
     }
+
+
+def ensure_codes(db: Session, acc: VacctAccount, pays: List[VacctPayment]) -> None:
+    """Every payment has a short number (P-001, P-002 ... in date order) -- the statement's Paid By column uses it."""
+    missing = [p for p in pays if not p.code]
+    if not missing:
+        return
+    used = [int(p.code[2:]) for p in pays if p.code and p.code[2:].isdigit()]
+    n = max(used, default=0)
+    for p in sorted(missing, key=lambda x: (x.paid_date or datetime.max, x.id)):
+        n += 1
+        p.code = f"P-{n:03d}"
+    db.commit()
+
+
+def so_view(db: Session, acc: VacctAccount, bills: List[VacctBill], out_bills: List[dict], pos: dict) -> List[dict]:
+    """Per vendor SO: its amount (from the sheet, else the PO's total), what's been invoiced, what's NOT invoiced yet
+    (and how that would be paid at the usual cash share), what's still owed on its invoices."""
+    po_total = {}
+    for po in {p.id: p for p in pos.values() if p}.values():
+        po_total[po.id] = cents(sum((l.quantity or 0) * (l.unit_cost or 0)
+                                    for l in db.query(PurchaseOrderLine).filter(PurchaseOrderLine.po_id == po.id).all()))
+    groups, order = defaultdict(list), []
+    for b, ob in zip(bills, out_bills):
+        k = b.so_number or f"(no SO) {b.bill_number or b.id}"
+        if k not in groups:
+            order.append(k)
+        groups[k].append((b, ob))
+    out = []
+    share = (acc.cash_share or 0) / 100.0
+    for k in order:
+        rows = groups[k]
+        po = next((pos.get(b.id) for b, _ in rows if pos.get(b.id)), None)
+        so_amt = next((b.so_amount for b, _ in rows if b.so_amount), None)
+        source = "sheet" if so_amt else None
+        if not so_amt and po and po_total.get(po.id):
+            so_amt, source = po_total[po.id], "po"
+        goods = cents(sum(ob["goods"] for _, ob in rows))
+        charges = cents(sum(ob["freight"] + ob["customs"] + ob["other"] for _, ob in rows))
+        remaining = cents(max(0.0, so_amt - goods)) if so_amt else None
+        over = cents(goods - so_amt) if so_amt and goods > so_amt + TOL else 0.0
+        out.append({"so_number": rows[0][0].so_number, "so_amount": so_amt, "so_amount_from": source, "po_code": po.code if po else None,
+                    "po_id": po.id if po else None, "invoices": [ob["bill_number"] for _, ob in rows], "bill_ids": [ob["id"] for _, ob in rows],
+                    "goods": goods, "charges": charges, "not_invoiced": remaining, "over": over,
+                    "expected_cash": cents((remaining or 0) * share), "expected_wire": cents((remaining or 0) - (remaining or 0) * share),
+                    "balance": cents(sum(ob["balance"] for _, ob in rows))})
+    return out
 
 
 def list_accounts(db: Session) -> List[dict]:
@@ -353,12 +406,19 @@ def suggest(db: Session, account_id: int, kind: str, amount: float, for_bill_ids
     bills = v["bills"]
     by_id = {b["id"]: b for b in bills}
     oldest = sorted(bills, key=lambda b: (b["bill_date"] or "9999", b["row"]))
+    named = [by_id[i] for i in (for_bill_ids or []) if i in by_id]
     if kind == "wire":
-        named = [by_id[i] for i in (for_bill_ids or []) if i in by_id]
-        if not named and came_with_bill_id in by_id:
-            named = [by_id[came_with_bill_id]]
-        for b in (named or oldest):
+        for b in named:  # the invoices it was sent for: their wire part, then their cash
             take(b, "wire")
+            take(b, "cash")
+        if not named and came_with_bill_id in by_id:
+            take(by_id[came_with_bill_id], "wire")  # an inflated invoice: its own charge, the rest is old cash
+        elif not named:
+            for b in oldest:
+                take(b, "wire")
+    else:
+        for b in named:
+            take(b, "cash")
     for b in oldest:
         take(b, "cash")
     return {"parts": out, "credit": cents(left)}
@@ -391,6 +451,8 @@ def save_payment(db: Session, account_id: int, data: dict, by: str, payment_id: 
     if not payment_id:
         db.add(p)
         db.flush()
+        ensure_codes(db, acc, _payments(db, acc))
+    p.review = False if payment_id else p.review  # edited by a person = mapped
     _set_parts(db, acc, p, parts, bills)
     sync_account(db, acc)
     db.commit()
@@ -472,19 +534,106 @@ def sync_account(db: Session, acc: VacctAccount) -> dict:
     n = 0
     for (pid, bid), amt in grouped.items():
         p, po = pays[pid], pos[bid]
-        what = f"Wire {p.reference}" if p.kind == "wire" and p.reference else ("Wire" if p.kind == "wire" else "Cash")
-        db.add(PurchaseOrderPayment(po_id=po.id, amount=cents(amt), paid_date=p.paid_date or po.order_date or datetime.utcnow(), method=p.kind,
-                                    reference=BY, vendor_bill_id=vb_for[bid].id if bid in vb_for else None,
-                                    note=f"{what} -- from the Vendor Account" + (f" ({p.note})" if p.note else ""), created_by=BY))
+        part_txt = "cash part, by wire" if (p.kind == "wire" and any(a.part == "cash" for a in _allocs(db, [pid]) if a.bill_id == bid)) else p.kind
+        db.add(PurchaseOrderPayment(po_id=po.id, amount=cents(amt), paid_date=p.paid_date or po.order_date or datetime.utcnow(),
+                                    method=p.kind.title(), reference=p.reference or (p.code or ""),
+                                    vendor_bill_id=vb_for[bid].id if bid in vb_for else None,
+                                    note=f"{p.code or 'Payment'} from the Vendor Account ({part_txt}, ${p.amount:,.2f} in all)", created_by=BY))
         n += 1
     db.flush()
     return {"pos": len(touched), "payments": n}
 
 
 def sync_all(db: Session) -> None:
-    """After a fresh import: every account puts its PO payments back (importers/mrpeasy/keep.py)."""
+    """After a fresh import: every account picks up payments recorded elsewhere and puts its PO payments back
+    (importers/mrpeasy/keep.py)."""
     for acc in db.query(VacctAccount).all():
+        pickup(db, acc, commit=False)
         sync_account(db, acc)
+
+
+def _kind_of(method) -> Tuple[str, bool]:
+    """(wire | cash, unclear?) from a payment method someone picked on another screen."""
+    m = (method or "").strip().lower()
+    if "cash" in m:
+        return "cash", False
+    return "wire", not ("wire" in m or "transfer" in m)
+
+
+def _map_to_po(db, p: VacctPayment, bills: List[VacctBill], amount: float, first_bill_number: Optional[str]) -> float:
+    """Apply `amount` of payment p to a PO's invoices in this account: the invoice it named first, wire part then cash
+    part for a wire (cash part first for cash). Returns what was applied (the rest stays a credit)."""
+    order = sorted(bills, key=lambda b: (not (first_bill_number and keys_match(code_key(b.bill_number), code_key(first_bill_number))),
+                                         b.position or 0, b.id))
+    parts = ("wire", "cash") if p.kind == "wire" else ("cash", "wire")
+    left, done = cents(amount), 0.0
+    for b in order:
+        for part in parts:
+            wp, cp = _paid_parts(db, b.id)
+            room = cents((b.wire_due - wp) if part == "wire" else (b.cash_due - cp))
+            n = cents(min(left, room))
+            if n > TOL:
+                db.add(VacctAlloc(payment_id=p.id, bill_id=b.id, part=part, amount=n))
+                db.flush()
+                left, done = cents(left - n), cents(done + n)
+    return done
+
+
+def pickup(db: Session, acc: VacctAccount, commit: bool = True) -> int:
+    """Payments recorded the old way for this vendor -- Purchase Orders > Vendor Payments, or Record Payment on one of the
+    account's POs -- become account payments, mapped to that PO's invoices. They then live only here (the PO shows what
+    the account paid, so nothing counts twice). One that isn't clearly a wire / cash, or isn't fully applied, is flagged
+    to check."""
+    vendor = _vendor(db, acc)
+    if not vendor:
+        return 0
+    bills = _bills(db, acc)
+    pos = match_pos(db, acc, bills)
+    of_po = defaultdict(list)
+    for b in bills:
+        if pos.get(b.id):
+            of_po[pos[b.id].id].append(b)
+    n = 0
+    for vp in db.query(VendorPayment).filter(VendorPayment.vendor_id == vendor.id).all():
+        apps = db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.vendor_payment_id == vp.id).all()
+        if any(a.po_id not in of_po for a in apps):
+            continue  # part of it went to a PO this account doesn't hold: leave it where it is
+        kind, unclear = _kind_of(vp.method)
+        p = VacctPayment(account_id=acc.id, kind=kind, paid_date=vp.paid_date, amount=cents(vp.amount), reference=vp.reference,
+                         note=vp.note, source="picked", picked_from=f"Vendor Payments {vp.code}", created_by=vp.created_by)
+        db.add(p)
+        db.flush()
+        applied = 0.0
+        for a in apps:
+            vb = db.get(VendorBill, a.vendor_bill_id) if a.vendor_bill_id else None
+            applied += _map_to_po(db, p, of_po[a.po_id], a.amount, vb.bill_number if vb else None)
+            db.delete(a)
+        p.review = unclear or cents(vp.amount - applied) > TOL
+        db.delete(vp)
+        n += 1
+    for po_id, bl in of_po.items():
+        for a in db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == po_id, PurchaseOrderPayment.vendor_payment_id.is_(None)).all():
+            if a.reference == MRP_TAG or a.created_by == BY or (a.reference or "") == BY:
+                continue
+            kind, unclear = _kind_of(a.method)
+            po = pos[bl[0].id]
+            p = VacctPayment(account_id=acc.id, kind=kind, paid_date=a.paid_date, amount=cents(a.amount),
+                             reference=None if (a.reference or "") == MRP_TAG else a.reference, note=a.note, source="picked",
+                             picked_from=f"{po.code} Record Payment", created_by=a.created_by)
+            db.add(p)
+            db.flush()
+            vb = db.get(VendorBill, a.vendor_bill_id) if a.vendor_bill_id else None
+            applied = _map_to_po(db, p, bl, a.amount, vb.bill_number if vb else None)
+            p.review = unclear or cents(a.amount - applied) > TOL
+            db.delete(a)
+            n += 1
+    if n:
+        db.flush()
+        ensure_codes(db, acc, _payments(db, acc)) if commit else None
+        sync_account(db, acc)
+        if commit:
+            db.commit()
+    return n
 
 
 # ---------------------------------------------------------------- their spreadsheet ---------------------------------
@@ -506,7 +655,7 @@ COLS = {  # our name -> header words (normalised: lower case, single spaces, no 
     "cash_adj": ("cash adjustment",),
     "balance": ("balance",),
     "date": ("date recvd", "date received", "date paid", "date"),
-    "payments": ("payments",),
+    "payments": ("payments", "paid by"),
     "comments": ("comments", "comment", "notes"),
     "their_notes": ("their notes",),
 }
@@ -752,8 +901,9 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
             if split:
                 wires = split
             else:
-                wires = [{"amount": cents(r["wire_recd"] + r["extra_wire"]), "date": dates[0] if dates else None,
-                          "reference": refs[0] if len(refs) == 1 else (", ".join(refs) or None)}]
+                in_comment = next((d for d in (_date_in(x) for x in r["comments"].split("\n") if re.search(r"wire|OW\d", x, re.I)) if d), None)
+                wires = [{"amount": cents(r["wire_recd"] + r["extra_wire"]), "date": dates[0] if dates else in_comment,
+                          "reference": refs[0] if len(set(refs)) == 1 else (", ".join(dict.fromkeys(refs)) or None)}]
         # what each wire pays: this row's wire part first, then the old cash it carried
         todo = [("wire", r, min(own_wire, r["true_wire_due"]))] + [("cash", t, a) for t, a in r["recovery_out"]]
         for w in wires:
@@ -775,6 +925,7 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
             payments.append({"kind": "cash", "row": r["row"], "amount": abs(r["cash_adj"]), "date": dates[0] if dates else None,
                              "reference": None, "note": "Cash adjustment (from the sheet)",
                              "parts": [{"row": r["row"], "part": "cash", "amount": abs(r["cash_adj"])}]})
+    payments = _merge_wires(payments, rows, notes)
     # parts can't be more than a bill's part: the over-collection stays a credit on the payment
     room = {(b["row"], "wire"): b["wire_due"] for b in bills}
     room.update({(b["row"], "cash"): b["cash_due"] for b in bills})
@@ -818,7 +969,7 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
 
 def _split_wires(r, own_wire) -> List[dict]:
     """'Wire # OW...043 for $6000' + 'Wire # OW...909 for $9256' on two lines, with two dates: two wires (only when they add up)."""
-    lines = [x for x in r["comments"].split("\n") if re.search(r"wire", x, re.I)]
+    lines = [x for x in r["comments"].split("\n") if re.search(r"wire", x, re.I) and not NOT_A_WIRE.search(x)]
     if len(lines) < 2 or r["extra_wire"] > TOL or r["inside"] > TOL:
         return []
     amts = []
@@ -833,8 +984,68 @@ def _split_wires(r, own_wire) -> List[dict]:
     out = []
     for i, (x, a) in enumerate(zip(lines, amts)):
         ref = WIRE_NO_RE.findall(x)
-        out.append({"amount": cents(a), "date": dates[i] if i < len(dates) else (dates[-1] if dates else None), "reference": ref[0] if ref else None})
+        when = dates[i] if i < len(dates) else (_date_in(x) or (dates[-1] if dates else None))
+        out.append({"amount": cents(a), "date": when, "reference": ref[0] if ref else None})
     return out
+
+
+NOT_A_WIRE = re.compile(r"cover|applied|toward|total", re.I)  # "wire sent ... to cover $5426": about another row's money
+DATE_IN_RE = re.compile(r"(?<![\d/])(\d{1,2}/\d{1,2}/\d{2,4})(?![\d/])")
+
+
+def _date_in(text) -> Optional[datetime]:
+    """A date written in a comment line ('Wire sent 10/16/2026', 'OW... - 09/09/26')."""
+    m = DATE_IN_RE.search(text or "")
+    return parse_date(m.group(1)) if m else None
+
+
+def _merge_wires(payments: List[dict], rows: List[dict], notes: List[str]) -> List[dict]:
+    """One real wire often paid several rows: the same wire # in their comments, or the same total written on each
+    ('Wire sent for 12454 covering 3 invoices', '$23630 ($18408 + $5222)'). Those become ONE payment with every part."""
+    by_row = {r["row"]: r for r in rows}
+    wires = [p for p in payments if p["kind"] == "wire"]
+    groups = []
+    taken = set()
+    refs = defaultdict(list)
+    for p in wires:
+        if p["reference"] and "," not in p["reference"]:
+            refs[p["reference"]].append(p)
+    for ref, ps in refs.items():
+        if len(ps) > 1:
+            groups.append((f"wire {ref}", ps))
+            taken.update(id(p) for p in ps)
+
+    def totals_of(p):
+        out = set()
+        for line in by_row[p["row"]]["comments"].split("\n"):
+            if re.search(r"wire", line, re.I):
+                out.update(a for a in _amounts_in(line) if a > p["amount"] + TOL)
+        return out
+    for p in wires:
+        if id(p) in taken:
+            continue
+        for total in sorted(totals_of(p), reverse=True):
+            ps = [q for q in wires if id(q) not in taken and total in totals_of(q)
+                  and (not p["date"] or not q["date"] or p["date"] == q["date"])]
+            if len(ps) > 1 and abs(sum(q["amount"] for q in ps) - total) <= 0.02:
+                groups.append((f"one wire of ${total:,.2f}", ps))
+                taken.update(id(q) for q in ps)
+                break
+    for label, ps in groups:
+        ps.sort(key=lambda q: q["row"])
+        keep = ps[0]
+        for q in ps[1:]:
+            keep["parts"] += q["parts"]
+            keep["amount"] = cents(keep["amount"] + q["amount"])
+            keep["date"] = keep["date"] or q["date"]
+            keep["reference"] = keep["reference"] or q["reference"]
+            if q.get("came_with_row") and not keep.get("came_with_row"):
+                keep["came_with_row"] = q["came_with_row"]
+            payments.remove(q)
+        rows_txt = ", ".join(f"row {q['row']}" for q in ps)
+        keep["note"] = f"One wire for {rows_txt}." + (f"\n{keep['note']}" if keep.get("note") else "")
+        notes.append(f"{label[:1].upper() + label[1:]}: {rows_txt} were paid together (${keep['amount']:,.2f}) -- recorded as one payment")
+    return payments
 
 
 def apply_sheet(db: Session, account_id: int, data: bytes, filename: str, by: str) -> dict:
@@ -925,23 +1136,24 @@ def compare(db: Session, account_id: int, data: bytes, filename: str) -> dict:
 
 # ---------------------------------------------------------------- the statement -------------------------------------
 
+def _paid_by(b: dict) -> str:
+    return "; ".join(f"{r['payment_code'] or ''} {'wire' if r['kind'] == 'wire' else 'cash'} ${r['amount']:,.2f}"
+                     f"{' old cash' + (' via ' + r['came_with'] if r['came_with'] else '') if r['recovery'] else ''}".strip()
+                     for r in b["paid_by"])
+
+
 def _stmt_rows(v: dict, open_only: bool) -> List[dict]:
-    bills = [b for b in v["bills"] if not open_only or abs(b["balance"]) > TOL]
-    for b in bills:
-        b["_payments"] = "; ".join(
-            f"{r['paid_date'] or ''} {'wire ' + (r['reference'] or '') if r['kind'] == 'wire' else 'cash'} ${r['amount']:,.2f}"
-            f"{' (old cash, came with ' + r['came_with'] + ')' if r['recovery'] and r['came_with'] else ''}".strip()
-            for r in b["paid_by"])
-    return bills
+    return [b for b in v["bills"] if not open_only or abs(b["balance"]) > TOL]
 
 
 STMT_HEAD = ["SO #", "SO Amount", "Invoice", "Invoice Date", "Invoice Sub Total", "Freight", "Customs / Other", "Invoice Total (Your Invoice)",
-             "Old Cash Included", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Payments", "Comments", "Their Notes"]
+             "Old Cash Included", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Paid By", "Comments", "Their Notes"]
 
 
 def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: bool = False) -> bytes:
-    """Their layout, worked out right, with live formulas (Balance, totals, the summary) and a Their Notes column; a
-    second sheet lists every payment and where it went. They can change it however they like and send it back."""
+    """Their layout, worked out right, with live formulas (Balance, totals, the summary) and a Their Notes column. Paid By
+    names the payments (P-001 ...); the Payments sheet maps each payment to every invoice it paid; SO Summary shows what
+    each SO still has to invoice. They can change it however they like and send it back."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter as L
@@ -952,32 +1164,35 @@ def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: b
     ws.title = "Statement"
     bold = Font(bold=True)
     head_fill = PatternFill("solid", fgColor="DCE6F1")
+    pay_fill = PatternFill("solid", fgColor="F2F2F2")
     thin = Side(style="thin", color="B7B7B7")
     money = '"$"#,##0.00;[Red]-"$"#,##0.00'
+
+    def head(sheet, cols):
+        sheet.append(cols)
+        for c in sheet[sheet.max_row]:
+            c.font, c.fill, c.alignment = bold, head_fill, Alignment(wrap_text=True, vertical="center")
+            c.border = Border(bottom=thin)
     ws.append([company_name])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([f"Statement of account -- {v['account']['vendor_name']} ({v['account']['vendor_code']})"])
     ws["A2"].font = Font(bold=True, size=12)
     ws.append([f"As of {datetime.utcnow():%B %d, %Y}" + ("  ·  open invoices only" if open_only else "")])
     ws.append(["Each invoice at its true amount. When an invoice of yours included old cash, it shows under Old Cash Included and "
-               "that money paid the cash of the invoice it was for. Write anything you see differently under Their Notes."])
+               "that money paid the cash of the invoice it was for. Paid By names the payments (sheet Payments shows each one in full). "
+               "Write anything you see differently under Their Notes."])
     ws.append([])
-    ws.append(STMT_HEAD)
-    hr = ws.max_row
-    for c in ws[hr]:
-        c.font, c.fill, c.alignment = bold, head_fill, Alignment(wrap_text=True, vertical="center")
-        c.border = Border(bottom=thin)
-    first = hr + 1
+    head(ws, STMT_HEAD)
+    first = ws.max_row + 1
     last_so = None
     for b in _stmt_rows(v, open_only):
         r = ws.max_row + 1
-        new_so = b["so_number"] != last_so
-        last_so = b["so_number"]
         paper = b["paper_amount"] if b["paper_amount"] is not None else b["total"]
-        ws.append([b["so_number"] if new_so else None, b["so_amount"] if new_so else None, b["bill_number"],
+        ws.append([b["so_number"], b["so_amount"] if b["so_number"] != last_so else None, b["bill_number"],
                    datetime.fromisoformat(b["bill_date"]) if b["bill_date"] else None, b["goods"], b["freight"],
                    cents(b["customs"] + b["other"]), paper, b["recovery_in"] or None, b["wire_due"], b["cash_due"], b["wire_paid"],
-                   b["cash_paid"], f"=J{r}+K{r}-L{r}-M{r}", b["_payments"] or None, b["note"], None])
+                   b["cash_paid"], f"=J{r}+K{r}-L{r}-M{r}", _paid_by(b) or None, b["note"], None])
+        last_so = b["so_number"]
         ws.cell(r, 4).number_format = "mm/dd/yyyy"
     last = ws.max_row
     ws.append([])
@@ -991,35 +1206,65 @@ def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: b
             if c.column != 3 and c.column != 4:
                 c.number_format = money
     ws.append([])
-    s = ws.max_row + 1
+    s0 = ws.max_row + 1
     summary = [("Wire Balance", f"=J{tr}-L{tr}"), ("Cash Balance", f"=K{tr}-M{tr}"),
-               ("Credit With You (Paid Ahead)", t["credit"]), ("Total Balance", f"=N{s}+N{s + 1}-N{s + 2}")]
+               ("Credit With You (Paid Ahead)", t["credit"]), ("Total Balance", f"=N{s0}+N{s0 + 1}-N{s0 + 2}")]
     for i, (label, val) in enumerate(summary):
-        ws.cell(s + i, 12, label).font = bold
-        c = ws.cell(s + i, 14, val)
+        ws.cell(s0 + i, 12, label).font = bold
+        c = ws.cell(s0 + i, 14, val)
         c.number_format, c.font = money, bold
-    ws.cell(s + len(summary) + 1, 12, "Old cash collected through invoices").font = Font(italic=True)
-    c = ws.cell(s + len(summary) + 1, 14, t["recovered"])
-    c.number_format = money
-    widths = [14, 12, 16, 12, 14, 11, 12, 16, 12, 12, 12, 12, 12, 12, 46, 40, 30]
-    for i, w in enumerate(widths, 1):
+    extra = [("Old cash collected through invoices", t["recovered"]), ("Ordered but not invoiced yet (not owed yet)", t["not_invoiced"])]
+    for i, (label, val) in enumerate(extra):
+        ws.cell(s0 + len(summary) + 1 + i, 12, label).font = Font(italic=True)
+        ws.cell(s0 + len(summary) + 1 + i, 14, val).number_format = money
+    for i, w in enumerate([16, 12, 16, 12, 14, 11, 12, 16, 12, 12, 12, 12, 12, 12, 46, 40, 30], 1):
         ws.column_dimensions[L(i)].width = w
     ws.freeze_panes = ws.cell(first, 4)
-    # every payment and where it went
+
+    # every payment, and every invoice it paid
     ps = wb.create_sheet("Payments")
-    ps.append(["Date", "Type", "Amount", "Wire #", "Sent With Invoice", "Applied To", "Not Applied Yet (Credit)", "Note", "Their Notes"])
-    for c in ps[1]:
-        c.font, c.fill = bold, head_fill
+    head(ps, ["Payment", "Date", "Type", "Wire #", "Payment Amount", "Invoice", "SO #", "Part", "Applied", "Note", "Their Notes"])
     for p in v["payments"]:
-        applied = "; ".join(f"{r['bill_number'] or 'SO ' + str(r['so_number'])} {r['part']} ${r['amount']:,.2f}" for r in p["parts"])
-        ps.append([datetime.fromisoformat(p["paid_date"]) if p["paid_date"] else None, p["kind"].title(), p["amount"], p["reference"],
-                   p["came_with"], applied or None, p["credit"] or None, p["note"], None])
-        r = ps.max_row
-        ps.cell(r, 1).number_format = "mm/dd/yyyy"
-        for col in (3, 7):
-            ps.cell(r, col).number_format = money
-    for i, w in enumerate([12, 8, 14, 22, 16, 60, 14, 50, 30], 1):
+        lines = [(r["bill_number"] or "", r["so_number"] or "", ("Cash (old cash)" if r["recovery"] else r["part"].title()), r["amount"])
+                 for r in p["parts"]]
+        if p["credit"] > TOL:
+            lines.append(("Not applied yet (credit with you)", "", "", p["credit"]))
+        start = ps.max_row + 1
+        for i, (inv, so, part, amt) in enumerate(lines or [("", "", "", 0)]):
+            ps.append([p["code"], datetime.fromisoformat(p["paid_date"]) if p["paid_date"] else None, p["kind"].title(), p["reference"],
+                       p["amount"], inv, so, part, amt, p["note"] if i == 0 else None, None] if i == 0 else
+                      [None, None, None, None, None, inv, so, part, amt, None, None])
+            ps.cell(ps.max_row, 2).number_format = "mm/dd/yyyy"
+            for col in (5, 9):
+                ps.cell(ps.max_row, col).number_format = money
+        ps.append([f"{p['code']} total", None, None, None, None, f"{len(p['parts'])} invoice part(s)", None, None,
+                   f"=SUM(I{start}:I{ps.max_row})", None, None])
+        for c in ps[ps.max_row]:
+            c.font, c.fill = bold, pay_fill
+        ps.cell(ps.max_row, 9).number_format = money
+    for i, w in enumerate([12, 12, 8, 22, 14, 34, 16, 16, 13, 50, 30], 1):
         ps.column_dimensions[L(i)].width = w
+    ps.freeze_panes = "A2"
+
+    # what each SO still has to invoice
+    so = wb.create_sheet("SO Summary")
+    head(so, ["SO #", "PO", "SO Amount", "Invoices", "Invoiced (Goods)", "Freight / Customs / Other", "Not Invoiced Yet",
+              "Expected Wire", "Expected Cash", "Owed On Its Invoices"])
+    f0 = so.max_row + 1
+    for x in v["sos"]:
+        r = so.max_row + 1
+        so.append([x["so_number"], x["po_code"], x["so_amount"], ", ".join(i or "" for i in x["invoices"]), x["goods"], x["charges"],
+                   f"=MAX(0,C{r}-E{r})" if x["so_amount"] else None, x["expected_wire"] or None, x["expected_cash"] or None, x["balance"]])
+        for col in (3, 5, 6, 7, 8, 9, 10):
+            so.cell(r, col).number_format = money
+    tr2 = so.max_row + 1
+    so.append(["Totals", None] + [f"=SUM({L(c)}{f0}:{L(c)}{tr2 - 1})" if c != 4 else None for c in range(3, 11)])
+    for c in so[tr2]:
+        c.font = bold
+        c.number_format = money
+    for i, w in enumerate([18, 12, 13, 40, 14, 14, 14, 13, 13, 14], 1):
+        so.column_dimensions[L(i)].width = w
+    so.freeze_panes = "A2"
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1039,33 +1284,46 @@ def statement_pdf(db: Session, account_id: int, open_only: bool = False) -> byte
         f.hAlign = "LEFT"
     story.append(P.p(f"As of {datetime.utcnow():%B %d, %Y}" + (" · open invoices only" if open_only else "") +
                      ". Each invoice at its true amount; old cash included in an invoice is shown separately and paid the cash of "
-                     "the invoice it was for.", "small"))
+                     "the invoice it was for. Paid By names the payments listed after the invoices.", "small"))
     story.append(Spacer(1, 8))
     story.append(P._meta_table([("Wire balance", P.money(t["wire_left"])), ("Cash balance", P.money(t["cash_left"])),
                                 ("Credit with you", P.money(t["credit"]) if t["credit"] else None),
-                                ("Total balance", P.money(t["owed"]))]))
+                                ("Total balance", P.money(t["owed"])),
+                                ("Not invoiced yet", P.money(t["not_invoiced"]) if t["not_invoiced"] else None)]))
     story[-1].hAlign = "LEFT"
     story.append(Spacer(1, 12))
-    head = ["SO #", "Invoice", "Invoice Total", "Old Cash Incl.", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance"]
-    rows, last_so = [], None
+    head = ["SO #", "Invoice", "Invoice Total", "Old Cash Incl.", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Paid By"]
+    rows = []
     for b in _stmt_rows(v, open_only):
         paper = b["paper_amount"] if b["paper_amount"] is not None else b["total"]
-        rows.append([b["so_number"] if b["so_number"] != last_so else "", b["bill_number"] or "", P.money(paper),
+        rows.append([b["so_number"] or "", b["bill_number"] or "", P.money(paper),
                      P.money(b["recovery_in"]) if b["recovery_in"] else "", P.money(b["wire_due"]), P.money(b["cash_due"]),
-                     P.money(b["wire_paid"]), P.money(b["cash_paid"]), P.money(b["balance"])])
-        last_so = b["so_number"]
+                     P.money(b["wire_paid"]), P.money(b["cash_paid"]), P.money(b["balance"]),
+                     ", ".join(dict.fromkeys(r["payment_code"] for r in b["paid_by"] if r["payment_code"]))])
     rows.append(["Totals", "", P.money(t["paper"]), P.money(t["recovery_in"]) if t["recovery_in"] else "", P.money(t["wire_due"]),
-                 P.money(t["cash_due"]), P.money(t["wire_paid"]), P.money(t["cash_paid"]), P.money(t["balance"])])
-    story.append(P._data_table(head, rows, [w * inch for w in (1.3, 1.3, 1.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)], right_cols=range(2, 9)))
+                 P.money(t["cash_due"]), P.money(t["wire_paid"]), P.money(t["cash_paid"]), P.money(t["balance"]), ""])
+    story.append(P._data_table(head, rows, [w * inch for w in (1.2, 1.2, 0.95, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 1.4)], right_cols=range(2, 9)))
     if v["payments"]:
-        story += [PageBreak(), P.p("Payments", "title"), Spacer(1, 6)]
+        story += [PageBreak(), P.p("Payments -- what each one paid", "title"), Spacer(1, 6)]
         prow = []
         for p in v["payments"]:
-            prow.append([p["paid_date"] or "", p["kind"].title(), P.money(p["amount"]), p["reference"] or "",
-                         "; ".join(f"{r['bill_number'] or 'SO ' + str(r['so_number'])} {r['part']} {P.money(r['amount'])}" for r in p["parts"]) or "",
-                         P.money(p["credit"]) if p["credit"] > TOL else ""])
-        story.append(P._data_table(["Date", "Type", "Amount", "Wire #", "Applied To", "Credit"], prow,
-                                   [w * inch for w in (0.9, 0.6, 1.0, 1.7, 4.4, 0.9)], right_cols=(2, 5)))
+            first = True
+            for r in p["parts"]:
+                prow.append([p["code"] if first else "", (p["paid_date"] or "") if first else "", (p["kind"].title() + (" " + p["reference"] if p["reference"] else "")) if first else "",
+                             P.money(p["amount"]) if first else "", f"{r['bill_number'] or ''} (SO {r['so_number'] or '-'})",
+                             "old cash" if r["recovery"] else r["part"], P.money(r["amount"])])
+                first = False
+            if p["credit"] > TOL:
+                prow.append([p["code"] if first else "", "", "", P.money(p["amount"]) if first else "", "not applied yet (credit)", "", P.money(p["credit"])])
+        story.append(P._data_table(["Payment", "Date", "Type / Wire #", "Amount", "Invoice (SO)", "Part", "Applied"], prow,
+                                   [w * inch for w in (0.7, 0.9, 2.2, 1.0, 2.6, 0.8, 1.0)], right_cols=(3, 6)))
+    open_sos = [x for x in v["sos"] if x["not_invoiced"]]
+    if open_sos:
+        story += [Spacer(1, 14), P.p("Ordered but not invoiced yet", "title"), Spacer(1, 6)]
+        story.append(P._data_table(["SO #", "SO Amount", "Invoiced", "Not Invoiced Yet", "Expected Wire", "Expected Cash"],
+                                   [[x["so_number"] or "", P.money(x["so_amount"]), P.money(x["goods"]), P.money(x["not_invoiced"]),
+                                     P.money(x["expected_wire"]), P.money(x["expected_cash"])] for x in open_sos],
+                                   [w * inch for w in (1.6, 1.2, 1.2, 1.3, 1.2, 1.2)], right_cols=range(1, 6)))
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(letter), title="Vendor Statement", leftMargin=0.5 * inch, rightMargin=0.5 * inch,
                             topMargin=0.5 * inch, bottomMargin=0.6 * inch)

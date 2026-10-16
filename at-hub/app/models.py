@@ -1983,6 +1983,9 @@ class VacctPayment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("vacct_accounts.id"), nullable=False, index=True)
+    code = Column(String, nullable=True)  # P-001 in date order, per account -- what the statement's Paid By column shows
+    review = Column(Boolean, nullable=True)  # picked up from another screen and not clearly mapped: check it
+    picked_from = Column(String, nullable=True)  # "Vendor Payments VP-0003" / "PO325362 payment" when picked up
     kind = Column(String, nullable=False, default="wire")  # wire | cash
     paid_date = Column(DateTime, nullable=True)
     amount = Column(Float, nullable=False)

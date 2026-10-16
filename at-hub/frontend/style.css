@@ -2546,3 +2546,6 @@ html[data-theme="dark"] .ca-table select.ca-need { background: #2a1606; }
 html[data-theme="dark"] .em-alert { background: #450a0a; color: #fecaca; border-color: #7f1d1d; }
 .dd-from { display: inline-flex; align-items: center; gap: 6px; }
 .dd-from label { margin: 0; }
+
+/* Vendor Accounts hints (vendor-accounts.html, purchase-orders.html) */
+.va-note { background: #fff7e6; border: 1px solid #f5d38a; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; color: #3b2f12; }

@@ -26,7 +26,7 @@
       <h3 style="margin-top:0;">Vendor Payments</h3>
       <p class="muted small" style="margin-top:0;">Money sent to a vendor before (or without) a purchase order. Whatever isn't applied yet is offered on that vendor's purchase orders.</p>
       <div class="vp-form">
-        <div><label>Vendor</label><select id="vp-vendor"></select></div>
+        <div><label>Vendor</label><select id="vp-vendor" onchange="vpVendorHint()"></select><div id="vp-va-hint" class="small"></div></div>
         <div><label>Amount</label><span class="price-input"><span>$</span><input type="number" step="0.01" min="0" id="vp-amount"></span></div>
         <div><label>Paid Date</label><input type="date" id="vp-date"></div>
         <div><label>Method</label><select id="vp-method" data-type-list="payment_method"></select></div>
@@ -89,6 +89,8 @@
     document.getElementById("sidebar").innerHTML = renderSidebar("purchase-orders.html");
 
     let vendors = [];
+    let VA_BY_VENDOR = {};  // vendor code -> Vendor Account id: their payments are recorded in the account (vendor-accounts.html)
+    const vaFor = vendorId => { const v = vendors.find(x => x.id === vendorId); return v ? VA_BY_VENDOR[v.code] : null; };
     let items = [];
     let orders = [];
     let currentOrder = null;
@@ -885,6 +887,13 @@
         <td>${!v.applications.length ? `<a class="link small" onclick="deleteVendorPayment(${v.id})">Delete</a>` : ""}</td>
       </tr>`).join("") : `<tr><td colspan="9" class="muted">No Vendor Payments Recorded Yet.</td></tr>`;
     }
+    function vpVendorHint() {
+      const id = parseInt(document.getElementById("vp-vendor").value);
+      const acc = id ? vaFor(id) : null;
+      document.getElementById("vp-va-hint").innerHTML = acc ? `<div class="va-note" style="margin-top:6px;">This vendor has a <strong>Vendor Account</strong> (wire + cash):
+        <a class="link" href="vendor-accounts.html?id=${acc}&pay=wire">record the payment there</a> so it's mapped to its invoices.
+        Recorded here, it still goes to the account — you'll be asked to check it there.</div>` : "";
+    }
     async function createVendorPayment() {
       const err = document.getElementById("vp-error");
       err.textContent = "";
@@ -1096,6 +1105,12 @@ Thank you.</textarea>
             `).join("")}</tbody>
           </table>
         ` : `<p class="muted">No payments recorded yet.</p>`}
+        ${vaFor(order.vendor_id) ? `<div class="va-note" style="margin-top:8px;"><strong>This vendor has a Vendor Account</strong> (wire + cash).
+          Record wires and cash there, so each payment is mapped to its invoices:
+          <a class="link" href="vendor-accounts.html?id=${vaFor(order.vendor_id)}&pay=wire&po=${encodeURIComponent(order.code)}">Record A Wire For ${escapeHtml(order.code)}</a> ·
+          <a class="link" href="vendor-accounts.html?id=${vaFor(order.vendor_id)}&pay=wire&kind=cash&po=${encodeURIComponent(order.code)}">Record Cash</a> ·
+          <a class="link" href="vendor-accounts.html?id=${vaFor(order.vendor_id)}">Open The Account</a>.
+          A payment recorded below still goes to the account (you'll be asked to check it there).</div>` : ""}
         <div class="field-grid" style="margin-top:8px;" id="payment-form">
           <div class="wide"><label>Against vendor invoice</label>
             <select id="pay-bill" onchange="const o = this.selectedOptions[0]; if (o.dataset.balance) document.getElementById('pay-amount').value = o.dataset.balance;">
@@ -1700,6 +1715,9 @@ Thank you.</textarea>
         apiFetch("/api/stock-items/groups/list").catch(() => []),
       ]);
       nonStockGroups = new Set(groups.filter(g => g.non_stock).map(g => g.name));
+      if (AuthGuard.can("vendor_accounts")) {
+        try { VA_BY_VENDOR = await apiFetch("/api/vendor-accounts/by-vendor"); } catch { VA_BY_VENDOR = {}; }
+      }
       const vendorOptions = vendors.map(v => `<option value="${v.id}">${escapeHtml(v.name)}${v.code ? ` (${escapeHtml(v.code)})` : ""}</option>`).join("");
       document.getElementById("f-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
       document.getElementById("vp-vendor").innerHTML = `<option value="">— pick a vendor —</option>` + vendorOptions;
