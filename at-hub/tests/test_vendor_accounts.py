@@ -317,7 +317,7 @@ def test_so_view_payment_numbers_and_the_mapped_statement(api, make, client, adm
     assert ps[0][0] == "P-001" and ps[0][5] == "GR1/61/26-27" and ps[1][5] == "GR1/62/26-27" and "credit" in ps[2][5]
     assert str(ps[3][8]).startswith("=SUM(")
     st = wb["Statement"]
-    paid_by = [r[14].value for r in st.iter_rows() if r[2].value == "GR1/61/26-27"][0]
+    paid_by = [r[15].value for r in st.iter_rows() if r[2].value == "GR1/61/26-27"][0]
     assert paid_by.startswith("P-001")
 
 
@@ -351,3 +351,29 @@ def test_payments_recorded_on_the_po_screens_come_into_the_account(api, make):
                    "parts": [{"bill_id": c["parts"][0]["bill_id"], "part": "wire", "amount": 400}]})
     assert view["totals"]["review"] == 0
     assert api.get("/api/vendor-accounts/by-vendor")[v["code"]] == aid
+
+
+def test_old_cash_billed_on_another_invoice_moves_there(api, make):
+    """User's example: invoice A owes $500 cash; invoice B is really $100 but says $500 -- $400 is A's cash. A's cash owed
+    drops to $100 and B owes $500 until B's wire comes; that wire pays B and A's $400; the total never changes."""
+    v, pos, aid = _account(api, make)
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"bill_number": "AX/1", "goods": 1000, "cash_due": 500})
+    a = _bill(view, "AX/1")
+    api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 500, "parts": [{"bill_id": a["id"], "part": "wire", "amount": 500}]})
+    before = api.get(f"/api/vendor-accounts/{aid}")["totals"]["owed"]
+    assert before == 500
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"bill_number": "BX/2", "freight": 100, "paper_amount": 500,
+                                                               "recovery_for": [{"bill_id": a["id"], "amount": 400}]})
+    a, b = _bill(view, "AX/1"), _bill(view, "BX/2")
+    assert a["cash_left"] == 100 and a["balance"] == 100 and a["moved_out"][0]["pending"] == 400 and a["moved_out"][0]["to"] == "BX/2"
+    assert b["balance"] == 500 and b["carried_open"] == 400 and b["carried_in"][0]["for"] == "AX/1"
+    assert view["totals"]["owed"] == 600 and view["totals"]["cash_left"] == 100 and view["totals"]["wire_left"] == 500
+    # the wire for B pays B's own $100 and A's $400 (not the oldest cash)
+    s = api.post(f"/api/vendor-accounts/{aid}/suggest", json={"kind": "wire", "amount": 500, "came_with_bill_id": b["id"]})
+    assert [(p["bill_id"], p["part"], p["amount"]) for p in s["parts"]] == [(b["id"], "wire", 100), (a["id"], "cash", 400)]
+    view = api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 500, "came_with_bill_id": b["id"]})
+    a, b = _bill(view, "AX/1"), _bill(view, "BX/2")
+    assert a["cash_left"] == 100 and a["moved_out"][0]["pending"] == 0 and b["balance"] == 0 and view["totals"]["owed"] == 100
+    # can't assign more than the extra on the paper
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"bill_number": "CX/3", "freight": 100, "paper_amount": 200,
+                                                        "recovery_for": [{"bill_id": a["id"], "amount": 150}]}, expect=400)

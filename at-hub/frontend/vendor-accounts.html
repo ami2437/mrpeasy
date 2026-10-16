@@ -223,8 +223,10 @@
         return `<tr class="${open ? "va-open-row" : ""} ${hlBills && hlBills.has(b.id) ? "va-hl" : ""}" style="cursor:pointer;" onclick="toggle(${b.id})">
             ${soCell(b, repeat)}<td class="nowrap">${esc(b.bill_number || "—")}</td>
             <td class="num">${m(paper)}</td>
-            <td class="num">${b.recovery_in > 0.005 ? `<span class="va-rec" title="Old cash he added to this invoice">${m(b.recovery_in)}</span>` : ""}</td>
-            <td class="num">${m(b.wire_due)}</td><td class="num">${m(b.cash_due)}</td>
+            <td class="num">${b.recovery_in > 0.005 ? `<span class="va-rec" title="Old cash he added to this invoice">${m(b.recovery_in)}</span>` : ""}
+              ${b.carried_in.map(c => `<br><span class="small va-rec" title="${c.pending > 0.005 ? "Owed through this invoice until its wire comes" : "Paid with this invoice's wire"}">for ${esc(c.for || "")}${c.pending > 0.005 ? "" : " ✓"}</span>`).join("")}</td>
+            <td class="num">${m(b.wire_due)}${b.carried_open > 0.005 ? `<br><span class="small va-rec">+ ${m(b.carried_open)} old cash</span>` : ""}</td>
+            <td class="num">${m(b.cash_due)}${b.moved_out.filter(x => x.pending > 0.005).map(x => `<br><span class="small va-rec" title="Billed on ${esc(x.to || "")}: paid with that invoice's wire">− ${m(x.pending)} on ${esc(x.to || "")}</span>`).join("")}</td>
             <td class="num">${m(b.wire_paid)}</td><td class="num">${m(b.cash_paid)}</td>
             <td class="num ${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</td>
             <td>${chips || `<span class="muted small">—</span>`}</td>
@@ -251,6 +253,8 @@
       return `<div class="row" style="align-items:flex-start;">
           <div style="flex:2;"><strong>True amount ${m(b.total)}</strong> — ${parts.join(" · ")}${b.paper_amount != null ? ` · <span class="va-rec">their invoice says ${m(b.paper_amount)}</span>` : ""}
             <br><span class="muted">SO ${esc(b.so_number || "—")}${b.so_amount ? ` (${m(b.so_amount)})` : ""} · ${b.po_code ? `PO <a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}">${esc(b.po_code)}</a>` : "no PO in AT-HUB yet"}${b.bill_date ? ` · invoice date ${fmtDate(b.bill_date)}` : ""}</span>
+            ${b.carried_in.map(c => `<div class="va-rec small" style="margin-top:4px;">Includes ${m(c.amount)} of old cash for ${esc(c.for || "")}${c.pending > 0.005 ? ` — ${m(c.pending)} still to come with this invoice's wire` : " — paid ✓"}</div>`).join("")}
+            ${b.moved_out.map(x => `<div class="va-rec small" style="margin-top:4px;">${m(x.amount)} of this invoice's cash was billed on ${esc(x.to || "")}${x.pending > 0.005 ? ` — ${m(x.pending)} comes with that invoice's wire` : " — paid ✓"}</div>`).join("")}
             ${b.note ? `<div class="muted" style="white-space:pre-line; margin-top:4px;">${esc(b.note)}</div>` : ""}</div>
           <div style="flex:2;"><strong>Paid by</strong>${paid}
             ${b.wire_left > 0.005 ? `<span class="va-owed">Wire still open ${m(b.wire_left)}</span> ` : ""}${b.cash_left > 0.005 ? `<span class="va-owed">Cash still open ${m(b.cash_left)}</span>` : ""}</div>
@@ -387,14 +391,47 @@
           <div><label>Note</label><input type="text" id="b-note" value="${esc(f("note"))}"></div>
         </div>
         <div id="b-check"></div>
+        <div id="b-for" style="display:none;"><h4 style="margin:10px 0 4px;">The Old Cash On This Invoice Is For</h4>
+          <p class="muted small" style="margin:0 0 6px;">Pick the invoice(s) whose cash he's collecting. Their cash owed goes down and this invoice's goes up by the same
+            amount until the wire for this invoice comes — then that wire pays them directly.</p>
+          <div id="b-for-rows"></div>
+          <div class="btn-row" style="margin:4px 0 0;"><button class="secondary small-btn" id="b-for-add">+ Invoice</button>
+            <button class="secondary small-btn" id="b-for-fill">Oldest Cash First</button></div></div>
         <div id="b-err" class="error"></div>
         <div class="btn-row"><button id="b-save">${b ? "Save" : "Add Invoice"}</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button></div>`);
       el.querySelector("#b-so").addEventListener("input", () => billCheck(el.querySelector("#b-goods")));
+      FOR = b ? b.carried_in.map(c => ({ bill_id: c.for_bill_id, amount: c.amount })) : [];
+      const cashOpts = sel => V.bills.filter(x => !b || x.id !== b.id).filter(x => x.cash_due > 0.005)
+        .map(x => `<option value="${x.id}" ${sel === x.id ? "selected" : ""}>${esc(billLabel(x))} · SO ${esc(x.so_number || "—")} · cash open ${m(x.cash_left_own)}</option>`).join("");
+      el.drawFor = () => {
+        el.querySelector("#b-for-rows").innerHTML = FOR.length ? `<table class="compact-table no-table-tools"><tbody>${FOR.map((d, i) => `<tr>
+            <td><select data-fi="${i}" data-k="bill_id"><option value="">— pick —</option>${cashOpts(d.bill_id)}</select></td>
+            <td class="num"><input type="number" step="0.01" min="0" data-fi="${i}" data-k="amount" value="${d.amount}" style="width:120px;"></td>
+            <td><a class="link" data-fdel="${i}">Remove</a></td></tr>`).join("")}</tbody></table>` : `<p class="muted small">Not assigned — when the wire comes it goes to the oldest open cash.</p>`;
+      };
+      el.querySelector("#b-for-rows").addEventListener("change", e => { const t = e.target; if (t.dataset.fi == null) return;
+        FOR[+t.dataset.fi][t.dataset.k] = t.dataset.k === "bill_id" ? parseInt(t.value) || null : parseFloat(t.value) || 0; });
+      el.querySelector("#b-for-rows").addEventListener("click", e => { const d = e.target.closest("[data-fdel]"); if (d) { FOR.splice(+d.dataset.fdel, 1); el.drawFor(); } });
+      el.querySelector("#b-for-add").onclick = () => { FOR.push({ bill_id: null, amount: 0 }); el.drawFor(); };
+      el.querySelector("#b-for-fill").onclick = () => {
+        const n = id => parseFloat(el.querySelector("#" + id).value) || 0;
+        let extra = Math.round((n("b-paper") - n("b-goods") - n("b-freight") - n("b-customs") - n("b-other")) * 100) / 100;
+        FOR = [];
+        for (const x of V.open_cash.slice().sort((a, c) => (a.bill_date || "9999").localeCompare(c.bill_date || "9999") || a.row - c.row)) {
+          if (extra <= 0.005) break;
+          if (b && x.id === b.id) continue;
+          const take = Math.min(extra, x.cash_left);
+          if (take > 0.005) { FOR.push({ bill_id: x.id, amount: Math.round(take * 100) / 100 }); extra -= take; }
+        }
+        el.drawFor();
+      };
+      el.drawFor();
       billCheck(el.querySelector("#b-goods"));
       el.querySelector("#b-save").onclick = async () => {
         const body = { so_number: val(el, "b-so"), bill_number: val(el, "b-no"), bill_date: val(el, "b-date") || null, po_code: val(el, "b-po") || null,
           goods: num(el, "b-goods") || 0, freight: num(el, "b-freight") || 0, customs: num(el, "b-customs") || 0, other: num(el, "b-other") || 0,
-          paper_amount: num(el, "b-paper"), cash_due: num(el, "b-cash"), so_amount: num(el, "b-soamt"), note: val(el, "b-note") };
+          paper_amount: num(el, "b-paper"), cash_due: num(el, "b-cash"), so_amount: num(el, "b-soamt"), note: val(el, "b-note"),
+          recovery_for: FOR.filter(d => d.bill_id && d.amount > 0) };
         try {
           setView(await apiFetch(b ? `/api/vendor-accounts/${V.account.id}/bills/${b.id}` : `/api/vendor-accounts/${V.account.id}/bills`,
                                  { method: b ? "PUT" : "POST", body: JSON.stringify(body) }));
@@ -410,10 +447,12 @@
       const paper = el.querySelector("#b-paper").value === "" ? null : n("b-paper");
       const cash = el.querySelector("#b-cash").value === "" ? Math.round(n("b-goods") * V.account.cash_share) / 100 : n("b-cash");
       let html = `<p class="muted small">True amount <strong>${m(total)}</strong> = wire <strong>${m(total - cash)}</strong> + cash <strong>${m(cash)}</strong>.</p>`;
+      const forBox = el.querySelector("#b-for");
+      if (forBox) forBox.style.display = paper != null && paper > total + 0.005 ? "" : "none";
       if (paper != null && paper > total + 0.005) {
         html += `<div class="va-note">Their invoice says <strong>${m(paper)}</strong> — <strong>${m(paper - total)}</strong> more than the charges.
           If that extra is <strong>freight or customs</strong>, enter it above (it's a real cost). If it's <strong>old cash</strong> he's collecting,
-          leave it: when you record the wire for this invoice, choose <em>Sent With</em> = this invoice and that ${m(paper - total)} goes to the oldest open cash.</div>`;
+          say below which invoice it's for: that invoice's cash goes down now, and the wire for this invoice pays it.</div>`;
       } else if (paper != null && paper < total - 0.005) {
         html += `<div class="va-note va-bad">The charges add up to more than their invoice — check the numbers.</div>`;
       }
@@ -437,7 +476,7 @@
       catch (e) { alert(e.message); }
     }
 
-    let PARTS = [];
+    let PARTS = [], FOR = [];
     function payForm(kind, id, opts = {}) {
       const p = id ? V.payments.find(x => x.id === id) : null;
       if (p && p.kind !== kind && !opts.switchKind) kind = p.kind;

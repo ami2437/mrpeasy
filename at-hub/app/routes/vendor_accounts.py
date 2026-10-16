@@ -43,6 +43,7 @@ class BillIn(BaseModel):
     paper_amount: Optional[float] = None
     cash_due: Optional[float] = None
     note: Optional[str] = None
+    recovery_for: Optional[List[dict]] = None  # [{bill_id, amount}]: the old cash inside this invoice is for those invoices
 
 
 class PartIn(BaseModel):

@@ -1968,6 +1968,9 @@ class VacctBill(Base):
     customs = Column(Float, nullable=False, default=0.0)
     other = Column(Float, nullable=False, default=0.0)
     paper_amount = Column(Float, nullable=True)
+    # the old cash inside paper_amount, and which invoices' cash it is: JSON [{"bill_id": 7, "amount": 400}]. Until the wire
+    # for this invoice comes, that cash is owed through THIS invoice (the other invoice's cash goes down by it)
+    recovery_for = Column(Text, nullable=True)
     wire_due = Column(Float, nullable=False, default=0.0)
     cash_due = Column(Float, nullable=False, default=0.0)
     note = Column(Text, nullable=True)

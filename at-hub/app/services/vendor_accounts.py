@@ -19,6 +19,7 @@ The opening history comes from their spreadsheet (plan_sheet / apply_sheet): row
 received, comments that say where a recovery went ("Sent $4000 along with freight invoice IF52"). The same reader
 compares a statement the vendor sends back (compare)."""
 import io
+import json
 import re
 from collections import defaultdict
 from datetime import datetime
@@ -72,6 +73,13 @@ def _account(db: Session, account_id: int) -> VacctAccount:
 
 def _vendor(db: Session, acc: VacctAccount) -> Optional[Vendor]:
     return db.query(Vendor).filter(Vendor.code == acc.vendor_code).first()
+
+
+def designations(b) -> List[dict]:
+    try:
+        return [d for d in json.loads(b.recovery_for or "[]") if d.get("bill_id") and (d.get("amount") or 0) > TOL]
+    except ValueError:
+        return []
 
 
 def bill_total(b) -> float:
@@ -161,6 +169,28 @@ def view(db: Session, account_id: int) -> dict:
             "po_code": po.code if po else None, "po_id": po.id if po else None, "po_picked": b.po_code,
             "note": b.note, "source": b.source, "paid_by": by_bill.get(b.id, []),
         })
+    # old cash he put on another invoice (recovery_for): owed through THAT invoice until its wire comes -- this invoice's
+    # cash goes down by it, that invoice's balance goes up by it; the total doesn't change
+    by_out = {ob["id"]: ob for ob in out_bills}
+    for ob in out_bills:
+        ob.update({"moved_out": [], "carried_in": [], "balance_own": ob["balance"], "cash_left_own": ob["cash_left"]})
+    for b in bills:
+        for d in designations(b):
+            tgt, src = by_out.get(d["bill_id"]), by_out[b.id]
+            if not tgt:
+                continue
+            via = cents(sum(a.amount for a in allocs if a.bill_id == d["bill_id"] and a.part == "cash" and pay_by_id.get(a.payment_id)
+                            and pay_by_id[a.payment_id].came_with_bill_id == b.id))
+            room = cents(tgt["cash_left_own"] - sum(x["pending"] for x in tgt["moved_out"]))
+            pending = cents(max(0.0, min(d["amount"] - via, room)))
+            tgt["moved_out"].append({"to_bill_id": b.id, "to": b.bill_number, "amount": cents(d["amount"]), "paid": via, "pending": pending})
+            src["carried_in"].append({"for_bill_id": tgt["id"], "for": tgt["bill_number"], "amount": cents(d["amount"]), "paid": via, "pending": pending})
+    for ob in out_bills:
+        out_p, in_p = cents(sum(x["pending"] for x in ob["moved_out"])), cents(sum(x["pending"] for x in ob["carried_in"]))
+        ob["cash_left"] = cents(ob["cash_left_own"] - out_p)
+        ob["carried_open"] = in_p
+        ob["moved_open"] = out_p
+        ob["balance"] = cents(ob["balance_own"] - out_p + in_p)
     out_pays = []
     for p in pays:
         applied = cents(sum(r["amount"] for r in by_pay.get(p.id, [])))
@@ -174,6 +204,8 @@ def view(db: Session, account_id: int) -> dict:
         })
     t = {k: cents(sum(b[k] for b in out_bills)) for k in ("total", "wire_due", "cash_due", "wire_paid", "cash_paid", "wire_left",
                                                           "cash_left", "balance", "recovery_in")}
+    t["carried_open"] = cents(sum(b["carried_open"] for b in out_bills))
+    t["wire_left"] = cents(t["wire_left"] + t["carried_open"])  # old cash billed on an invoice is paid with that invoice's wire
     t["paper"] = cents(sum((b["paper_amount"] if b["paper_amount"] is not None else b["total"]) for b in out_bills))
     t["credit"] = cents(sum(p["credit"] for p in out_pays if p["credit"] > 0))
     t["paid"] = cents(sum(p["amount"] for p in out_pays))
@@ -332,6 +364,10 @@ def save_bill(db: Session, account_id: int, data: dict, by: str, bill_id: int = 
     total = bill_total(b)
     if total <= 0:
         raise HTTPException(status_code=400, detail="A bill needs an amount (goods or a charge)")
+    if "recovery_for" in data:
+        _set_designations(db, acc, b, data["recovery_for"] or [], total)
+    elif b.paper_amount is None or b.paper_amount <= total + TOL:
+        b.recovery_for = None
     if b.paper_amount is not None and b.paper_amount < total - TOL:
         raise HTTPException(status_code=400, detail=f"The invoice says ${b.paper_amount:,.2f} but the charges add up to ${total:,.2f} -- "
                                                     "the true amount can't be more than the invoice")
@@ -357,6 +393,28 @@ def save_bill(db: Session, account_id: int, data: dict, by: str, bill_id: int = 
     return b
 
 
+def _set_designations(db, acc, b, items, total) -> None:
+    """The old cash inside this invoice and the invoices it is for -- no more than the extra on the paper, each no more
+    than that invoice's cash."""
+    extra = cents((b.paper_amount or 0) - total)
+    out, used = [], 0.0
+    for d in items:
+        amt = _money_in(d.get("amount"), "Old cash amount")
+        if amt <= TOL:
+            continue
+        t = db.get(VacctBill, int(d.get("bill_id") or 0))
+        if not t or t.account_id != acc.id or (b.id and t.id == b.id):
+            raise HTTPException(status_code=400, detail="Pick another invoice of this vendor for the old cash")
+        if amt > cents(t.cash_due) + TOL:
+            raise HTTPException(status_code=400, detail=f"{t.bill_number or t.so_number}: its cash is only ${t.cash_due:,.2f}")
+        used = cents(used + amt)
+        out.append({"bill_id": t.id, "amount": amt})
+    if used > extra + TOL:
+        raise HTTPException(status_code=400, detail=f"The invoice carries ${max(extra, 0):,.2f} of old cash (what it says less its charges) -- "
+                                                    f"you assigned ${used:,.2f}")
+    b.recovery_for = json.dumps(out) if out else None
+
+
 def _paid_parts(db, bill_id) -> Tuple[float, float]:
     w = c = 0.0
     for a in db.query(VacctAlloc).filter(VacctAlloc.bill_id == bill_id).all():
@@ -375,6 +433,10 @@ def delete_bill(db: Session, account_id: int, bill_id: int) -> None:
     if db.query(VacctAlloc).filter(VacctAlloc.bill_id == b.id).count():
         raise HTTPException(status_code=400, detail="Payments are applied to this bill -- take them off first (edit those payments)")
     db.query(VacctPayment).filter(VacctPayment.came_with_bill_id == b.id).update({"came_with_bill_id": None}, synchronize_session=False)
+    for other in _bills(db, acc):
+        ds = designations(other)
+        if any(d["bill_id"] == b.id for d in ds):
+            other.recovery_for = json.dumps([d for d in ds if d["bill_id"] != b.id]) or None
     db.delete(b)
     db.flush()
     sync_account(db, acc)
@@ -394,9 +456,9 @@ def suggest(db: Session, account_id: int, kind: str, amount: float, for_bill_ids
     left = cents(amount)
     out = []
 
-    def take(b, part):
+    def take(b, part, cap=None):
         nonlocal left
-        n = min(left, b[f"{part}_left"])
+        n = min(left, b[f"{part}_left"] if cap is None else cap)
         if n > TOL:
             out.append({"bill_id": b["id"], "part": part, "amount": cents(n), "bill_number": b["bill_number"], "so_number": b["so_number"],
                         "left_before": b[f"{part}_left"]})
@@ -412,7 +474,12 @@ def suggest(db: Session, account_id: int, kind: str, amount: float, for_bill_ids
             take(b, "wire")
             take(b, "cash")
         if not named and came_with_bill_id in by_id:
-            take(by_id[came_with_bill_id], "wire")  # an inflated invoice: its own charge, the rest is old cash
+            came = by_id[came_with_bill_id]
+            take(came, "wire")  # an inflated invoice: its own charge, then the old cash it carries for the invoices named on it
+            for c in came["carried_in"]:
+                tgt = by_id.get(c["for_bill_id"])
+                if tgt and c["pending"] > TOL:
+                    take(tgt, "cash", cap=min(c["pending"], tgt["cash_left_own"]))
         elif not named:
             for b in oldest:
                 take(b, "wire")
@@ -870,6 +937,7 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
             fits_so = x["so_amount"] is None or own <= x["so_amount"] + max(1.0, 0.01 * (x["so_amount"] or 0))
             if x["wire_recd"] >= amt - TOL and own > TOL and fits_so and not x.get("recovery"):
                 x["inside"] = cents(x["inside"] + amt)
+                x.setdefault("for_rows", []).append((r["row"], amt))
                 notes.append(f"Row {x['row']} {x['invoice']}: the invoice (${x['paper']:,.2f}) includes ${amt:,.2f} of old cash for row "
                              f"{r['row']} {r['invoice']} -- its real charge is ${cents(x['paper'] - x['inside']):,.2f}")
             elif not x.get("recovery"):
@@ -888,7 +956,7 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
         bills.append({"row": r["row"], "so_number": r["so"], "so_amount": r["so_amount"], "bill_number": r["invoice"],
                       "bill_date": parse_date(r["bill_date"], r["so"]).date().isoformat() if parse_date(r["bill_date"], r["so"]) else None,
                       "goods": r["goods"], "freight": r["freight"], "customs": r["customs"], "other": r["other"],
-                      "paper_amount": r["paper"] if r["inside"] > TOL else None,
+                      "paper_amount": r["paper"] if r["inside"] > TOL else None, "for_rows": r.get("for_rows", []),
                       "wire_due": r["true_wire_due"], "cash_due": r["true_cash_due"], "note": r["comments"] or None})
     payments = []
     for r in rows:
@@ -1078,6 +1146,11 @@ def apply_sheet(db: Session, account_id: int, data: bytes, filename: str, by: st
         db.add(row)
         db.flush()
         bill_id[b["row"]] = row.id
+    by_row = {b["row"]: b for b in plan["bills"]}
+    for b in plan["bills"]:  # which invoice the old cash inside an invoice was for
+        ds = [{"bill_id": bill_id[r], "amount": cents(min(a, by_row[r]["cash_due"]))} for r, a in b.get("for_rows", []) if r in bill_id]
+        if ds:
+            db.get(VacctBill, bill_id[b["row"]]).recovery_for = json.dumps(ds)
     for p in plan["payments"]:
         row = VacctPayment(account_id=acc.id, kind=p["kind"], paid_date=_date(p["date"]), amount=p["amount"], reference=p["reference"],
                            came_with_bill_id=bill_id.get(p.get("came_with_row")), note=p["note"], source="sheet", created_by=by)
@@ -1116,13 +1189,14 @@ def compare(db: Session, account_id: int, data: bytes, filename: str) -> dict:
             diffs.append(f"invoice ${t['total']:,.2f} on theirs, ${our_paper:,.2f} on ours")
         # an over-collection is a credit on ours, a negative balance on theirs
         credit = cents(sum(p["credit"] for p in v["payments"] if p["credit"] > TOL and any(r["bill_id"] == o["id"] for r in p["parts"])))
-        if abs(o["balance"] - their_bal) > 0.02 and abs(o["balance"] - credit - their_bal) > 1.0:
-            diffs.append(f"balance ${their_bal:,.2f} on theirs, ${o['balance']:,.2f} on ours")
-        rows.append({**item, "our_total": our_paper, "our_balance": o["balance"], "bill_id": o["id"],
+        own = o["balance_own"]
+        if abs(own - their_bal) > 0.02 and abs(own - credit - their_bal) > 1.0 and abs(o["balance"] - their_bal) > 0.02:
+            diffs.append(f"balance ${their_bal:,.2f} on theirs, ${own:,.2f} on ours")
+        rows.append({**item, "our_total": our_paper, "our_balance": own, "bill_id": o["id"],
                      "status": "differs" if diffs else ("note" if t["their_notes"] else "same"), "differences": diffs})
     for o in ours:
         if o["id"] not in used:
-            rows.append({"invoice": o["bill_number"] or f"SO {o['so_number']}", "our_total": o["total"], "our_balance": o["balance"],
+            rows.append({"invoice": o["bill_number"] or f"SO {o['so_number']}", "our_total": o["total"], "our_balance": o["balance_own"],
                          "bill_id": o["id"], "status": "only_ours"})
     their_owed = cents(sum(t["total"] - t["recovery"] - t["wire_recd"] - t["cash_recd"] - t["cash_adj"] for t in theirs))
     counts = defaultdict(int)
@@ -1142,12 +1216,18 @@ def _paid_by(b: dict) -> str:
                      for r in b["paid_by"])
 
 
+def _moved_note(b: dict) -> str:
+    out = [f"${x['pending']:,.2f} of this invoice's cash is billed on {x['to']}" for x in b["moved_out"] if x["pending"] > TOL]
+    out += [f"includes ${x['pending']:,.2f} old cash for {x['for']}" for x in b["carried_in"] if x["pending"] > TOL]
+    return "; ".join(out)
+
+
 def _stmt_rows(v: dict, open_only: bool) -> List[dict]:
     return [b for b in v["bills"] if not open_only or abs(b["balance"]) > TOL]
 
 
 STMT_HEAD = ["SO #", "SO Amount", "Invoice", "Invoice Date", "Invoice Sub Total", "Freight", "Customs / Other", "Invoice Total (Your Invoice)",
-             "Old Cash Included", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Paid By", "Comments", "Their Notes"]
+             "Old Cash Included", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Old Cash Moved", "Balance", "Paid By", "Comments", "Their Notes"]
 
 
 def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: bool = False) -> bytes:
@@ -1191,33 +1271,35 @@ def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: b
         ws.append([b["so_number"], b["so_amount"] if b["so_number"] != last_so else None, b["bill_number"],
                    datetime.fromisoformat(b["bill_date"]) if b["bill_date"] else None, b["goods"], b["freight"],
                    cents(b["customs"] + b["other"]), paper, b["recovery_in"] or None, b["wire_due"], b["cash_due"], b["wire_paid"],
-                   b["cash_paid"], f"=J{r}+K{r}-L{r}-M{r}", _paid_by(b) or None, b["note"], None])
+                   b["cash_paid"], cents(b["carried_open"] - b["moved_open"]) or None, f"=J{r}+K{r}-L{r}-M{r}+N{r}", _paid_by(b) or None,
+                   _moved_note(b) or b["note"], None])
         last_so = b["so_number"]
         ws.cell(r, 4).number_format = "mm/dd/yyyy"
     last = ws.max_row
     ws.append([])
     tr = ws.max_row + 1
-    ws.append(["Totals"] + [None] * 3 + [f"=SUM({L(c)}{first}:{L(c)}{last})" for c in range(5, 15)])
+    ws.append(["Totals"] + [None] * 3 + [f"=SUM({L(c)}{first}:{L(c)}{last})" for c in range(5, 16)])
     for c in ws[tr]:
         c.font = bold
         c.border = Border(top=thin)
-    for row in ws.iter_rows(min_row=first, max_row=tr, min_col=2, max_col=14):
+    for row in ws.iter_rows(min_row=first, max_row=tr, min_col=2, max_col=15):
         for c in row:
             if c.column != 3 and c.column != 4:
                 c.number_format = money
     ws.append([])
     s0 = ws.max_row + 1
-    summary = [("Wire Balance", f"=J{tr}-L{tr}"), ("Cash Balance", f"=K{tr}-M{tr}"),
-               ("Credit With You (Paid Ahead)", t["credit"]), ("Total Balance", f"=N{s0}+N{s0 + 1}-N{s0 + 2}")]
+    nr = f"N{first}:N{last}"
+    summary = [("Wire Balance", f'=J{tr}-L{tr}+SUMIF({nr},">0")'), ("Cash Balance", f'=K{tr}-M{tr}+SUMIF({nr},"<0")'),
+               ("Credit With You (Paid Ahead)", t["credit"]), ("Total Balance", f"=O{s0}+O{s0 + 1}-O{s0 + 2}")]
     for i, (label, val) in enumerate(summary):
         ws.cell(s0 + i, 12, label).font = bold
-        c = ws.cell(s0 + i, 14, val)
+        c = ws.cell(s0 + i, 15, val)
         c.number_format, c.font = money, bold
     extra = [("Old cash collected through invoices", t["recovered"]), ("Ordered but not invoiced yet (not owed yet)", t["not_invoiced"])]
     for i, (label, val) in enumerate(extra):
         ws.cell(s0 + len(summary) + 1 + i, 12, label).font = Font(italic=True)
-        ws.cell(s0 + len(summary) + 1 + i, 14, val).number_format = money
-    for i, w in enumerate([16, 12, 16, 12, 14, 11, 12, 16, 12, 12, 12, 12, 12, 12, 46, 40, 30], 1):
+        ws.cell(s0 + len(summary) + 1 + i, 15, val).number_format = money
+    for i, w in enumerate([16, 12, 16, 12, 14, 11, 12, 16, 12, 12, 12, 12, 12, 13, 12, 46, 40, 30], 1):
         ws.column_dimensions[L(i)].width = w
     ws.freeze_panes = ws.cell(first, 4)
 
