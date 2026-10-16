@@ -37,8 +37,9 @@ function Newest($pattern) {
 
 try {
   New-Item -ItemType Directory -Force $Folder | Out-Null
-  $lastFull = Newest "AT-HUB-backup-*-everything.zip"
-  $lastAny = @(Newest "AT-HUB-backup-*-everything.zip"; Newest "AT-HUB-backup-*-database.zip") | Where-Object { $_ } |
+  # your own downloads count too (same names without "-auto"): nothing is fetched twice
+  $lastFull = Newest "AT-HUB-backup-*-everything*.zip"
+  $lastAny = @(Newest "AT-HUB-backup-*-everything*.zip"; Newest "AT-HUB-backup-*-database*.zip") | Where-Object { $_ } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $Kind) {
     if (-not $lastFull -or $lastFull.LastWriteTime -lt (Get-Date).AddDays(-$FullEveryDays)) { $Kind = "full" }
@@ -64,15 +65,15 @@ try {
     $files = @($zip.Entries | Where-Object { $_.FullName -like "uploads/*" }).Count
   } finally { $zip.Dispose() }
 
-  $name = "AT-HUB-backup-$(Get-Date -Format 'yyyy-MM-dd-HHmm')-$label.zip"
+  $name = "AT-HUB-backup-$(Get-Date -Format 'yyyy-MM-dd-HHmm')-$label-auto.zip"
   $dest = Join-Path $Folder $name
   Move-Item $tmp $dest -Force
   $size = (Get-Item $dest).Length
   & $ssh -i $key -o BatchMode=yes -o ConnectTimeout=20 $server "saved $Kind $size" | Out-Null
 
-  # keep the newest copies of each kind
-  Get-ChildItem $Folder -Filter "AT-HUB-backup-*-database.zip" -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip $KeepDb | Remove-Item -Force
-  Get-ChildItem $Folder -Filter "AT-HUB-backup-*-everything.zip" -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip $KeepFull | Remove-Item -Force
+  # keep the newest automatic copies of each kind (copies you saved yourself are never deleted)
+  Get-ChildItem $Folder -Filter "AT-HUB-backup-*-database-auto.zip" -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip $KeepDb | Remove-Item -Force
+  Get-ChildItem $Folder -Filter "AT-HUB-backup-*-everything-auto.zip" -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip $KeepFull | Remove-Item -Force
 
   $mb = [math]::Round($size / 1MB, 1)
   Note "saved $name ($mb MB$(if ($Kind -eq 'full') { ", $files files" }))"
