@@ -164,7 +164,7 @@ def test_their_sheet_loads_with_every_recovery_worked_out(api, make, client, adm
     assert wb.sheetnames == ["Statement", "Payments", "SO Summary"]
     ws = wb["Statement"]
     head = [c.value for c in next(r for r in ws.iter_rows(min_row=1, max_row=10) if r[0].value == "SO #")]
-    assert "Their Notes" in head and "Old Cash Included" in head
+    assert "Their Notes" in head and "Includes Cash Of Other Invoices" in head and "Invoiced Amount" in head
     assert any(str(c.value or "").startswith("=J") for row in ws.iter_rows() for c in row)   # live formulas
     r = client.post(f"/api/vendor-accounts/{aid}/compare", headers=admin_headers,
                     files={"file": ("ours.xlsx", io.BytesIO(x.content), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
@@ -377,3 +377,30 @@ def test_old_cash_billed_on_another_invoice_moves_there(api, make):
     # can't assign more than the extra on the paper
     api.post(f"/api/vendor-accounts/{aid}/bills", json={"bill_number": "CX/3", "freight": 100, "paper_amount": 200,
                                                         "recovery_for": [{"bill_id": a["id"], "amount": 150}]}, expect=400)
+
+
+def test_notes_on_lines_and_completed_invoices(api, make, client):
+    v, pos, aid = _account(api, make)
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"bill_number": "NT/1", "goods": 100, "cash_due": 0})
+    b = _bill(view, "NT/1")
+    assert not b["completed"] and b["notes"] == 0
+    notes = api.post(f"/api/vendor-accounts/{aid}/notes", json={"target": "bill", "target_id": b["id"], "text": "Asked him for the packing list"})
+    assert [n["text"] for n in notes] == ["Asked him for the packing list"] and notes[0]["by"] == "admin"
+    api.post(f"/api/vendor-accounts/{aid}/notes", json={"target": "bill", "target_id": b["id"], "text": "  "}, expect=400)
+    api.post(f"/api/vendor-accounts/{aid}/notes", json={"target": "bill", "target_id": 999999, "text": "x"}, expect=404)
+    view = api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 100, "paid_date": "2026-10-16"})
+    b = _bill(view, "NT/1")
+    assert b["completed"] and b["notes"] == 1 and b["last_note"] == "Asked him for the packing list"
+    p = view["payments"][0]
+    api.post(f"/api/vendor-accounts/{aid}/notes", json={"target": "payment", "target_id": p["id"], "text": "Confirmed by bank"})
+    assert api.get(f"/api/vendor-accounts/{aid}")["payments"][0]["notes"] == 1
+    # only the writer (or a Super admin) deletes a note; it goes with its line
+    nid = notes[0]["id"]
+    api.delete(f"/api/vendor-accounts/{aid}/notes/{nid}")
+    assert api.get(f"/api/vendor-accounts/{aid}/notes", params={"target": "bill", "target_id": b["id"]}) == []
+    api.delete(f"/api/vendor-accounts/{aid}/payments/{p['id']}")
+    from app.config.database import SessionLocal
+    from app.models import VacctNote
+    db = SessionLocal()
+    assert db.query(VacctNote).filter(VacctNote.target == "payment", VacctNote.target_id == p["id"]).count() == 0
+    db.close()

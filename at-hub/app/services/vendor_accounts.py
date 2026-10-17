@@ -28,8 +28,8 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import (PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, VacctAccount, VacctAlloc, VacctBill, VacctPayment,
-                        Vendor, VendorBill, VendorPayment)
+from app.models import (PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, VacctAccount, VacctAlloc, VacctBill, VacctNote,
+                        VacctPayment, Vendor, VendorBill, VendorPayment)
 from app.services.money import cents
 
 TOL = 0.005
@@ -191,6 +191,15 @@ def view(db: Session, account_id: int) -> dict:
         ob["carried_open"] = in_p
         ob["moved_open"] = out_p
         ob["balance"] = cents(ob["balance_own"] - out_p + in_p)
+    notes = defaultdict(list)
+    for n in db.query(VacctNote).filter(VacctNote.account_id == acc.id).order_by(VacctNote.created_at).all():
+        notes[(n.target, n.target_id)].append(n)
+    for b, ob in zip(bills, out_bills):
+        po = pos.get(b.id)
+        ob["po_date"] = po.order_date.date().isoformat() if po and po.order_date else None
+        ns = notes.get(("bill", b.id), [])
+        ob["notes"], ob["last_note"] = len(ns), (ns[-1].text if ns else None)
+        ob["completed"] = abs(ob["balance"]) <= TOL and abs(ob["balance_own"]) <= TOL and ob["carried_open"] <= TOL and ob["moved_open"] <= TOL
     out_pays = []
     for p in pays:
         applied = cents(sum(r["amount"] for r in by_pay.get(p.id, [])))
@@ -201,6 +210,8 @@ def view(db: Session, account_id: int) -> dict:
             "came_with_bill_id": p.came_with_bill_id,
             "came_with": bill_by_id[p.came_with_bill_id].bill_number if p.came_with_bill_id in bill_by_id else None,
             "applied": applied, "credit": cents(p.amount - applied), "parts": by_pay.get(p.id, []),
+            "notes": len(notes.get(("payment", p.id), [])),
+            "last_note": notes[("payment", p.id)][-1].text if notes.get(("payment", p.id)) else None,
         })
     t = {k: cents(sum(b[k] for b in out_bills)) for k in ("total", "wire_due", "cash_due", "wire_paid", "cash_paid", "wire_left",
                                                           "cash_left", "balance", "recovery_in")}
@@ -271,6 +282,46 @@ def so_view(db: Session, acc: VacctAccount, bills: List[VacctBill], out_bills: L
     return out
 
 
+# ---------------------------------------------------------------- notes per line ------------------------------------
+
+def _target(db, acc, target: str, target_id: int):
+    model = {"bill": VacctBill, "payment": VacctPayment}.get(target)
+    row = db.get(model, target_id) if model else None
+    if not row or row.account_id != acc.id:
+        raise HTTPException(status_code=404, detail="That line isn't in this account")
+    return row
+
+
+def list_notes(db: Session, account_id: int, target: str, target_id: int) -> List[dict]:
+    acc = _account(db, account_id)
+    _target(db, acc, target, target_id)
+    return [{"id": n.id, "text": n.text, "by": n.created_by, "at": n.created_at.isoformat() + "Z" if n.created_at else None}
+            for n in db.query(VacctNote).filter(VacctNote.account_id == acc.id, VacctNote.target == target, VacctNote.target_id == target_id)
+            .order_by(VacctNote.created_at).all()]
+
+
+def add_note(db: Session, account_id: int, target: str, target_id: int, text: str, by: str) -> List[dict]:
+    acc = _account(db, account_id)
+    _target(db, acc, target, target_id)
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Write the note first")
+    db.add(VacctNote(account_id=acc.id, target=target, target_id=target_id, text=text[:4000], created_by=by))
+    db.commit()
+    return list_notes(db, account_id, target, target_id)
+
+
+def delete_note(db: Session, account_id: int, note_id: int, user) -> None:
+    acc = _account(db, account_id)
+    n = db.get(VacctNote, note_id)
+    if not n or n.account_id != acc.id:
+        raise HTTPException(status_code=404, detail="Note not found")
+    if n.created_by != user.username and user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only the person who wrote a note (or a Super admin) can delete it")
+    db.delete(n)
+    db.commit()
+
+
 def list_accounts(db: Session) -> List[dict]:
     out = []
     for acc in db.query(VacctAccount).order_by(VacctAccount.vendor_name).all():
@@ -316,6 +367,7 @@ def delete_account(db: Session, account_id: int) -> None:
     db.query(VacctAlloc).filter(VacctAlloc.payment_id.in_(pays or [-1])).delete(synchronize_session=False)
     db.query(VacctPayment).filter(VacctPayment.account_id == acc.id).delete(synchronize_session=False)
     db.query(VacctBill).filter(VacctBill.account_id == acc.id).delete(synchronize_session=False)
+    db.query(VacctNote).filter(VacctNote.account_id == acc.id).delete(synchronize_session=False)
     db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id.in_(pos or [-1]), PurchaseOrderPayment.created_by == BY).delete(synchronize_session=False)
     db.delete(acc)
     db.commit()
@@ -437,6 +489,7 @@ def delete_bill(db: Session, account_id: int, bill_id: int) -> None:
         ds = designations(other)
         if any(d["bill_id"] == b.id for d in ds):
             other.recovery_for = json.dumps([d for d in ds if d["bill_id"] != b.id]) or None
+    db.query(VacctNote).filter(VacctNote.target == "bill", VacctNote.target_id == b.id).delete(synchronize_session=False)
     db.delete(b)
     db.flush()
     sync_account(db, acc)
@@ -558,6 +611,7 @@ def delete_payment(db: Session, account_id: int, payment_id: int) -> None:
     if not p or p.account_id != acc.id:
         raise HTTPException(status_code=404, detail="Payment not found")
     db.query(VacctAlloc).filter(VacctAlloc.payment_id == p.id).delete(synchronize_session=False)
+    db.query(VacctNote).filter(VacctNote.target == "payment", VacctNote.target_id == p.id).delete(synchronize_session=False)
     db.delete(p)
     db.flush()
     sync_account(db, acc)
@@ -713,8 +767,8 @@ COLS = {  # our name -> header words (normalised: lower case, single spaces, no 
     "subtotal": ("invoice sub total", "sub total", "subtotal", "goods"),
     "freight": ("freight",),
     "customs": ("customs / other", "customs", "other charges"),
-    "total": ("invoice total (your invoice)", "invoice total", "total"),
-    "recovery": ("old cash included", "recovery included", "recovery"),
+    "total": ("invoiced amount", "invoice total (your invoice)", "invoice total", "total"),
+    "recovery": ("includes cash of other invoices", "old cash included", "recovery included", "recovery"),
     "wire_due": ("wire due",),
     "cash_due": ("cash due",),
     "wire_recd": ("wire recd", "wire received", "wire paid"),
@@ -1216,6 +1270,11 @@ def _paid_by(b: dict) -> str:
                      for r in b["paid_by"])
 
 
+def _notes_text(db, target: str, target_id: int) -> str:
+    return "\n".join(f"{n.text} ({n.created_by or ''}, {n.created_at:%m/%d/%Y})" for n in
+                     db.query(VacctNote).filter(VacctNote.target == target, VacctNote.target_id == target_id).order_by(VacctNote.created_at).all())
+
+
 def _moved_note(b: dict) -> str:
     out = [f"${x['pending']:,.2f} of this invoice's cash is billed on {x['to']}" for x in b["moved_out"] if x["pending"] > TOL]
     out += [f"includes ${x['pending']:,.2f} old cash for {x['for']}" for x in b["carried_in"] if x["pending"] > TOL]
@@ -1226,8 +1285,9 @@ def _stmt_rows(v: dict, open_only: bool) -> List[dict]:
     return [b for b in v["bills"] if not open_only or abs(b["balance"]) > TOL]
 
 
-STMT_HEAD = ["SO #", "SO Amount", "Invoice", "Invoice Date", "Invoice Sub Total", "Freight", "Customs / Other", "Invoice Total (Your Invoice)",
-             "Old Cash Included", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Old Cash Moved", "Balance", "Paid By", "Comments", "Their Notes"]
+STMT_HEAD = ["SO #", "SO Amount", "Invoice", "Invoice Date", "Invoice Sub Total", "Freight", "Customs / Other", "Invoiced Amount",
+             "Includes Cash Of Other Invoices", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Cash Moved Between Invoices", "Balance",
+             "Paid By", "Comments", "Their Notes"]
 
 
 def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: bool = False) -> bytes:
@@ -1272,7 +1332,7 @@ def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: b
                    datetime.fromisoformat(b["bill_date"]) if b["bill_date"] else None, b["goods"], b["freight"],
                    cents(b["customs"] + b["other"]), paper, b["recovery_in"] or None, b["wire_due"], b["cash_due"], b["wire_paid"],
                    b["cash_paid"], cents(b["carried_open"] - b["moved_open"]) or None, f"=J{r}+K{r}-L{r}-M{r}+N{r}", _paid_by(b) or None,
-                   _moved_note(b) or b["note"], None])
+                   "\n".join(x for x in (_moved_note(b), b["note"], _notes_text(db, "bill", b["id"])) if x) or None, None])
         last_so = b["so_number"]
         ws.cell(r, 4).number_format = "mm/dd/yyyy"
     last = ws.max_row
@@ -1314,7 +1374,7 @@ def statement_xlsx(db: Session, account_id: int, company_name: str, open_only: b
         start = ps.max_row + 1
         for i, (inv, so, part, amt) in enumerate(lines or [("", "", "", 0)]):
             ps.append([p["code"], datetime.fromisoformat(p["paid_date"]) if p["paid_date"] else None, p["kind"].title(), p["reference"],
-                       p["amount"], inv, so, part, amt, p["note"] if i == 0 else None, None] if i == 0 else
+                       p["amount"], inv, so, part, amt, "\n".join(x for x in (p["note"], _notes_text(db, "payment", p["id"])) if x) or None, None] if i == 0 else
                       [None, None, None, None, None, inv, so, part, amt, None, None])
             ps.cell(ps.max_row, 2).number_format = "mm/dd/yyyy"
             for col in (5, 9):
@@ -1374,7 +1434,7 @@ def statement_pdf(db: Session, account_id: int, open_only: bool = False) -> byte
                                 ("Not invoiced yet", P.money(t["not_invoiced"]) if t["not_invoiced"] else None)]))
     story[-1].hAlign = "LEFT"
     story.append(Spacer(1, 12))
-    head = ["SO #", "Invoice", "Invoice Total", "Old Cash Incl.", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Paid By"]
+    head = ["SO #", "Invoice", "Invoiced Amount", "Cash Of Other Invoices", "Wire Due", "Cash Due", "Wire Recd", "Cash Recd", "Balance", "Paid By"]
     rows = []
     for b in _stmt_rows(v, open_only):
         paper = b["paper_amount"] if b["paper_amount"] is not None else b["total"]

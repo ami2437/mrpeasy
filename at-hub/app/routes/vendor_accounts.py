@@ -170,6 +170,28 @@ def delete_payment(account_id: int, payment_id: int, db: Session = Depends(get_d
     return VA.view(db, account_id)
 
 
+class NoteIn(BaseModel):
+    target: str
+    target_id: int
+    text: str
+
+
+@router.get("/{account_id}/notes")
+def notes(account_id: int, target: str, target_id: int, db: Session = Depends(get_db)):
+    return VA.list_notes(db, account_id, target, target_id)
+
+
+@router.post("/{account_id}/notes")
+def add_note(account_id: int, data: NoteIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    return VA.add_note(db, account_id, data.target, data.target_id, data.text, user.username)
+
+
+@router.delete("/{account_id}/notes/{note_id}", status_code=204)
+def delete_note(account_id: int, note_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    VA.delete_note(db, account_id, note_id, user)
+    return Response(status_code=204)
+
+
 @router.post("/{account_id}/sheet/preview")
 async def sheet_preview(account_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     return VA.plan_sheet(db, account_id, await _read(file), file.filename or "sheet.xlsx")

@@ -42,7 +42,8 @@
     .va-chip:hover, .va-chip.on { background: var(--va-on-bg); color: var(--va-on-fg); border-color: var(--va-hl-edge); }
     .va-chip.rec { color: var(--va-rec); }
     .va-chip.rec.on, .va-chip.rec:hover { color: var(--va-on-fg); }
-    .va-so { max-width: 150px; overflow-wrap: anywhere; }
+    .va-so { min-width: 128px; max-width: 190px; overflow-wrap: break-word; }
+    .va-so .nowrap, .va-so .small { white-space: nowrap; }
     .va-chip { font-size: 11px; padding: 0 6px; }
     .va-so .muted { font-size: 12px; }
     .va-paid { border: 2px solid var(--va-paid-border); background: var(--va-paid-bg); color: var(--text); border-radius: 10px; padding: 10px 14px; margin: 0 0 12px; }
@@ -51,6 +52,23 @@
     .va-pay-part td:first-child { padding-left: 26px; }
     .va-hlbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--va-paid-bg); color: var(--text); border: 1px solid var(--va-note-border); border-radius: 8px;
                 padding: 6px 10px; margin: 0 0 8px; font-size: 13px; }
+    .va-sortable { cursor: pointer; user-select: none; }
+    .va-table th { position: relative; }
+    .va-scroll thead th { position: sticky; }
+    .va-rs { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 4; }
+    .va-rs:hover { background: var(--accent-ring); }
+    body.va-resizing, body.va-resizing * { cursor: col-resize !important; user-select: none !important; }
+    .va-click { cursor: pointer; }
+    .va-click:hover td { background: var(--accent-soft); }
+    .va-search { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
+    .va-search input { flex: 1; }
+    .va-done > summary { cursor: pointer; font-weight: 600; margin: 14px 0 6px; }
+    .va-hlpill { position: fixed; right: 18px; bottom: 18px; z-index: 60; background: var(--va-paid-bg); border: 1px solid var(--va-paid-border); color: var(--text);
+                 border-radius: 20px; padding: 8px 14px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); font-size: 13px; }
+    .va-notebtn { cursor: pointer; color: var(--muted); white-space: nowrap; }
+    .va-notebtn.has { color: var(--accent); font-weight: 600; }
+    .va-noteline { border-left: 3px solid var(--border); padding: 4px 8px; margin: 4px 0; }
+    .va-modal.wide .modal { max-width: 1000px; }
   </style>
 </head>
 <body>
@@ -78,12 +96,14 @@
     AuthGuard.requirePerm("vendor_accounts");
     document.getElementById("sidebar").innerHTML = renderSidebar("vendor-accounts.html");
 
-    let accounts = [], V = null, TAB = "invoices", OPEN = new Set(), HL = null, LAST = null;
+    let accounts = [], V = null, TAB = "invoices", HL = null, Q = "";
     const store = { get: k => { try { return localStorage.getItem("va." + k); } catch { return null; } },
                     set: (k, v) => { try { localStorage.setItem("va." + k, v); } catch {} } };
     const m = n => fmtMoney(n || 0);
     const esc = escapeHtml;
     const PARAMS = new URLSearchParams(location.search);
+    let SORT = {};
+    try { SORT = JSON.parse(store.get("sort") || "{}"); } catch { SORT = {}; }
 
     function optionsHtml() {
       return accounts.map(a => `<option value="${a.id}">${esc(a.vendor_name || a.vendor_code)} — owed ${m(a.totals.owed)}</option>`).join("");
@@ -102,7 +122,7 @@
     async function pick(id) {
       if (!id) return;
       store.set("acc", id);
-      HL = null; LAST = null;
+      HL = null;
       V = await apiFetch(`/api/vendor-accounts/${id}`);
       render();
       // arriving from a PO screen: "record a wire for this PO"
@@ -122,15 +142,116 @@
       sel.innerHTML = optionsHtml();
       sel.value = cur;
     }
+    async function refresh() { setView(await apiFetch(`/api/vendor-accounts/${V.account.id}`)); }
     const payById = id => V.payments.find(p => p.id === id);
     const billById = id => V.bills.find(b => b.id === id);
     const billLabel = b => b ? (b.bill_number || "SO " + (b.so_number || "")) : "";
+    const soOf = b => V.sos.find(s => s.so_number === b.so_number);
 
+    // ---- the page never jumps: every redraw keeps where you were scrolled ----
     function render() {
+      const y = window.scrollY;
+      const inner = {};
+      document.querySelectorAll("[data-scroll-key]").forEach(el => { inner[el.dataset.scrollKey] = [el.scrollTop, el.scrollLeft]; });
+      draw();
+      document.querySelectorAll("[data-scroll-key]").forEach(el => { const s = inner[el.dataset.scrollKey]; if (s) { el.scrollTop = s[0]; el.scrollLeft = s[1]; } });
+      window.scrollTo(0, y);
+      applyHL();
+    }
+
+    // ---- search: words, invoice / SO / PO / wire / P- numbers, notes, and amounts (5426, >10000, <=500) ----
+    function parseQuery(q) {
+      return (q || "").toLowerCase().split(/\s+/).filter(Boolean).map(t => {
+        const mm = t.match(/^(>=|<=|>|<|=)?\$?([\d,]*\.?\d+)$/);
+        if (mm) return { num: parseFloat(mm[2].replace(/,/g, "")), op: mm[1] || "", raw: t.replace(/^[<>=]+/, "") };
+        return { text: t };
+      });
+    }
+    function hits(terms, text, amounts) {
+      const hay = (text || "").toLowerCase();
+      return terms.every(t => {
+        if (t.text != null) return hay.includes(t.text);
+        const cmp = a => t.op === ">" ? a > t.num : t.op === "<" ? a < t.num : t.op === ">=" ? a >= t.num - 0.005 : t.op === "<=" ? a <= t.num + 0.005 : Math.abs(a - t.num) < 0.005;
+        return amounts.some(a => a != null && cmp(Math.abs(a))) || (!t.op && hay.includes(t.raw));
+      });
+    }
+    function billMatches(b, terms) {
+      if (!terms.length) return true;
+      const pays = b.paid_by.map(r => `${r.payment_code} ${r.reference || ""}`).join(" ");
+      const text = [b.so_number, b.bill_number, b.po_code, b.note, b.last_note, pays, b.carried_in.map(c => c.for).join(" "), b.moved_out.map(x => x.to).join(" ")].join(" ");
+      return hits(terms, text, [b.total, b.paper_amount, b.wire_due, b.cash_due, b.wire_paid, b.cash_paid, b.balance, b.recovery_in, b.so_amount, ...b.paid_by.map(r => r.amount)]);
+    }
+    function payMatches(p, terms) {
+      if (!terms.length) return true;
+      const text = [p.code, p.kind, p.reference, p.note, p.last_note, p.picked_from, p.came_with, p.paid_date,
+                    ...p.parts.map(r => { const b = billById(r.bill_id) || {}; return `${b.bill_number || ""} ${b.so_number || ""} ${b.po_code || ""}`; })].join(" ");
+      return hits(terms, text, [p.amount, p.credit, ...p.parts.map(r => r.amount)]);
+    }
+    function soMatches(x, terms) {
+      if (!terms.length) return true;
+      return hits(terms, [x.so_number, x.po_code, ...x.invoices].join(" "), [x.so_amount, x.goods, x.charges, x.not_invoiced, x.balance]);
+    }
+
+    // ---- tables: click a heading to sort, drag its right edge to resize (both remembered) ----
+    function grid(id, cols, rows, opts = {}) {
+      const s = SORT[id];
+      if (s) {
+        const col = cols.find(c => c.key === s.key);
+        if (col && col.val) {
+          rows = rows.slice().sort((a, b) => {
+            const x = col.val(a), y = col.val(b);
+            const r = (x == null || x === "") - (y == null || y === "") || (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true }));
+            return s.dir === "desc" ? -r : r;
+          });
+        }
+      }
+      const w = k => store.get(`w.${id}.${k}`);
+      const head = cols.map(c => `<th class="${c.num ? "num" : ""} ${c.val ? "va-sortable" : ""}" data-grid="${id}" data-key="${c.key}" style="${w(c.key) ? `width:${w(c.key)}px; min-width:${w(c.key)}px;` : ""}"
+          ${c.title ? `title="${esc(c.title)}"` : ""}>${c.label}${s && s.key === c.key ? (s.dir === "desc" ? " ▼" : " ▲") : ""}<span class="va-rs" data-grid="${id}" data-key="${c.key}"></span></th>`).join("");
+      const body = rows.map(r => `<tr ${opts.rowAttr ? opts.rowAttr(r) : ""}>${cols.map(c => `<td class="${c.num ? "num" : ""} ${c.cls || ""}">${c.html(r)}</td>`).join("")}</tr>`
+        + (opts.after ? opts.after(r) : "")).join("");
+      return `<div class="va-scroll" data-scroll-key="${id}"><table class="compact-table va-table no-table-tools" id="g-${id}">
+        <thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="${cols.length}" class="muted">${opts.empty || "Nothing here."}</td></tr>`}</tbody>
+        ${opts.foot ? `<tfoot>${opts.foot}</tfoot>` : ""}</table></div>`;
+    }
+    document.addEventListener("click", e => {
+      const th = e.target.closest("th.va-sortable");
+      if (!th || e.target.classList.contains("va-rs")) return;
+      const id = th.dataset.grid, key = th.dataset.key, cur = SORT[id];
+      SORT[id] = cur && cur.key === key ? (cur.dir === "asc" ? { key, dir: "desc" } : null) : { key, dir: "asc" };
+      if (!SORT[id]) delete SORT[id];
+      store.set("sort", JSON.stringify(SORT));
+      render();
+    });
+    document.addEventListener("mousedown", e => {
+      const h = e.target.closest(".va-rs");
+      if (!h) return;
+      e.preventDefault();
+      const th = h.parentElement, x0 = e.clientX, w0 = th.offsetWidth;
+      document.body.classList.add("va-resizing");
+      const move = ev => { const w = Math.max(50, w0 + ev.clientX - x0); th.style.width = th.style.minWidth = w + "px"; };
+      const up = () => {
+        document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+        document.body.classList.remove("va-resizing");
+        store.set(`w.${h.dataset.grid}.${h.dataset.key}`, Math.round(th.offsetWidth));
+      };
+      document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+    });
+    document.addEventListener("dblclick", e => {  // double-click an edge: back to its natural width
+      const h = e.target.closest(".va-rs");
+      if (!h) return;
+      store.set(`w.${h.dataset.grid}.${h.dataset.key}`, "");
+      render();
+    });
+
+    function draw() {
       const t = V.totals, a = V.account;
       const tile = (label, value, sub, cls = "", click = "") => `<div class="stat ${click ? "stat-click" : ""}" ${click ? `onclick="${click}"` : ""}><div class="stat-label">${label}</div><div class="stat-value ${cls}">${value}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ""}</div>`;
-      const tabs = [["invoices", `Invoices (${V.bills.length})`], ["sos", `By SO (${V.sos.length})`], ["payments", `Payments (${V.payments.length})`],
-                    ["cash", `Open Cash (${V.open_cash.length})`]];
+      const terms = parseQuery(Q);
+      const nInv = V.bills.filter(b => billMatches(b, terms)).length, nPay = V.payments.filter(p => payMatches(p, terms)).length;
+      const nSo = V.sos.filter(x => soMatches(x, terms)).length;
+      const tabs = [["invoices", `Invoices (${terms.length ? nInv + " of " : ""}${V.bills.length})`], ["payments", `Payments (${terms.length ? nPay + " of " : ""}${V.payments.length})`],
+                    ["sos", `By SO (${terms.length ? nSo + " of " : ""}${V.sos.length})`], ["cash", `Open Cash (${V.open_cash.length})`], ["timeline", "Timeline"]];
       if (t.review) tabs.push(["review", `Needs Mapping (${t.review})`]);
       document.getElementById("acc-view").innerHTML = `
         <div class="card">
@@ -140,11 +261,11 @@
           </div>
           <div class="stat-row">
             ${tile("Total Owed", m(t.owed), "Wire + Cash − Credit", t.owed > 0.005 ? "va-owed" : "")}
-            ${tile("Wire Owed", m(t.wire_left))}
+            ${tile("Wire Owed", m(t.wire_left), t.carried_open > 0.005 ? `Incl. ${m(t.carried_open)} Cash Billed On Other Invoices` : "")}
             ${tile("Cash Owed", m(t.cash_left), V.open_cash.length ? `On ${V.open_cash.length} Invoice${V.open_cash.length === 1 ? "" : "s"}` : "", "", "TAB='cash';render()")}
             ${tile("Credit With Them", m(t.credit), "Paid Ahead / Over-Collected", t.credit > 0.005 ? "va-credit" : "")}
             ${tile("Not Invoiced Yet", m(t.not_invoiced), "Ordered, Not Billed — Not Owed Yet", "", "TAB='sos';render()")}
-            ${tile("True Billed", m(t.total), t.recovery_in > 0.005 ? `Their Invoices Say ${m(t.paper)}` : "")}
+            ${tile("True Billed", m(t.total), t.recovery_in > 0.005 ? `Invoiced ${m(t.paper)}` : "")}
             ${tile("Paid", m(t.paid), `Wire ${m(t.wire_sent)} · Cash ${m(t.cash_handed)}`, "", "TAB='payments';render()")}
           </div>
           ${t.review ? `<div class="va-note"><strong>${t.review} payment${t.review === 1 ? "" : "s"} recorded on another screen</strong> came in here and need a look
@@ -160,167 +281,256 @@
             <button class="secondary" onclick="compareForm()">Compare Their Sheet</button>
             <button class="secondary" onclick="sheetForm()">Load Spreadsheet</button>
           </div>
-          ${LAST ? paidPanel(LAST) : ""}
+          <div class="va-search"><input type="search" id="va-q" value="${esc(Q)}" placeholder="Search: invoice, SO #, PO, wire #, P-number, note, amount (5426, >10000, <500)…  — press / to search"
+              oninput="Q=this.value; clearTimeout(window._qT); window._qT=setTimeout(() => { render(); const i=document.getElementById('va-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 180)">
+            ${Q ? `<a class="link small" onclick="Q='';render()">Clear</a>` : ""}</div>
           <div class="tabs">${tabs.map(([k, l]) => `<div class="tab ${TAB === k ? "active" : ""}" onclick="TAB='${k}';render()">${l}</div>`).join("")}</div>
-          ${HL ? hlBar() : ""}
-          <div id="va-tab">${TAB === "invoices" ? invoicesHtml() : TAB === "sos" ? sosHtml() : TAB === "payments" ? paymentsHtml() :
-                             TAB === "review" ? paymentsHtml(true) : openCashHtml()}</div>
-        </div>`;
+          <div id="va-tab">${TAB === "invoices" ? invoicesHtml(terms) : TAB === "sos" ? sosHtml(terms) : TAB === "payments" ? paymentsHtml(terms) :
+                             TAB === "review" ? paymentsHtml(terms, true) : TAB === "timeline" ? timelineHtml(terms) : openCashHtml(terms)}</div>
+        </div>
+        <div id="va-hlpill" class="va-hlpill" style="display:none;"></div>`;
       decorateIcons(document.getElementById("acc-view"));
     }
     function openOnly() { const el = document.getElementById("open-only"); return el && el.checked; }
+    document.addEventListener("keydown", e => {
+      if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && document.getElementById("va-q")) { e.preventDefault(); document.getElementById("va-q").focus(); }
+    });
 
-    // ---- a payment's invoices, highlighted wherever you are ----
+    // ---- a payment's invoices lit up in place: nothing is redrawn, the page doesn't move ----
     function chip(r) {
-      return `<span class="va-chip ${HL === r.payment_id ? "on" : ""} ${r.recovery ? "rec" : ""}" title="${esc((r.kind === "wire" ? "Wire " + (r.reference || "") : "Cash") + " · " + (r.paid_date || "no date") + " · " + m(r.amount) + " to the " + r.part + " part" + (r.recovery ? " (old cash)" : ""))}"
-        onclick="event.stopPropagation(); highlight(${r.payment_id})">${esc(r.payment_code || "P")}</span>`;
+      return `<span class="va-chip ${r.recovery ? "rec" : ""}" data-pid="${r.payment_id}" title="${esc((r.kind === "wire" ? "Wire " + (r.reference || "") : "Cash") + " · " + (r.paid_date || "no date") + " · " + m(r.amount) + " to the " + r.part + " part" + (r.recovery ? " (cash of this invoice, paid by wire)" : "") + " — click for the payment")}"
+        onclick="event.stopPropagation(); paymentPop(${r.payment_id})">${esc(r.payment_code || "P")}</span>`;
     }
-    function highlight(pid) { HL = HL === pid ? null : pid; if (HL && TAB !== "invoices" && TAB !== "payments") TAB = "invoices"; render(); }
-    function hlBar() {
-      const p = payById(HL);
-      if (!p) return "";
-      return `<div class="va-hlbar"><strong>${esc(p.code)}</strong> ${p.kind === "wire" ? "Wire" + (p.reference ? " " + esc(p.reference) : "") : "Cash"}
-        · ${p.paid_date ? fmtDate(p.paid_date) : "no date"} · <strong>${m(p.amount)}</strong> paid
-        ${p.parts.map(r => `${esc(billLabel(billById(r.bill_id)))} <span class="muted">(${r.recovery ? "old cash" : r.part})</span> ${m(r.amount)}`).join(" · ")}
-        ${p.credit > 0.005 ? ` · <span class="va-credit">credit ${m(p.credit)}</span>` : ""}
-        <span style="flex:1"></span><a class="link" onclick="HL=null;render()">Clear</a></div>`;
+    function applyHL() {
+      const p = HL ? payById(HL) : null;
+      const ids = new Set(p ? p.parts.map(r => r.bill_id) : []);
+      document.querySelectorAll("tr[data-bill]").forEach(tr => tr.classList.toggle("va-hl", ids.has(+tr.dataset.bill)));
+      document.querySelectorAll("tr[data-pay]").forEach(tr => tr.classList.toggle("va-hl", !!p && +tr.dataset.pay === p.id));
+      document.querySelectorAll(".va-chip[data-pid]").forEach(c => c.classList.toggle("on", !!p && +c.dataset.pid === p.id));
+      const pill = document.getElementById("va-hlpill");
+      if (!pill) return;
+      pill.style.display = p ? "" : "none";
+      pill.innerHTML = p ? `Showing <strong>${esc(p.code)}</strong> (${m(p.amount)}) on ${ids.size} invoice${ids.size === 1 ? "" : "s"}
+        <a class="link" onclick="paymentPop(${p.id})">Details</a> · <a class="link" onclick="HL=null;applyHL()">Clear</a>` : "";
     }
+    function showOnList(pid) { HL = pid; if (TAB !== "invoices") { TAB = "invoices"; render(); } else applyHL(); }
 
-    // ---- right after a payment is saved: what it covered ----
-    function paidPanel(pid) {
+    // ---- pop-up: one payment and every invoice it paid ----
+    function paymentPop(pid, opts = {}) {
       const p = payById(pid);
-      if (!p) return "";
-      return `<div class="va-paid"><div class="row" style="align-items:center;"><h4 style="flex:1;">${esc(p.code)} recorded — ${p.kind === "wire" ? "wire" + (p.reference ? " " + esc(p.reference) : "") : "cash"}
-          of ${m(p.amount)}${p.paid_date ? " on " + fmtDate(p.paid_date) : ""} covered ${p.parts.length} invoice part${p.parts.length === 1 ? "" : "s"}</h4>
-          <div style="flex:0; white-space:nowrap;"><a class="link" onclick="payForm('${p.kind}', ${p.id})">Change</a> · <a class="link" onclick="LAST=null;render()">Close</a></div></div>
+      if (!p) return;
+      const el = modal(`<div class="row" style="align-items:center;"><h3 style="margin:0; flex:1;">${opts.recorded ? `${esc(p.code)} Recorded` : esc(p.code)} —
+          ${p.kind === "wire" ? "Wire" + (p.reference ? " " + esc(p.reference) : "") : "Cash" + (p.reference ? " · " + esc(p.reference) : "")}</h3></div>
+        <p class="muted" style="margin:4px 0 10px;">${p.paid_date ? fmtDate(p.paid_date) : "No date"} · <strong>${m(p.amount)}</strong>${p.came_with ? ` · sent with ${esc(p.came_with)}` : ""}${p.picked_from ? ` · from ${esc(p.picked_from)}` : ""}</p>
+        ${p.review ? `<div class="va-note">Recorded on another screen — check it's a ${p.kind} and goes to the right invoices (Edit, then Save).</div>` : ""}
+        <h4 style="margin:0 0 4px;">What It Paid</h4>
         <table class="compact-table no-table-tools va-table"><thead><tr><th>Invoice</th><th>SO #</th><th>PO</th><th>Part</th><th class="num">Applied</th><th class="num">Still Open On It</th></tr></thead><tbody>
-          ${p.parts.map(r => { const b = billById(r.bill_id) || {}; return `<tr><td>${esc(billLabel(b))}</td><td>${esc(b.so_number || "")}</td><td>${b.po_code ? esc(b.po_code) : `<span class="muted">—</span>`}</td>
+          ${p.parts.map(r => { const b = billById(r.bill_id) || {}; return `<tr><td><a class="link" onclick="this.closest('.modal-backdrop').remove(); invoicePop(${b.id})">${esc(billLabel(b))}</a></td>
+            <td>${esc(b.so_number || "")}</td><td>${b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}">${esc(b.po_code)}</a>` : `<span class="muted">—</span>`}</td>
             <td>${r.recovery ? `<span class="va-rec">cash part, paid by wire</span>` : r.part + " part"}</td><td class="num">${m(r.amount)}</td>
-            <td class="num ${b.balance > 0.005 ? "va-owed" : "va-ok"}">${b.balance > 0.005 ? m(b.balance) : "Paid ✓"}</td></tr>`; }).join("")}
-          ${p.credit > 0.005 ? `<tr><td colspan="4" class="va-credit">Not applied — stays a credit with ${esc(V.account.vendor_name)}</td><td class="num va-credit">${m(p.credit)}</td><td></td></tr>` : ""}
-        </tbody></table></div>`;
+            <td class="num ${b.balance > 0.005 ? "va-owed" : "va-ok"}">${b.balance > 0.005 ? m(b.balance) : "Paid ✓"}</td></tr>`; }).join("") || `<tr><td colspan="6" class="muted">Not applied to any invoice yet.</td></tr>`}
+          ${p.credit > 0.005 ? `<tr><td colspan="4" class="va-credit">Not applied — a credit with ${esc(V.account.vendor_name)}</td><td class="num va-credit">${m(p.credit)}</td><td></td></tr>` : ""}
+        </tbody><tfoot><tr><th colspan="4">Total</th><th class="num">${m(p.amount)}</th><th></th></tr></tfoot></table>
+        ${p.note ? `<div class="muted small" style="white-space:pre-line; margin-top:8px;">${esc(p.note)}</div>` : ""}
+        <div data-notes="payment:${p.id}"></div>
+        <div class="btn-row" style="margin-top:12px;"><button onclick="this.closest('.modal-backdrop').remove(); showOnList(${p.id})">Show Its Invoices In The List</button>
+          <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); payForm('${p.kind}', ${p.id})">${p.review ? "Map It" : "Edit"}</button>
+          <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); deletePayment(${p.id})">Delete</button>
+          <span style="flex:1"></span><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`, "wide");
+      notesBox(el.querySelector("[data-notes]"), "payment", p.id);
     }
 
-    function soCell(b, repeat) {
-      const so = esc(b.so_number || "—");
-      const x = V.sos.find(s => s.so_number === b.so_number);
-      const link = b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}" title="Open ${esc(b.po_code)}" onclick="event.stopPropagation()">${so}</a>` : so;
-      const amt = x && x.so_amount != null ? `<br><span class="small" title="SO amount${x.so_amount_from === "po" ? " (the PO's total)" : ""}">SO ${m(x.so_amount)}</span>${x.not_invoiced > 0.005 ? ` <span class="small va-rec" title="Not invoiced yet">· ${m(x.not_invoiced)} to bill</span>` : ""}` : "";
-      return `<td class="va-so ${repeat ? "muted" : ""}">${link}${amt}<br><span class="muted">${b.po_code ? esc(b.po_code) : "No PO yet"}</span></td>`;
-    }
-
-    function invoicesHtml() {
-      if (!V.bills.length) return `<p class="muted">No Invoices Yet. Add them with <strong>+ Invoice</strong> or load your spreadsheet.</p>`;
-      const hlBills = HL ? new Set((payById(HL) || { parts: [] }).parts.map(r => r.bill_id)) : null;
-      let lastSo = null;
-      const rows = V.bills.map(b => {
-        const repeat = b.so_number === lastSo;
-        lastSo = b.so_number;
-        const open = OPEN.has(b.id);
-        const paper = b.paper_amount != null ? b.paper_amount : b.total;
-        const seen = new Set();
-        const chips = b.paid_by.filter(r => !seen.has(r.payment_id) && seen.add(r.payment_id)).map(chip).join("");
-        return `<tr class="${open ? "va-open-row" : ""} ${hlBills && hlBills.has(b.id) ? "va-hl" : ""}" style="cursor:pointer;" onclick="toggle(${b.id})">
-            ${soCell(b, repeat)}<td class="nowrap">${esc(b.bill_number || "—")}</td>
-            <td class="num">${m(paper)}</td>
-            <td class="num">${b.recovery_in > 0.005 ? `<span class="va-rec" title="Old cash he added to this invoice">${m(b.recovery_in)}</span>` : ""}
-              ${b.carried_in.map(c => `<br><span class="small va-rec" title="${c.pending > 0.005 ? "Owed through this invoice until its wire comes" : "Paid with this invoice's wire"}">for ${esc(c.for || "")}${c.pending > 0.005 ? "" : " ✓"}</span>`).join("")}</td>
-            <td class="num">${m(b.wire_due)}${b.carried_open > 0.005 ? `<br><span class="small va-rec">+ ${m(b.carried_open)} old cash</span>` : ""}</td>
-            <td class="num">${m(b.cash_due)}${b.moved_out.filter(x => x.pending > 0.005).map(x => `<br><span class="small va-rec" title="Billed on ${esc(x.to || "")}: paid with that invoice's wire">− ${m(x.pending)} on ${esc(x.to || "")}</span>`).join("")}</td>
-            <td class="num">${m(b.wire_paid)}</td><td class="num">${m(b.cash_paid)}</td>
-            <td class="num ${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</td>
-            <td>${chips || `<span class="muted small">—</span>`}</td>
-          </tr>${open ? `<tr class="va-detail"><td colspan="10">${billDetail(b)}</td></tr>` : ""}`;
-      }).join("");
-      const t = V.totals;
-      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
-        <thead><tr><th>SO # / SO Amount / PO</th><th>Invoice</th><th class="num">Their Invoice</th><th class="num">Old Cash</th><th class="num">Wire Due</th>
-          <th class="num">Cash Due</th><th class="num">Wire Paid</th><th class="num">Cash Paid</th><th class="num">Balance</th><th>Paid By</th></tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot><tr><th colspan="2">Totals</th><th class="num">${m(t.paper)}</th><th class="num">${m(t.recovery_in)}</th><th class="num">${m(t.wire_due)}</th>
-          <th class="num">${m(t.cash_due)}</th><th class="num">${m(t.wire_paid)}</th><th class="num">${m(t.cash_paid)}</th><th class="num">${m(t.balance)}</th><th></th></tr></tfoot>
-      </table></div>
-      <p class="muted small">Click an invoice for its details. Click a payment number (P-…) to light up every invoice that payment paid. Invoice Total is what their invoice says; the true amount is Wire Due + Cash Due.</p>`;
-    }
-
-    function billDetail(b) {
+    // ---- pop-up: one invoice ----
+    function invoicePop(id, opts = {}) {
+      const b = billById(id);
+      if (!b) return;
+      const x = soOf(b);
       const parts = [`Goods ${m(b.goods)}`];
       if (b.freight) parts.push(`Freight ${m(b.freight)}`);
       if (b.customs) parts.push(`Customs ${m(b.customs)}`);
       if (b.other) parts.push(`Other ${m(b.other)}`);
-      const paid = b.paid_by.length ? `<ul>${b.paid_by.map(r => `<li>${chip(r)} ${r.paid_date ? fmtDate(r.paid_date) + " · " : ""}${r.kind === "wire" ? `Wire${r.reference ? " " + esc(r.reference) : ""}` : "Cash"}
-          → ${r.part} part ${m(r.amount)}${r.payment_amount && r.payment_amount - r.amount > 0.005 ? ` <span class="muted">(of a ${m(r.payment_amount)} payment)</span>` : ""}${r.recovery ? ` <span class="va-rec">old cash${r.came_with ? ", came with " + esc(r.came_with) : ""}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">Nothing paid yet.</p>`;
-      return `<div class="row" style="align-items:flex-start;">
-          <div style="flex:2;"><strong>True amount ${m(b.total)}</strong> — ${parts.join(" · ")}${b.paper_amount != null ? ` · <span class="va-rec">their invoice says ${m(b.paper_amount)}</span>` : ""}
-            <br><span class="muted">SO ${esc(b.so_number || "—")}${b.so_amount ? ` (${m(b.so_amount)})` : ""} · ${b.po_code ? `PO <a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}">${esc(b.po_code)}</a>` : "no PO in AT-HUB yet"}${b.bill_date ? ` · invoice date ${fmtDate(b.bill_date)}` : ""}</span>
-            ${b.carried_in.map(c => `<div class="va-rec small" style="margin-top:4px;">Includes ${m(c.amount)} of old cash for ${esc(c.for || "")}${c.pending > 0.005 ? ` — ${m(c.pending)} still to come with this invoice's wire` : " — paid ✓"}</div>`).join("")}
-            ${b.moved_out.map(x => `<div class="va-rec small" style="margin-top:4px;">${m(x.amount)} of this invoice's cash was billed on ${esc(x.to || "")}${x.pending > 0.005 ? ` — ${m(x.pending)} comes with that invoice's wire` : " — paid ✓"}</div>`).join("")}
-            ${b.note ? `<div class="muted" style="white-space:pre-line; margin-top:4px;">${esc(b.note)}</div>` : ""}</div>
-          <div style="flex:2;"><strong>Paid by</strong>${paid}
-            ${b.wire_left > 0.005 ? `<span class="va-owed">Wire still open ${m(b.wire_left)}</span> ` : ""}${b.cash_left > 0.005 ? `<span class="va-owed">Cash still open ${m(b.cash_left)}</span>` : ""}</div>
-          <div style="flex:0; white-space:nowrap;"><a class="link" onclick="billForm(${b.id})">Edit</a> · <a class="link" onclick="deleteBill(${b.id})">Delete</a></div>
-        </div>`;
+      const el = modal(`<h3 style="margin:0;">Invoice ${esc(b.bill_number || "—")} <span class="muted small">SO ${esc(b.so_number || "—")}</span></h3>
+        <p class="muted" style="margin:4px 0 10px;">${b.po_code ? `PO <a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}">${esc(b.po_code)}</a>` : "No PO in AT-HUB yet"}
+          ${b.bill_date ? ` · invoice date ${fmtDate(b.bill_date)}` : b.po_date ? ` · PO date ${fmtDate(b.po_date)}` : ""}
+          ${x && x.so_amount != null ? ` · SO ${m(x.so_amount)}${x.not_invoiced > 0.005 ? ` (${m(x.not_invoiced)} not invoiced yet)` : ""}` : ""}</p>
+        <div class="stat-row" style="margin:0 0 10px;">
+          <div class="stat"><div class="stat-label">Invoiced Amount</div><div class="stat-value">${m(b.paper_amount != null ? b.paper_amount : b.total)}</div>${b.recovery_in > 0.005 ? `<div class="stat-sub">True ${m(b.total)} + ${m(b.recovery_in)} Of Other Invoices' Cash</div>` : ""}</div>
+          <div class="stat"><div class="stat-label">Wire Due / Paid</div><div class="stat-value">${m(b.wire_due)}</div><div class="stat-sub">Paid ${m(b.wire_paid)}</div></div>
+          <div class="stat"><div class="stat-label">Cash Due / Paid</div><div class="stat-value">${m(b.cash_due)}</div><div class="stat-sub">Paid ${m(b.cash_paid)}</div></div>
+          <div class="stat"><div class="stat-label">Balance</div><div class="stat-value ${b.balance > 0.005 ? "va-owed" : "va-ok"}">${b.balance > 0.005 ? m(b.balance) : "Paid ✓"}</div></div>
+        </div>
+        <p class="small" style="margin:0 0 6px;"><strong>True amount ${m(b.total)}</strong> — ${parts.join(" · ")}</p>
+        ${b.carried_in.map(c => `<div class="va-rec small">Includes ${m(c.amount)} of ${esc(c.for || "")}'s cash${c.pending > 0.005 ? ` — ${m(c.pending)} still to come with this invoice's wire` : " — paid ✓"}</div>`).join("")}
+        ${b.moved_out.map(o => `<div class="va-rec small">${m(o.amount)} of this invoice's cash was billed on ${esc(o.to || "")}${o.pending > 0.005 ? ` — ${m(o.pending)} comes with that invoice's wire` : " — paid ✓"}</div>`).join("")}
+        <h4 style="margin:12px 0 4px;">Paid By</h4>
+        ${b.paid_by.length ? `<table class="compact-table no-table-tools va-table"><thead><tr><th>Payment</th><th>Date</th><th>Type / Wire #</th><th>Part</th><th class="num">Applied</th><th class="num">Of A Payment Of</th></tr></thead><tbody>
+          ${b.paid_by.map(r => `<tr><td>${chip(r)}</td><td>${r.paid_date ? fmtDate(r.paid_date) : `<span class="muted">—</span>`}</td>
+            <td>${r.kind === "wire" ? "Wire" + (r.reference ? " " + esc(r.reference) : "") : "Cash"}</td><td>${r.recovery ? `<span class="va-rec">cash, by wire${r.came_with ? " (came with " + esc(r.came_with) + ")" : ""}</span>` : r.part}</td>
+            <td class="num">${m(r.amount)}</td><td class="num muted">${m(r.payment_amount)}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">Nothing paid yet.</p>`}
+        ${b.wire_left > 0.005 || b.cash_left > 0.005 ? `<p class="small">${b.wire_left > 0.005 ? `<span class="va-owed">Wire still open ${m(b.wire_left)}</span> ` : ""}${b.cash_left > 0.005 ? `<span class="va-owed">Cash still open ${m(b.cash_left)}</span>` : ""}</p>` : ""}
+        ${b.note ? `<h4 style="margin:12px 0 4px;">From The Sheet</h4><div class="muted small" style="white-space:pre-line;">${esc(b.note)}</div>` : ""}
+        <div data-notes="bill:${b.id}"></div>
+        <div class="btn-row" style="margin-top:12px;"><button class="secondary" onclick="this.closest('.modal-backdrop').remove(); billForm(${b.id})">Edit Invoice</button>
+          <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); payForm('wire', null, { forBills: [${b.id}] })">+ Wire For It</button>
+          <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); deleteBill(${b.id})">Delete</button>
+          <span style="flex:1"></span><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`, "wide");
+      notesBox(el.querySelector("[data-notes]"), "bill", b.id, opts.notes);
     }
-    function toggle(id) { OPEN.has(id) ? OPEN.delete(id) : OPEN.add(id); render(); }
 
-    function sosHtml() {
+    // ---- notes on a line (who, when); everyone with the account sees them, they go on the statement ----
+    async function notesBox(box, target, id, focus) {
+      const url = `/api/vendor-accounts/${V.account.id}/notes`;
+      const me = (AuthGuard.getUser() || {}).username;
+      const draw = list => {
+        box.innerHTML = `<h4 style="margin:12px 0 4px;">Notes</h4>
+          ${list.length ? list.map(n => `<div class="va-noteline"><div style="white-space:pre-line;">${esc(n.text)}</div>
+            <div class="muted small">${esc(n.by || "")} · ${fmtWhen(n.at)}${n.by === me || AuthGuard.getUser().role === "super_admin" ? ` · <a class="link" data-del="${n.id}">Delete</a>` : ""}</div></div>`).join("") : `<p class="muted small" style="margin:0 0 4px;">No notes yet.</p>`}
+          <div class="row" style="gap:8px; align-items:flex-end;"><textarea rows="2" style="flex:1;" placeholder="Add a note to this ${target === "bill" ? "invoice" : "payment"}…"></textarea>
+            <button class="secondary" style="flex:0;" data-add>Add Note</button></div>`;
+        const ta = box.querySelector("textarea");
+        box.querySelector("[data-add]").onclick = async () => {
+          if (!ta.value.trim()) return;
+          try { draw(await apiFetch(url, { method: "POST", body: JSON.stringify({ target, target_id: id, text: ta.value }) })); refreshQuiet(); } catch (e) { alert(e.message); }
+        };
+        box.querySelectorAll("[data-del]").forEach(a => a.onclick = async () => {
+          if (!confirm("Delete this note?")) return;
+          try { await apiFetch(`${url}/${a.dataset.del}`, { method: "DELETE" }); draw(await apiFetch(`${url}?target=${target}&target_id=${id}`)); refreshQuiet(); } catch (e) { alert(e.message); }
+        });
+        if (focus) { ta.focus(); focus = false; }
+      };
+      try { draw(await apiFetch(`${url}?target=${target}&target_id=${id}`)); } catch (e) { box.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+    }
+    async function refreshQuiet() { V = await apiFetch(`/api/vendor-accounts/${V.account.id}`); render(); }
+
+    function soCell(b) {
+      const x = soOf(b);
+      const link = b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}" title="Open ${esc(b.po_code)}" onclick="event.stopPropagation()">${esc(b.so_number || "—")}</a>` : esc(b.so_number || "—");
+      const amt = x && x.so_amount != null ? `<br><span class="small" title="SO amount${x.so_amount_from === "po" ? " (the PO's total)" : ""}">SO ${m(x.so_amount)}</span>${x.not_invoiced > 0.005 ? ` <span class="small va-rec" title="Not invoiced yet">· ${m(x.not_invoiced)} to bill</span>` : ""}` : "";
+      return `<div class="va-so">${link}${amt}<br><span class="muted small">${b.po_code ? esc(b.po_code) : "No PO yet"}</span></div>`;
+    }
+    const noteBtn = (kind, id, n) => `<a class="va-notebtn ${n ? "has" : ""}" title="${n ? n + " note" + (n === 1 ? "" : "s") : "Add a note"}" onclick="event.stopPropagation(); ${kind}(${id}, { notes: true })">✎${n ? " " + n : ""}</a>`;
+
+    const INV_COLS = [
+      { key: "so", label: "SO # / SO Amount / PO", val: b => b.so_number, html: b => soCell(b) },
+      { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${esc(b.bill_number || "—")}</span>` },
+      { key: "date", label: "Date", val: b => b.bill_date || b.po_date, html: b => b.bill_date ? fmtDate(b.bill_date) : b.po_date ? `<span class="muted" title="PO date (the invoice has none)">${fmtDate(b.po_date)}</span>` : "" },
+      { key: "invoiced", label: "Invoiced Amount", num: true, val: b => b.paper_amount != null ? b.paper_amount : b.total, html: b => m(b.paper_amount != null ? b.paper_amount : b.total) },
+      { key: "other", label: "Cash Of Other Invoices", num: true, title: "Part of this invoice that is really another invoice's cash he's collecting — not a cost of this invoice", val: b => b.recovery_in,
+        html: b => (b.recovery_in > 0.005 ? `<span class="va-rec">${m(b.recovery_in)}</span>` : "") + b.carried_in.map(c => `<br><span class="small va-rec">for ${esc(c.for || "")}${c.pending > 0.005 ? "" : " ✓"}</span>`).join("") },
+      { key: "wdue", label: "Wire Due", num: true, val: b => b.wire_due, html: b => m(b.wire_due) + (b.carried_open > 0.005 ? `<br><span class="small va-rec">+ ${m(b.carried_open)} other cash</span>` : "") },
+      { key: "cdue", label: "Cash Due", num: true, val: b => b.cash_due, html: b => m(b.cash_due) + b.moved_out.filter(x => x.pending > 0.005).map(x => `<br><span class="small va-rec" title="Billed on ${esc(x.to || "")}">− ${m(x.pending)} on ${esc(x.to || "")}</span>`).join("") },
+      { key: "wpaid", label: "Wire Paid", num: true, val: b => b.wire_paid, html: b => m(b.wire_paid) },
+      { key: "cpaid", label: "Cash Paid", num: true, val: b => b.cash_paid, html: b => m(b.cash_paid) },
+      { key: "bal", label: "Balance", num: true, val: b => b.balance, html: b => `<span class="${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</span>` },
+      { key: "paidby", label: "Paid By", val: b => (b.paid_by[0] || {}).payment_code, html: b => { const seen = new Set(); return b.paid_by.filter(r => !seen.has(r.payment_id) && seen.add(r.payment_id)).map(chip).join("") || `<span class="muted small">—</span>`; } },
+      { key: "notes", label: "Notes", val: b => b.notes, html: b => noteBtn("invoicePop", b.id, b.notes) },
+    ];
+
+    function invoicesHtml(terms) {
+      if (!V.bills.length) return `<p class="muted">No Invoices Yet. Add them with <strong>+ Invoice</strong> or load your spreadsheet.</p>`;
+      const list = V.bills.filter(b => billMatches(b, terms));
+      const open = list.filter(b => !b.completed), done = list.filter(b => b.completed);
+      const sum = (rows, k) => rows.reduce((s, b) => s + (k === "invoiced" ? (b.paper_amount != null ? b.paper_amount : b.total) : b[k]), 0);
+      const foot = rows => `<tr><th colspan="3">Totals (${rows.length})</th><th class="num">${m(sum(rows, "invoiced"))}</th><th class="num">${m(sum(rows, "recovery_in"))}</th>
+        <th class="num">${m(sum(rows, "wire_due"))}</th><th class="num">${m(sum(rows, "cash_due"))}</th><th class="num">${m(sum(rows, "wire_paid"))}</th>
+        <th class="num">${m(sum(rows, "cash_paid"))}</th><th class="num">${m(sum(rows, "balance"))}</th><th></th><th></th></tr>`;
+      const rowAttr = b => `data-bill="${b.id}" class="va-click" onclick="invoicePop(${b.id})"`;
+      const doneOpen = store.get("done.inv") === "1" || (terms.length && !open.length);
+      return `${grid("inv", INV_COLS, open, { rowAttr, foot: foot(open), empty: terms.length ? "No open invoice matches." : "Every invoice is paid ✓" })}
+        <details class="va-done" ${doneOpen ? "open" : ""} ontoggle="store.set('done.inv', this.open ? '1' : '0')"><summary>Completed — Paid In Full (${done.length})</summary>
+          ${done.length ? grid("inv-done", INV_COLS, done, { rowAttr, foot: foot(done) }) : `<p class="muted small">None${terms.length ? " match" : ""}.</p>`}</details>
+        <p class="muted small">Click an invoice for everything about it. Click a payment number (P-…) for that payment and every invoice it paid.
+          Click a heading to sort; drag its right edge to resize (double-click the edge to reset).</p>`;
+    }
+
+    function sosHtml(terms) {
       if (!V.sos.length) return `<p class="muted">No SOs yet.</p>`;
-      const t = V.totals;
-      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
-        <thead><tr><th>SO # / PO</th><th class="num">SO Amount</th><th>Invoices</th><th class="num">Invoiced (Goods)</th><th class="num">Freight / Customs</th>
-          <th class="num">Not Invoiced Yet</th><th class="num">Owed On Its Invoices</th></tr></thead>
-        <tbody>${V.sos.map(x => `<tr>
-          <td class="va-so">${esc(x.so_number || "—")}<br>${x.po_code ? `<a class="link small" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : `<span class="muted small">No PO yet</span>`}</td>
-          <td class="num">${x.so_amount != null ? m(x.so_amount) : `<span class="muted">—</span>`}${x.so_amount_from === "po" ? `<br><span class="muted small">PO total</span>` : ""}</td>
-          <td class="small nowrap">${x.invoices.map(i => esc(i || "—")).join("<br>")}</td>
-          <td class="num">${m(x.goods)}${x.over > 0.005 ? `<br><span class="va-rec small" title="Invoiced goods are more than the SO">+${m(x.over)} over SO</span>` : ""}</td>
-          <td class="num">${x.charges ? m(x.charges) : ""}</td>
-          <td class="num ${x.not_invoiced > 0.005 ? "va-rec" : ""}">${x.not_invoiced > 0.005 ? `${m(x.not_invoiced)}<br><span class="muted small">≈ wire ${m(x.expected_wire)} · cash ${m(x.expected_cash)}</span>` : x.so_amount != null ? `<span class="va-ok">All ✓</span>` : ""}</td>
-          <td class="num ${x.balance > 0.005 ? "va-owed" : ""}">${m(x.balance)}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><th colspan="5">Totals</th><th class="num">${m(t.not_invoiced)}</th><th class="num">${m(t.balance)}</th></tr></tfoot>
-      </table></div>
-      <p class="muted small">Not Invoiced Yet = SO amount − goods invoiced so far: ordered but not billed, so not owed yet. Expected wire / cash uses the usual ${V.account.cash_share}% cash share.
-        "Over SO" usually means freight or customs inside the goods — or old cash being collected.</p>`;
+      const list = V.sos.filter(x => soMatches(x, terms));
+      const isDone = x => !(x.not_invoiced > 0.005) && Math.abs(x.balance) <= 0.005;
+      const cols = [
+        { key: "so", label: "SO # / PO", val: x => x.so_number, html: x => `<div class="va-so">${esc(x.so_number || "—")}<br>${x.po_code ? `<a class="link small" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : `<span class="muted small">No PO yet</span>`}</div>` },
+        { key: "amt", label: "SO Amount", num: true, val: x => x.so_amount, html: x => x.so_amount != null ? m(x.so_amount) + (x.so_amount_from === "po" ? `<br><span class="muted small">PO total</span>` : "") : `<span class="muted">—</span>` },
+        { key: "inv", label: "Invoices", val: x => x.invoices.length, html: x => `<span class="small nowrap">${x.invoices.map(i => esc(i || "—")).join("<br>")}</span>` },
+        { key: "goods", label: "Invoiced (Goods)", num: true, val: x => x.goods, html: x => m(x.goods) + (x.over > 0.005 ? `<br><span class="va-rec small" title="Invoiced goods are more than the SO">+${m(x.over)} over SO</span>` : "") },
+        { key: "charges", label: "Freight / Customs", num: true, val: x => x.charges, html: x => x.charges ? m(x.charges) : "" },
+        { key: "not", label: "Not Invoiced Yet", num: true, val: x => x.not_invoiced, html: x => x.not_invoiced > 0.005 ? `<span class="va-rec">${m(x.not_invoiced)}</span><br><span class="muted small">≈ wire ${m(x.expected_wire)} · cash ${m(x.expected_cash)}</span>` : x.so_amount != null ? `<span class="va-ok">All ✓</span>` : "" },
+        { key: "bal", label: "Owed On Its Invoices", num: true, val: x => x.balance, html: x => `<span class="${x.balance > 0.005 ? "va-owed" : ""}">${m(x.balance)}</span>` },
+      ];
+      const open = list.filter(x => !isDone(x)), done = list.filter(isDone);
+      const foot = rows => `<tr><th colspan="5">Totals (${rows.length})</th><th class="num">${m(rows.reduce((s, x) => s + (x.not_invoiced || 0), 0))}</th><th class="num">${m(rows.reduce((s, x) => s + x.balance, 0))}</th></tr>`;
+      return `${grid("so", cols, open, { foot: foot(open), empty: "Every SO is invoiced and paid ✓" })}
+        <details class="va-done" ${store.get("done.so") === "1" ? "open" : ""} ontoggle="store.set('done.so', this.open ? '1' : '0')"><summary>Completed — Invoiced And Paid (${done.length})</summary>
+          ${done.length ? grid("so-done", cols, done, { foot: foot(done) }) : `<p class="muted small">None.</p>`}</details>
+        <p class="muted small">Not Invoiced Yet = SO amount − goods invoiced so far: ordered but not billed, so not owed yet. Expected wire / cash uses the usual ${V.account.cash_share}% cash share.</p>`;
     }
 
-    function paymentsHtml(reviewOnly) {
-      const list = reviewOnly ? V.payments.filter(p => p.review) : V.payments;
-      if (!list.length) return `<p class="muted">No Payments Yet. Record one with <strong>+ Wire</strong> or <strong>+ Cash</strong>.</p>`;
-      const rows = list.map(p => {
-        const head = `<tr class="va-pay-head ${HL === p.id ? "va-hl" : ""}">
-          <td class="nowrap">${chip({ payment_id: p.id, payment_code: p.code, kind: p.kind, reference: p.reference, paid_date: p.paid_date, amount: p.amount, part: "", recovery: false })}
-            ${p.review ? `<span class="tag cancelled" title="${esc(p.picked_from || "")}">Check</span>` : ""}</td>
-          <td>${p.paid_date ? fmtDate(p.paid_date) : `<span class="muted">no date</span>`}</td>
-          <td>${p.kind === "wire" ? "Wire" : "Cash"}${p.reference ? ` <span class="small">${esc(p.reference)}</span>` : ""}${p.picked_from ? `<br><span class="muted small">from ${esc(p.picked_from)}</span>` : ""}</td>
-          <td class="num">${m(p.amount)}</td><td colspan="2" class="small muted">${p.parts.length} invoice part${p.parts.length === 1 ? "" : "s"}${p.came_with ? ` · sent with ${esc(p.came_with)}` : ""}</td>
-          <td class="num">${p.credit > 0.005 ? `<span class="va-credit">credit ${m(p.credit)}</span>` : ""}</td>
-          <td class="nowrap"><a class="link" onclick="payForm('${p.kind}', ${p.id})">${p.review ? "Map It" : "Edit"}</a> · <a class="link" onclick="deletePayment(${p.id})">Delete</a></td></tr>`;
-        const parts = p.parts.map(r => { const b = billById(r.bill_id) || {}; return `<tr class="va-pay-part"><td class="muted">↳</td><td></td><td></td><td></td>
-          <td class="nowrap">${esc(billLabel(b))}</td><td class="small">SO ${esc(b.so_number || "—")}${b.po_code ? " · " + esc(b.po_code) : ""}</td>
-          <td class="num">${r.recovery ? `<span class="va-rec" title="old cash">${m(r.amount)} cash</span>` : `${m(r.amount)} <span class="muted small">${r.part}</span>`}</td><td></td></tr>`; }).join("");
-        return head + parts;
-      }).join("");
-      return `<div class="va-scroll"><table class="compact-table va-table no-table-tools">
-        <thead><tr><th>Payment</th><th>Date</th><th>Type / Wire #</th><th class="num">Amount</th><th>Invoice</th><th>SO # / PO</th><th class="num">Applied</th><th></th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
-      <p class="muted small">Each payment with every invoice it paid underneath. A payment's credit is money not applied yet — Edit it to apply it to an open invoice.
-        Payments recorded on the Purchase Orders screens for this vendor come in here automatically.</p>`;
+    function paymentsHtml(terms, reviewOnly) {
+      const list = (reviewOnly ? V.payments.filter(p => p.review) : V.payments).filter(p => payMatches(p, terms));
+      if (!V.payments.length) return `<p class="muted">No Payments Yet. Record one with <strong>+ Wire</strong> or <strong>+ Cash</strong>.</p>`;
+      const cols = [
+        { key: "code", label: "Payment", val: p => p.code, html: p => `${chip({ payment_id: p.id, payment_code: p.code, kind: p.kind, reference: p.reference, paid_date: p.paid_date, amount: p.amount, part: "", recovery: false })}${p.review ? ` <span class="tag cancelled">Check</span>` : ""}` },
+        { key: "date", label: "Date", val: p => p.paid_date, html: p => p.paid_date ? fmtDate(p.paid_date) : `<span class="muted">no date</span>` },
+        { key: "type", label: "Type / Wire #", val: p => p.kind + (p.reference || ""), html: p => `${p.kind === "wire" ? "Wire" : "Cash"}${p.reference ? `<br><span class="small">${esc(p.reference)}</span>` : ""}${p.picked_from ? `<br><span class="muted small">from ${esc(p.picked_from)}</span>` : ""}` },
+        { key: "amt", label: "Amount", num: true, val: p => p.amount, html: p => `<strong>${m(p.amount)}</strong>` },
+        { key: "paid", label: "What It Paid", val: p => p.parts.length, html: p => p.parts.map(r => { const b = billById(r.bill_id) || {}; return `<div class="nowrap small">${esc(billLabel(b))} <span class="muted">· SO ${esc(b.so_number || "—")}</span> · ${r.recovery ? `<span class="va-rec">${m(r.amount)} cash</span>` : `${m(r.amount)} <span class="muted">${r.part}</span>`}</div>`; }).join("") || `<span class="muted small">Nothing yet</span>` },
+        { key: "credit", label: "Credit", num: true, val: p => p.credit, html: p => p.credit > 0.005 ? `<span class="va-credit">${m(p.credit)}</span>` : "" },
+        { key: "notes", label: "Notes", val: p => p.notes, html: p => noteBtn("paymentPopNotes", p.id, p.notes) },
+      ];
+      return `${grid(reviewOnly ? "pay-review" : "pay", cols, list, { rowAttr: p => `data-pay="${p.id}" class="va-click" onclick="paymentPop(${p.id})"`, empty: "No payment matches.",
+          foot: `<tr><th colspan="3">Totals (${list.length})</th><th class="num">${m(list.reduce((s, p) => s + p.amount, 0))}</th><th></th><th class="num">${m(list.reduce((s, p) => s + Math.max(0, p.credit), 0))}</th><th></th></tr>` })}
+        <p class="muted small">Click a payment to see every invoice it paid. Payments recorded on the Purchase Orders screens for this vendor come in here automatically.</p>`;
     }
+    function paymentPopNotes(id) { paymentPop(id); }
 
-    function openCashHtml() {
+    function openCashHtml(terms) {
+      const list = V.open_cash.filter(b => billMatches(b, terms));
       if (!V.open_cash.length) return `<p class="muted">No Cash Owed.</p>`;
-      return `<table class="compact-table va-table">
-        <thead><tr><th>SO # / PO</th><th>Invoice</th><th>Invoice Date</th><th class="num">Cash Due</th><th class="num">Cash Paid</th><th class="num">Cash Still Owed</th><th class="num">Days</th></tr></thead>
-        <tbody>${V.open_cash.map(b => `<tr>${soCell(b, false)}<td class="nowrap">${esc(b.bill_number || "—")}</td><td>${b.bill_date ? fmtDate(b.bill_date) : ""}</td>
-          <td class="num">${m(b.cash_due)}</td><td class="num">${m(b.cash_paid)}</td><td class="num va-owed">${m(b.cash_left)}</td><td class="num">${b.days_open ?? ""}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><th colspan="5">Total cash owed</th><th class="num">${m(V.totals.cash_left)}</th><th></th></tr></tfoot>
-      </table><p class="muted small">Oldest first — the order a wire's old cash is applied in, unless you pick otherwise.</p>`;
+      const age = b => b.days_open != null ? b.days_open : (b.po_date ? Math.floor((Date.now() - new Date(b.po_date)) / 864e5) : null);
+      const buckets = [["0–30 Days", 0, 30], ["31–60 Days", 31, 60], ["61–90 Days", 61, 90], ["Over 90 Days", 91, 1e9]];
+      const undated = list.filter(b => age(b) == null);
+      const tiles = buckets.map(([l, lo, hi]) => { const rows = list.filter(b => age(b) != null && age(b) >= lo && age(b) <= hi);
+        return `<div class="stat"><div class="stat-label">${l}</div><div class="stat-value ${hi > 90 && rows.length ? "va-owed" : ""}">${m(rows.reduce((s, b) => s + b.cash_left, 0))}</div><div class="stat-sub">${rows.length} Invoice${rows.length === 1 ? "" : "s"}</div></div>`; }).join("")
+        + (undated.length ? `<div class="stat"><div class="stat-label">No Date</div><div class="stat-value">${m(undated.reduce((s, b) => s + b.cash_left, 0))}</div><div class="stat-sub">${undated.length} Invoice${undated.length === 1 ? "" : "s"} — Add The Invoice Date</div></div>` : "");
+      const cols = [
+        { key: "so", label: "SO # / PO", val: b => b.so_number, html: b => soCell(b) },
+        { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${esc(b.bill_number || "—")}</span>` },
+        { key: "date", label: "Date", val: b => b.bill_date || b.po_date, html: b => b.bill_date ? fmtDate(b.bill_date) : b.po_date ? `<span class="muted" title="PO date">${fmtDate(b.po_date)}</span>` : "" },
+        { key: "due", label: "Cash Due", num: true, val: b => b.cash_due, html: b => m(b.cash_due) },
+        { key: "paid", label: "Cash Paid", num: true, val: b => b.cash_paid, html: b => m(b.cash_paid) },
+        { key: "left", label: "Cash Still Owed", num: true, val: b => b.cash_left, html: b => `<span class="va-owed">${m(b.cash_left)}</span>` },
+        { key: "age", label: "Days", num: true, val: age, html: b => age(b) ?? "" },
+      ];
+      return `<div class="stat-row">${tiles}</div>
+        ${grid("cash", cols, list, { rowAttr: b => `data-bill="${b.id}" class="va-click" onclick="invoicePop(${b.id})"`,
+          foot: `<tr><th colspan="5">Total cash owed</th><th class="num">${m(list.reduce((s, b) => s + b.cash_left, 0))}</th><th></th></tr>` })}
+        <p class="muted small">Age counts from the invoice date (the PO date when the invoice has none). Oldest first is the order a wire's spare money is applied in, unless you pick otherwise.</p>`;
+    }
+
+    // ---- every invoice and payment in date order, with the running balance (what a statement reconciles to) ----
+    function timelineHtml(terms) {
+      const ev = [];
+      V.bills.forEach(b => ev.push({ date: b.bill_date || b.po_date, guess: !b.bill_date, kind: "inv", id: b.id, label: `Invoice ${b.bill_number || "—"}`, sub: `SO ${b.so_number || "—"}${b.po_code ? " · " + b.po_code : ""}`,
+        plus: b.total, match: billMatches(b, terms) }));
+      V.payments.forEach(p => ev.push({ date: p.paid_date, kind: "pay", id: p.id, label: `${p.code} ${p.kind === "wire" ? "Wire" : "Cash"}${p.reference ? " " + p.reference : ""}`,
+        sub: p.parts.map(r => billLabel(billById(r.bill_id))).join(", "), minus: p.amount, match: payMatches(p, terms) }));
+      ev.sort((a, b) => (a.date || "0000").localeCompare(b.date || "0000") || (a.kind === "inv" ? -1 : 1));
+      let bal = 0;
+      ev.forEach(e => { bal += (e.plus || 0) - (e.minus || 0); e.bal = Math.round(bal * 100) / 100; });
+      const shown = ev.filter(e => e.match);
+      return `<div class="va-scroll" data-scroll-key="timeline"><table class="compact-table va-table no-table-tools">
+        <thead><tr><th>Date</th><th>What</th><th>Detail</th><th class="num">Billed</th><th class="num">Paid</th><th class="num">Running Balance</th></tr></thead>
+        <tbody>${shown.map(e => `<tr class="va-click" ${e.kind === "inv" ? `data-bill="${e.id}" onclick="invoicePop(${e.id})"` : `data-pay="${e.id}" onclick="paymentPop(${e.id})"`}>
+          <td class="nowrap">${e.date ? `<span class="${e.guess ? "muted" : ""}" ${e.guess ? `title="PO date (the invoice has none)"` : ""}>${fmtDate(e.date)}</span>` : `<span class="muted">no date</span>`}</td>
+          <td class="nowrap">${esc(e.label)}</td><td class="small muted">${esc(e.sub || "")}</td>
+          <td class="num">${e.plus ? m(e.plus) : ""}</td><td class="num">${e.minus ? m(e.minus) : ""}</td><td class="num"><strong>${m(e.bal)}</strong></td></tr>`).join("")}</tbody>
+        <tfoot><tr><th colspan="5">Owed now (true billed − paid)</th><th class="num">${m(bal)}</th></tr></tfoot></table></div>
+      <p class="muted small">Undated lines first (the sheet had no date for them); an invoice with no date uses its PO date (grey). Billed = the true amount, so old cash collected on another invoice isn't counted twice.</p>`;
     }
 
     // ---- pop-ups ----
-    function modal(html) {
+    function modal(html, cls = "") {
       const back = document.createElement("div");
-      back.className = "modal-backdrop va-modal";
+      back.className = "modal-backdrop va-modal " + cls;
       back.innerHTML = `<div class="modal">${html}</div>`;
       let downOnBack = false;
       back.addEventListener("mousedown", e => { downOnBack = e.target === back; });
@@ -385,13 +595,13 @@
           <div><label>Freight</label><input type="number" step="0.01" id="b-freight" value="${f("freight")}" oninput="billCheck(this)"></div>
           <div><label>Customs</label><input type="number" step="0.01" id="b-customs" value="${f("customs")}" oninput="billCheck(this)"></div>
           <div><label>Other Charges</label><input type="number" step="0.01" id="b-other" value="${f("other")}" oninput="billCheck(this)"></div>
-          <div><label>Their Invoice Says</label><input type="number" step="0.01" id="b-paper" value="${f("paper_amount")}" placeholder="Same As True Amount" oninput="billCheck(this)"></div>
+          <div><label>Invoiced Amount (Their Invoice)</label><input type="number" step="0.01" id="b-paper" value="${f("paper_amount")}" placeholder="Same As True Amount" oninput="billCheck(this)"></div>
           <div><label>Cash Due</label><input type="number" step="0.01" id="b-cash" value="${b ? b.cash_due : ""}" placeholder="${V.account.cash_share}% Of Goods" oninput="billCheck(this)"></div>
           <div><label>SO Amount</label><input type="number" step="0.01" id="b-soamt" value="${f("so_amount")}" placeholder="From The PO" oninput="billCheck(this)"></div>
           <div><label>Note</label><input type="text" id="b-note" value="${esc(f("note"))}"></div>
         </div>
         <div id="b-check"></div>
-        <div id="b-for" style="display:none;"><h4 style="margin:10px 0 4px;">The Old Cash On This Invoice Is For</h4>
+        <div id="b-for" style="display:none;"><h4 style="margin:10px 0 4px;">This Invoice Includes Cash Owed On Other Invoices — Which Ones?</h4>
           <p class="muted small" style="margin:0 0 6px;">Pick the invoice(s) whose cash he's collecting. Their cash owed goes down and this invoice's goes up by the same
             amount until the wire for this invoice comes — then that wire pays them directly.</p>
           <div id="b-for-rows"></div>
@@ -450,7 +660,7 @@
       const forBox = el.querySelector("#b-for");
       if (forBox) forBox.style.display = paper != null && paper > total + 0.005 ? "" : "none";
       if (paper != null && paper > total + 0.005) {
-        html += `<div class="va-note">Their invoice says <strong>${m(paper)}</strong> — <strong>${m(paper - total)}</strong> more than the charges.
+        html += `<div class="va-note">Invoiced <strong>${m(paper)}</strong> — <strong>${m(paper - total)}</strong> more than the charges.
           If that extra is <strong>freight or customs</strong>, enter it above (it's a real cost). If it's <strong>old cash</strong> he's collecting,
           say below which invoice it's for: that invoice's cash goes down now, and the wire for this invoice pays it.</div>`;
       } else if (paper != null && paper < total - 0.005) {
@@ -563,10 +773,10 @@
                                    { method: p ? "PUT" : "POST", body: JSON.stringify(body) });
           el.remove();
           const saved = p ? p.id : (v.payments.find(x => !before.has(x.id)) || {}).id;
-          LAST = saved || null; HL = saved || null;
+          HL = saved || null;
           if (TAB === "review" && !v.totals.review) TAB = "payments";
           setView(v);
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          if (saved) paymentPop(saved, { recorded: true });
         } catch (e) { el.querySelector("#p-err").textContent = e.message; }
       };
     }
@@ -574,7 +784,7 @@
     async function deletePayment(id) {
       const p = V.payments.find(x => x.id === id);
       if (!confirm(`Delete ${p.code} (${p.kind} of ${m(p.amount)})? What it paid becomes open again.`)) return;
-      try { if (HL === id) HL = null; if (LAST === id) LAST = null; setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/payments/${id}`, { method: "DELETE" })); }
+      try { if (HL === id) HL = null; setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/payments/${id}`, { method: "DELETE" })); }
       catch (e) { alert(e.message); }
     }
 
@@ -628,7 +838,7 @@
               const fd2 = new FormData(); fd2.append("file", file);
               const res = await apiUpload(`/api/vendor-accounts/${V.account.id}/sheet/apply`, fd2);
               el.remove();
-              HL = null; LAST = null;
+              HL = null;
               setView(res.view);
               toast(`Loaded ${res.bills} invoices and ${res.payments} payments — owed ${m(res.owed)}${res.matches ? " (same as the sheet)" : ""}. ${res.pos} POs now show these payments.`);
             } catch (e) { el.querySelector("#f-err").textContent = e.message; }

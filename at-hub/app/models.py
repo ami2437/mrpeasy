@@ -2009,3 +2009,16 @@ class VacctAlloc(Base):
     bill_id = Column(Integer, ForeignKey("vacct_bills.id"), nullable=False, index=True)
     part = Column(String, nullable=False, default="wire")  # wire | cash
     amount = Column(Float, nullable=False)
+
+
+class VacctNote(Base):
+    """A note on one line of a Vendor Account -- an invoice or a payment (who wrote it, when)."""
+    __tablename__ = "vacct_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("vacct_accounts.id"), nullable=False, index=True)
+    target = Column(String, nullable=False)  # bill | payment
+    target_id = Column(Integer, nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
