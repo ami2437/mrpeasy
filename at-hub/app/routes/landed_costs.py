@@ -17,12 +17,19 @@ def list_landed_costs(db: Session = Depends(get_db)):
 @router.post("/preview", response_model=list[LandedCostAllocationResponse])
 def preview_allocation(data: LandedCostPreviewRequest, db: Session = Depends(get_db)):
     """How the amount would split across the selected POs' lines, without saving anything."""
-    return LandedCostService.plan(db, data.amount, data.po_ids)
+    return LandedCostService.plan(db, data.amount, data.po_ids, data.split)
 
 
 @router.post("/", response_model=LandedCostResponse)
 def create_landed_cost(data: LandedCostInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     return LandedCostService.create(db, data, created_by=current_user.username)
+
+
+@router.get("/unapplied")
+def unapplied(db: Session = Depends(get_db)):
+    """What hasn't reached any goods' cost: PO charges with no landed cost (new / imported from MRPeasy) and landed costs on nothing."""
+    from app.services import charges
+    return charges.unapplied(db)
 
 
 @router.get("/{lc_id}", response_model=LandedCostResponse)

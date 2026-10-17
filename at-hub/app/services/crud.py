@@ -1035,8 +1035,8 @@ class CustomerOrderService:
             raise HTTPException(status_code=404, detail="Order line not found")
         if line.allocated_quantity > 0:
             raise HTTPException(status_code=400, detail="Cannot remove a line that is booked into or shipped on a shipment")
-        if len(order.lines) <= 1:
-            raise HTTPException(status_code=400, detail="Order must have at least one line")
+        if len(order.lines) <= 1 and order.status not in ("validation", "draft"):
+            raise HTTPException(status_code=400, detail="Order must have at least one line -- add the right line first, then remove this one")
         db.delete(line)
         db.flush()
         db.refresh(order)
@@ -2444,8 +2444,8 @@ class PurchaseOrderService:
     def create(db: Session, data, created_by: str) -> PurchaseOrder:
         if not db.query(Vendor).filter(Vendor.id == data.vendor_id).first():
             raise HTTPException(status_code=400, detail="Vendor not found")
-        if not data.lines:
-            raise HTTPException(status_code=400, detail="Order must have at least one line")
+        if not data.lines and not getattr(data, "charges_only", False):
+            raise HTTPException(status_code=400, detail="Order must have at least one line (or be a charges-only PO: freight, customs...)")
         allow = getattr(data, "allow_duplicate", False)
         if not allow:
             PurchaseOrderService.check_duplicate_so(db, data.vendor_id, data.vendor_so_number)
@@ -2506,8 +2506,8 @@ class PurchaseOrderService:
         if po.ai_pending_lines:
             raise HTTPException(status_code=400, detail=f"{len(po.ai_pending_lines)} line(s) from the vendor's document still need an item -- "
                                                         "pick one for each (or drop it) first")
-        if not po.lines:
-            raise HTTPException(status_code=400, detail="Add the PO's lines from the vendor's document first")
+        if not po.lines and not po.charges:
+            raise HTTPException(status_code=400, detail="Add the PO's lines (or its charges -- freight, customs...) from the vendor's document first")
         if allow_duplicate and not po.duplicate_so_ok and PurchaseOrderService.duplicate_so(db, po.vendor_id, po.vendor_so_number, po.id):
             po.duplicate_so_ok = f"{by}, {datetime.utcnow():%Y-%m-%d %H:%M} UTC (at validation)"
         if not po.duplicate_so_ok:
@@ -2527,6 +2527,8 @@ class PurchaseOrderService:
             raise HTTPException(status_code=400, detail=f"{po.code} was quick-captured -- check it and Validate it first")
         if po.status != "draft":
             raise HTTPException(status_code=400, detail=f"Order is already {po.status}")
+        if not po.lines and not po.charges:
+            raise HTTPException(status_code=400, detail="Add a line or a charge before marking it ordered")
         from app.services import lookalike
         lookalike.require_ok(db, "vendor", po)
         po.status = "ordered"
@@ -2572,6 +2574,8 @@ class PurchaseOrderService:
         VendorItemService.learn(db, po.vendor_id, item_id, code, desc, data.unit_cost)
         db.flush()
         db.refresh(po)
+        from app.services import charges
+        charges.respread_po(db, po)  # this PO's freight / customs now spread over the new line too
         PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
@@ -2619,6 +2623,10 @@ class PurchaseOrderService:
             for lot in db.query(Lot).filter(Lot.po_line_id == line.id).all():
                 lot.base_unit_cost = line.unit_cost
             recompute_lot_costs(db, [line.id])
+        if "quantity" in updates or cost_changed:
+            from app.services import charges
+            db.flush()
+            charges.respread_po(db, po)  # the PO's own freight / customs follow the new quantities / values
         PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
@@ -2653,17 +2661,23 @@ class PurchaseOrderService:
             raise HTTPException(status_code=404, detail="PO line not found")
         if line.received_quantity > 0:
             raise HTTPException(status_code=400, detail="Cannot remove a line that has already been received")
-        if line.allocations:
-            codes = ", ".join(sorted({a.landed_cost.code for a in line.allocations}))
+        own = {c.landed_cost_id for c in po.charges if c.landed_cost_id}
+        foreign = [a for a in line.allocations if a.landed_cost_id not in own]
+        if foreign:
+            codes = ", ".join(sorted({a.landed_cost.code for a in foreign}))
             raise HTTPException(status_code=400, detail=f"This line carries landed cost {codes} -- edit or delete that landed cost first")
-        if len(po.lines) <= 1:
-            raise HTTPException(status_code=400, detail="Order must have at least one line")
+        if len(po.lines) <= 1 and po.status not in ("validation", "draft") and not po.charges:
+            raise HTTPException(status_code=400, detail="Order must have at least one line -- add the right line first, then remove this one")
+        for a in list(line.allocations):  # its share of this PO's own charges is re-spread below
+            db.delete(a)
         from app.models import VendorShipmentLine
         db.query(VendorShipmentLine).filter(VendorShipmentLine.po_line_id == line.id).delete()  # off any vendor shipment too
         db.delete(line)
         db.flush()
         db.refresh(po)
         renumber_lines(po.lines)
+        from app.services import charges
+        charges.respread_po(db, po)
         PurchaseOrderService.refresh_status(po)
         db.commit()
         db.refresh(po)
@@ -2853,8 +2867,12 @@ class VendorBillService:
         db.flush()
         if shipping > 0:
             # The shipping billed on this invoice becomes a PO charge, so the PO total grows to match what's billed.
-            db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.shipping_type), amount=shipping,
-                                       description=f"Billed on invoice {number}", vendor_bill_id=bill.id, created_by=created_by))
+            charge = PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.shipping_type), amount=shipping,
+                                         description=f"Billed on invoice {number}", vendor_bill_id=bill.id, created_by=created_by)
+            db.add(charge)
+            db.flush()
+            from app.services import charges
+            charges.auto_apply(db, charge, created_by)
         db.commit()
         db.refresh(po)
         return po
@@ -2867,7 +2885,9 @@ class VendorBillService:
             raise HTTPException(status_code=404, detail="Vendor invoice not found")
         if bill.payments:
             raise HTTPException(status_code=400, detail=f"Payments are recorded against {bill.bill_number} -- it can't be deleted")
+        from app.services import charges
         for charge in [c for c in po.charges if c.vendor_bill_id == bill.id]:
+            charges.drop(db, charge)
             po.charges.remove(charge)
         db.delete(bill)
         db.commit()
@@ -2914,9 +2934,13 @@ class PurchaseOrderChargeService:
             raise HTTPException(status_code=400, detail="Charge amount must be greater than 0")
         if data.vendor_bill_id and not any(b.id == data.vendor_bill_id for b in po.bills):
             raise HTTPException(status_code=400, detail="That vendor invoice isn't on this purchase order")
-        db.add(PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.charge_type), amount=cents(data.amount),
-                                   description=(data.description or "").strip() or None, vendor_bill_id=data.vendor_bill_id,
-                                   created_by=created_by))
+        charge = PurchaseOrderCharge(po_id=po.id, charge_type=_charge_type(db, data.charge_type), amount=cents(data.amount),
+                                     description=(data.description or "").strip() or None, vendor_bill_id=data.vendor_bill_id,
+                                     created_by=created_by)
+        db.add(charge)
+        db.flush()
+        from app.services import charges
+        charges.auto_apply(db, charge, created_by)  # onto this PO's own goods
         db.commit()
         db.refresh(po)
         return po
@@ -2930,6 +2954,8 @@ class PurchaseOrderChargeService:
         if charge.vendor_bill_id:
             raise HTTPException(status_code=400, detail=f"This S&H comes from vendor invoice {charge.bill_number} -- "
                                                         "delete or correct that invoice instead")
+        from app.services import charges
+        charges.drop(db, charge)
         po.charges.remove(charge)
         db.commit()
         db.refresh(po)
@@ -3045,9 +3071,9 @@ class LandedCostService:
         return lc
 
     @staticmethod
-    def plan(db: Session, amount: float, po_ids: List[int]) -> List[dict]:
-        """Split amount over every line of the selected POs in proportion to line quantity,
-        so each unit across the selection carries the same landed cost per unit."""
+    def plan(db: Session, amount: float, po_ids: List[int], split: str = None) -> List[dict]:
+        """Split amount over every line of the selected POs: by quantity (each unit across the selection carries the same
+        landed cost per unit) or by value (each line's share of the dollars -- customs / duty are charged on value)."""
         amount = cents(amount) if amount is not None else None
         if amount is None or amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
@@ -3064,6 +3090,13 @@ class LandedCostService:
         total_qty = sum(l.quantity for l in lines)
         if total_qty <= 0:
             raise HTTPException(status_code=400, detail="The selected purchase orders have no quantity to spread the cost over")
+        total_value = sum(l.quantity * (l.unit_cost or 0) for l in lines)
+        if split == "value" and total_value > 0:
+            return [{
+                "po_id": l.po_id, "po_line_id": l.id, "item_id": l.item_id, "quantity": l.quantity,
+                "amount": amount * l.quantity * (l.unit_cost or 0) / total_value,
+                "per_unit": amount * (l.unit_cost or 0) / total_value,
+            } for l in lines]
         per_unit = amount / total_qty
         return [{
             "po_id": l.po_id, "po_line_id": l.id, "item_id": l.item_id,
@@ -3081,7 +3114,7 @@ class LandedCostService:
     @staticmethod
     def _allocate(db: Session, lc: LandedCost, po_ids: List[int]) -> List[int]:
         line_ids = []
-        for p in LandedCostService.plan(db, lc.amount, po_ids):
+        for p in LandedCostService.plan(db, lc.amount, po_ids, lc.split):
             db.add(LandedCostAllocation(
                 landed_cost_id=lc.id, po_id=p["po_id"], po_line_id=p["po_line_id"],
                 item_id=p["item_id"], quantity=p["quantity"], amount=p["amount"],
@@ -3108,7 +3141,7 @@ class LandedCostService:
         lc = LandedCostService.create_internal(
             db, description=data.description, cost_type=data.cost_type, amount=data.amount,
             po_ids=data.po_ids, created_by=created_by, paid_to=data.paid_to, reference=data.reference,
-            cost_date=data.cost_date, notes=data.notes,
+            cost_date=data.cost_date, notes=data.notes, split=getattr(data, "split", None),
         )
         db.commit()
         db.refresh(lc)
@@ -3121,8 +3154,12 @@ class LandedCostService:
         LandedCostService._validate(db, data)
         lc = LandedCostService.get(db, lc_id)
         old_line_ids = [a.po_line_id for a in lc.allocations]
+        if lc.source_charge_id and abs(cents(data.amount) - cents(lc.amount)) > 0.005:
+            raise HTTPException(status_code=400, detail="This landed cost's amount follows its charge on the PO -- change the charge instead")
         for field in ("description", "cost_type", "amount", "paid_to", "reference", "cost_date", "notes"):
             setattr(lc, field, getattr(data, field))
+        if getattr(data, "split", None) in ("quantity", "value"):
+            lc.split = data.split
         lc.description = lc.description.strip()
         lc.amount = cents(lc.amount)
         lc.allocations.clear()
@@ -3137,6 +3174,10 @@ class LandedCostService:
     def delete(db: Session, lc_id: int) -> None:
         lc = LandedCostService.get(db, lc_id)
         line_ids = [a.po_line_id for a in lc.allocations]
+        if lc.source_charge_id:  # its charge stays on the PO, now not spread onto any goods
+            charge = db.get(PurchaseOrderCharge, lc.source_charge_id)
+            if charge:
+                charge.landed_cost_id = None
         db.delete(lc)
         recompute_lot_costs(db, line_ids)
         db.commit()

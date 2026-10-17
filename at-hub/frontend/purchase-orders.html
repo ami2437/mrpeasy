@@ -691,7 +691,7 @@
           </tbody>
           ${editable ? `<tbody class="entry-body"><tr class="entry-row" data-commit="addLineToOrder(${order.id})" title="Fill in the new line — Tab off the cost (or press Enter) saves it">
             <td class="line-no">+</td>
-            <td class="grow"><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('tr').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add our item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
+            <td class="grow"><select id="new-line-item" data-searchable data-create="poCreateItem" data-charge="poChargeFromText" onchange="document.getElementById('new-line-cost').value = this.selectedOptions[0].dataset.cost || ''; fillVendorCode(this, document.getElementById('new-line-vcode'), ${order.vendor_id}, document.getElementById('new-line-vdesc'), document.getElementById('new-line-cost')); this.closest('tr').querySelector('[data-price-delta]').dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add our item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i)} data-cost="${i.cost_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
             <td class="vendor-cell"><input type="text" id="new-line-vcode" placeholder="Vendor Part #" onchange="matchVendorCode(this, document.getElementById('new-line-item'), ${order.vendor_id})"><div class="vcode-hint small"></div>
               <input type="text" id="new-line-vdesc" placeholder="Their description (optional)"></td>
             <td class="num"><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></td>
@@ -703,9 +703,11 @@
           <tbody id="po-charges-body">
             ${order.charges.map(c => `
               <tr class="charge-row ${c.vendor_bill_id ? "locked" : ""}">
-                <td class="line-no">S&amp;H${editable && !c.vendor_bill_id ? `<div class="line-actions no-print">${trashBtn(`removeCharge(${order.id}, ${c.id})`, "Remove this charge")}</div>` : ""}</td>
+                <td class="line-no">Charge${editable && !c.vendor_bill_id && c.created_by !== "vendor-account" ? `<div class="line-actions no-print">${trashBtn(`removeCharge(${order.id}, ${c.id})`, "Remove this charge")}</div>` : ""}</td>
                 <td class="grow"><span class="tag sh">${escapeHtml(TypeLists.label("charge", c.charge_type))}</span> ${escapeHtml(c.description || "")}
-                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>` : `<div class="muted small">Added manually</div>`}</td>
+                  ${c.vendor_bill_id ? `<div class="muted small">🔒 From vendor invoice <strong>${escapeHtml(c.bill_number || "")}</strong> — change it on that invoice</div>`
+                    : c.created_by === "vendor-account" ? `<div class="muted small">🔒 From the Vendor Account</div>` : c.created_by === "mrpeasy-import" ? `<div class="muted small">Imported from MRPeasy</div>` : `<div class="muted small">Added manually</div>`}
+                  <div class="small charge-lc">${chargeLcHtml(order, c)}</div></td>
                 <td colspan="4"></td>
                 <td class="num subtotal">${fmtMoney(c.amount)}</td>
                 <td></td>
@@ -715,7 +717,7 @@
           <tfoot>
             <tr><td></td><td class="grow">Lines Total</td><td></td><td class="num">${fmtQty(order.lines.reduce((s, l) => s + l.quantity, 0))}</td><td></td><td></td>
               <td class="num" id="po-total">${fmtMoney(sumLines(order.lines, "unit_cost"))}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
-            ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Shipping &amp; Handling</td><td colspan="4"></td>
+            ${order.charges.length ? `<tr class="sub-total"><td></td><td class="grow">Charges (Freight, Customs…)</td><td colspan="4"></td>
               <td class="num">${fmtMoney(order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>
             <tr class="grand-total"><td></td><td class="grow">PO Total</td><td colspan="4"></td>
               <td class="num" id="po-grand-total">${fmtMoney(order.lines_total + order.charges_total)}</td><td colspan="${1 + (canReceive ? 1 : 0)}"></td></tr>` : ""}
@@ -724,12 +726,14 @@
         </div>
         ${editable ? `
           <div class="row" style="margin-top:6px; max-width:1100px;">
-            <div style="flex:0 0 140px;"><label>Add S&amp;H</label><select id="chg-type" data-type-list="charge">${TypeLists.optionsHtml("charge", null, "shipping")}</select></div>
-            <div style="flex:3;"><label>Description</label><input type="text" id="chg-desc" placeholder="E.g. Quoted Freight (S&amp;H On A Vendor Invoice Is Added Automatically)"></div>
+            <div style="flex:0 0 150px;"><label>Add A Charge</label><select id="chg-type" data-type-list="charge">${TypeLists.optionsHtml("charge", null, "freight")}</select></div>
+            <div style="flex:3;"><label>Description</label><input type="text" id="chg-desc" placeholder="E.g. Ocean Freight, Customs Entry (S&amp;H On A Vendor Invoice Is Added Automatically)"></div>
             <div style="flex:0;"><label>Amount</label>${priceInput("chg-amount-input", "", 'id="chg-amount"')}</div>
-            <div style="flex:0;"><button class="secondary" onclick="addCharge(${order.id})">+ Add S&amp;H</button></div>
+            <div style="flex:0;"><button class="secondary" onclick="addCharge(${order.id})">+ Add Charge</button></div>
           </div>
           <div id="charge-error" class="error"></div>
+          <p class="muted small" style="margin:2px 0 0;">A charge on a PO with items goes onto those items' cost by itself (a landed cost — customs / duty by value, the rest by quantity).
+            Use <strong>Apply To…</strong> on a charge to put it on other POs' goods instead (e.g. a container shared by several POs).</p>
         ` : ""}
         <div id="lines-error" class="error"></div>
         </section>
@@ -843,6 +847,97 @@
     }
 
     // ---- Charges ----
+    // ---- charges -> landed cost ----
+    function landedBuildUp(l) {
+      const parts = (l.landed_parts || []).map(p => `${TypeLists.label("landed_cost", p.cost_type)} ${fmtPrice(p.per_unit)} (${p.code})`);
+      return `Purchase ${fmtPrice(l.unit_cost)}${parts.length ? " + " + parts.join(" + ") : ""} = landed ${fmtPrice(l.unit_cost + l.landed_cost_per_unit)} per unit`;
+    }
+    function chargeLcHtml(order, c) {
+      const canLc = AuthGuard.can("landed_costs");
+      const codeOf = id => (orders.find(o => o.id === id) || {}).code || `#${id}`;
+      const btns = canLc ? ` · <a class="link" onclick="chargeApplyPop(${order.id}, ${c.id})">Apply To…</a>`
+        + (c.landed_cost_id && !(c.applied_po_ids.length === 1 && c.applied_po_ids[0] === order.id) && order.lines.length ? ` · <a class="link" onclick="chargeOwn(${order.id}, ${c.id})">This PO's Goods</a>` : "")
+        + (!c.landed_cost_id && order.lines.length ? ` · <a class="link" onclick="chargeOwn(${order.id}, ${c.id})">This PO's Goods</a>` : "")
+        + (c.lc_status !== "skip" ? ` · <a class="link" onclick="chargeSkip(${order.id}, ${c.id})">Leave As PO Cost</a>` : "") : "";
+      if (c.landed_cost_id) {
+        const where = c.applied_po_ids.length === 1 && c.applied_po_ids[0] === order.id ? "this PO's items" : c.applied_po_ids.map(codeOf).join(", ");
+        return `<span class="pos">→ <a class="link" href="landed-costs.html?id=${c.landed_cost_id}">${escapeHtml(c.landed_cost_code || "")}</a> on ${escapeHtml(where)} (by ${escapeHtml(c.lc_split || "quantity")})</span>${btns}`;
+      }
+      if (c.lc_status === "skip") return `<span class="muted">Left as a PO cost — not in any item's cost</span>${btns}`;
+      return `<span class="warn-text">Not in any item's cost yet</span>${btns}`;
+    }
+    async function chargeOwn(poId, chargeId) {
+      try { await apiFetch(`/api/purchase-orders/${poId}/charges/${chargeId}/apply`, { method: "POST", body: JSON.stringify({}) }); await loadOrders(); showDetail(poId); }
+      catch (e) { alert(e.message); }
+    }
+    async function chargeSkip(poId, chargeId) {
+      if (!confirm("Leave this charge as a PO cost only? It won't be in any item's cost (margins won't include it).")) return;
+      try { await apiFetch(`/api/purchase-orders/${poId}/charges/${chargeId}/skip`, { method: "POST" }); await loadOrders(); showDetail(poId); }
+      catch (e) { alert(e.message); }
+    }
+    async function chargeApplyPop(poId, chargeId) {
+      const po = currentOrder && currentOrder.id === poId ? currentOrder : await apiFetch(`/api/purchase-orders/${poId}`);
+      const c = po.charges.find(x => x.id === chargeId);
+      const picked = new Set(c.applied_po_ids.length ? c.applied_po_ids : (po.lines.length ? [po.id] : []));
+      const vname = id => (vendors.find(v => v.id === id) || {}).name || "";
+      // suggestions first: this PO, then this vendor's POs, then the rest (newest first)
+      const live = orders.filter(o => o.status !== "cancelled" && (o.lines || []).length);
+      const rank = o => (o.id === po.id ? 0 : o.vendor_id === po.vendor_id ? 1 : 2);
+      live.sort((a, b) => rank(a) - rank(b) || String(b.order_date || "").localeCompare(String(a.order_date || "")));
+      const split0 = c.lc_split || (["customs", "duty", "tariff", "brokerage"].includes(c.charge_type) ? "value" : "quantity");
+      const { value, el } = await askDialog({ title: `Apply ${TypeLists.label("charge", c.charge_type)} ${fmtMoney(c.amount)} To…`, wide: true, body: `
+        <p class="muted small" style="margin-top:0;">Pick the PO(s) whose goods this ${escapeHtml(TypeLists.label("charge", c.charge_type).toLowerCase())} was for. Its cost is spread onto their lines' unit cost (a landed cost).</p>
+        <div class="row" style="gap:10px; align-items:flex-end;"><div style="flex:2;"><input type="text" id="ap-q" placeholder="Filter: PO, vendor, SO #…"></div>
+          <div style="flex:1;"><label>Spread</label><select id="ap-split"><option value="value" ${split0 === "value" ? "selected" : ""}>By Value ($ Of Each Line)</option><option value="quantity" ${split0 === "quantity" ? "selected" : ""}>By Quantity (Same Per Unit)</option></select></div></div>
+        <div class="table-scroll" style="max-height:300px; overflow:auto; margin-top:8px;"><table class="compact-table no-table-tools"><thead><tr><th></th><th>PO</th><th>Vendor</th><th>Their SO #</th><th>Status</th><th class="num">Lines</th></tr></thead><tbody id="ap-list">
+          ${live.map(o => `<tr data-q="${escapeHtml([o.code, vname(o.vendor_id), o.vendor_so_number || ""].join(" ").toLowerCase())}"><td><input type="checkbox" class="ap-po" value="${o.id}" ${picked.has(o.id) ? "checked" : ""}></td>
+            <td>${escapeHtml(o.code)}${o.id === po.id ? ' <span class="tag">This PO</span>' : o.vendor_id === po.vendor_id ? ' <span class="muted small">same vendor</span>' : ""}</td><td>${escapeHtml(vname(o.vendor_id))}</td>
+            <td>${escapeHtml(o.vendor_so_number || "")}</td><td>${escapeHtml((o.status || "").replace("_", " "))}</td><td class="num">${(o.lines || []).length}</td></tr>`).join("")}</tbody></table></div>
+        <div id="ap-preview" class="small" style="margin-top:8px;"></div>`,
+        buttons: [{ label: "Apply", value: "go" }, { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value !== "go") return;
+      const po_ids = [...el.querySelectorAll(".ap-po:checked")].map(x => parseInt(x.value));
+      if (!po_ids.length) { alert("Pick at least one PO."); return; }
+      try {
+        await apiFetch(`/api/purchase-orders/${poId}/charges/${chargeId}/apply`, { method: "POST", body: JSON.stringify({ po_ids, split: el.querySelector("#ap-split").value }) });
+        toast("Applied — the goods' unit costs now include it");
+        await loadOrders(); showDetail(poId);
+      } catch (e) { alert(e.message); }
+    }
+    document.addEventListener("input", e => {  // the Apply To… filter + a live preview of the split
+      if (e.target.id === "ap-q") {
+        const q = e.target.value.toLowerCase();
+        document.querySelectorAll("#ap-list tr").forEach(tr => tr.style.display = tr.dataset.q.includes(q) ? "" : "none");
+      }
+    });
+    document.addEventListener("change", async e => {
+      if (!e.target.classList.contains("ap-po") && e.target.id !== "ap-split") return;
+      const box = document.getElementById("ap-preview");
+      const ids = [...document.querySelectorAll(".ap-po:checked")].map(x => parseInt(x.value));
+      const amount = parseFloat((document.querySelector(".ask-dialog h3") || {}).textContent.replace(/[^\d.]/g, "")) || 0;
+      if (!box || !ids.length || !amount) { if (box) box.innerHTML = ""; return; }
+      try {
+        const rows = await apiFetch("/api/landed-costs/preview", { method: "POST", body: JSON.stringify({ amount, po_ids: ids, split: document.getElementById("ap-split").value }) });
+        const itemCode = id => (items.find(i => i.id === id) || {}).code || "";
+        box.innerHTML = `<strong>Per unit:</strong> ` + rows.slice(0, 12).map(r => `${escapeHtml(itemCode(r.item_id))} +${fmtPrice(r.per_unit)}`).join(" · ") + (rows.length > 12 ? ` · …${rows.length - 12} more` : "");
+      } catch (err) { box.textContent = err.message; }
+    });
+    // ---- the line's item picker: "+ Create Item" / "+ Add As A Charge" ----
+    let _poGroups = null;
+    async function poCreateItem(text, select) {
+      if (!_poGroups) { try { _poGroups = await apiFetch("/api/stock-items/groups/list"); } catch { _poGroups = []; } }
+      return createItemForPicker(text, select, "vendor", items, _poGroups);
+    }
+    function poChargeFromText(text) {
+      const t = /custom/i.test(text) ? "customs" : /dut/i.test(text) ? "duty" : /dispatch/i.test(text) ? "dispatch" : /broker/i.test(text) ? "brokerage"
+        : /handl/i.test(text) ? "handling" : /ship|courier/i.test(text) ? "shipping" : "freight";
+      const sel = document.getElementById("chg-type");
+      if (!sel) { alert("Charges can be added once the PO is saved."); return; }
+      if ([...sel.options].some(o => o.value === t)) sel.value = t;
+      document.getElementById("chg-desc").value = text;
+      document.getElementById("chg-amount").focus({ preventScroll: false });
+      toast(`Add it below as a ${t} charge — enter the amount`);
+    }
     async function addCharge(poId) {
       const err = document.getElementById("charge-error");
       err.textContent = "";
@@ -1611,7 +1706,8 @@ Thank you.</textarea>
                 <td class="num">${editable ? priceInput("e-line-cost", l.unit_cost) : fmtPrice(l.unit_cost)}
                   <div data-price-delta data-kind="purchase" data-item="${l.item_id}" data-doc="${order.id}" data-price="${l.unit_cost}" ${editable ? `data-price-input=".e-line-cost"` : ""}></div></td>
                 <td class="num subtotal">${fmtMoney(lineAmount(l.quantity, l.unit_cost))}</td>
-                <td class="num"><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong>${l.landed_cost_per_unit ? `<div class="muted small">+${fmtPrice(l.landed_cost_per_unit)} landed</div>` : ""}</td>
+                <td class="num" ${l.landed_cost_per_unit ? `title="${escapeHtml(landedBuildUp(l))}"` : ""}><strong>${fmtPrice(l.unit_cost + l.landed_cost_per_unit)}</strong>${l.landed_cost_per_unit
+                  ? (l.landed_parts || []).map(p => `<div class="muted small">+${fmtPrice(p.per_unit)} ${escapeHtml(TypeLists.label("landed_cost", p.cost_type))}</div>`).join("") || `<div class="muted small">+${fmtPrice(l.landed_cost_per_unit)} landed</div>` : ""}</td>
 
                 ${canReceive ? `
                   <td class="recv-cell"><input type="number" step="1" min="0" class="recv-qty qty-input" data-line="${l.id}" value="${Math.max(0, Math.round(l.quantity - l.received_quantity))}">
@@ -1634,6 +1730,7 @@ Thank you.</textarea>
       } catch (err) {
         if (row && body) { body.insertBefore(row, next); renumberRowsOnScreen(body); recalcPoLines(); }
         errorEl.textContent = err.message;
+        askDialog({ title: "This Line Can't Be Removed", body: `<p>${escapeHtml(err.message)}</p>`, buttons: [{ label: "OK" }] });
       }
     }
 

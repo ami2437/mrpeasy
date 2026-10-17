@@ -1088,7 +1088,7 @@
           </tbody>
           ${editable ? `<tbody class="entry-body"><tr class="entry-row" data-commit="addLineToOrder(${order.id})" title="Fill in the new line — Tab off the price (or press Enter) saves it">
             <td class="line-no">+</td>
-            <td class="grow"><select id="new-line-item" data-searchable onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('tr').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
+            <td class="grow"><select id="new-line-item" data-searchable data-create="coCreateItem" onchange="document.getElementById('new-line-price').value = this.selectedOptions[0].dataset.price || ''; const d = this.closest('tr').querySelector('[data-price-delta]'); d.dataset.item = this.value; refreshPriceDeltas(this.closest('tr'))"><option value="">— add an item —</option>${items.map(i => `<option value="${i.id}" ${itemPickAttr(i, true)} data-price="${i.selling_price || 0}" data-search="${escapeHtml([i.category, i.barcode].filter(Boolean).join(" "))}">${escapeHtml(i.code)} — ${escapeHtml(i.title)}${itemPickNote(i)}</option>`).join("")}</select></td>
             <td class="num"><input type="number" step="1" min="1" id="new-line-qty" class="qty-input" value="1"></td>
             <td class="num price-cell"><span class="price-input"><span>$</span><input type="number" step="${PRICE_STEP}" min="0" id="new-line-price" class="new-line-price" value="" oninput="refreshPriceDeltas(this.closest('tr'))"></span>
               <div data-price-delta data-kind="sale" data-item="" data-doc="${order.id}" data-price-input=".new-line-price"></div></td>
@@ -1422,7 +1422,13 @@
       } catch (err) {
         if (row && body) { body.insertBefore(row, next); renumberRowsOnScreen(body); recalcLines("order-lines-body", "order-total"); }
         errorEl.textContent = err.message;
+        askDialog({ title: "This Line Can't Be Removed", body: `<p>${escapeHtml(err.message)}</p>`, buttons: [{ label: "OK" }] });
       }
+    }
+    let _coGroups = null;
+    async function coCreateItem(text, select) {
+      if (!_coGroups) { try { _coGroups = await apiFetch("/api/stock-items/groups/list"); } catch { _coGroups = []; } }
+      return createItemForPicker(text, select, "customer", items, _coGroups);
     }
 
     async function addLineToOrder(orderId) {

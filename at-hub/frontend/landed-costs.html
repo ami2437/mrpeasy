@@ -15,7 +15,8 @@
         <div style="flex:3;">
           <h3 style="margin:0;">Landed Costs</h3>
           <p class="muted" style="margin:4px 0 0;">Freight, tariffs, customs, brokerage and other costs of getting stock in the door. Pick the purchase orders a bill covers and
-            its amount is spread across their lines <strong>by quantity</strong> — every unit carries the same share, added to the unit cost of its lot (received now or later).</p>
+            its amount is spread across their lines <strong>by quantity</strong> (every unit the same share) or <strong>by value</strong> (each line's share of the dollars — best for customs / duty), added to the unit cost of its lot (received now or later).
+            A freight / customs charge on a PO lands on that PO's goods by itself; charges not in any item's cost are listed below.</p>
         </div>
         <div style="flex:0;"><button onclick="openForm()">+ New Landed Cost</button></div>
       </div>
@@ -28,6 +29,7 @@
         <div style="flex:2;"><label>Description</label><input type="text" id="f-description" placeholder="e.g. Ocean freight — container MSKU1234567"></div>
         <div><label>Type</label><select id="f-type" data-type-list="landed_cost"></select></div>
         <div><label>Amount ($)</label><input type="number" step="0.01" min="0" id="f-amount" oninput="schedulePreview()"></div>
+        <div><label>Spread</label><select id="f-split" onchange="schedulePreview()"><option value="quantity">By Quantity (Same Per Unit)</option><option value="value">By Value ($ Of Each Line)</option></select></div>
       </div>
       <div class="row">
         <div><label>Paid to</label><input type="text" id="f-paid-to" placeholder="Carrier / Broker"></div>
@@ -53,6 +55,8 @@
       </div>
       <div id="form-error" class="error"></div>
     </div>
+
+    <div id="unapplied"></div>
 
     <div class="card">
       <table>
@@ -88,10 +92,12 @@
       tbody.innerHTML = landedCosts.map(lc => {
         const poIds = [...new Set(lc.allocations.map(a => a.po_id))];
         const perUnit = lc.allocations.length ? lc.allocations[0].per_unit : 0;
+        const live = poIds.filter(id => (pos.find(p => p.id === id) || {}).status !== "cancelled");
         return `
           <tr>
-            <td><a class="link" onclick="openForm(${lc.id})">${escapeHtml(lc.code)}</a></td>
-            <td>${escapeHtml(lc.description)}${lc.paid_to ? `<div class="muted small">${escapeHtml(lc.paid_to)}${lc.reference ? ` · ${escapeHtml(lc.reference)}` : ""}</div>` : ""}</td>
+            <td><a class="link" onclick="openForm(${lc.id})">${escapeHtml(lc.code)}</a>${!live.length ? ` <span class="tag cancelled" title="Not on any live PO -- it isn't in any item's cost">Not Applied</span>` : ""}</td>
+            <td>${escapeHtml(lc.description)}${lc.paid_to ? `<div class="muted small">${escapeHtml(lc.paid_to)}${lc.reference ? ` · ${escapeHtml(lc.reference)}` : ""}</div>` : ""}
+              ${lc.source_po_id ? `<div class="muted small">From the ${escapeHtml(TypeLists.label("landed_cost", lc.cost_type).toLowerCase())} charge on <a class="link" href="purchase-orders.html?id=${lc.source_po_id}">${escapeHtml(poCode(lc.source_po_id))}</a> · by ${escapeHtml(lc.split || "quantity")}</div>` : lc.split === "value" ? `<div class="muted small">By value</div>` : ""}</td>
             <td>${escapeHtml(TypeLists.label("landed_cost", lc.cost_type))}</td>
             <td class="num">${fmtMoney(lc.amount)}</td>
             <td>${poIds.map(id => `<a class="link" href="purchase-orders.html?id=${id}">${escapeHtml(poCode(id))}</a>`).join(", ")}</td>
@@ -143,12 +149,14 @@
         return;
       }
       try {
-        const plan = await apiFetch("/api/landed-costs/preview", { method: "POST", body: JSON.stringify({ amount, po_ids: [...selected] }) });
+        const split = document.getElementById("f-split").value;
+        const plan = await apiFetch("/api/landed-costs/preview", { method: "POST", body: JSON.stringify({ amount, po_ids: [...selected], split }) });
         const totalQty = plan.reduce((s, a) => s + a.quantity, 0);
         el.innerHTML = `
           <div class="panel">
-            <h4>Split by quantity</h4>
-            <p class="muted" style="margin:0 0 8px;">${fmtMoney(amount)} ÷ ${fmtQty(totalQty)} units = <strong>${fmtPrice(plan[0].per_unit)}</strong> per unit on every line below.</p>
+            <h4>Split by ${split === "value" ? "value" : "quantity"}</h4>
+            <p class="muted" style="margin:0 0 8px;">${split === "value" ? `${fmtMoney(amount)} shared by each line's dollars — pricier lines carry more per unit.`
+              : `${fmtMoney(amount)} ÷ ${fmtQty(totalQty)} units = <strong>${fmtPrice(plan[0].per_unit)}</strong> per unit on every line below.`}</p>
             <table class="compact-table">
               <thead><tr><th>PO</th><th>Item</th><th class="num">Qty</th><th class="num">Share</th><th class="num">Per unit</th></tr></thead>
               <tbody>${plan.map(a => `
@@ -173,6 +181,8 @@
       document.getElementById("f-description").value = lc ? lc.description : "";
       document.getElementById("f-type").innerHTML = TypeLists.optionsHtml("landed_cost", null, lc ? lc.cost_type : "freight");  // Types & Tags
       document.getElementById("f-amount").value = lc ? lc.amount : "";
+      document.getElementById("f-split").value = lc && lc.split ? lc.split : "quantity";
+      document.getElementById("f-amount").disabled = !!(lc && lc.source_charge_id);
       document.getElementById("f-paid-to").value = lc ? lc.paid_to || "" : "";
       document.getElementById("f-reference").value = lc ? lc.reference || "" : "";
       document.getElementById("f-date").value = lc && lc.cost_date ? lc.cost_date.substring(0, 10) : "";
@@ -203,6 +213,7 @@
         cost_date: document.getElementById("f-date").value || null,
         notes: document.getElementById("f-notes").value.trim() || null,
         po_ids: [...selected],
+        split: document.getElementById("f-split").value,
       };
       if (!body.description) { errorEl.textContent = "Enter a description."; return; }
       if (!(body.amount > 0)) { errorEl.textContent = "Enter an amount greater than 0."; return; }
@@ -231,6 +242,52 @@
       try { await TypeLists.load("landed_cost"); } catch {}
       landedCosts = await apiFetch("/api/landed-costs/");
       renderList();
+      loadUnapplied();
+    }
+
+    // ---- what never reached any goods' cost: charges with no landed cost, landed costs on nothing ----
+    async function loadUnapplied() {
+      const box = document.getElementById("unapplied");
+      if (!box) return;
+      let u;
+      try { u = await apiFetch("/api/landed-costs/unapplied"); } catch (e) { box.innerHTML = ""; return; }
+      const n = u.charges.length + u.landed_costs.length;
+      const chargeRow = c => `<tr><td><a class="link" href="purchase-orders.html?id=${c.po_id}">${escapeHtml(c.po_code)}</a></td><td>${escapeHtml(c.vendor)}</td>
+        <td>${escapeHtml(TypeLists.label("charge", c.charge_type))}${c.description ? ` <span class="muted small">${escapeHtml(c.description)}</span>` : ""}</td><td class="num">${fmtMoney(c.amount)}</td>
+        <td class="nowrap">${c.has_lines ? `<a class="link" onclick="unOwn(${c.po_id}, ${c.charge_id})">Its PO's Goods</a> · ` : ""}<a class="link" href="purchase-orders.html?id=${c.po_id}">Apply To…</a> ·
+          <a class="link" onclick="unSkip(${c.po_id}, ${c.charge_id})">Leave As PO Cost</a></td></tr>`;
+      const head = `<thead><tr><th>PO</th><th>Vendor</th><th>Charge</th><th class="num">Amount</th><th></th></tr></thead>`;
+      box.innerHTML = `<div class="card">
+        <h3 style="margin-top:0;">${n ? `⚠ Not In Any Item's Cost (${n})` : "Everything Is In The Goods' Cost ✓"}</h3>
+        ${u.landed_costs.length ? `<h4>Landed costs not applied</h4><table class="compact-table no-table-tools"><tbody>${u.landed_costs.map(l => `<tr><td><a class="link" onclick="openForm(${l.id})">${escapeHtml(l.code)}</a></td>
+          <td>${escapeHtml(l.description)}</td><td class="num">${fmtMoney(l.amount)}</td><td class="muted">${escapeHtml(l.why)}</td></tr>`).join("")}</tbody></table>` : ""}
+        ${u.charges.length ? `<h4>PO charges not on any goods yet</h4><table class="compact-table no-table-tools">${head}<tbody>${u.charges.map(chargeRow).join("")}</tbody></table>` : ""}
+        ${u.past.length ? `<details style="margin-top:10px;"><summary><strong>From MRPeasy: ${u.past.length} PO charges (${fmtMoney(u.past.reduce((s, c) => s + c.amount, 0))}) were never in any item's cost</strong>
+            <span class="muted small">— decide: put each on its PO's goods (changes past cost of goods) or leave it as a PO cost</span></summary>
+          <div class="btn-row" style="margin:8px 0;"><button class="secondary small-btn" onclick="unBulk('own')">Put All On Their PO's Goods</button>
+            <button class="secondary small-btn" onclick="unBulk('skip')">Leave All As PO Cost</button></div>
+          <table class="compact-table no-table-tools">${head}<tbody>${u.past.map(chargeRow).join("")}</tbody></table></details>` : ""}
+      </div>`;
+      window._unapplied = u;
+      if (new URLSearchParams(location.search).get("view") === "unapplied") box.scrollIntoView({ block: "start" });
+    }
+    async function unOwn(poId, id) {
+      try { await apiFetch(`/api/purchase-orders/${poId}/charges/${id}/apply`, { method: "POST", body: "{}" }); await load(); } catch (e) { alert(e.message); }
+    }
+    async function unSkip(poId, id) {
+      try { await apiFetch(`/api/purchase-orders/${poId}/charges/${id}/skip`, { method: "POST" }); await load(); } catch (e) { alert(e.message); }
+    }
+    async function unBulk(what) {
+      const list = (window._unapplied || { past: [] }).past.filter(c => what === "skip" || c.has_lines);
+      if (!list.length || !confirm(what === "own" ? `Put ${list.length} past charges onto their own PO's goods? Lot costs and past cost of goods change.`
+                                                   : `Leave ${list.length} past charges as PO costs only (not in any item's cost)?`)) return;
+      const failed = [];
+      for (const c of list) {
+        try { await apiFetch(`/api/purchase-orders/${c.po_id}/charges/${c.charge_id}/${what === "own" ? "apply" : "skip"}`, { method: "POST", body: what === "own" ? "{}" : undefined }); }
+        catch (e) { failed.push(`${c.po_code}: ${e.message}`); }
+      }
+      if (failed.length) alert(failed.join("\n"));
+      await load();
     }
 
     async function init() {

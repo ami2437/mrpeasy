@@ -707,6 +707,11 @@ class PurchaseOrderLine(Base):
     def landed_cost_per_unit(self) -> float:
         return sum(a.per_unit for a in self.allocations)
 
+    @property
+    def landed_parts(self) -> list:
+        return [{"code": a.landed_cost.code, "cost_type": a.landed_cost.cost_type, "per_unit": round(a.per_unit, 6),
+                 "amount": round(a.amount, 2)} for a in self.allocations if a.landed_cost]
+
 
 class VendorItem(Base):
     """Cross-reference: what a vendor calls one of our items (our ITEM100 = their B45).
@@ -805,10 +810,17 @@ class LandedCost(Base):
     reference = Column(String, nullable=True)  # their bill / invoice #
     cost_date = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
+    split = Column(String, nullable=True)  # quantity (every unit the same share) | value (by each line's $) -- None = quantity
+    source_charge_id = Column(Integer, nullable=True, index=True)  # made from this PO charge (freight / customs on a PO)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     allocations = relationship("LandedCostAllocation", backref="landed_cost", cascade="all, delete-orphan")
+    source_charge = relationship("PurchaseOrderCharge", primaryjoin="foreign(LandedCost.source_charge_id) == PurchaseOrderCharge.id", viewonly=True)
+
+    @property
+    def source_po_id(self):
+        return self.source_charge.po_id if self.source_charge else None
 
 
 class LandedCostAllocation(Base):
@@ -1225,10 +1237,25 @@ class PurchaseOrderCharge(Base):
     amount = Column(Float, nullable=False, default=0)
     description = Column(String, nullable=True)
     vendor_bill_id = Column(Integer, ForeignKey("vendor_bills.id"), nullable=True, index=True)  # the invoice it was billed on
+    landed_cost_id = Column(Integer, nullable=True, index=True)  # the landed cost carrying this charge into the goods' cost
+    lc_status = Column(String, nullable=True)  # "skip": left as a PO cost only, not spread onto goods
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     bill = relationship("VendorBill")
+    landed_cost = relationship("LandedCost", primaryjoin="foreign(PurchaseOrderCharge.landed_cost_id) == LandedCost.id", viewonly=True)
+
+    @property
+    def landed_cost_code(self):
+        return self.landed_cost.code if self.landed_cost else None
+
+    @property
+    def lc_split(self):
+        return (self.landed_cost.split or "quantity") if self.landed_cost else None
+
+    @property
+    def applied_po_ids(self):
+        return sorted({a.po_id for a in self.landed_cost.allocations}) if self.landed_cost else []
 
     @property
     def bill_number(self):

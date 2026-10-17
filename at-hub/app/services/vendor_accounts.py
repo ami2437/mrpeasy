@@ -234,12 +234,17 @@ def view(db: Session, account_id: int) -> dict:
         ob["over_answer"] = next((b.over_answer for b in bills if b.id == ob["id"]), None)
     t["not_invoiced"] = cents(sum(x["not_invoiced"] or 0 for x in sos))
     t["review"] = sum(1 for p in out_pays if p["review"])
-    t["problems"] = sum(1 for x in sos for pr in x["problems"] if not pr.get("info"))
+    from app.services import charges as CH
+    vendor_pos = {po.id for po in pos.values() if po}
+    un = CH.unapplied(db) if vendor_pos else {"charges": [], "past": []}
+    unapplied_charges = [dict(c, past=False) for c in un["charges"] if c["po_id"] in vendor_pos] + \
+                        [dict(c, past=True) for c in un["past"] if c["po_id"] in vendor_pos]
+    t["problems"] = sum(1 for x in sos for pr in x["problems"] if not pr.get("info")) + sum(1 for c in unapplied_charges if not c["past"])
     t["to_receive"] = sum(1 for x in sos for pr in x["problems"] if pr.get("info"))
     return {
         "account": {"id": acc.id, "vendor_code": acc.vendor_code, "vendor_name": vendor.name if vendor else acc.vendor_name,
                     "vendor_id": vendor.id if vendor else None, "cash_share": acc.cash_share, "note": acc.note},
-        "bills": out_bills, "payments": out_pays, "totals": t, "sos": sos,
+        "bills": out_bills, "payments": out_pays, "totals": t, "sos": sos, "unapplied_charges": unapplied_charges,
         "open_cash": sorted([b for b in out_bills if b["cash_left"] > TOL], key=lambda b: (b["bill_date"] or "9999", b["row"])),
     }
 
@@ -839,6 +844,7 @@ def sync_account(db: Session, acc: VacctAccount) -> dict:
         elif abs((vb.amount or 0) - bill_total(b)) > TOL:
             vb.amount = bill_total(b)
         vb_for[b.id] = vb
+    _sync_charges(db, bills, pos, vb_for)
     pays = {p.id: p for p in _payments(db, acc)}
     grouped = defaultdict(float)
     for a in _allocs(db, pays):
@@ -855,6 +861,55 @@ def sync_account(db: Session, acc: VacctAccount) -> dict:
         n += 1
     db.flush()
     return {"pos": len(touched), "payments": n}
+
+
+def _sync_charges(db: Session, bills: List[VacctBill], pos: dict, vb_for: dict) -> None:
+    """The account's freight / customs / other on each PO become that PO's charges (so the PO total matches what was
+    billed, and the cost can go onto the goods as a landed cost). Charges the PO already has (typed in, or imported from
+    MRPeasy) count first -- only what's missing is added; ours are updated in place, so their landed costs stay linked."""
+    from app.models import PurchaseOrderCharge
+    from app.services import charges as CH
+    want = defaultdict(lambda: defaultdict(float))
+    first_vb = {}
+    for b in bills:
+        po = pos.get(b.id)
+        if not po:
+            continue
+        for t in ("freight", "customs", "other"):
+            if (getattr(b, t) or 0) > TOL:
+                want[po.id][t] += getattr(b, t)
+                first_vb.setdefault((po.id, t), vb_for.get(b.id))
+    touched = {po.id: po for po in pos.values() if po}
+    for po_id, po in touched.items():
+        mine = {c.charge_type: c for c in po.charges if c.created_by == BY}
+        cover = cents(sum(c.amount for c in po.charges if c.created_by != BY))
+        for t in ("freight", "customs", "other"):
+            need = cents(want[po_id][t])
+            take = min(cover, need)
+            cover, need = cents(cover - take), cents(need - take)
+            c = mine.pop(t, None)
+            if need <= TOL:
+                if c:
+                    CH.drop(db, c)
+                    po.charges.remove(c)
+                continue
+            if c is None:
+                vb = first_vb.get((po_id, t))
+                c = PurchaseOrderCharge(po_id=po_id, charge_type=t, amount=need, description="From the Vendor Account",
+                                        vendor_bill_id=vb.id if vb else None, created_by=BY)
+                po.charges.append(c)
+                db.flush()
+                CH.auto_apply(db, c, BY)
+            elif abs(c.amount - need) > TOL:
+                c.amount = need
+                db.flush()
+                lc = CH._lc(db, c)
+                if lc:
+                    CH.apply(db, c, sorted({a.po_id for a in lc.allocations}) or [po_id], lc.split, BY)
+        for c in mine.values():  # a type the account no longer has
+            CH.drop(db, c)
+            po.charges.remove(c)
+    db.flush()
 
 
 def sync_all(db: Session) -> None:

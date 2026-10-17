@@ -319,3 +319,35 @@ def add_charge(po_id: int, data: PurchaseOrderChargeInput, db: Session = Depends
 @router.delete("/{po_id}/charges/{charge_id}", response_model=PurchaseOrderResponse)
 def remove_charge(po_id: int, charge_id: int, db: Session = Depends(get_db)):
     return PurchaseOrderChargeService.remove(db, po_id, charge_id)
+
+
+class ChargeApplyIn(BaseModel):
+    po_ids: Optional[List[int]] = None  # None = this PO's own goods
+    split: Optional[str] = None  # quantity | value (None = by type: value for customs / duty)
+
+
+def _charge(db: Session, po_id: int, charge_id: int):
+    from app.models import PurchaseOrderCharge
+    c = db.get(PurchaseOrderCharge, charge_id)
+    if not c or c.po_id != po_id:
+        raise HTTPException(status_code=404, detail="Charge not found on this PO")
+    return c
+
+
+@router.post("/{po_id}/charges/{charge_id}/apply", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("landed_costs"))])
+def apply_charge(po_id: int, charge_id: int, data: ChargeApplyIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Carry a charge (freight, customs...) into the cost of the goods on these POs -- a landed cost, spread by quantity or value."""
+    from app.services import charges
+    c = _charge(db, po_id, charge_id)
+    charges.apply(db, c, data.po_ids or [po_id], data.split, current_user.username)
+    db.commit()
+    return PurchaseOrderService.get(db, po_id)
+
+
+@router.post("/{po_id}/charges/{charge_id}/skip", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("landed_costs"))])
+def skip_charge(po_id: int, charge_id: int, db: Session = Depends(get_db)):
+    """Leave it as a PO cost only (not spread onto any goods) -- e.g. old charges from MRPeasy."""
+    from app.services import charges
+    charges.skip(db, _charge(db, po_id, charge_id))
+    db.commit()
+    return PurchaseOrderService.get(db, po_id)

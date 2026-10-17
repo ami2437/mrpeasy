@@ -39,6 +39,22 @@ def _suggestions(db: Session) -> dict:
                 f"{vendor} · invoices {', '.join(b.bill_number for b in po.bills)} · ${billed:,.2f} billed, ${paid:,.2f} recorded. "
                 "Check the PO's Payment Status in MRPeasy (Paid / Unpaid / partly) and enter each payment with its date.",
                 f"purchase-orders.html?id={po.id}")
+    try:  # landed costs / PO charges that never reached any goods' cost
+        from app.services import charges
+        from datetime import timedelta
+        un = charges.unapplied(db)
+        for lc in un["landed_costs"]:
+            out[f"lc-unapplied:{lc['code']}"] = ("Landed costs", f"Apply landed cost {lc['code']} (${lc['amount']:,.2f} {lc['cost_type']}) to the goods it was for",
+                                                 f"{lc['description']} -- {lc['why']}, so it isn't in any item's cost.", "landed-costs.html?view=unapplied")
+        week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        for c in un["charges"]:
+            if c["po_status"] in ("received", "partially_received") or (c["created_at"] or "") < week_ago or not c["has_lines"]:
+                out[f"charge-unapplied:{c['po_code']}:{c['charge_id']}"] = (
+                    "Landed costs", f"Apply the ${c['amount']:,.2f} {c['charge_type']} on {c['po_code']} to its goods",
+                    f"{c['vendor']}: {'a charges-only PO -- pick the goods PO(s) it was for' if not c['has_lines'] else 'not in any item cost yet'}.",
+                    f"purchase-orders.html?id={c['po_id']}")
+    except Exception:
+        pass
     try:  # Vendor Accounts: SOs that don't add up (invoiced over the SO, received but SO says more, ...)
         from app.models import VacctAccount
         from app.services import vendor_accounts

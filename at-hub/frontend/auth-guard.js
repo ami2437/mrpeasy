@@ -811,14 +811,31 @@ function makeSearchable(select) {
   select.addEventListener("change", () => { if (document.activeElement !== input) input.value = label(); });
   let matches = [], active = 0;
 
+  // a page can offer "+ Create Item ..." (data-create = a function name) and, for words like freight / customs,
+  // "+ Add ... As A Charge" (data-charge) -- both get the typed text
+  const CHARGE_WORDS = /freight|custom|duty|duties|tariff|shipping|dispatch|brokerage|handling|courier|delivery charge/i;
+  const extras = () => {
+    const text = input.value.trim();
+    if (!text) return "";
+    let html = "";
+    if (select.dataset.charge && CHARGE_WORDS.test(text)) html += `<div class="search-select-option ss-extra" data-extra="charge">+ Add "${escapeHtml(text)}" As A Charge (Not An Item)</div>`;
+    if (select.dataset.create) html += `<div class="search-select-option ss-extra" data-extra="create">+ Create Item "${escapeHtml(text)}"</div>`;
+    return html;
+  };
+  const runExtra = kind => {
+    const text = input.value.trim(), fn = window[select.dataset[kind]];
+    list.style.display = "none";
+    input.value = label();
+    if (typeof fn === "function") fn(text, select);
+  };
   const render = () => {
     matches = Array.from(select.options).filter(o => searchMatch(input.value, o.textContent, o.dataset.search));
     active = 0;
     const shown = matches.slice(0, 50);
-    list.innerHTML = shown.length
+    list.innerHTML = (shown.length
       ? shown.map((o, i) => `<div class="search-select-option${i === 0 ? " active" : ""}${o.disabled ? " blocked" : ""}" data-i="${i}">${escapeHtml(o.textContent)}${o.dataset.search ? ` <span class="muted small">${escapeHtml(o.dataset.search)}</span>` : ""}</div>`).join("")
         + (matches.length > 50 ? `<div class="muted small" style="padding:6px 10px;">${matches.length - 50} More — Keep Typing To Narrow Down</div>` : "")
-      : `<div class="muted small" style="padding:6px 10px;">No Items Match "${escapeHtml(input.value)}"</div>`;
+      : `<div class="muted small" style="padding:6px 10px;">No Items Match "${escapeHtml(input.value)}"</div>`) + extras();
     list.style.display = "block";
   };
   const choose = i => {
@@ -843,13 +860,23 @@ function makeSearchable(select) {
   input.addEventListener("keydown", e => {
     if (e.key === "ArrowDown") { active = Math.min(active + 1, Math.min(matches.length, 50) - 1); highlight(); e.preventDefault(); }
     else if (e.key === "ArrowUp") { active = Math.max(active - 1, 0); highlight(); e.preventDefault(); }
-    else if (e.key === "Enter") { choose(active); e.preventDefault(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (!matches.length && input.value.trim()) {  // nothing matches: the first offer (charge / create) runs
+        const first = list.querySelector("[data-extra]");
+        if (first) { runExtra(first.dataset.extra); return; }
+      }
+      choose(active);
+    }
     else if (e.key === "Escape") { input.value = label(); list.style.display = "none"; input.blur(); }
   });
   input.addEventListener("blur", () => setTimeout(() => { list.style.display = "none"; input.value = label(); }, 150));
   list.addEventListener("mousedown", e => {
     const el = e.target.closest(".search-select-option");
-    if (el) { e.preventDefault(); choose(parseInt(el.dataset.i)); }
+    if (!el) return;
+    e.preventDefault();
+    if (el.dataset.extra) runExtra(el.dataset.extra);
+    else choose(parseInt(el.dataset.i));
   });
 }
 
@@ -4581,7 +4608,7 @@ async function quickAddItem(opts) {
     if (!form.category) { error = "Pick the new item's group."; continue; }
     try {
       const item = await apiFetch("/api/stock-items/", { method: "POST", body: JSON.stringify({ code: form.code, title: form.title, category: form.category,
-        [opts.side === "vendor" ? "cost_price" : "selling_price"]: form.price, created_via: "ai-scan" }) });
+        [opts.side === "vendor" ? "cost_price" : "selling_price"]: form.price, created_via: opts.createdVia || "ai-scan" }) });
       toast(`${item.code} added to Stock Items`);
       return { item, created: true };
     } catch (e) { error = e.message; }
@@ -5170,4 +5197,25 @@ function cardSendFromHtml(d) {
     <div class="ent" style="grid-template-columns:1fr;"><select onchange="ContactCards.set('email_from_id', null, null, this.value ? parseInt(this.value) : null)" style="max-width:320px;">
       <option value="">The default for each kind of email</option>
       ${cardSenders.map(s => `<option value="${s.id}" ${s.id === cur ? "selected" : ""}>${escapeHtml(s.address)}</option>`).join("")}</select></div></div>`;
+}
+
+
+// "+ Create Item" from a line's item picker (POs, customer orders): the quick-add pop-up, then the new item fills the line.
+async function createItemForPicker(text, select, side, items, groups) {
+  const looksLikeCode = /^[A-Za-z0-9][\w\-\/.]*$/.test(text) && !/\s/.test(text);
+  const got = await quickAddItem({ side, heading: "New Item", code: looksLikeCode ? text.toUpperCase() : "", title: looksLikeCode ? "" : text,
+    items, groups: (groups || []).map(g => g.name || g), createdVia: "line-entry" });
+  if (!got || !got.item) return null;
+  const it = got.item;
+  if (!Array.from(select.options).some(o => o.value === String(it.id))) {
+    const o = document.createElement("option");
+    o.value = it.id; o.dataset.cost = it.cost_price || 0; o.dataset.price = it.selling_price || 0;
+    o.textContent = `${it.code} — ${it.title}`;
+    select.appendChild(o);
+    if (Array.isArray(items)) items.push(it);
+  }
+  select.value = String(it.id);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  toast(`${got.created ? "Created" : "Picked"} ${it.code}`);
+  return it;
 }

@@ -445,9 +445,13 @@
           <table class="compact-table no-table-tools va-table"><thead><tr><th>SO #</th><th>PO</th><th>Invoices</th><th>PO Status</th></tr></thead><tbody>
           ${info.map(({ x }) => `<tr><td>${esc(x.so_number)}</td><td>${x.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : ""}</td>
             <td class="small">${x.bill_ids.map((id, i) => refLink(id, x.invoices[i] || "—")).join(", ")}</td><td>${esc((x.po_status || "").replace("_", " "))}</td></tr>`).join("")}</tbody></table></details>` : "";
-      if (!rows.length) return `<p class="va-ok">Nothing to check — every SO adds up ✓</p>${infoHtml}`;
+      const unc = (V.unapplied_charges || []).filter(c => !c.past);
+      const chargesHtml = unc.length ? `<div class="va-problem"><strong>⚠ ${unc.length} charge${unc.length === 1 ? "" : "s"} not in any item's cost yet</strong>
+          <div class="small" style="margin-top:4px;">${unc.map(c => `${esc(c.charge_type)} ${m(c.amount)} on <a class="link" href="purchase-orders.html?id=${c.po_id}">${esc(c.po_code)}</a>${c.has_lines ? "" : " (charges-only PO — apply it to the goods it was for)"}`).join("<br>")}</div>
+          <p class="muted small" style="margin:4px 0 0;">Open the PO and use <strong>Apply To…</strong> on the charge, so the goods' unit cost includes it.</p></div>` : "";
+      if (!rows.length) return (chargesHtml || `<p class="va-ok">Nothing to check — every SO adds up ✓</p>`) + infoHtml;
       const btn = (x, a, label, cls = "secondary") => `<button class="${cls} small-btn" onclick="soAnswer('${esc(x.so_number)}', '${a}')">${label}</button>`;
-      return rows.map(({ x, p }) => `<div class="va-problem">
+      return chargesHtml + rows.map(({ x, p }) => `<div class="va-problem">
           <div class="row" style="align-items:flex-start;"><div style="flex:1;"><strong>⚠ SO ${esc(x.so_number)}</strong>${x.po_code ? ` · <a class="link" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : ""}
             · invoices ${x.bill_ids.map((id, i) => refLink(id, x.invoices[i] || "—")).join(", ")}<br>${esc(p.text)}</div></div>
           <div class="btn-row" style="margin-top:6px;">${p.kind === "over_so" ? `<button class="small-btn" onclick="overPop(${p.bill_id})">Say What The Extra Is</button>` :

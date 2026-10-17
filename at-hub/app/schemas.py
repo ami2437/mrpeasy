@@ -876,7 +876,8 @@ class PurchaseOrderCreate(BaseModel):
     expected_date: Optional[datetime] = None
     vendor_so_number: Optional[str] = None  # the vendor's sales order / confirmation #
     notes: Optional[str] = None
-    lines: List[PurchaseOrderLineCreate]
+    lines: List[PurchaseOrderLineCreate] = []
+    charges_only: bool = False  # a freight / customs invoice: no item lines, its charges are added right after
 
 
 class PurchaseOrderLineResponse(BaseModel):
@@ -886,6 +887,7 @@ class PurchaseOrderLineResponse(BaseModel):
     unit_cost: float
     received_quantity: float
     landed_cost_per_unit: float = 0
+    landed_parts: List[dict] = []  # [{code, cost_type, per_unit}]: purchase + each landed cost = landed unit cost
     vendor_item_code: Optional[str] = None
     vendor_description: Optional[str] = None
     notes: Optional[str] = None
@@ -929,6 +931,11 @@ class PurchaseOrderChargeResponse(PurchaseOrderChargeInput):
     id: int
     po_id: int
     bill_number: Optional[str] = None
+    landed_cost_id: Optional[int] = None  # the landed cost carrying it into the goods' cost
+    landed_cost_code: Optional[str] = None
+    lc_split: Optional[str] = None
+    lc_status: Optional[str] = None  # skip = left as a PO cost only
+    applied_po_ids: List[int] = []
     created_by: Optional[str] = None
     created_at: datetime
 
@@ -1212,12 +1219,14 @@ class LandedCostInput(BaseModel):
     reference: Optional[str] = None
     cost_date: Optional[datetime] = None
     notes: Optional[str] = None
-    po_ids: List[int]  # purchase orders to spread the amount over, by line quantity
+    po_ids: List[int]  # purchase orders to spread the amount over
+    split: Optional[str] = None  # quantity (default) | value
 
 
 class LandedCostPreviewRequest(BaseModel):
     amount: float
     po_ids: List[int]
+    split: Optional[str] = None
 
 
 class LandedCostAllocationResponse(BaseModel):
@@ -1242,6 +1251,9 @@ class LandedCostResponse(BaseModel):
     reference: Optional[str] = None
     cost_date: Optional[datetime] = None
     notes: Optional[str] = None
+    split: Optional[str] = None
+    source_charge_id: Optional[int] = None
+    source_po_id: Optional[int] = None  # the PO whose charge this landed cost carries
     created_by: Optional[str] = None
     created_at: datetime
     allocations: List[LandedCostAllocationResponse] = []
