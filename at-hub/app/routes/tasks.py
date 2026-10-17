@@ -22,6 +22,9 @@ def _suggestions(db: Session) -> dict:
     vendors = dict(db.query(Vendor.id, Vendor.name).all())
     for po in db.query(PurchaseOrder).filter(PurchaseOrder.status != "cancelled").all():
         vendor = vendors.get(po.vendor_id, "")
+        if po.created_from == "vendor-account" and po.status == "validation":
+            out[f"va-po:{po.code}"] = ("Purchase orders", f"Fill in {po.code} for SO {po.vendor_so_number or '-'}",
+                                       f"{vendor}: made from the Vendor Account -- add the lines and validate it.", f"purchase-orders.html?id={po.id}")
         for b in po.bills:
             if b.amount < 0.005:
                 out[f"bill-amount:{po.code}:{b.bill_number}"] = (
@@ -36,6 +39,17 @@ def _suggestions(db: Session) -> dict:
                 f"{vendor} · invoices {', '.join(b.bill_number for b in po.bills)} · ${billed:,.2f} billed, ${paid:,.2f} recorded. "
                 "Check the PO's Payment Status in MRPeasy (Paid / Unpaid / partly) and enter each payment with its date.",
                 f"purchase-orders.html?id={po.id}")
+    try:  # Vendor Accounts: SOs that don't add up (invoiced over the SO, received but SO says more, ...)
+        from app.models import VacctAccount
+        from app.services import vendor_accounts
+        for acc in db.query(VacctAccount).all():
+            n = vendor_accounts.view(db, acc.id)["totals"]["problems"]
+            if n:
+                out[f"va-problems:{acc.vendor_code}"] = ("Vendor accounts", f"Check {n} thing{'s' if n != 1 else ''} in the {acc.vendor_name} Vendor Account",
+                                                         "SOs that don't add up -- the Problems tab says what and asks what happened.",
+                                                         f"vendor-accounts.html?id={acc.id}")
+    except Exception:
+        pass
     with_po = {a.entity_id for a in db.query(Attachment).filter(Attachment.entity_type == "customer_order", Attachment.category == "customer_po").all()}
     for o in db.query(CustomerOrder).filter(CustomerOrder.status != "cancelled").all():
         if o.id not in with_po and o.po_number:

@@ -136,7 +136,8 @@ def test_their_sheet_loads_with_every_recovery_worked_out(api, make, client, adm
     # the sheet: billed 14,600 incl. the two recoveries counted twice (1,000 + 2,200); received 12,400 + 2,200 cash recd ...
     assert c["matches"] and c["owed"] == c["sheet_owed"] and c["double_counted"] == 3200 and c["true_billed"] == c["sheet_billed"] - 3200
     assert c["credit"] == 200          # the over-collection on AB/20 (cash due 2,000, 2,200 came in)
-    assert len(plan["bills"]) == 8 and not plan["warnings"]
+    assert len(plan["bills"]) == 8 and [w for w in plan["warnings"] if "more than SO" not in w] == []
+    assert any("more than SO 10/25-26" in w for w in plan["warnings"])   # AB/2 goods put SO 10 over: AT-HUB will ask
     by_row = {b["row"]: b for b in plan["bills"]}
     assert by_row[4]["paper_amount"] == 1300 and by_row[4]["wire_due"] == 300 and by_row[4]["goods"] == 300   # AB/12: $1,000 of old cash inside
     assert by_row[7]["paper_amount"] == 2300 and by_row[7]["wire_due"] == 100
@@ -404,3 +405,106 @@ def test_notes_on_lines_and_completed_invoices(api, make, client):
     db = SessionLocal()
     assert db.query(VacctNote).filter(VacctNote.target == "payment", VacctNote.target_id == p["id"]).count() == 0
     db.close()
+
+
+
+def _po_received(api, make, vendor, so, qty, cost):
+    item = make.item()
+    po = make.po(vendor=vendor, lines=[(item, qty, cost)], vendor_so_number=so)
+    api.post(f"/api/purchase-orders/{po['id']}/mark-ordered")
+    api.post(f"/api/purchase-orders/{po['id']}/receive", json={"lines": [{"line_id": po["lines"][0]["id"], "quantity": qty}]})
+    return po
+
+
+def test_so_problems_are_caught_and_answered(api, make):
+    """Over the SO -> ask what the extra is (customs moves out of the goods); everything received, invoiced and paid but
+    the SO says more -> ask (reduced sets the SO to what was received); editing the SO amount sets every invoice of it."""
+    v, _, aid = _account(api, make)
+    # SO 90: planned $19,500, the PO came to $18,408 (received in full), invoiced and paid at $18,408
+    _po_received(api, make, v, "90/25-26", 18408, 1)
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "90/25-26", "so_amount": 19500, "bill_number": "IF/47", "goods": 18408, "cash_due": 0})
+    so = next(x for x in view["sos"] if x["so_number"] == "90/25-26")
+    assert so["actual"] == 18408 and so["not_invoiced"] == 0 and so["po_code"]
+    view = api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 18408})
+    so = next(x for x in view["sos"] if x["so_number"] == "90/25-26")
+    assert [p["kind"] for p in so["problems"]] == ["so_mismatch"] and view["totals"]["problems"] == 1
+    view = api.post(f"/api/vendor-accounts/{aid}/sos/answer", json={"so_number": "90/25-26", "answer": "reduced"})
+    so = next(x for x in view["sos"] if x["so_number"] == "90/25-26")
+    assert so["so_amount"] == 18408 and so["planned"] == 19500 and not so["problems"]
+    # GR1/63: SO $610, invoiced $1,090 -> the extra $480 is customs
+    view = api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR1/63", "so_amount": 610, "bill_number": "GR1/63", "goods": 1090, "cash_due": 0})
+    b = _bill(view, "GR1/63")
+    assert [p["kind"] for p in b["problems"]] == ["over_so"] and b["problems"][0]["amount"] == 480
+    view = api.post(f"/api/vendor-accounts/{aid}/bills/{b['id']}/over", json={"kind": "customs"})
+    b = _bill(view, "GR1/63")
+    assert (b["goods"], b["customs"], b["total"], b["wire_due"]) == (610, 480, 1090, 1090) and not b["problems"] and b["over_answer"] == "customs"
+    # edit the SO amount once for every invoice of the SO
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR/17", "so_amount": 30000, "bill_number": "GR1/61", "goods": 2250, "cash_due": 0})
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR/17", "so_amount": 30000, "bill_number": "GR1/64", "goods": 1000, "cash_due": 0})
+    r = api.put(f"/api/vendor-accounts/{aid}/sos", json={"so_number": "GR/17", "so_amount": 36365})
+    assert r["change"] == {"so_number": "GR/17", "before": 30000, "after": 36365}
+    assert {b["so_amount"] for b in r["bills"] if b["so_number"] == "GR/17"} == {36365}
+    # a paid invoice of an SO with more to bill stays open
+    ids = [x["id"] for x in r["bills"] if x["so_number"] == "GR/17"]
+    view = api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 3250, "for_bill_ids": ids})
+    g = _bill(view, "GR1/61")
+    assert g["balance"] == 0 and g["so_to_bill"] == 33115 and not g["completed"]
+
+
+def test_draft_pos_from_the_account_are_linked_tasked_and_kept(api, make):
+    from app.config.database import SessionLocal
+    v, _, aid = _account(api, make)
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "GR1/14/26-27", "so_amount": 23900, "bill_number": "GR1/48/26-27",
+                                                        "goods": 23900, "freight": 1112, "cash_due": 11950})
+    api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 13062})
+    r = api.post(f"/api/vendor-accounts/{aid}/create-pos", json={"so_numbers": ["GR1/14/26-27"]})
+    po = r["made"][0]
+    b = _bill(r["view"], "GR1/48/26-27")
+    assert b["po_code"] == po["po_code"]
+    got = api.get(f"/api/purchase-orders/{po['po_id']}")
+    assert got["status"] == "validation" and got["vendor_so_number"] == "GR1/14/26-27" and "Vendor Account" in got["notes"]
+    db = SessionLocal()
+    pays = db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == po["po_id"]).all()
+    assert round(sum(x.amount for x in pays), 2) == 13062            # the account's payment is on the new PO
+    assert db.query(VendorBill).filter(VendorBill.po_id == po["po_id"]).one().amount == 25012
+    db.close()
+    tasks = api.get("/api/tasks/")
+    assert any(t["key"] == f"va-po:{po['po_code']}" and t["status"] == "open" for t in tasks)
+    assert api.post(f"/api/vendor-accounts/{aid}/create-pos", json={"so_numbers": ["GR1/14/26-27"]})["made"] == []   # once
+    # the View pop-up on the PO
+    fp = api.get(f"/api/vendor-accounts/for-po/{po['po_id']}")
+    assert fp["account"]["id"] == aid and [x["bill_number"] for x in fp["bills"]] == ["GR1/48/26-27"] and len(fp["payments"]) == 1
+
+
+def test_a_po_saved_with_the_so_links_at_once(api, make):
+    """A PO typed by hand with the account's SO # gets the account's invoice and payments the moment it's saved."""
+    from app.config.database import SessionLocal
+    v, _, aid = _account(api, make)
+    api.post(f"/api/vendor-accounts/{aid}/bills", json={"so_number": "LK/5/26-27", "bill_number": "LK/9", "goods": 500, "cash_due": 0})
+    api.post(f"/api/vendor-accounts/{aid}/payments", json={"kind": "wire", "amount": 500})
+    po = make.po(vendor=v, lines=[(make.item(), 5, 100)], vendor_so_number="LK/5/26-27")
+    db = SessionLocal()
+    assert round(sum(x.amount for x in db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id == po["id"])), 2) == 500
+    db.close()
+
+
+def test_import_keeps_pos_made_from_a_vendor_account(tmp_path):
+    from app.importers.mrpeasy.keep import keep_independent
+    from app.models import PurchaseOrderLine, StockItem
+    live_p, new_p = tmp_path / "live.db", tmp_path / "import.db"
+    e1, live = _db(live_p)
+    e2, new = _db(new_p)
+    live.add_all([Vendor(id=1, code="V00005", name="Akbar"), StockItem(id=3, code="BOLT-1", title="bolt"),
+                  PurchaseOrder(id=9, code="PO325400", vendor_id=1, vendor_so_number="GR1/14/26-27", status="validation", created_from="vendor-account")])
+    live.add(PurchaseOrderLine(po_id=9, position=0, item_id=3, quantity=10, unit_cost=2.5))
+    live.commit()
+    new.add_all([Vendor(id=11, code="V00005", name="Akbar"), StockItem(id=30, code="BOLT-1", title="bolt")])
+    new.commit()
+    live.close(); new.close(); e1.dispose(); e2.dispose()
+    kept = keep_independent(new_p, live_p)
+    assert kept["POs made from Vendor Accounts"] == 1
+    e3, chk = _db(new_p)
+    po = chk.query(PurchaseOrder).filter(PurchaseOrder.code == "PO325400").one()
+    assert po.vendor_id == 11 and po.status == "validation"
+    assert [(l.item_id, l.quantity) for l in chk.query(PurchaseOrderLine).filter(PurchaseOrderLine.po_id == po.id)] == [(30, 10)]
+    chk.close(); e3.dispose()

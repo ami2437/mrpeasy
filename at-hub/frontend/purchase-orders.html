@@ -646,6 +646,7 @@
       card.innerHTML = `
         <h3 class="detail-head" style="margin-top:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} ${poStatusTag(order, true)}
           ${order.vendor_so_number ? `<span class="muted small" style="font-weight:400;">Vendor SO # ${escapeHtml(order.vendor_so_number)}</span>` : ""}
+          ${vaFor(order.vendor_id) ? `<button class="secondary small-btn" style="font-weight:400;" onclick="vaView(${order.id})" title="What this vendor's Vendor Account holds for this PO">Vendor Account</button>` : ""}
           <span class="file-strip" id="po-file-strip" style="margin-left:auto;"></span>
           ${order.status !== "cancelled" ? aiValidateButton("po", order.id) : ""}
           <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this PO (internal view)">Print</button></h3>
@@ -886,6 +887,34 @@
         <td class="small">${escapeHtml([TypeLists.label("payment_method", v.method), v.reference].filter(Boolean).join(" · "))}${v.note ? `<div class="muted">${escapeHtml(v.note)}</div>` : ""}</td>
         <td>${!v.applications.length ? `<a class="link small" onclick="deleteVendorPayment(${v.id})">Delete</a>` : ""}</td>
       </tr>`).join("") : `<tr><td colspan="9" class="muted">No Vendor Payments Recorded Yet.</td></tr>`;
+    }
+    // read-only: this PO's SO / invoices / payments in the vendor's Vendor Account (vendor-accounts.html)
+    async function vaView(poId) {
+      const back = document.createElement("div");
+      back.className = "modal-backdrop";
+      back.innerHTML = `<div class="modal" style="max-width:960px; width:calc(100% - 32px);"><p class="muted">Loading…</p></div>`;
+      back.addEventListener("click", e => { if (e.target === back) back.remove(); });
+      document.body.appendChild(back);
+      const box = back.querySelector(".modal");
+      try {
+        const r = await apiFetch(`/api/vendor-accounts/for-po/${poId}`);
+        if (!r.account) { box.innerHTML = `<p>This vendor has no Vendor Account.</p><div class="btn-row"><button onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`; return; }
+        const m = fmtMoney, esc = escapeHtml;
+        const so = r.sos[0];
+        box.innerHTML = `<h3 style="margin-top:0;">Vendor Account — ${esc(r.account.vendor_name)}</h3>
+          ${r.bills.length ? `${so ? `<p class="muted" style="margin:0 0 8px;">SO <strong>${esc(so.so_number || "—")}</strong>${so.so_amount != null ? ` · SO ${m(so.so_amount)}` : ""}${so.not_invoiced > 0.005 ? ` · <span class="va-rec">${m(so.not_invoiced)} not invoiced yet</span>` : ""} · owed on its invoices ${m(so.balance)}</p>
+            ${so.problems.map(p => `<div class="va-note">${p.info ? "" : "⚠ "}${esc(p.text)}</div>`).join("")}` : ""}
+            <table class="compact-table no-table-tools"><thead><tr><th>Invoice</th><th class="num">Invoiced</th><th class="num">Wire Due / Paid</th><th class="num">Cash Due / Paid</th><th class="num">Balance</th><th>Paid By</th></tr></thead><tbody>
+              ${r.bills.map(b => `<tr><td>${esc(b.bill_number || "—")}${b.freight || b.customs || b.other || b.recovery_in > 0.005 ? `<br><span class="small muted">Goods ${m(b.goods)}${b.freight ? " · Freight " + m(b.freight) : ""}${b.customs ? " · Customs " + m(b.customs) : ""}${b.other ? " · Other " + m(b.other) : ""}${b.recovery_in > 0.005 ? " · other invoices' cash " + m(b.recovery_in) : ""}</span>` : ""}</td>
+                <td class="num">${m(b.paper_amount != null ? b.paper_amount : b.total)}</td><td class="num">${m(b.wire_due)}<br><span class="small muted">${m(b.wire_paid)}</span></td>
+                <td class="num">${m(b.cash_due)}<br><span class="small muted">${m(b.cash_paid)}</span></td><td class="num ${b.balance > 0.005 ? "neg" : ""}">${m(b.balance)}</td>
+                <td class="small">${b.paid_by.map(x => `${esc(x.payment_code || "")} ${x.kind === "wire" ? "wire " + esc(x.reference || "") : "cash"} ${m(x.amount)}${x.paid_date ? " · " + fmtDate(x.paid_date) : ""}`).join("<br>") || "—"}</td></tr>`).join("")}</tbody></table>
+            ${r.bills.some(b => b.notes) ? `<p class="small muted">Notes on these invoices: open the account to read them.</p>` : ""}`
+          : `<p>Nothing in the account matches this PO yet${r.account ? " (by its Vendor SO # or invoice #)" : ""}.</p>`}
+          <div class="btn-row" style="margin-top:12px;"><a class="link" href="vendor-accounts.html?id=${r.account.id}">Open The Vendor Account</a><span style="flex:1"></span>
+            <button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`;
+        decorateIcons(box);
+      } catch (e) { box.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
     }
     function vpVendorHint() {
       const id = parseInt(document.getElementById("vp-vendor").value);

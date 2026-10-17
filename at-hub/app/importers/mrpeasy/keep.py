@@ -6,6 +6,8 @@ keep_independent() copies, from the live at_hub.db into the freshly built import
     comments, ignored lines, projections, reconciles ... -- any acct_* table added later is kept automatically)
   - app_settings rows whose key starts with "acct_" (partner split, year settings, dismissed rule suggestions ...)
   - every vacct_* table (Vendor Accounts: wire + cash vendors -- bills, payments, what each paid; keyed by codes)
+  - POs made from a Vendor Account (created_from = "vendor-account") with their lines -- the user creates them before
+    go-live for SOs MRPeasy doesn't have (vendor and items found again by code)
   - vendor payments typed in AT-HUB (vendor_payments) and what they were applied to, re-pointed by vendor / PO code
     (user, 2026-10-16: a payment recorded on the site was lost by an import -- never again)
 Same ids, so nothing inside Accounting changes. The only Accounting rows that point at MRPeasy records are AP / AR notes
@@ -61,6 +63,7 @@ def keep_independent(target: Path, live: Path, rep=None) -> Dict[str, int]:
         con.execute(f"insert into main.app_settings ({sl}) select {sl} from live.app_settings where key like ?", (SETTING_PREFIX + "%",))
         out["app_settings (acct_*)"] = con.execute("select count(*) from main.app_settings where key like ?", (SETTING_PREFIX + "%",)).fetchone()[0]
         dropped = repoint_open_items(con)
+        out.update(keep_va_pos(con, dropped))
         vp, vp_dropped = keep_vendor_payments(con)
         out.update(vp)
         dropped += vp_dropped
@@ -74,7 +77,7 @@ def keep_independent(target: Path, live: Path, rep=None) -> Dict[str, int]:
     if rep:
         rep.add("kept", "Accounting, Vendor Accounts and vendor payments kept from the live database: " + ", ".join(f"{t} {n}" for t, n in out.items()))
         for d in dropped:
-            what = "Vendor payment" if d[0] in ("vendor", "po") else "AP / AR note"
+            what = {"vendor": "Vendor payment / PO", "po": "Vendor payment", "item": "PO line", "receipt": "PO receipt"}.get(d[0], "AP / AR note")
             rep.add("kept", f"{what} dropped -- its {d[0]} {d[1]} isn't in the new import")
     return out
 
@@ -100,6 +103,42 @@ def _dicts(con, sql, args=()):
     cur = con.execute(sql, args)
     names = [d[0] for d in cur.description]
     return [dict(zip(names, row)) for row in cur.fetchall()]
+
+
+def keep_va_pos(con: sqlite3.Connection, dropped: list) -> Dict[str, int]:
+    """POs made from a Vendor Account that the import doesn't have: copied over with their lines (vendor / items by code).
+    Receipts on them are not copied (the import's stock is MRPeasy's) -- reported."""
+    if "created_from" not in _cols(con, "live", "purchase_orders") or "created_from" not in _cols(con, "main", "purchase_orders"):
+        return {}
+    pcols = [c for c in _cols(con, "live", "purchase_orders") if c in set(_cols(con, "main", "purchase_orders")) and c != "id"]
+    lcols = [c for c in _cols(con, "live", "purchase_order_lines") if c in set(_cols(con, "main", "purchase_order_lines")) and c not in ("id", "po_id")]
+    n = 0
+    for po in _dicts(con, "select p.*, v.code as _vcode from live.purchase_orders p left join live.vendors v on v.id = p.vendor_id "
+                          "where p.created_from = 'vendor-account'"):
+        if con.execute("select 1 from main.purchase_orders where code = ?", (po["code"],)).fetchone():
+            continue
+        vend = con.execute("select id from main.vendors where code = ?", (po["_vcode"],)).fetchone() if po["_vcode"] else None
+        if not vend:
+            dropped.append(("vendor", f"{po['_vcode']} (PO {po['code']} made from the Vendor Account)"))
+            continue
+        po["vendor_id"] = vend[0]
+        if po.get("status") in ("received", "partially_received", "shipped"):
+            po["status"] = "ordered"  # its receipts aren't carried
+        con.execute(f"insert into main.purchase_orders ({', '.join(pcols)}) values ({', '.join('?' for _ in pcols)})", [po[c] for c in pcols])
+        new_id = con.execute("select id from main.purchase_orders where code = ?", (po["code"],)).fetchone()[0]
+        for ln in _dicts(con, "select l.*, i.code as _icode from live.purchase_order_lines l left join live.stock_items i on i.id = l.item_id "
+                              "where l.po_id = ?", (po["id"],)):
+            item = con.execute("select id from main.stock_items where code = ?", (ln["_icode"],)).fetchone() if ln["_icode"] else None
+            if not item:
+                dropped.append(("item", f"{ln['_icode']} (a line of {po['code']})"))
+                continue
+            if (ln.get("received_quantity") or 0) > 0:
+                dropped.append(("receipt", f"{po['code']}: received stock isn't carried -- receive it again"))
+            ln["item_id"], ln["po_id"], ln["received_quantity"] = item[0], new_id, 0
+            cols = lcols + ["po_id"]
+            con.execute(f"insert into main.purchase_order_lines ({', '.join(cols)}) values ({', '.join('?' for _ in cols)})", [ln[c] for c in cols])
+        n += 1
+    return {"POs made from Vendor Accounts": n} if n else {}
 
 
 def keep_vendor_payments(con: sqlite3.Connection):

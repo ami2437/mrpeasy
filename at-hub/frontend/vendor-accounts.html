@@ -69,6 +69,29 @@
     .va-notebtn.has { color: var(--accent); font-weight: 600; }
     .va-noteline { border-left: 3px solid var(--border); padding: 4px 8px; margin: 4px 0; }
     .va-modal.wide .modal { max-width: 1000px; }
+    .va-break { margin-top: 2px; white-space: normal; }
+    .va-sub { display: block; white-space: normal; }
+    .va-scroll thead th { white-space: normal; vertical-align: bottom; }
+    .va-scroll thead th.num { max-width: 110px; overflow: visible; text-overflow: clip; }
+    .va-table td, .va-table th { padding-left: 6px; padding-right: 6px; }
+    .va-soamt { cursor: pointer; border-bottom: 1px dashed var(--border-strong); }
+    .va-soamt .va-pen { opacity: 0; font-size: 11px; }
+    .va-soamt:hover { color: var(--accent); }
+    .va-soamt:hover .va-pen { opacity: 1; }
+    .va-soinput { width: 110px; padding: 2px 6px; font-size: 13px; }
+    .va-moved { display: inline-block; min-width: 18px; text-align: center; border-radius: 5px; font-weight: 700; cursor: pointer;
+                color: var(--va-rec); background: var(--surface-2); border: 1px solid var(--border); }
+    .va-moved.pending { background: var(--va-on-bg); color: var(--va-on-fg); border-color: var(--va-hl-edge); }
+    .va-table tr.va-moved-row td:first-child { box-shadow: inset 3px 0 0 var(--border-strong); }
+    .va-table tr.va-moved-row.pending td { background: color-mix(in srgb, var(--va-hl) 60%, transparent); }
+    .va-table tr.va-moved-row.pending td:first-child { box-shadow: inset 3px 0 0 var(--va-hl-edge); }
+    .va-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+    .va-filter { cursor: pointer; padding: 3px 10px; border-radius: 14px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+    .va-filter.on { background: var(--va-on-bg); color: var(--va-on-fg); border-color: var(--va-hl-edge); }
+    .va-check { cursor: pointer; font-size: 11px; }
+    .va-warn { border-color: var(--va-owed) !important; }
+    .va-problem { border: 1px solid var(--border); border-left: 4px solid var(--va-owed); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; background: var(--surface); }
+    .va-answers { display: flex; gap: 8px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -96,7 +119,7 @@
     AuthGuard.requirePerm("vendor_accounts");
     document.getElementById("sidebar").innerHTML = renderSidebar("vendor-accounts.html");
 
-    let accounts = [], V = null, TAB = "invoices", HL = null, Q = "";
+    let accounts = [], V = null, TAB = "invoices", HL = null, Q = "", MOVED = false;
     const store = { get: k => { try { return localStorage.getItem("va." + k); } catch { return null; } },
                     set: (k, v) => { try { localStorage.setItem("va." + k, v); } catch {} } };
     const m = n => fmtMoney(n || 0);
@@ -253,6 +276,7 @@
       const tabs = [["invoices", `Invoices (${terms.length ? nInv + " of " : ""}${V.bills.length})`], ["payments", `Payments (${terms.length ? nPay + " of " : ""}${V.payments.length})`],
                     ["sos", `By SO (${terms.length ? nSo + " of " : ""}${V.sos.length})`], ["cash", `Open Cash (${V.open_cash.length})`], ["timeline", "Timeline"]];
       if (t.review) tabs.push(["review", `Needs Mapping (${t.review})`]);
+      if (t.problems || t.to_receive) tabs.push(["problems", t.problems ? `⚠ Problems (${t.problems})` : `Checks (${t.to_receive})`]);
       document.getElementById("acc-view").innerHTML = `
         <div class="card">
           <div class="row" style="align-items:center;">
@@ -268,6 +292,8 @@
             ${tile("True Billed", m(t.total), t.recovery_in > 0.005 ? `Invoiced ${m(t.paper)}` : "")}
             ${tile("Paid", m(t.paid), `Wire ${m(t.wire_sent)} · Cash ${m(t.cash_handed)}`, "", "TAB='payments';render()")}
           </div>
+          ${t.problems ? `<div class="va-note va-warn"><strong>⚠ ${t.problems} SO${t.problems === 1 ? "" : "s"} don't add up</strong> — invoiced over the SO,
+            or received / paid but the SO says something else. <a class="link" onclick="TAB='problems';render()">See what and answer</a></div>` : ""}
           ${t.review ? `<div class="va-note"><strong>${t.review} payment${t.review === 1 ? "" : "s"} recorded on another screen</strong> came in here and need a look
             (wire or cash? which invoices?). <a class="link" onclick="TAB='review';render()">Check them</a></div>` : ""}
           <div class="va-tools">
@@ -286,7 +312,7 @@
             ${Q ? `<a class="link small" onclick="Q='';render()">Clear</a>` : ""}</div>
           <div class="tabs">${tabs.map(([k, l]) => `<div class="tab ${TAB === k ? "active" : ""}" onclick="TAB='${k}';render()">${l}</div>`).join("")}</div>
           <div id="va-tab">${TAB === "invoices" ? invoicesHtml(terms) : TAB === "sos" ? sosHtml(terms) : TAB === "payments" ? paymentsHtml(terms) :
-                             TAB === "review" ? paymentsHtml(terms, true) : TAB === "timeline" ? timelineHtml(terms) : openCashHtml(terms)}</div>
+                             TAB === "review" ? paymentsHtml(terms, true) : TAB === "timeline" ? timelineHtml(terms) : TAB === "problems" ? problemsHtml() : openCashHtml(terms)}</div>
         </div>
         <div id="va-hlpill" class="va-hlpill" style="display:none;"></div>`;
       decorateIcons(document.getElementById("acc-view"));
@@ -349,10 +375,11 @@
       if (b.freight) parts.push(`Freight ${m(b.freight)}`);
       if (b.customs) parts.push(`Customs ${m(b.customs)}`);
       if (b.other) parts.push(`Other ${m(b.other)}`);
-      const el = modal(`<h3 style="margin:0;">Invoice ${esc(b.bill_number || "—")} <span class="muted small">SO ${esc(b.so_number || "—")}</span></h3>
+      const back = document.querySelectorAll(".va-modal").length ? `<a class="link small" onclick="this.closest('.modal-backdrop').remove()">← Back</a> ` : "";
+      const el = modal(`${back}<h3 style="margin:0;">${movedIcon(b)} Invoice ${esc(b.bill_number || "—")} <span class="muted small">SO ${esc(b.so_number || "—")}</span></h3>
         <p class="muted" style="margin:4px 0 10px;">${b.po_code ? `PO <a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}">${esc(b.po_code)}</a>` : "No PO in AT-HUB yet"}
           ${b.bill_date ? ` · invoice date ${fmtDate(b.bill_date)}` : b.po_date ? ` · PO date ${fmtDate(b.po_date)}` : ""}
-          ${x && x.so_amount != null ? ` · SO ${m(x.so_amount)}${x.not_invoiced > 0.005 ? ` (${m(x.not_invoiced)} not invoiced yet)` : ""}` : ""}</p>
+          ${x ? ` · ${soAmt(x)}${x.not_invoiced > 0.005 ? ` (${m(x.not_invoiced)} not invoiced yet)` : ""}` : ""}</p>
         <div class="stat-row" style="margin:0 0 10px;">
           <div class="stat"><div class="stat-label">Invoiced Amount</div><div class="stat-value">${m(b.paper_amount != null ? b.paper_amount : b.total)}</div>${b.recovery_in > 0.005 ? `<div class="stat-sub">True ${m(b.total)} + ${m(b.recovery_in)} Of Other Invoices' Cash</div>` : ""}</div>
           <div class="stat"><div class="stat-label">Wire Due / Paid</div><div class="stat-value">${m(b.wire_due)}</div><div class="stat-sub">Paid ${m(b.wire_paid)}</div></div>
@@ -360,8 +387,10 @@
           <div class="stat"><div class="stat-label">Balance</div><div class="stat-value ${b.balance > 0.005 ? "va-owed" : "va-ok"}">${b.balance > 0.005 ? m(b.balance) : "Paid ✓"}</div></div>
         </div>
         <p class="small" style="margin:0 0 6px;"><strong>True amount ${m(b.total)}</strong> — ${parts.join(" · ")}</p>
-        ${b.carried_in.map(c => `<div class="va-rec small">Includes ${m(c.amount)} of ${esc(c.for || "")}'s cash${c.pending > 0.005 ? ` — ${m(c.pending)} still to come with this invoice's wire` : " — paid ✓"}</div>`).join("")}
-        ${b.moved_out.map(o => `<div class="va-rec small">${m(o.amount)} of this invoice's cash was billed on ${esc(o.to || "")}${o.pending > 0.005 ? ` — ${m(o.pending)} comes with that invoice's wire` : " — paid ✓"}</div>`).join("")}
+        ${b.carried_in.map(c => `<div class="va-rec small">⇄ Includes ${m(c.amount)} of ${refLink(c.for_bill_id, c.for)}'s cash${c.pending > 0.005 ? ` — ${m(c.pending)} still to come with this invoice's wire` : " — paid ✓"}</div>`).join("")}
+        ${b.moved_out.map(o => `<div class="va-rec small">⇄ ${m(o.amount)} of this invoice's cash was billed on ${refLink(o.to_bill_id, o.to)}${o.pending > 0.005 ? ` — ${m(o.pending)} comes with that invoice's wire` : " — paid ✓"}</div>`).join("")}
+        ${(b.problems || []).map(p => `<div class="va-note va-warn small">⚠ ${esc(p.text)} <a class="link" onclick="this.closest('.modal-backdrop').remove(); overPop(${b.id})">Answer</a></div>`).join("")}
+        ${b.so_to_bill > 0.005 ? `<p class="small va-rec" style="margin:4px 0;">SO ${esc(b.so_number || "")} still has ${m(b.so_to_bill)} to invoice — this invoice stays open until it's all billed.</p>` : ""}
         <h4 style="margin:12px 0 4px;">Paid By</h4>
         ${b.paid_by.length ? `<table class="compact-table no-table-tools va-table"><thead><tr><th>Payment</th><th>Date</th><th>Type / Wire #</th><th>Part</th><th class="num">Applied</th><th class="num">Of A Payment Of</th></tr></thead><tbody>
           ${b.paid_by.map(r => `<tr><td>${chip(r)}</td><td>${r.paid_date ? fmtDate(r.paid_date) : `<span class="muted">—</span>`}</td>
@@ -375,6 +404,94 @@
           <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); deleteBill(${b.id})">Delete</button>
           <span style="flex:1"></span><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Close</button></div>`, "wide");
       notesBox(el.querySelector("[data-notes]"), "bill", b.id, opts.notes);
+    }
+
+    // ---- "this invoice is more than its SO -- what is the extra?" ----
+    function overPop(id) {
+      const b = billById(id);
+      const p = (b && b.problems || []).find(x => x.kind === "over_so");
+      if (!p) { if (b) invoicePop(id); return; }
+      const targets = V.bills.filter(x => x.id !== b.id && x.cash_left_own > 0.005);
+      const el = modal(`<h3 style="margin-top:0;">What Is The Extra On ${esc(b.bill_number || "")}?</h3>
+        <p>${esc(p.text)}</p>${breakdown(b)}
+        <div class="va-answers">
+          <button data-k="freight">Freight</button><button data-k="customs">Customs</button><button data-k="other">Other Charge</button>
+          <button data-k="price" class="secondary" title="The goods really cost more than the SO said">Price Went Up (Goods)</button>
+        </div>
+        <div style="margin-top:10px;"><label>Or it's cash owed on another invoice he's collecting:</label>
+          <div class="row" style="gap:8px; align-items:flex-end;"><select id="o-target" style="flex:1;"><option value="">— pick the invoice —</option>
+            ${targets.map(x => `<option value="${x.id}">${esc(billLabel(x))} · SO ${esc(x.so_number || "—")} · cash open ${m(x.cash_left_own)}</option>`).join("")}</select>
+            <button class="secondary" style="flex:0;" data-k="recovery">Cash Of That Invoice</button></div></div>
+        <p class="muted small">Freight / customs / other move the extra out of the goods into that charge (a real cost, paid by wire). Price keeps it in the goods.</p>
+        <div id="o-err" class="error"></div>
+        <div class="btn-row"><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Not Now</button></div>`);
+      el.querySelectorAll("[data-k]").forEach(btn => btn.onclick = async () => {
+        const kind = btn.dataset.k, target = el.querySelector("#o-target").value;
+        if (kind === "recovery" && !target) { el.querySelector("#o-err").textContent = "Pick the invoice whose cash it is."; return; }
+        try {
+          setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/bills/${b.id}/over`, { method: "POST", body: JSON.stringify({ kind, target_bill_id: target ? parseInt(target) : null }) }));
+          el.remove();
+          toast(`${b.bill_number}: saved as ${btn.textContent.trim().toLowerCase()} ✓`);
+        } catch (e) { el.querySelector("#o-err").textContent = e.message; }
+      });
+    }
+
+    // ---- SOs that don't add up: say what, ask what happened ----
+    function problemsHtml() {
+      const all = V.sos.flatMap(x => x.problems.map(p => ({ x, p })));
+      const rows = all.filter(r => !r.p.info), info = all.filter(r => r.p.info);
+      const infoHtml = info.length ? `<details class="va-done" ${store.get("done.recv") === "1" ? "open" : ""} ontoggle="store.set('done.recv', this.open ? '1' : '0')">
+          <summary>Paid But Not Received Yet (${info.length}) <span class="muted small">— usually old POs MRPeasy never received; the go-live close-out receives them</span></summary>
+          <table class="compact-table no-table-tools va-table"><thead><tr><th>SO #</th><th>PO</th><th>Invoices</th><th>PO Status</th></tr></thead><tbody>
+          ${info.map(({ x }) => `<tr><td>${esc(x.so_number)}</td><td>${x.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : ""}</td>
+            <td class="small">${x.bill_ids.map((id, i) => refLink(id, x.invoices[i] || "—")).join(", ")}</td><td>${esc((x.po_status || "").replace("_", " "))}</td></tr>`).join("")}</tbody></table></details>` : "";
+      if (!rows.length) return `<p class="va-ok">Nothing to check — every SO adds up ✓</p>${infoHtml}`;
+      const btn = (x, a, label, cls = "secondary") => `<button class="${cls} small-btn" onclick="soAnswer('${esc(x.so_number)}', '${a}')">${label}</button>`;
+      return rows.map(({ x, p }) => `<div class="va-problem">
+          <div class="row" style="align-items:flex-start;"><div style="flex:1;"><strong>⚠ SO ${esc(x.so_number)}</strong>${x.po_code ? ` · <a class="link" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : ""}
+            · invoices ${x.bill_ids.map((id, i) => refLink(id, x.invoices[i] || "—")).join(", ")}<br>${esc(p.text)}</div></div>
+          <div class="btn-row" style="margin-top:6px;">${p.kind === "over_so" ? `<button class="small-btn" onclick="overPop(${p.bill_id})">Say What The Extra Is</button>` :
+            p.kind === "so_mismatch" ? `${btn(x, "reduced", `The SO Was Reduced — Make It ${m(p.actual)}`, "")}${btn(x, "expecting", "Still Expecting An Invoice")}${btn(x, "other", "Something Else (Note)")}` :
+            p.kind === "received_not_invoiced" ? `${btn(x, "expecting", "Invoice Still To Come", "")}${btn(x, "other", "Something Else (Note)")}` :
+            `<a class="link small" href="purchase-orders.html?code=${encodeURIComponent(x.po_code || "")}">Open ${esc(x.po_code || "the PO")} to receive it</a>`}</div></div>`).join("")
+        + infoHtml + `<p class="muted small">Checks: invoiced more than the SO · received, invoiced and paid but the SO says more · received in full but not all invoiced · invoiced and paid but not received.</p>`;
+    }
+    async function soAnswer(so, answer) {
+      let note = null;
+      if (answer === "other") { note = prompt(`SO ${so}: what happened?`); if (note === null) return; }
+      try {
+        setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/sos/answer`, { method: "POST", body: JSON.stringify({ so_number: so, answer, note }) }));
+        toast(`SO ${so}: ${answer === "reduced" ? "SO amount set to what was received" : answer === "expecting" ? "kept open for the invoice to come" : "note saved"} ✓`, { label: "Undo", run: async () => {
+          setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/sos/answer`, { method: "POST", body: JSON.stringify({ so_number: so, answer: null }) }));
+        } });
+      } catch (e) { alert(e.message); }
+    }
+
+    // ---- a PO for each SO that has none: Validation stage, linked, a task to fill it in ----
+    function createPosForm() {
+      const list = V.sos.filter(x => !x.po_code && x.so_number && !x.so_number.startsWith("(no SO)"));
+      const el = modal(`<h3 style="margin-top:0;">Create POs For SOs Without One</h3>
+        <p class="muted">Each becomes a PO in <strong>Validation</strong> for ${esc(V.account.vendor_name)} — the SO #, SO amount and invoice #s filled in, no lines yet
+          (it can't be ordered or received until you fill it in and validate it). It's linked to this account at once, a task reminds you to fill it in,
+          and a fresh MRPeasy import keeps it.</p>
+        <table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" checked onchange="this.closest('table').querySelectorAll('.cp').forEach(c => c.checked = this.checked)"></th><th>SO #</th><th class="num">SO Amount</th><th>Invoices</th><th class="num">Owed</th></tr></thead><tbody>
+          ${list.map(x => `<tr><td><input type="checkbox" class="cp" value="${esc(x.so_number)}" checked></td><td>${esc(x.so_number)}</td><td class="num">${x.so_amount != null ? m(x.so_amount) : "—"}</td>
+            <td class="small">${x.invoices.map(i => esc(i || "—")).join(", ")}</td><td class="num">${m(x.balance)}</td></tr>`).join("")}</tbody></table>
+        <div id="cp-err" class="error"></div>
+        <div class="btn-row"><button id="cp-go">Create The Ticked POs</button><button class="secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button></div>`);
+      el.querySelector("#cp-go").onclick = async () => {
+        const so_numbers = [...el.querySelectorAll(".cp:checked")].map(c => c.value);
+        if (!so_numbers.length) { el.querySelector("#cp-err").textContent = "Tick at least one SO."; return; }
+        try {
+          const r = await apiFetch(`/api/vendor-accounts/${V.account.id}/create-pos`, { method: "POST", body: JSON.stringify({ so_numbers }) });
+          el.remove();
+          setView(r.view);
+          modal(`<h3 style="margin-top:0;">${r.made.length} PO${r.made.length === 1 ? "" : "s"} Created</h3>
+            <ul>${r.made.map(x => `<li><a class="link" href="purchase-orders.html?id=${x.po_id}">${esc(x.po_code)}</a> for SO ${esc(x.so_number)} — in Validation, fill in the lines</li>`).join("")}</ul>
+            <p class="muted small">They're in Tasks too, until each is validated.</p>
+            <div class="btn-row"><button onclick="this.closest('.modal-backdrop').remove()">OK</button></div>`);
+        } catch (e) { el.querySelector("#cp-err").textContent = e.message; }
+      };
     }
 
     // ---- notes on a line (who, when); everyone with the account sees them, they go on the statement ----
@@ -402,42 +519,97 @@
     }
     async function refreshQuiet() { V = await apiFetch(`/api/vendor-accounts/${V.account.id}`); render(); }
 
+    // the SO amount: click it, type, Enter -- every invoice of the SO gets it (Undo in the toast)
+    function soAmt(x, small = true) {
+      if (!x || !x.so_number) return "";
+      const label = x.so_amount != null ? `SO ${m(x.so_amount)}` : "Add SO amount";
+      return `<span class="va-soamt ${small ? "small" : ""}" data-so="${esc(x.so_number)}" title="Click to change the SO amount (all its invoices)${x.so_amount_from === "po" ? " — now the PO's total" : ""}"
+        onclick="event.stopPropagation(); soEdit(this)">${label} <span class="va-pen">✎</span></span>${x.planned ? ` <span class="small muted" title="Before it was reduced">(planned ${m(x.planned)})</span>` : ""}`;
+    }
+    function soEdit(el) {
+      const so = el.dataset.so, x = V.sos.find(s => s.so_number === so);
+      const box = document.createElement("input");
+      box.type = "number"; box.step = "0.01"; box.className = "va-soinput"; box.value = x && x.so_amount != null ? x.so_amount : "";
+      el.replaceWith(box); box.focus(); box.select();
+      let done = false;
+      const finish = async save => {
+        if (done) return; done = true;
+        if (!save || box.value === String(x && x.so_amount != null ? x.so_amount : "")) { render(); return; }
+        try {
+          const v = await apiFetch(`/api/vendor-accounts/${V.account.id}/sos`, { method: "PUT", body: JSON.stringify({ so_number: so, so_amount: box.value === "" ? null : parseFloat(box.value) }) });
+          setView(v);
+          const before = v.change.before;
+          toast(`SO ${so}: ${before != null ? m(before) : "no amount"} → ${v.change.after != null ? m(v.change.after) : "no amount"} ✓`, { label: "Undo", run: async () => {
+            setView(await apiFetch(`/api/vendor-accounts/${V.account.id}/sos`, { method: "PUT", body: JSON.stringify({ so_number: so, so_amount: before }) }));
+          } });
+        } catch (e) { alert(e.message); render(); }
+      };
+      box.addEventListener("keydown", e => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); });
+      box.addEventListener("blur", () => finish(true));
+      box.addEventListener("click", e => e.stopPropagation());
+    }
+    const billByNo = no => V.bills.find(b => b.bill_number === no);
+    // another invoice named in a line -> its pop-up, on top of this one (Close goes back)
+    const refLink = (id, label) => id ? `<a class="link va-ref" onclick="event.stopPropagation(); invoicePop(${id})">${esc(label || "")}</a>` : esc(label || "");
+    const moved = b => b.carried_in.length || b.moved_out.length;
+    const movedPending = b => b.carried_in.some(c => c.pending > 0.005) || b.moved_out.some(x => x.pending > 0.005);
+    function movedIcon(b) {
+      if (!moved(b)) return "";
+      const tip = [...b.moved_out.map(x => `${m(x.amount)} of this invoice's cash was billed on ${x.to}${x.pending > 0.005 ? ` — ${m(x.pending)} still to come with its wire` : " — paid ✓"}`),
+                   ...b.carried_in.map(c => `carries ${m(c.amount)} of ${c.for}'s cash${c.pending > 0.005 ? ` — ${m(c.pending)} still to come` : " — paid ✓"}`)].join("\n");
+      const other = (b.moved_out[0] && b.moved_out[0].to_bill_id) || (b.carried_in[0] && b.carried_in[0].for_bill_id);
+      return `<a class="va-moved ${movedPending(b) ? "pending" : ""}" title="${esc(tip)}" onclick="event.stopPropagation(); invoicePop(${other})">⇄</a>`;
+    }
     function soCell(b) {
       const x = soOf(b);
       const link = b.po_code ? `<a class="link" href="purchase-orders.html?code=${encodeURIComponent(b.po_code)}" title="Open ${esc(b.po_code)}" onclick="event.stopPropagation()">${esc(b.so_number || "—")}</a>` : esc(b.so_number || "—");
-      const amt = x && x.so_amount != null ? `<br><span class="small" title="SO amount${x.so_amount_from === "po" ? " (the PO's total)" : ""}">SO ${m(x.so_amount)}</span>${x.not_invoiced > 0.005 ? ` <span class="small va-rec" title="Not invoiced yet">· ${m(x.not_invoiced)} to bill</span>` : ""}` : "";
+      const amt = x ? `<br>${soAmt(x)}${x.not_invoiced > 0.005 ? ` <span class="small va-rec" title="Not invoiced yet">· ${m(x.not_invoiced)} to bill</span>` : ""}` : "";
       return `<div class="va-so">${link}${amt}<br><span class="muted small">${b.po_code ? esc(b.po_code) : "No PO yet"}</span></div>`;
     }
+    // goods / freight / customs / other under the amount, so nobody has to open Edit to see it
+    function breakdown(b) {
+      const parts = [];
+      if (b.freight || b.customs || b.other || b.recovery_in > 0.005) parts.push(`Goods ${m(b.goods)}`);
+      if (b.freight) parts.push(`Freight ${m(b.freight)}`);
+      if (b.customs) parts.push(`Customs ${m(b.customs)}`);
+      if (b.other) parts.push(`Other ${m(b.other)}`);
+      if (b.recovery_in > 0.005) parts.push(`<span class="va-rec">Other invoices' cash ${m(b.recovery_in)}</span>`);
+      return parts.length ? `<div class="small muted va-break">${parts.join(" · ")}</div>` : "";
+    }
+    const checkBadge = b => (b.problems || []).length ? `<a class="tag cancelled va-check" title="${esc(b.problems.map(p => p.text).join(" "))}" onclick="event.stopPropagation(); overPop(${b.id})">Check</a>` : "";
     const noteBtn = (kind, id, n) => `<a class="va-notebtn ${n ? "has" : ""}" title="${n ? n + " note" + (n === 1 ? "" : "s") : "Add a note"}" onclick="event.stopPropagation(); ${kind}(${id}, { notes: true })">✎${n ? " " + n : ""}</a>`;
 
     const INV_COLS = [
       { key: "so", label: "SO # / SO Amount / PO", val: b => b.so_number, html: b => soCell(b) },
-      { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${esc(b.bill_number || "—")}</span>` },
+      { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${movedIcon(b)} ${esc(b.bill_number || "—")}</span> ${checkBadge(b)}` },
       { key: "date", label: "Date", val: b => b.bill_date || b.po_date, html: b => b.bill_date ? fmtDate(b.bill_date) : b.po_date ? `<span class="muted" title="PO date (the invoice has none)">${fmtDate(b.po_date)}</span>` : "" },
-      { key: "invoiced", label: "Invoiced Amount", num: true, val: b => b.paper_amount != null ? b.paper_amount : b.total, html: b => m(b.paper_amount != null ? b.paper_amount : b.total) },
-      { key: "other", label: "Cash Of Other Invoices", num: true, title: "Part of this invoice that is really another invoice's cash he's collecting — not a cost of this invoice", val: b => b.recovery_in,
-        html: b => (b.recovery_in > 0.005 ? `<span class="va-rec">${m(b.recovery_in)}</span>` : "") + b.carried_in.map(c => `<br><span class="small va-rec">for ${esc(c.for || "")}${c.pending > 0.005 ? "" : " ✓"}</span>`).join("") },
+      { key: "invoiced", label: "Invoiced<br>Amount", num: true, val: b => b.paper_amount != null ? b.paper_amount : b.total, html: b => m(b.paper_amount != null ? b.paper_amount : b.total) + breakdown(b) },
+      { key: "other", label: "Cash Of Other<br>Invoices", num: true, title: "Part of this invoice that is really another invoice's cash he's collecting — not a cost of this invoice", val: b => b.recovery_in,
+        html: b => (b.recovery_in > 0.005 ? `<span class="va-rec">${m(b.recovery_in)}</span>` : "") + b.carried_in.map(c => `<br><span class="small va-rec">for ${refLink(c.for_bill_id, c.for)}${c.pending > 0.005 ? "" : " ✓"}</span>`).join("") },
       { key: "wdue", label: "Wire Due", num: true, val: b => b.wire_due, html: b => m(b.wire_due) + (b.carried_open > 0.005 ? `<br><span class="small va-rec">+ ${m(b.carried_open)} other cash</span>` : "") },
-      { key: "cdue", label: "Cash Due", num: true, val: b => b.cash_due, html: b => m(b.cash_due) + b.moved_out.filter(x => x.pending > 0.005).map(x => `<br><span class="small va-rec" title="Billed on ${esc(x.to || "")}">− ${m(x.pending)} on ${esc(x.to || "")}</span>`).join("") },
+      { key: "cdue", label: "Cash Due", num: true, val: b => b.cash_due, html: b => m(b.cash_due) + b.moved_out.filter(x => x.pending > 0.005).map(x => `<br><span class="small va-rec" title="Billed on ${esc(x.to || "")}">− ${m(x.pending)} on ${refLink(x.to_bill_id, x.to)}</span>`).join("") },
       { key: "wpaid", label: "Wire Paid", num: true, val: b => b.wire_paid, html: b => m(b.wire_paid) },
       { key: "cpaid", label: "Cash Paid", num: true, val: b => b.cash_paid, html: b => m(b.cash_paid) },
-      { key: "bal", label: "Balance", num: true, val: b => b.balance, html: b => `<span class="${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</span>` },
+      { key: "bal", label: "Balance", num: true, val: b => b.balance, html: b => `<span class="${b.balance > 0.005 ? "va-owed" : b.balance < -0.005 ? "va-credit" : ""}">${m(b.balance)}</span>`
+          + (Math.abs(b.balance) <= 0.005 && b.so_to_bill > 0.005 ? `<span class="va-sub small va-ok">Paid ✓</span><span class="va-sub small va-rec" title="The SO still has ${m(b.so_to_bill)} to invoice — this invoice stays open until it's all billed">SO open</span>` : "") },
       { key: "paidby", label: "Paid By", val: b => (b.paid_by[0] || {}).payment_code, html: b => { const seen = new Set(); return b.paid_by.filter(r => !seen.has(r.payment_id) && seen.add(r.payment_id)).map(chip).join("") || `<span class="muted small">—</span>`; } },
       { key: "notes", label: "Notes", val: b => b.notes, html: b => noteBtn("invoicePop", b.id, b.notes) },
     ];
 
     function invoicesHtml(terms) {
       if (!V.bills.length) return `<p class="muted">No Invoices Yet. Add them with <strong>+ Invoice</strong> or load your spreadsheet.</p>`;
-      const list = V.bills.filter(b => billMatches(b, terms));
+      const list = V.bills.filter(b => billMatches(b, terms) && (!MOVED || moved(b)));
       const open = list.filter(b => !b.completed), done = list.filter(b => b.completed);
+      const nMoved = V.bills.filter(moved).length;
       const sum = (rows, k) => rows.reduce((s, b) => s + (k === "invoiced" ? (b.paper_amount != null ? b.paper_amount : b.total) : b[k]), 0);
       const foot = rows => `<tr><th colspan="3">Totals (${rows.length})</th><th class="num">${m(sum(rows, "invoiced"))}</th><th class="num">${m(sum(rows, "recovery_in"))}</th>
         <th class="num">${m(sum(rows, "wire_due"))}</th><th class="num">${m(sum(rows, "cash_due"))}</th><th class="num">${m(sum(rows, "wire_paid"))}</th>
         <th class="num">${m(sum(rows, "cash_paid"))}</th><th class="num">${m(sum(rows, "balance"))}</th><th></th><th></th></tr>`;
-      const rowAttr = b => `data-bill="${b.id}" class="va-click" onclick="invoicePop(${b.id})"`;
-      const doneOpen = store.get("done.inv") === "1" || (terms.length && !open.length);
-      return `${grid("inv", INV_COLS, open, { rowAttr, foot: foot(open), empty: terms.length ? "No open invoice matches." : "Every invoice is paid ✓" })}
-        <details class="va-done" ${doneOpen ? "open" : ""} ontoggle="store.set('done.inv', this.open ? '1' : '0')"><summary>Completed — Paid In Full (${done.length})</summary>
+      const rowAttr = b => `data-bill="${b.id}" class="va-click ${moved(b) ? (movedPending(b) ? "va-moved-row pending" : "va-moved-row") : ""}" onclick="invoicePop(${b.id})"`;
+      const doneOpen = store.get("done.inv") === "1" || ((terms.length || MOVED) && !open.length);
+      return `<div class="va-chips">${nMoved ? `<span class="va-filter ${MOVED ? "on" : ""}" onclick="MOVED=!MOVED;render()" title="Invoices whose cash was billed on another invoice, and the invoices that carry it">⇄ Cash Moved Between Invoices (${nMoved})</span>` : ""}</div>
+        ${grid("inv", INV_COLS, open, { rowAttr, foot: foot(open), empty: terms.length || MOVED ? "No open invoice matches." : "Every invoice is paid ✓" })}
+        <details class="va-done" ${doneOpen ? "open" : ""} ontoggle="store.set('done.inv', this.open ? '1' : '0')"><summary>Completed — Paid In Full And Their SO Fully Invoiced (${done.length})</summary>
           ${done.length ? grid("inv-done", INV_COLS, done, { rowAttr, foot: foot(done) }) : `<p class="muted small">None${terms.length ? " match" : ""}.</p>`}</details>
         <p class="muted small">Click an invoice for everything about it. Click a payment number (P-…) for that payment and every invoice it paid.
           Click a heading to sort; drag its right edge to resize (double-click the edge to reset).</p>`;
@@ -449,7 +621,9 @@
       const isDone = x => !(x.not_invoiced > 0.005) && Math.abs(x.balance) <= 0.005;
       const cols = [
         { key: "so", label: "SO # / PO", val: x => x.so_number, html: x => `<div class="va-so">${esc(x.so_number || "—")}<br>${x.po_code ? `<a class="link small" href="purchase-orders.html?code=${encodeURIComponent(x.po_code)}">${esc(x.po_code)}</a>` : `<span class="muted small">No PO yet</span>`}</div>` },
-        { key: "amt", label: "SO Amount", num: true, val: x => x.so_amount, html: x => x.so_amount != null ? m(x.so_amount) + (x.so_amount_from === "po" ? `<br><span class="muted small">PO total</span>` : "") : `<span class="muted">—</span>` },
+        { key: "amt", label: "SO Amount", num: true, val: x => x.so_amount, html: x => soAmt(x, false) + (x.so_amount_from === "po" ? `<br><span class="muted small">PO total</span>` : "")
+            + (x.actual != null && x.so_amount != null && Math.abs(x.actual - x.so_amount) > 1 ? `<br><span class="small va-rec" title="The PO was received in full">actual ${m(x.actual)} (PO received)</span>` : "")
+            + (x.problems.length ? `<br><a class="tag cancelled va-check" onclick="event.stopPropagation(); TAB='problems'; render()">⚠ ${x.problems.length}</a>` : "") },
         { key: "inv", label: "Invoices", val: x => x.invoices.length, html: x => `<span class="small nowrap">${x.invoices.map(i => esc(i || "—")).join("<br>")}</span>` },
         { key: "goods", label: "Invoiced (Goods)", num: true, val: x => x.goods, html: x => m(x.goods) + (x.over > 0.005 ? `<br><span class="va-rec small" title="Invoiced goods are more than the SO">+${m(x.over)} over SO</span>` : "") },
         { key: "charges", label: "Freight / Customs", num: true, val: x => x.charges, html: x => x.charges ? m(x.charges) : "" },
@@ -458,7 +632,9 @@
       ];
       const open = list.filter(x => !isDone(x)), done = list.filter(isDone);
       const foot = rows => `<tr><th colspan="5">Totals (${rows.length})</th><th class="num">${m(rows.reduce((s, x) => s + (x.not_invoiced || 0), 0))}</th><th class="num">${m(rows.reduce((s, x) => s + x.balance, 0))}</th></tr>`;
-      return `${grid("so", cols, open, { foot: foot(open), empty: "Every SO is invoiced and paid ✓" })}
+      const noPo = V.sos.filter(x => !x.po_code && x.so_number && !x.so_number.startsWith("(no SO)"));
+      return `${noPo.length ? `<div class="va-chips"><button class="secondary small-btn" onclick="createPosForm()">Create POs For ${noPo.length} SO${noPo.length === 1 ? "" : "s"} Without One</button></div>` : ""}
+        ${grid("so", cols, open, { foot: foot(open), empty: "Every SO is invoiced and paid ✓" })}
         <details class="va-done" ${store.get("done.so") === "1" ? "open" : ""} ontoggle="store.set('done.so', this.open ? '1' : '0')"><summary>Completed — Invoiced And Paid (${done.length})</summary>
           ${done.length ? grid("so-done", cols, done, { foot: foot(done) }) : `<p class="muted small">None.</p>`}</details>
         <p class="muted small">Not Invoiced Yet = SO amount − goods invoiced so far: ordered but not billed, so not owed yet. Expected wire / cash uses the usual ${V.account.cash_share}% cash share.</p>`;
@@ -493,7 +669,7 @@
         + (undated.length ? `<div class="stat"><div class="stat-label">No Date</div><div class="stat-value">${m(undated.reduce((s, b) => s + b.cash_left, 0))}</div><div class="stat-sub">${undated.length} Invoice${undated.length === 1 ? "" : "s"} — Add The Invoice Date</div></div>` : "");
       const cols = [
         { key: "so", label: "SO # / PO", val: b => b.so_number, html: b => soCell(b) },
-        { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${esc(b.bill_number || "—")}</span>` },
+        { key: "inv", label: "Invoice", val: b => b.bill_number, html: b => `<span class="nowrap">${movedIcon(b)} ${esc(b.bill_number || "—")}</span>` },
         { key: "date", label: "Date", val: b => b.bill_date || b.po_date, html: b => b.bill_date ? fmtDate(b.bill_date) : b.po_date ? `<span class="muted" title="PO date">${fmtDate(b.po_date)}</span>` : "" },
         { key: "due", label: "Cash Due", num: true, val: b => b.cash_due, html: b => m(b.cash_due) },
         { key: "paid", label: "Cash Paid", num: true, val: b => b.cash_paid, html: b => m(b.cash_paid) },
@@ -509,7 +685,7 @@
     // ---- every invoice and payment in date order, with the running balance (what a statement reconciles to) ----
     function timelineHtml(terms) {
       const ev = [];
-      V.bills.forEach(b => ev.push({ date: b.bill_date || b.po_date, guess: !b.bill_date, kind: "inv", id: b.id, label: `Invoice ${b.bill_number || "—"}`, sub: `SO ${b.so_number || "—"}${b.po_code ? " · " + b.po_code : ""}`,
+      V.bills.forEach(b => ev.push({ date: b.bill_date || b.po_date, guess: !b.bill_date, kind: "inv", id: b.id, label: `${moved(b) ? "⇄ " : ""}Invoice ${b.bill_number || "—"}`, sub: `SO ${b.so_number || "—"}${b.po_code ? " · " + b.po_code : ""}`,
         plus: b.total, match: billMatches(b, terms) }));
       V.payments.forEach(p => ev.push({ date: p.paid_date, kind: "pay", id: p.id, label: `${p.code} ${p.kind === "wire" ? "Wire" : "Cash"}${p.reference ? " " + p.reference : ""}`,
         sub: p.parts.map(r => billLabel(billById(r.bill_id))).join(", "), minus: p.amount, match: payMatches(p, terms) }));
@@ -643,9 +819,12 @@
           paper_amount: num(el, "b-paper"), cash_due: num(el, "b-cash"), so_amount: num(el, "b-soamt"), note: val(el, "b-note"),
           recovery_for: FOR.filter(d => d.bill_id && d.amount > 0) };
         try {
+          const beforeIds = new Set(V.bills.map(x => x.id));
           setView(await apiFetch(b ? `/api/vendor-accounts/${V.account.id}/bills/${b.id}` : `/api/vendor-accounts/${V.account.id}/bills`,
                                  { method: b ? "PUT" : "POST", body: JSON.stringify(body) }));
           el.remove();
+          const saved = b ? billById(b.id) : V.bills.find(x => !beforeIds.has(x.id));
+          if (saved && (saved.problems || []).some(p => p.kind === "over_so")) overPop(saved.id);
         } catch (e) { el.querySelector("#b-err").textContent = e.message; }
       };
     }

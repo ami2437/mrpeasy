@@ -29,7 +29,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import (PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment, VacctAccount, VacctAlloc, VacctBill, VacctNote,
-                        VacctPayment, Vendor, VendorBill, VendorPayment)
+                        VacctPayment, VacctSO, Vendor, VendorBill, VendorPayment)
 from app.services.money import cents
 
 TOL = 0.005
@@ -225,8 +225,17 @@ def view(db: Session, account_id: int) -> dict:
     t["recovered"] = cents(sum(r["amount"] for p in out_pays for r in p["parts"] if r["recovery"]))
     t["owed"] = cents(t["wire_left"] + t["cash_left"] - t["credit"])
     sos = so_view(db, acc, bills, out_bills, pos)
+    so_of = {bid: x for x in sos for bid in x["bill_ids"]}
+    for ob in out_bills:
+        x = so_of.get(ob["id"])
+        ob["so_to_bill"] = x["not_invoiced"] if x and (x["not_invoiced"] or 0) > TOL else 0.0
+        ob["completed"] = ob["completed"] and not ob["so_to_bill"]
+        ob["problems"] = [pr for pr in (x["problems"] if x else []) if pr.get("bill_id") in (None, ob["id"]) and pr["kind"] == "over_so"]
+        ob["over_answer"] = next((b.over_answer for b in bills if b.id == ob["id"]), None)
     t["not_invoiced"] = cents(sum(x["not_invoiced"] or 0 for x in sos))
     t["review"] = sum(1 for p in out_pays if p["review"])
+    t["problems"] = sum(1 for x in sos for pr in x["problems"] if not pr.get("info"))
+    t["to_receive"] = sum(1 for x in sos for pr in x["problems"] if pr.get("info"))
     return {
         "account": {"id": acc.id, "vendor_code": acc.vendor_code, "vendor_name": vendor.name if vendor else acc.vendor_name,
                     "vendor_id": vendor.id if vendor else None, "cash_share": acc.cash_share, "note": acc.note},
@@ -249,12 +258,16 @@ def ensure_codes(db: Session, acc: VacctAccount, pays: List[VacctPayment]) -> No
 
 
 def so_view(db: Session, acc: VacctAccount, bills: List[VacctBill], out_bills: List[dict], pos: dict) -> List[dict]:
-    """Per vendor SO: its amount (from the sheet, else the PO's total), what's been invoiced, what's NOT invoiced yet
-    (and how that would be paid at the usual cash share), what's still owed on its invoices."""
+    """Per vendor SO: its amount (from the sheet, else the PO's total), what's been invoiced, what's NOT invoiced yet (and
+    how that would be paid at the usual cash share), what's still owed on its invoices -- and the problems worth asking
+    about: invoiced more than the SO (what is the extra?), everything received / invoiced / paid but the SO says more
+    (was it reduced?), received but not invoiced, invoiced but not received. Once the PO is fully received, "not invoiced
+    yet" uses what was actually received (the PO's total), not the planned SO amount."""
     po_total = {}
     for po in {p.id: p for p in pos.values() if p}.values():
         po_total[po.id] = cents(sum((l.quantity or 0) * (l.unit_cost or 0)
                                     for l in db.query(PurchaseOrderLine).filter(PurchaseOrderLine.po_id == po.id).all()))
+    answers = {x.so_number: x for x in db.query(VacctSO).filter(VacctSO.account_id == acc.id).all()}
     groups, order = defaultdict(list), []
     for b, ob in zip(bills, out_bills):
         k = b.so_number or f"(no SO) {b.bill_number or b.id}"
@@ -265,6 +278,7 @@ def so_view(db: Session, acc: VacctAccount, bills: List[VacctBill], out_bills: L
     share = (acc.cash_share or 0) / 100.0
     for k in order:
         rows = groups[k]
+        so_no = rows[0][0].so_number
         po = next((pos.get(b.id) for b, _ in rows if pos.get(b.id)), None)
         so_amt = next((b.so_amount for b, _ in rows if b.so_amount), None)
         source = "sheet" if so_amt else None
@@ -272,14 +286,192 @@ def so_view(db: Session, acc: VacctAccount, bills: List[VacctBill], out_bills: L
             so_amt, source = po_total[po.id], "po"
         goods = cents(sum(ob["goods"] for _, ob in rows))
         charges = cents(sum(ob["freight"] + ob["customs"] + ob["other"] for _, ob in rows))
-        remaining = cents(max(0.0, so_amt - goods)) if so_amt else None
+        received = bool(po and po.status == "received")
+        actual = po_total.get(po.id) if received and po else None
+        ans = answers.get(so_no) if so_no else None
+        expecting = bool(ans and ans.answer == "expecting")
+        base = actual if (actual and not expecting) else so_amt
+        slack = max(5.0, 0.01 * (actual or so_amt or 0))  # rounding / pennies are not a problem worth asking about
+        remaining = cents(max(0.0, base - goods)) if base else None
+        if remaining is not None and actual and not expecting and remaining <= slack:
+            remaining = 0.0
         over = cents(goods - so_amt) if so_amt and goods > so_amt + TOL else 0.0
-        out.append({"so_number": rows[0][0].so_number, "so_amount": so_amt, "so_amount_from": source, "po_code": po.code if po else None,
-                    "po_id": po.id if po else None, "invoices": [ob["bill_number"] for _, ob in rows], "bill_ids": [ob["id"] for _, ob in rows],
+        balance = cents(sum(ob["balance"] for _, ob in rows))
+        problems = []
+        over_open = over > max(1.0, 0.001 * (so_amt or 0)) and not any(b.over_answer for b, _ in rows)
+        if over_open:
+            last = rows[-1][1]
+            problems.append({"kind": "over_so", "bill_id": last["id"], "amount": over,
+                             "text": f"Invoiced ${goods:,.2f} of goods on an SO of ${so_amt:,.2f} -- ${over:,.2f} more. What is the extra?"})
+        if received and so_amt and not ans and abs((actual or 0) - so_amt) > slack and abs(balance) <= TOL and goods >= (actual or 0) - slack:
+            problems.append({"kind": "so_mismatch", "amount": cents(so_amt - (actual or 0)), "actual": actual,
+                             "text": f"Everything was received, invoiced and paid, but the SO says ${so_amt:,.2f} and the PO came to "
+                                     f"${actual:,.2f} -- ${abs(so_amt - actual):,.2f} {'less' if actual < so_amt else 'more'}."})
+        if received and actual and goods < actual - slack and not expecting:
+            problems.append({"kind": "received_not_invoiced", "amount": cents(actual - goods),
+                             "text": f"The PO was received in full (${actual:,.2f}) but only ${goods:,.2f} has been invoiced."})
+        if po and not received and po.status not in ("cancelled", "validation") and so_amt and goods >= so_amt - slack and abs(balance) <= TOL:
+            problems.append({"kind": "invoiced_not_received", "amount": 0.0, "info": True,
+                             "text": f"Invoiced and paid in full, but {po.code} isn't received yet ({po.status.replace('_', ' ')})."})
+        out.append({"so_number": so_no, "so_amount": so_amt, "so_amount_from": source, "po_code": po.code if po else None,
+                    "po_id": po.id if po else None, "po_status": po.status if po else None, "actual": actual,
+                    "planned": ans.planned_amount if ans and ans.planned_amount else None,
+                    "answer": ans.answer if ans else None, "answer_note": ans.note if ans else None,
+                    "invoices": [ob["bill_number"] for _, ob in rows], "bill_ids": [ob["id"] for _, ob in rows],
                     "goods": goods, "charges": charges, "not_invoiced": remaining, "over": over,
                     "expected_cash": cents((remaining or 0) * share), "expected_wire": cents((remaining or 0) - (remaining or 0) * share),
-                    "balance": cents(sum(ob["balance"] for _, ob in rows))})
+                    "balance": balance, "problems": problems})
     return out
+
+
+def _so_bills(db, acc, so_number) -> List[VacctBill]:
+    rows = db.query(VacctBill).filter(VacctBill.account_id == acc.id, VacctBill.so_number == so_number).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No invoice under SO {so_number} in this account")
+    return rows
+
+
+def edit_so(db: Session, account_id: int, so_number: str, so_amount, by: str) -> dict:
+    """One SO amount for every invoice of the SO."""
+    acc = _account(db, account_id)
+    amt = _money_in(so_amount, "SO amount") if so_amount not in (None, "") else None
+    rows = _so_bills(db, acc, so_number)
+    before = next((b.so_amount for b in rows if b.so_amount), None)
+    for b in rows:
+        b.so_amount = amt
+    db.commit()
+    return {"so_number": so_number, "before": before, "after": amt}
+
+
+def answer_so(db: Session, account_id: int, so_number: str, answer: str, note: Optional[str], by: str) -> None:
+    """The SO-doesn't-match question: reduced (the SO amount becomes what was actually received), expecting (another
+    invoice is coming -- keep it open), other (just a note)."""
+    if answer not in ("reduced", "expecting", "other", None, ""):
+        raise HTTPException(status_code=400, detail="Answer reduced, expecting or other")
+    acc = _account(db, account_id)
+    rows = _so_bills(db, acc, so_number)
+    row = db.query(VacctSO).filter(VacctSO.account_id == acc.id, VacctSO.so_number == so_number).first()
+    if not answer:
+        if row:
+            db.delete(row)
+        db.commit()
+        return
+    row = row or VacctSO(account_id=acc.id, so_number=so_number)
+    if answer == "reduced":
+        v = view(db, account_id)
+        so = next((x for x in v["sos"] if x["so_number"] == so_number), None)
+        actual = so and (so["actual"] or so["goods"])
+        if not actual:
+            raise HTTPException(status_code=400, detail="Nothing to reduce it to -- the PO isn't received and nothing is invoiced")
+        row.planned_amount = row.planned_amount or next((b.so_amount for b in rows if b.so_amount), None)
+        for b in rows:
+            b.so_amount = cents(actual)
+    row.answer, row.note, row.updated_by = answer, (note or "").strip() or None, by
+    db.add(row)
+    db.commit()
+
+
+OVER_KINDS = ("freight", "customs", "other", "price", "recovery")
+
+
+def answer_over(db: Session, account_id: int, bill_id: int, kind: str, by: str, target_bill_id: int = None) -> None:
+    """"This invoice is more than its SO -- what is the extra?" Freight / customs / other: the extra moves out of the goods
+    into that charge (a real cost, paid by wire). Price: the goods really cost more (nothing moves). Recovery: it's another
+    invoice's cash -- the extra leaves the true amount and is assigned to that invoice."""
+    if kind not in OVER_KINDS:
+        raise HTTPException(status_code=400, detail="Freight, customs, other, price or recovery")
+    acc = _account(db, account_id)
+    b = db.get(VacctBill, bill_id)
+    if not b or b.account_id != acc.id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    so = next((x for x in view(db, account_id)["sos"] if b.id in x["bill_ids"]), None)
+    extra = cents(min(so["over"] if so else 0.0, b.goods or 0.0))
+    if kind in ("freight", "customs", "other") and extra > TOL:
+        b.goods = cents(b.goods - extra)
+        setattr(b, kind, cents((getattr(b, kind) or 0) + extra))
+        b.cash_due = cents(min(b.cash_due, bill_total(b)))
+        b.wire_due = cents(bill_total(b) - b.cash_due)
+    elif kind == "recovery" and extra > TOL:
+        wp, cp = _paid_parts(db, b.id)
+        total_before = bill_total(b)
+        b.paper_amount = b.paper_amount if b.paper_amount is not None else total_before
+        b.goods = cents(b.goods - extra)
+        b.cash_due = cents(min(b.cash_due, bill_total(b)))
+        b.wire_due = cents(bill_total(b) - b.cash_due)
+        if wp > b.wire_due + TOL or cp > b.cash_due + TOL:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="Payments already applied to this invoice are more than its true amount would be -- "
+                                                        "edit those payments first (put the extra on the other invoice's cash)")
+        if target_bill_id:
+            _set_designations(db, acc, b, [{"bill_id": target_bill_id, "amount": extra}], bill_total(b))
+    b.over_answer = kind
+    db.flush()
+    sync_account(db, acc)
+    db.commit()
+
+
+# ---------------------------------------------------------------- POs from the account ------------------------------
+
+def create_pos(db: Session, account_id: int, so_numbers: List[str], by: str) -> List[dict]:
+    """A PO for each SO that has none yet, in Validation (no lines -- it can't be ordered or received until someone fills
+    it in): the vendor, the vendor SO #, the invoice #s and the SO amount in its notes. Linked to the account at once;
+    a task asks to fill it in; fresh imports keep it."""
+    from app.services.crud import PurchaseOrderService
+    acc = _account(db, account_id)
+    vendor = _vendor(db, acc)
+    if not vendor:
+        raise HTTPException(status_code=400, detail="This account's vendor isn't in AT-HUB")
+    v = view(db, account_id)
+    made = []
+    for so_no in so_numbers:
+        so = next((x for x in v["sos"] if x["so_number"] == so_no), None)
+        if not so:
+            raise HTTPException(status_code=404, detail=f"SO {so_no} isn't in this account")
+        if so["po_code"]:
+            continue
+        po = PurchaseOrderService.capture(db, vendor.id, so_no, by, allow_duplicate=True)
+        po.created_from = "vendor-account"
+        po.notes = (f"Created from the Vendor Account -- fill in the lines.\nSO {so_no}"
+                    + (f" · SO amount ${so['so_amount']:,.2f}" if so["so_amount"] else "")
+                    + f" · invoices {', '.join(i or '-' for i in so['invoices'])}")
+        for b in db.query(VacctBill).filter(VacctBill.account_id == acc.id, VacctBill.id.in_(so["bill_ids"])).all():
+            b.po_code = po.code
+        db.flush()
+        made.append({"so_number": so_no, "po_code": po.code, "po_id": po.id})
+    sync_account(db, acc)
+    db.commit()
+    return made
+
+
+def account_for_vendor(db: Session, vendor_id: int) -> Optional[VacctAccount]:
+    vendor = db.get(Vendor, vendor_id)
+    return db.query(VacctAccount).filter(VacctAccount.vendor_code == vendor.code).first() if vendor else None
+
+
+def sync_for_po(db: Session, po: PurchaseOrder) -> None:
+    """A PO was saved: if its vendor has an account, link it now (the PO gets the account's invoices and payments)."""
+    acc = account_for_vendor(db, po.vendor_id)
+    if acc:
+        sync_account(db, acc)
+        db.commit()
+
+
+def for_po(db: Session, po_id: int) -> dict:
+    """What the vendor's account holds for this PO (the View pop-up on the PO): its SO(s), invoices, payments, notes."""
+    po = db.get(PurchaseOrder, po_id)
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    acc = account_for_vendor(db, po.vendor_id)
+    if not acc:
+        return {"account": None}
+    v = view(db, acc.id)
+    bills = [b for b in v["bills"] if b["po_code"] == po.code]
+    if not bills and po.vendor_so_number:
+        k = code_key(po.vendor_so_number)
+        bills = [b for b in v["bills"] if b["so_number"] and keys_match(code_key(b["so_number"]), k)]
+    ids = {b["id"] for b in bills}
+    return {"account": v["account"], "bills": bills, "sos": [x for x in v["sos"] if set(x["bill_ids"]) & ids],
+            "payments": [p for p in v["payments"] if any(r["bill_id"] in ids for r in p["parts"])]}
 
 
 # ---------------------------------------------------------------- notes per line ------------------------------------
@@ -629,7 +821,7 @@ def sync_account(db: Session, acc: VacctAccount) -> dict:
     if touched:
         db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.po_id.in_(list(touched)),
                                               (PurchaseOrderPayment.reference == MRP_TAG) | (PurchaseOrderPayment.created_by == BY)
-                                              ).delete(synchronize_session=False)
+                                              ).delete(synchronize_session="fetch")
     vb_for = {}
     for b in bills:
         po = pos.get(b.id)
@@ -751,9 +943,9 @@ def pickup(db: Session, acc: VacctAccount, commit: bool = True) -> int:
     if n:
         db.flush()
         ensure_codes(db, acc, _payments(db, acc)) if commit else None
-        sync_account(db, acc)
-        if commit:
-            db.commit()
+    sync_account(db, acc)  # also links any PO made / given this SO since
+    if commit:
+        db.commit()
     return n
 
 
@@ -1047,6 +1239,15 @@ def plan_sheet(db: Session, account_id: int, data: bytes, filename: str) -> dict
             payments.append({"kind": "cash", "row": r["row"], "amount": abs(r["cash_adj"]), "date": dates[0] if dates else None,
                              "reference": None, "note": "Cash adjustment (from the sheet)",
                              "parts": [{"row": r["row"], "part": "cash", "amount": abs(r["cash_adj"])}]})
+    by_so = defaultdict(list)
+    for r in rows:
+        by_so[r["so"]].append(r)
+    for so_no, rs in by_so.items():
+        amt = rs[0]["so_amount"]
+        goods = cents(sum(r["goods"] - r["inside"] for r in rs))
+        if amt and goods > amt + max(1.0, 0.001 * amt):
+            warnings.append(f"Row {rs[-1]['row']} {rs[-1]['invoice'] or so_no}: ${goods - amt:,.2f} more than SO {so_no} (${amt:,.2f}) -- "
+                            f"after loading, AT-HUB asks what it is (freight, customs, other charge, old cash, price)")
     payments = _merge_wires(payments, rows, notes)
     # parts can't be more than a bill's part: the over-collection stays a credit on the payment
     room = {(b["row"], "wire"): b["wire_due"] for b in bills}

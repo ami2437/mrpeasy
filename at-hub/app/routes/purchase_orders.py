@@ -88,9 +88,20 @@ def po_receipts(po_id: int, db: Session = Depends(get_db)):
     return {"receipts": receiving.receipts(db, [po.id]), **receiving.po_events(db, po)}
 
 
+def _va(db: Session, po):
+    """A vendor with a Vendor Account: link the saved PO to it now (its invoices and payments show on the PO)."""
+    try:
+        from app.services import vendor_accounts
+        vendor_accounts.sync_for_po(db, po)
+        db.refresh(po)
+    except Exception:  # never let the link stop a PO from saving
+        db.rollback()
+    return po
+
+
 @router.post("/", response_model=PurchaseOrderResponse)
 def create_order(data: PurchaseOrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    return _la(db, PurchaseOrderService.create(db, data, created_by=current_user.username))
+    return _la(db, _va(db, PurchaseOrderService.create(db, data, created_by=current_user.username)))
 
 
 @router.post("/capture", response_model=PurchaseOrderResponse)
@@ -109,7 +120,7 @@ def capture_order(vendor_id: int = Form(...), vendor_so_number: str | None = For
         store_file(db, "purchase_order", po.id, category, name, ctype, data, note or "Quick capture", current_user.username)
     db.commit()
     db.refresh(po)
-    return po
+    return _va(db, po)
 
 
 class ValidatePoIn(BaseModel):
@@ -172,7 +183,7 @@ def email_po(po_id: int, data: PurchaseOrderEmailRequest, db: Session = Depends(
 
 @router.put("/{po_id}", response_model=PurchaseOrderResponse)
 def update_order(po_id: int, data: PurchaseOrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    return _la(db, PurchaseOrderService.update(db, po_id, data, by=current_user.username))
+    return _la(db, _va(db, PurchaseOrderService.update(db, po_id, data, by=current_user.username)))
 
 
 @router.post("/{po_id}/lookalike-ok", response_model=PurchaseOrderResponse)
@@ -237,7 +248,7 @@ def record_payment(po_id: int, data: PurchaseOrderPaymentInput, db: Session = De
 @router.post("/{po_id}/bills", response_model=PurchaseOrderResponse)
 def add_bill(po_id: int, data: VendorBillInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Record a vendor invoice (one PO can be billed in several)."""
-    return VendorBillService.create(db, po_id, data, created_by=current_user.username)
+    return _va(db, VendorBillService.create(db, po_id, data, created_by=current_user.username))
 
 
 @router.delete("/{po_id}/bills/{bill_id}", response_model=PurchaseOrderResponse, dependencies=[Depends(require_perm("purchasing"))])

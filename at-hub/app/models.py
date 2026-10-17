@@ -427,6 +427,7 @@ class PurchaseOrder(Base):
     duplicate_so_ok = Column(String, nullable=True)  # "who, when" someone OK'd this vendor SO # also being on another PO of the vendor
     lookalike_ok = Column(Text, nullable=True)  # JSON: look-alike POs someone checked and OK'd as separate (services/lookalike.py)
     notes = Column(Text, nullable=True)
+    created_from = Column(String, nullable=True)  # "vendor-account": made from a Vendor Account SO (kept by fresh imports)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -1971,6 +1972,8 @@ class VacctBill(Base):
     # the old cash inside paper_amount, and which invoices' cash it is: JSON [{"bill_id": 7, "amount": 400}]. Until the wire
     # for this invoice comes, that cash is owed through THIS invoice (the other invoice's cash goes down by it)
     recovery_for = Column(Text, nullable=True)
+    # the answer to "this invoice is more than its SO -- what is the extra?": freight | customs | other | price | recovery
+    over_answer = Column(String, nullable=True)
     wire_due = Column(Float, nullable=False, default=0.0)
     cash_due = Column(Float, nullable=False, default=0.0)
     note = Column(Text, nullable=True)
@@ -2022,3 +2025,17 @@ class VacctNote(Base):
     text = Column(Text, nullable=False)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VacctSO(Base):
+    """What someone said about one SO of a Vendor Account: "the SO was reduced", "still expecting an invoice", or a note."""
+    __tablename__ = "vacct_sos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("vacct_accounts.id"), nullable=False, index=True)
+    so_number = Column(String, nullable=False)
+    answer = Column(String, nullable=True)  # reduced | expecting | other
+    note = Column(Text, nullable=True)
+    planned_amount = Column(Float, nullable=True)  # the SO amount before it was reduced
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -170,6 +170,56 @@ def delete_payment(account_id: int, payment_id: int, db: Session = Depends(get_d
     return VA.view(db, account_id)
 
 
+class SoEditIn(BaseModel):
+    so_number: str
+    so_amount: Optional[float] = None
+
+
+class SoAnswerIn(BaseModel):
+    so_number: str
+    answer: Optional[str] = None  # reduced | expecting | other | None (take the answer back)
+    note: Optional[str] = None
+
+
+class OverIn(BaseModel):
+    kind: str  # freight | customs | other | price | recovery
+    target_bill_id: Optional[int] = None
+
+
+class CreatePosIn(BaseModel):
+    so_numbers: List[str]
+
+
+@router.get("/for-po/{po_id}")
+def for_po(po_id: int, db: Session = Depends(get_db)):
+    """The View pop-up on a PO: what this vendor's account holds for it."""
+    return VA.for_po(db, po_id)
+
+
+@router.put("/{account_id}/sos")
+def edit_so(account_id: int, data: SoEditIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    change = VA.edit_so(db, account_id, data.so_number, data.so_amount, user.username)
+    return {**VA.view(db, account_id), "change": change}
+
+
+@router.post("/{account_id}/sos/answer")
+def answer_so(account_id: int, data: SoAnswerIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    VA.answer_so(db, account_id, data.so_number, data.answer, data.note, user.username)
+    return VA.view(db, account_id)
+
+
+@router.post("/{account_id}/bills/{bill_id}/over")
+def answer_over(account_id: int, bill_id: int, data: OverIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    VA.answer_over(db, account_id, bill_id, data.kind, user.username, data.target_bill_id)
+    return VA.view(db, account_id)
+
+
+@router.post("/{account_id}/create-pos")
+def create_pos(account_id: int, data: CreatePosIn, db: Session = Depends(get_db), user: User = Depends(get_current_active_user)):
+    made = VA.create_pos(db, account_id, data.so_numbers, user.username)
+    return {"made": made, "view": VA.view(db, account_id)}
+
+
 class NoteIn(BaseModel):
     target: str
     target_id: int
