@@ -410,6 +410,10 @@ from app.routes import accounting  # noqa: E402
 app.include_router(accounting.router)
 from app.routes import vendor_accounts  # noqa: E402
 app.include_router(vendor_accounts.router)
+from app.routes import asks as asks_routes  # noqa: E402
+app.include_router(asks_routes.router)
+from app.routes import cost_sheets  # noqa: E402
+app.include_router(cost_sheets.router)
 
 
 def _mail_loop():

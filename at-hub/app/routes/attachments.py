@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config.database import get_db
@@ -123,6 +124,22 @@ def attachment_counts(entity_type: str = Query(...), db: Session = Depends(get_d
     if _hides_money(user):
         q = q.filter(Attachment.category.notin_(_money(db)))
     return {str(eid): n for eid, n in q.group_by(Attachment.entity_id).all()}
+
+
+@router.get("/find")
+def find_record(entity_type: str = Query(...), code: str = Query(...), db: Session = Depends(get_db),
+                user: User = Depends(get_current_active_user)):
+    """A record by its number (C89124, PO325289, SH215751) -- for a file dropped on a list page."""
+    model = ENTITIES.get(entity_type)
+    if not model:
+        raise HTTPException(status_code=400, detail=f"Unknown record type '{entity_type}'")
+    c = code.strip()
+    rec = db.query(model).filter(func.lower(model.code) == c.lower()).first()
+    if not rec and c.isdigit():  # just the digits: PO325289 typed as 325289
+        rec = db.query(model).filter(model.code.like(f"%{c}")).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No {entity_type.replace('_', ' ')} {c}")
+    return {"id": rec.id, "code": rec.code}
 
 
 @router.post("/", response_model=List[AttachmentResponse])

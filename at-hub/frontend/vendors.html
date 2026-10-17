@@ -73,14 +73,24 @@
           <div id="xref"></div>
           <h4 style="margin-top:20px;">Purchase orders</h4>
           ${mine.length ? `<div class="table-scroll"><table>
-            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="num sum">Total</th></tr></thead>
+            <thead><tr><th>Code</th><th>Date</th><th>Status</th><th class="num sum">Total</th>${AuthGuard.can("cost_sheets") ? "<th>Cost Sheet</th>" : ""}</tr></thead>
             <tbody>${mine.map(o => `<tr><td><a class="link" href="purchase-orders.html?id=${o.id}">${escapeHtml(o.code)}</a></td><td>${fmtDate(o.order_date)}</td>
-              <td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td><td class="num">${fmtMoney(o.order_total)}</td></tr>`).join("")}</tbody>
+              <td><span class="tag ${o.status}">${o.status.replace("_", " ")}</span></td><td class="num">${fmtMoney(o.order_total)}</td>
+              ${AuthGuard.can("cost_sheets") ? `<td><a class="link small" data-cs="${escapeHtml(o.code)}" href="purchase-orders.html?id=${o.id}&costsheet=1">Open</a></td>` : ""}</tr>`).join("")}</tbody>
           </table></div>` : `<p class="muted">No purchase orders yet.</p>`}`;
       },
-      afterRender: v => renderXref(v.id),
+      afterRender: v => { renderXref(v.id); markCostSheets(v.id); },
     });
 
+    // which of this vendor's POs already have a cost sheet (routes/cost_sheets.py)
+    async function markCostSheets(vendorId) {
+      if (!AuthGuard.can("cost_sheets")) return;
+      try {
+        const sheets = await apiFetch(`/api/cost-sheets/?vendor_id=${vendorId}`);
+        sheets.forEach(s => document.querySelectorAll(`[data-cs="${CSS.escape(s.po_code)}"]`).forEach(a => {
+          a.textContent = `Open (${fmtMoney(s.extras)} extras)`; a.style.fontWeight = "600"; }));
+      } catch {}
+    }
     async function renderXref(vendorId) {
       const el = document.getElementById("xref");
       const [mappings, items] = await Promise.all([apiFetch(`/api/vendors/${vendorId}/items`), allItems()]);

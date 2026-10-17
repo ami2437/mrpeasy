@@ -1351,6 +1351,7 @@ async function showDetail(id) {
       ? ` · PO <a class="link" href="customer-orders.html?id=${shipment.order_id}">${escapeHtml(ord.po_number)}</a>` : ""}
       — created ${fmtDate(shipment.created_at)}${shipment.ship_date ? ` — shipped ${fmtDate(shipment.ship_date)}` : ""}</p>
     <div id="shipment-sticky" class="sticky-strip"></div>
+    <div class="ask-box" data-ask="shipment:${shipment.id}"></div>
 
     <div class="ship-actions-bar">
       ${shipment.status !== "cancelled" ? `<button class="${open ? "next-step" : "secondary"}" onclick="openProcess(${shipment.id})" ${open ? "" : "disabled"}
@@ -1409,7 +1410,7 @@ async function showDetail(id) {
   decorateIcons(card);
   stickyNotes("shipment-sticky", "shipment", shipment.id);
   renderAttachments("shipment-attachments", "shipment", shipment.id, ["pod", "bol", "other"],
-    { notePlaceholder: "Note — E.g. Received By / Signed By", onChange: async () => {
+    { code: shipment.code, notePlaceholder: "Note — E.g. Received By / Signed By", onChange: async () => {
       // A POD upload may have just marked it delivered.
       const fresh = await apiFetch(`/api/shipments/${shipment.id}`);
       if (fresh.status !== shipment.status || fresh.delivered_at !== shipment.delivered_at) { await reloadList(); showDetail(shipment.id); }
@@ -1494,7 +1495,7 @@ async function printLabels(shipmentId) {
   printBoxLabels(shipment.boxes.map(b => ({
     customer: customerName(ord ? ord.customer_id : null), customer_id: ord ? ord.customer_id : null, shipment: shipment.code,
     order: ord ? ord.code : "", po: ord ? ord.po_number : "", job: ord ? ord.job_number : "",
-    item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box,
+    item_code: itemCode(b.item_id), item_title: (itemObj(b.item_id) || {}).title || "", qty: b.quantity_in_box, line: b.order_line_id,
     lot: b.lot_code || "", pallet: b.pallet_number || "", ship_to: ord ? ord.ship_to_address || "" : "",
   })), docFileName(shipment.code, ord ? ord.po_number : "", "Labels"));
 }

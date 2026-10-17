@@ -2066,3 +2066,44 @@ class VacctSO(Base):
     planned_amount = Column(Float, nullable=True)  # the SO amount before it was reduced
     updated_by = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RecordAsk(Base):
+    """"Niraj, please validate PO325380 -- check the line qtys": a person asked to do something on a record (customer order,
+    shipment, PO, invoice, Vendor Account line). It sits in their To-Do; replies go on it; it closes itself when the
+    action happens (a PO / order validated) or when they say done. services/asks.py."""
+    __tablename__ = "record_asks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)  # customer_order | shipment | purchase_order | invoice | vacct_bill | vacct_payment
+    entity_id = Column(Integer, nullable=False, index=True)
+    entity_label = Column(String, nullable=True)  # "PO325380", "invoice GR1/48/26-27 (Akbar Ali)"
+    action = Column(String, nullable=False, default="review")  # validate | review | approve | check_prices | other
+    comment = Column(Text, nullable=True)
+    asked_user = Column(String, nullable=False, index=True)
+    asked_by = Column(String, nullable=False)
+    due_date = Column(DateTime, nullable=True)
+    status = Column(String, nullable=False, default="open")  # open | done | withdrawn
+    record_status = Column(String, nullable=True)  # the PO's / order's status when asked: a Validate ask closes once it changes
+    done_by = Column(String, nullable=True)
+    done_how = Column(String, nullable=True)  # "validated" (it happened) | "marked done"
+    done_at = Column(DateTime, nullable=True)
+    replies = Column(Text, nullable=True)  # JSON [{by, at, text}]
+    todo_item_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VacctCostSheet(Base):
+    """An UNOFFICIAL cost sheet for one PO (one shipment): the user's own extra costs (lunch for the crew, labor, forklift...)
+    spread over the PO's items to see their "real" cost. Scratch only -- never touches lots, margins or accounting.
+    Keyed by PO code and kept by fresh imports (vacct_* tables, importers/mrpeasy/keep.py)."""
+    __tablename__ = "vacct_cost_sheets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    po_code = Column(String, nullable=False, unique=True, index=True)
+    vendor_code = Column(String, nullable=True, index=True)
+    data = Column(Text, nullable=True)  # JSON {rows: [{date, what, expr, amount, note, on}], split, include: {purchase, extras, lc: {code: bool}}, notes}
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

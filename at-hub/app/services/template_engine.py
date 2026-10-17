@@ -629,6 +629,21 @@ def render(spec, ctx, rows, title="Document") -> bytes:
     return buf.getvalue()
 
 
+def _grouped(band):
+    """The label design for a grouped label: "Box {{label.box}} of {{label.boxes}}" reads "{{label.boxes}} Boxes"."""
+    import re as _re
+
+    def fix(v):
+        if isinstance(v, str):
+            return _re.sub(r"Box\s*\{\{\s*label\.box\s*\}\}\s*of\s*\{\{\s*label\.boxes\s*\}\}", "{{label.boxes}} Boxes", v)
+        if isinstance(v, list):
+            return [fix(x) for x in v]
+        if isinstance(v, dict):
+            return {k: fix(x) for k, x in v.items()}
+        return v
+    return fix(copy.deepcopy(band))
+
+
 def render_labels(spec, contexts) -> bytes:
     """One page per label (box labels, address labels)."""
     spec = visible_spec(spec)
@@ -637,12 +652,17 @@ def render_labels(spec, contexts) -> bytes:
     pw, ph, m = float(page.get("w", 6)) * inch, float(page.get("h", 4)) * inch, float(page.get("margin", 0.15)) * inch
     band = spec.get("header") or {}
     pages = []
+    grouped_band = None
     for ctx in contexts or [{}]:
+        if isinstance(ctx.get("label"), dict) and ctx["label"].get("grouped"):
+            # one label for a set of identical boxes: no "Box 3 of 80" on it -- the copies go on any of them
+            grouped_band = grouped_band or _grouped(band)
+            ctx = {**ctx, "_band": grouped_band}
         # A table that doesn't fit carries on: measure on a scratch canvas, then number the sheets ("1 of 2").
         sheets, cur = [], copy.copy(ctx)
         for _ in range(50):
             scratch = rl_canvas.Canvas(io.BytesIO(), pagesize=(pw, ph))
-            draw_band(scratch, band, cur, m, ph - m)
+            draw_band(scratch, cur.get("_band") or band, cur, m, ph - m)
             sheets.append(cur)
             rest = cur.pop("_overflow", None)
             if not rest:
@@ -659,7 +679,7 @@ def render_labels(spec, contexts) -> bytes:
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=(pw, ph))
     for ctx in pages:
-        draw_band(c, band, ctx, m, ph - m)
+        draw_band(c, ctx.get("_band") or band, ctx, m, ph - m)
         c.showPage()
     c.save()
     return buf.getvalue()

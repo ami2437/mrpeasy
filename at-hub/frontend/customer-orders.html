@@ -1049,6 +1049,7 @@
         ${duplicateBanner(order, isManager)}
         <div id="ai-validate-panel"></div>
         <div id="co-sticky" class="sticky-strip"></div>
+        <div class="ask-box" data-ask="customer_order:${order.id}"></div>
         ${orderTimeline(order, orderShipments, orderInvoices)}
         ${orderMoneyTiles(order, orderInvoices)}
 
@@ -1173,7 +1174,7 @@
       }
       stickyNotes("co-sticky", "customer_order", order.id);
       renderAttachments("co-attachments", "customer_order", order.id, ["customer_po", "invoice", "packing_list", "bol", "mtr", "other"],
-        { onChange: () => renderFileStrip("co-file-strip", "customer_order", order.id) });
+        { code: order.code, onChange: () => renderFileStrip("co-file-strip", "customer_order", order.id) });
       renderFileStrip("co-file-strip", "customer_order", order.id);
       renderOrderMtrs("co-mtrs", order.id);
     }

@@ -35,7 +35,7 @@ BUILTINS = {
                    ("invoice", "Our Invoice", [CO], True), ("packing_list", "Packing List", [CO, PO, SH], False),
                    ("bol", "Bill of Lading", [CO, PO, SH], False), ("mtr", "Material Test Report (MTR)", [CO, PO], False),
                    ("pod", "Proof of Delivery", [SH], False), ("other", "Other", [CO, PO, SH], False),
-                   ("customer_rfq", "Customer RFQ / Request", ["quote"], True)],
+                   ("customer_rfq", "Customer RFQ / Request", ["quote"], True), ("customs", "Customs / Tariff", [PO, SH], True)],
     "charge": [("shipping", "Shipping", None, False), ("freight", "Freight", None, False), ("handling", "Handling", None, False),
                ("other", "Other", None, False), ("customs", "Customs", None, False), ("duty", "Duty", None, False),
                ("brokerage", "Brokerage", None, False), ("dispatch", "Dispatch", None, False)],

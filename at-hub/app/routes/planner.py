@@ -50,6 +50,14 @@ def _today(user: User) -> datetime:
 
 
 def _record_label(db: Session, entity_type: Optional[str], entity_id: Optional[int]) -> Optional[dict]:
+    if entity_type in ("invoice", "vacct_bill", "vacct_payment") and entity_id:  # To-Do items from Assign / Ask
+        from app.services import asks
+        model = asks.ENTITIES[entity_type][0]
+        rec = db.get(model, entity_id)
+        if not rec:
+            return None
+        return {"type": entity_type, "id": entity_id, "code": asks.label(db, entity_type, rec), "who": "", "status": getattr(rec, "status", None),
+                "link": asks.link(db, entity_type, rec)}
     if not entity_type or entity_type not in NOTE_ENTITIES or not entity_id:
         return None
     model, _perm, page = NOTE_ENTITIES[entity_type]

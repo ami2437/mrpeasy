@@ -647,6 +647,7 @@
         <h3 class="detail-head" style="margin-top:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">${order.code} ${poStatusTag(order, true)}
           ${order.vendor_so_number ? `<span class="muted small" style="font-weight:400;">Vendor SO # ${escapeHtml(order.vendor_so_number)}</span>` : ""}
           ${vaFor(order.vendor_id) ? `<button class="secondary small-btn" style="font-weight:400;" onclick="vaView(${order.id})" title="What this vendor's Vendor Account holds for this PO">Vendor Account</button>` : ""}
+          ${AuthGuard.can("cost_sheets") ? `<button class="secondary small-btn" style="font-weight:400;" onclick="costSheet(${order.id})" title="Your unofficial scratch sheet: extra costs (labor, forklift, meals...) spread over this PO's items">Cost Sheet</button>` : ""}
           <span class="file-strip" id="po-file-strip" style="margin-left:auto;"></span>
           ${order.status !== "cancelled" ? aiValidateButton("po", order.id) : ""}
           <button class="secondary small-btn no-print" onclick="printRecord()" title="Print this PO (internal view)">Print</button></h3>
@@ -654,6 +655,7 @@
         ${LookAlike.banner("vendor", order)}
         <div id="ai-validate-panel"></div>
         <div id="po-sticky" class="sticky-strip"></div>
+        <div class="ask-box" data-ask="purchase_order:${order.id}"></div>
         <div id="po-timeline">${poTimeline(order, null)}</div>
         ${poMoneyTiles(order)}
         <p class="muted" style="margin:0 0 4px;">${escapeHtml((vendors.find(v => v.id === order.vendor_id) || {}).name || "")}${order.order_date && !["draft", "validation"].includes(order.status) ? ` — ordered ${fmtDate(order.order_date)}` : ""}</p>
@@ -803,7 +805,7 @@
       renderEmailThread("po-email-thread", "purchase_order", order.id);
       loadPoReceipts(order);
       renderAttachments("po-attachments", "purchase_order", order.id, ["purchase_order", "vendor_quote", "vendor_invoice", "mtr", "packing_list", "bol", "other"],
-        { notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => { renderPoMtrs(order); renderFileStrip("po-file-strip", "purchase_order", order.id); } });
+        { code: order.code, notePlaceholder: "Note — E.g. Heat #, Invoice #", onChange: () => { renderPoMtrs(order); renderFileStrip("po-file-strip", "purchase_order", order.id); } });
       renderFileStrip("po-file-strip", "purchase_order", order.id);
     }
 
@@ -983,6 +985,112 @@
         <td>${!v.applications.length ? `<a class="link small" onclick="deleteVendorPayment(${v.id})">Delete</a>` : ""}</td>
       </tr>`).join("") : `<tr><td colspan="9" class="muted">No Vendor Payments Recorded Yet.</td></tr>`;
     }
+    // ---- Cost Sheet: an UNOFFICIAL scratch sheet for this PO (routes/cost_sheets.py) -- your extra costs spread over the
+    // items to see their real cost; tick what goes in. Never touches lot costs or reports. ----
+    let CS = null;
+    const csEval = v => {  // "240", "$1,200.50", "=6*40", "6*40+15"
+      const t = String(v ?? "").replace(/[$,\s]/g, "").replace(/^=/, "");
+      if (!t) return 0;
+      if (!/^[\d+\-*/().]+$/.test(t)) return NaN;
+      try { const x = Function(`"use strict"; return (${t});`)(); return isFinite(x) ? Math.round(x * 100) / 100 : NaN; } catch { return NaN; }
+    };
+    async function costSheet(poId) {
+      let r;
+      try { r = await apiFetch(`/api/cost-sheets/po/${poId}`); } catch (e) { alert(e.message); return; }
+      const lcs = {};  // every official landed cost on the lines: code -> type
+      r.lines.forEach(l => (l.landed_parts || []).forEach(p => { lcs[p.code] = p.cost_type; }));
+      try { await TypeLists.load("landed_cost"); } catch {}
+      const d = r.data || {};
+      CS = { poId, po: r.po, lines: r.lines, lcs, dirty: false,
+             rows: (d.rows || []).map(x => ({ on: x.on !== false, date: x.date || "", what: x.what || "", expr: x.expr ?? String(x.amount ?? ""), note: x.note || "" })),
+             split: d.split || "value", include: { purchase: true, extras: true, lc: {}, ...(d.include || {}) }, notes: d.notes || "", saved: r.updated_at, savedBy: r.updated_by };
+      Object.keys(lcs).forEach(c => { if (CS.include.lc[c] === undefined) CS.include.lc[c] = true; });
+      const back = document.createElement("div");
+      back.className = "modal-backdrop cs-modal";
+      back.innerHTML = `<div class="modal" style="max-width:1150px; width:calc(100% - 32px); max-height:90vh; overflow:auto;"></div>`;
+      back.addEventListener("mousedown", e => { back._down = e.target === back; });
+      back.addEventListener("click", e => { if (e.target === back && back._down) csClose(); });
+      document.body.appendChild(back);
+      csDraw();
+    }
+    function csCalc() {
+      const extras = CS.include.extras ? CS.rows.filter(x => x.on).reduce((s, x) => s + (csEval(x.expr) || 0), 0) : 0;
+      const weight = l => CS.split === "value" ? l.quantity * (l.unit_cost || 0) : l.quantity;
+      const W = CS.lines.reduce((s, l) => s + weight(l), 0) || 1;
+      const rows = CS.lines.map(l => {
+        const official = (l.landed_parts || []).filter(p => CS.include.lc[p.code]).reduce((s, p) => s + p.per_unit, 0);
+        const share = l.quantity ? (extras * weight(l) / W) / l.quantity : 0;
+        const real = (CS.include.purchase ? (l.unit_cost || 0) : 0) + official + share;
+        return { l, official, share, real, total: real * l.quantity };
+      });
+      return { extras, rows, total: rows.reduce((s, x) => s + x.total, 0), goods: CS.lines.reduce((s, l) => s + l.quantity * (l.unit_cost || 0), 0),
+               official: rows.reduce((s, x) => s + x.official * x.l.quantity, 0) };
+    }
+    function csDraw() {
+      const box = document.querySelector(".cs-modal .modal");
+      if (!box) return;
+      const c = csCalc(), m = fmtMoney, p = n => fmtPrice(n);
+      const tick = (path, label, on) => `<label class="inline-check"><input type="checkbox" ${on ? "checked" : ""} onchange="csSet('${path}', this.checked)"> ${label}</label>`;
+      box.innerHTML = `<div class="row" style="align-items:center;"><h3 style="margin:0; flex:1;">Cost Sheet — ${escapeHtml(CS.po.code)} <span class="muted small">${escapeHtml(CS.po.vendor)}${CS.po.vendor_so ? " · SO " + escapeHtml(CS.po.vendor_so) : ""}</span></h3>
+          <span class="tag" title="Only on this sheet: lot costs, margins and reports never see it">Unofficial — Scratch Only</span></div>
+        <div class="cs-ticks"><strong class="small">Include in real cost:</strong> ${tick("purchase", "Purchase", CS.include.purchase)}
+          ${Object.entries(CS.lcs).map(([code, t]) => tick("lc." + code, `Official ${escapeHtml(TypeLists.label("landed_cost", t))} <span class="muted small">${escapeHtml(code)}</span>`, CS.include.lc[code])).join("")}
+          ${tick("extras", "Your extras", CS.include.extras)}
+          <span style="flex:1"></span><label class="small">Spread extras <select onchange="CS.split=this.value; CS.dirty=true; csDraw()"><option value="value" ${CS.split === "value" ? "selected" : ""}>By Value</option><option value="quantity" ${CS.split === "quantity" ? "selected" : ""}>By Quantity</option></select></label></div>
+        <table class="compact-table no-table-tools cs-table"><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Purchase / Unit</th><th class="num">Official Landed / Unit</th>
+          <th class="num">Your Extras / Unit</th><th class="num">Real Cost / Unit</th><th class="num">Line Real Total</th></tr></thead><tbody>
+          ${c.rows.map(x => `<tr><td><strong>${escapeHtml(x.l.item_code)}</strong> <span class="muted small">${escapeHtml((x.l.title || "").slice(0, 60))}</span></td>
+            <td class="num">${fmtQty(x.l.quantity)}</td><td class="num ${CS.include.purchase ? "" : "cs-off"}">${p(x.l.unit_cost || 0)}</td>
+            <td class="num">${x.official ? p(x.official) : `<span class="muted">—</span>`}</td><td class="num">${CS.include.extras && x.share ? p(x.share) : `<span class="muted">—</span>`}</td>
+            <td class="num"><strong>${p(x.real)}</strong></td><td class="num">${m(x.total)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">This PO has no item lines.</td></tr>`}</tbody>
+          <tfoot><tr><th colspan="6">Goods ${m(c.goods)} · Official landed ${m(c.official)} · Your extras ${m(c.extras)}</th><th class="num">${m(c.total)}</th></tr></tfoot></table>
+        <h4 style="margin:14px 0 4px;">Your Extra Costs <span class="muted small">— type anything; amounts can be formulas (=6*40)</span></h4>
+        <table class="compact-table no-table-tools cs-table"><thead><tr><th style="width:30px;"></th><th style="width:140px;">Date</th><th>What</th><th class="num" style="width:140px;">Amount</th><th>Note</th><th style="width:30px;"></th></tr></thead><tbody>
+          ${CS.rows.map((x, i) => { const v = csEval(x.expr); return `<tr class="${x.on ? "" : "cs-off"}"><td><input type="checkbox" ${x.on ? "checked" : ""} onchange="csRow(${i}, 'on', this.checked)"></td>
+            <td><input type="date" value="${escapeHtml(x.date)}" onchange="csRow(${i}, 'date', this.value)"></td>
+            <td><input type="text" value="${escapeHtml(x.what)}" placeholder="Lunch for unloading crew" onchange="csRow(${i}, 'what', this.value)"></td>
+            <td class="num"><input type="text" value="${escapeHtml(x.expr)}" placeholder="0.00 or =6*40" style="text-align:right;" onchange="csRow(${i}, 'expr', this.value)">
+              ${isNaN(v) ? `<div class="error small">Not a number</div>` : /[*+/()-]/.test(String(x.expr).replace(/^-/, "")) ? `<div class="muted small">= ${m(v)}</div>` : ""}</td>
+            <td><input type="text" value="${escapeHtml(x.note)}" onchange="csRow(${i}, 'note', this.value)"></td>
+            <td><a class="link" title="Remove" onclick="CS.rows.splice(${i}, 1); CS.dirty=true; csDraw()">✕</a></td></tr>`; }).join("")}</tbody>
+          <tfoot><tr><th colspan="3"><a class="link" onclick="CS.rows.push({ on: true, date: todayISO(), what: '', expr: '', note: '' }); CS.dirty=true; csDraw(); setTimeout(() => { const i = document.querySelectorAll('.cs-modal tbody')[1].querySelectorAll('input[type=text]'); if (i.length) i[i.length - 3].focus(); }, 30)">+ Add A Row</a></th>
+            <th class="num">${m(CS.rows.filter(x => x.on).reduce((s, x) => s + (csEval(x.expr) || 0), 0))}</th><th colspan="2"></th></tr></tfoot></table>
+        <label style="margin-top:10px;">Notes</label><textarea rows="2" onchange="CS.notes=this.value; CS.dirty=true">${escapeHtml(CS.notes)}</textarea>
+        <div class="btn-row" style="margin-top:12px;"><button onclick="csSave()">Save</button><button class="secondary" onclick="csExport()">Export Excel</button>
+          <span class="muted small" id="cs-state">${CS.dirty ? "Not saved yet" : CS.saved ? `Saved ${fmtWhen(CS.saved)}${CS.savedBy ? " by " + escapeHtml(CS.savedBy) : ""}` : ""}</span>
+          <span style="flex:1"></span><button class="secondary" onclick="csClose()">Close</button></div>`;
+    }
+    function csSet(path, on) {
+      if (path.startsWith("lc.")) CS.include.lc[path.slice(3)] = on; else CS.include[path] = on;
+      CS.dirty = true; csDraw();
+    }
+    function csRow(i, k, v) { CS.rows[i][k] = v; CS.dirty = true; csDraw(); }
+    async function csSave() {
+      const data = { rows: CS.rows.map(x => ({ ...x, amount: csEval(x.expr) || 0 })), split: CS.split, include: CS.include, notes: CS.notes };
+      try { const r = await apiFetch(`/api/cost-sheets/po/${CS.poId}`, { method: "PUT", body: JSON.stringify({ data }) }); CS.dirty = false; CS.saved = r.updated_at; CS.savedBy = (AuthGuard.getUser() || {}).username; csDraw(); toast("Cost sheet saved"); }
+      catch (e) { alert(e.message); }
+    }
+    async function csExport() {
+      const c = csCalc();
+      const table = [["Item", "Title", "Qty", "Purchase / Unit", "Official Landed / Unit", "Your Extras / Unit", "Real Cost / Unit", "Line Real Total"],
+        ...c.rows.map(x => [x.l.item_code, x.l.title, x.l.quantity, CS.include.purchase ? x.l.unit_cost : 0, x.official, CS.include.extras ? x.share : 0, x.real, x.total]),
+        [], ["Your extra costs", "", "", "Included", "Amount", "Note"],
+        ...CS.rows.map(x => [x.date, x.what, "", x.on ? "yes" : "no", csEval(x.expr) || 0, x.note]),
+        [], ["Spread", CS.split], ["Notes", CS.notes]];
+      try {
+        const res = await fetch(`${API_BASE}/api/cost-sheets/po/${CS.poId}/xlsx`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${AuthGuard.getToken()}` }, body: JSON.stringify({ table }) });
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        const url = URL.createObjectURL(await res.blob());
+        const a = Object.assign(document.createElement("a"), { href: url, download: `${CS.po.code}-Cost Sheet.xlsx` });
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { alert(e.message); }
+    }
+    function csClose() {
+      if (CS && CS.dirty && !confirm("Close without saving the cost sheet?")) return;
+      document.querySelectorAll(".cs-modal").forEach(x => x.remove());
+      CS = null;
+    }
+
     // read-only: this PO's SO / invoices / payments in the vendor's Vendor Account (vendor-accounts.html)
     async function vaView(poId) {
       const back = document.createElement("div");
@@ -1862,7 +1970,7 @@ Thank you.</textarea>
       const vendorId = params.get("vendor_id");
       const byCode = params.get("code");  // a PO # link from another screen
       if (byCode && !id) { const hit = orders.find(o => o.code.toLowerCase() === byCode.toLowerCase()); if (hit) showDetail(hit.id); }
-      if (id) showDetail(parseInt(id));
+      if (id) { await showDetail(parseInt(id)); if (params.get("costsheet")) costSheet(parseInt(id)); }
       const newFor = parseInt(params.get("new"));  // "+ PO" on a vendor's card
       if (newFor) {
         toggleForm(true);

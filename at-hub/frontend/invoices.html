@@ -576,6 +576,7 @@
           onclick="renameInvoice(${invoice.id}, '${escapeHtml(invoice.code)}')">${icon("pencil")}</button>` : ""}${combinedBadge(invoice)} <span class="tag ${invoice.status === 'paid' ? 'shipped' : invoice.status === 'void' ? 'cancelled' : invoice.status === 'sent' ? 'confirmed' : 'draft'}">${invoice.status}</span></h3>
         <p class="muted" style="margin:0 0 4px;">${escapeHtml(customerName(invoice.customer_id))} — dated ${fmtDate(invoice.invoice_date)}</p>
         <div id="invoice-refs" class="muted"></div>
+        <div class="ask-box" data-ask="invoice:${invoice.id}"></div>
         ${invoice.split_from_code || (invoice.split_into || []).length ? `<div class="muted small" style="margin-top:2px;">${icon("scissors")}
           ${invoice.split_from_code ? `Split from <a class="link" onclick="showDetail(${invoice.split_from_id})">${escapeHtml(invoice.split_from_code)}</a>` : ""}
           ${(invoice.split_into || []).length ? `${invoice.split_from_code ? " · " : ""}Lines split onto ${invoice.split_into.map(c => { const o = invoices.find(i => i.code === c); return o ? `<a class="link" onclick="showDetail(${o.id})">${escapeHtml(c)}</a>` : escapeHtml(c); }).join(", ")}` : ""}

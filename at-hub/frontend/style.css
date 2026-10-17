@@ -2547,6 +2547,31 @@ html[data-theme="dark"] .em-alert { background: #450a0a; color: #fecaca; border-
 .dd-from { display: inline-flex; align-items: center; gap: 6px; }
 .dd-from label { margin: 0; }
 
+/* Drag-and-drop uploads (DropAttach in auth-guard.js) */
+#drop-overlay { position: fixed; inset: 0; z-index: 3000; pointer-events: none; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); outline: 3px dashed var(--accent); outline-offset: -10px; }
+.drop-overlay-box { display: flex; gap: 12px; align-items: center; padding: 16px 22px; border-radius: 12px; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 8px 30px rgba(0,0,0,.18); font-size: 15px; }
+.drop-overlay-box svg { width: 28px; height: 28px; color: var(--accent); }
+.drop-types { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 12px; }
+tr.flash-row td { animation: flash-row 2s ease-out; }
+@keyframes flash-row { from { background: var(--accent-soft); } to { background: transparent; } }
+
+/* Cost Sheet (purchase-orders.html) */
+.cs-ticks { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.cs-table input[type=text], .cs-table input[type=date] { width: 100%; }
+.cs-off, .cs-off td { opacity: .45; }
+
+/* Assign / Ask (AskBox in auth-guard.js) */
+.ask-box { margin: 6px 0; }
+.ask-row { display: flex; gap: 10px; align-items: center; }
+.ask-banner { margin-top: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); border-left: 4px solid var(--accent); background: var(--accent-soft); color: var(--text); font-size: 13px; }
+.ask-banner.done { border-left-color: var(--border-strong); background: var(--surface-2); }
+.ask-comment { margin: 4px 0; white-space: pre-line; }
+.ask-reply { margin: 4px 0 0 12px; padding-left: 8px; border-left: 2px solid var(--border-strong); }
+.ask-actions { margin-top: 4px; }
+.ask-done.hidden { display: none; }
+
 /* Vendor Accounts hints (vendor-accounts.html, purchase-orders.html) */
 .va-note { background: #fff7e6; border: 1px solid #f5d38a; border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; color: #3b2f12; }
 html[data-theme="dark"] .va-note { background: #2a2413; border-color: #6b5418; color: #f3e7c4; }

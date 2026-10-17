@@ -56,6 +56,8 @@ CATALOG = [
     ("vendor_accounts", "Purchasing", "Vendor Accounts: wire + cash vendors -- bills at their true amount, wires and cash paid, old cash "
                                       "collected through other invoices, running balance, statements to send them", True, "admin"),
     ("landed_costs", "Purchasing", "Landed costs", True, "admin"),
+    ("cost_sheets", "Purchasing", "Cost Sheets: an unofficial scratch sheet per PO -- your own extra costs (labor, forklift, meals...) "
+                                  "spread over its items to see their real cost; never changes lot costs or reports", True, "admin"),
     # Reports & tools
     ("reports", "Reports", "Reports and the dashboard's money sections", True, "admin"),
     ("insights", "Reports", "Quick Insights pop-up (top bar): orders shipped / pending, shipments in process / not invoiced, "

@@ -47,11 +47,15 @@ OPEN = {
         ("POST", "/api/todo/lists"), ("PUT", "/api/todo/lists/{list_id}"), ("DELETE", "/api/todo/lists/{list_id}")]},
     # files: drivers upload proof of delivery; money document types are refused inside without "See prices"
     **{(m, p): "attachments (money types checked inside)" for m, p in [
-        ("GET", "/api/attachments/"), ("POST", "/api/attachments/"), ("GET", "/api/attachments/counts"),
+        ("GET", "/api/attachments/"), ("POST", "/api/attachments/"), ("GET", "/api/attachments/counts"), ("GET", "/api/attachments/find"),
         ("PUT", "/api/attachments/{attachment_id}"), ("DELETE", "/api/attachments/{attachment_id}"),
         ("GET", "/api/attachments/{attachment_id}/file"), ("GET", "/api/attachments/{attachment_id}/thumb"),
         ("GET", "/api/attachments/{attachment_id}/preview")]},
     ("GET", "/api/email/health"): "a signed-in user's own top-bar check; returns nothing without the Company Settings permission",
+    # Assign / Ask: the asker must see the record and only people who can see it can be asked (checked in services/asks.py)
+    **{(m, p): "asks -- record visibility checked inside" for m, p in [
+        ("GET", "/api/asks/"), ("GET", "/api/asks/people"), ("GET", "/api/asks/mine"), ("POST", "/api/asks/"),
+        ("POST", "/api/asks/{ask_id}/reply"), ("POST", "/api/asks/{ask_id}/done"), ("POST", "/api/asks/{ask_id}/withdraw")]},
     ("POST", "/api/ai-docs/extract"): "checks 'ai' inside (POD reading is for drivers)",
     ("POST", "/api/ai-docs/validate-po/{po_id}"): "checks 'ai' inside",
     # checked inside main.py (recycle_bin permission; history scrubbed without 'See prices')

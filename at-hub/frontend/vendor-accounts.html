@@ -358,6 +358,7 @@
           ${p.credit > 0.005 ? `<tr><td colspan="4" class="va-credit">Not applied — a credit with ${esc(V.account.vendor_name)}</td><td class="num va-credit">${m(p.credit)}</td><td></td></tr>` : ""}
         </tbody><tfoot><tr><th colspan="4">Total</th><th class="num">${m(p.amount)}</th><th></th></tr></tfoot></table>
         ${p.note ? `<div class="muted small" style="white-space:pre-line; margin-top:8px;">${esc(p.note)}</div>` : ""}
+        <div class="ask-box" data-ask="vacct_payment:${p.id}"></div>
         <div data-notes="payment:${p.id}"></div>
         <div class="btn-row" style="margin-top:12px;"><button onclick="this.closest('.modal-backdrop').remove(); showOnList(${p.id})">Show Its Invoices In The List</button>
           <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); payForm('${p.kind}', ${p.id})">${p.review ? "Map It" : "Edit"}</button>
@@ -398,6 +399,7 @@
             <td class="num">${m(r.amount)}</td><td class="num muted">${m(r.payment_amount)}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">Nothing paid yet.</p>`}
         ${b.wire_left > 0.005 || b.cash_left > 0.005 ? `<p class="small">${b.wire_left > 0.005 ? `<span class="va-owed">Wire still open ${m(b.wire_left)}</span> ` : ""}${b.cash_left > 0.005 ? `<span class="va-owed">Cash still open ${m(b.cash_left)}</span>` : ""}</p>` : ""}
         ${b.note ? `<h4 style="margin:12px 0 4px;">From The Sheet</h4><div class="muted small" style="white-space:pre-line;">${esc(b.note)}</div>` : ""}
+        <div class="ask-box" data-ask="vacct_bill:${b.id}"></div>
         <div data-notes="bill:${b.id}"></div>
         <div class="btn-row" style="margin-top:12px;"><button class="secondary" onclick="this.closest('.modal-backdrop').remove(); billForm(${b.id})">Edit Invoice</button>
           <button class="secondary" onclick="this.closest('.modal-backdrop').remove(); payForm('wire', null, { forBills: [${b.id}] })">+ Wire For It</button>

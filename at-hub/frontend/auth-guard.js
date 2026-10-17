@@ -47,7 +47,7 @@ const AuthGuard = {
   ROLE_RANK: { employee: 1, manager: 2, admin: 3, super_admin: 4 },
   PERM_DEFAULT: { "customers.view": 2, "customers.edit": 2, "orders.view": 1, "orders.edit": 2, quotes: 3, "shipments.view": 1, "shipments.work": 1,
     "shipments.deliver": 2, "shipments.undo": 2, "pod.upload": 1, "stock.view": 1, "stock.edit": 2, "mtrs.manage": 2, "money.view": 3, invoices: 3,
-    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, accounting: 3, "accounting.undo_import": 4, "accounting.start_fresh": 4, emails: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, vendor_accounts: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
+    "invoices.split": 3, "credit_memos": 3, "invoices.funding": 3, "payments.import": 3, reconcile: 3, accounting: 3, "accounting.undo_import": 4, "accounting.start_fresh": 4, emails: 3, purchasing: 3, vendors: 2, po_shipments: 2, "receipts.correct": 2, vendor_payments: 3, vendor_accounts: 3, cost_sheets: 3, landed_costs: 3, reports: 3, insights: 3, imports: 2, ai: 2,
     recycle_bin: 2, golive: 3, simulate: 3, company: 3, "types.manage": 2, templates: 3, tasks: 3, users: 4, backups: 4, "backups.download": 4, file_matcher: 4 },
   can(perm) {
     const user = this.getUser();
@@ -1096,11 +1096,151 @@ const fileViewer = {
   },
 };
 
+// ---- Drag-and-drop files onto a page: a drop anywhere on an open order / PO / shipment asks "What is it?" (the record's
+// document types, a guess from the file name picked) and uploads it there. On a list page with nothing open it asks which
+// record (by its number) or sends it to the AI Desk. renderAttachments() tells it which record is open. ----
+const DropAttach = {
+  current: null,  // {entityType, entityId, categories, el, opts} -- the files box on screen
+  LIST_PAGES: { "customer-orders.html": "customer_order", "purchase-orders.html": "purchase_order", "shipments.html": "shipment" },
+  NOUN: { customer_order: "customer order", purchase_order: "PO", shipment: "shipment", quote: "quote" },
+  // file name words -> document type (the first one that this record takes)
+  GUESS: [[/customs|tariff|7501|\bentry\b|\bduty\b/i, ["customs"]], [/\bmtr\b|mill.?test|\bcert|test.?report/i, ["mtr"]],
+          [/\bbol\b|bill.?of.?lading|lading/i, ["bol"]], [/packing|\bpl\b|pack.?list/i, ["packing_list"]],
+          [/\bpod\b|proof|delivered|signed/i, ["pod"]], [/quot|confirm|\bso\b|sales.?order|proforma/i, ["vendor_quote"]],
+          [/invoice|\binv\b|bill/i, ["vendor_invoice", "invoice"]], [/\bpo\b|purchase.?order|order/i, ["customer_po", "purchase_order"]]],
+  page() { return (location.pathname.split("/").pop() || "").toLowerCase(); },
+  open() {  // the record whose files box is on screen now
+    const c = this.current;
+    return c && document.body.contains(c.el) && c.el.offsetParent !== null ? c : null;
+  },
+  wanted() { return !!(this.open() || this.LIST_PAGES[this.page()]); },
+  guess(names, cats) {
+    const text = names.join(" ").replace(/[_\-.]+/g, " ");
+    for (const [re, keys] of this.GUESS) if (re.test(text)) { const k = keys.find(x => cats.includes(x)); if (k) return k; }
+    return cats.includes("other") ? "other" : cats[0];
+  },
+  overlay(on) {
+    let o = document.getElementById("drop-overlay");
+    if (!on) { if (o) o.remove(); return; }
+    if (o) return;
+    const c = this.open();
+    o = document.createElement("div");
+    o.id = "drop-overlay";
+    o.innerHTML = `<div class="drop-overlay-box">${icon("paperclip")}<div><strong>Drop To Attach</strong><div class="small">${c
+      ? `to ${escapeHtml(this.NOUN[c.entityType] || c.entityType)} ${escapeHtml(this.label(c))} — you'll say what it is next`
+      : "you'll pick the record (or the AI Desk) next"}</div></div></div>`;
+    document.body.appendChild(o);
+  },
+  label(c) {
+    const t = document.querySelector(".detail-title, h2.page-title, .page-title");
+    return c.code || (t ? t.textContent.trim().split(/\s+/)[0] : `#${c.entityId}`);
+  },
+  async categoriesFor(entityType, given) {
+    try { await TypeLists.load("attachment"); } catch {}
+    let cats = given || [];
+    if (TypeLists.cache.attachment) {
+      const mine = TypeLists.active("attachment", entityType).map(o => o.key);
+      cats = [...cats.filter(c => mine.includes(c)), ...mine.filter(c => !cats.includes(c))];
+    }
+    const money = TypeLists.cache.attachment ? TypeLists.cache.attachment.filter(o => o.money).map(o => o.key) : MONEY_ATTACHMENTS;
+    return hidesMoney() ? cats.filter(c => !money.includes(c)) : cats;
+  },
+  async drop(files) {
+    if (!files.length) return;
+    let c = this.open();
+    if (!c) {
+      const kind = this.LIST_PAGES[this.page()];
+      const desk = AuthGuard.can("ai");
+      const { value, el } = await askDialog({ title: `${files.length} File${files.length > 1 ? "s" : ""} Dropped`, body: `
+        <p class="muted small" style="margin:0 0 8px;">${files.map(f => escapeHtml(f.name)).join("<br>")}</p>
+        <label>Which ${escapeHtml(this.NOUN[kind])}? <span class="muted small">(its number)</span></label>
+        <input type="text" id="drop-code" placeholder="E.g. ${kind === "purchase_order" ? "PO325289" : kind === "shipment" ? "SH215751" : "C89124"}">`,
+        buttons: [{ label: "Next", value: "rec" }, ...(desk ? [{ label: "Send To AI Desk", value: "desk", cls: "secondary" }] : []), { label: "Cancel", value: null, cls: "secondary" }] });
+      if (value === "desk") return this.toDesk(files);
+      if (value !== "rec") return;
+      const code = el.querySelector("#drop-code").value.trim();
+      if (!code) { alert(`Type the ${this.NOUN[kind]}'s number.`); return; }
+      let rec;
+      try { rec = await apiFetch(`/api/attachments/find?entity_type=${kind}&code=${encodeURIComponent(code)}`); } catch (e) { alert(e.message); return; }
+      c = { entityType: kind, entityId: rec.id, code: rec.code, categories: null };
+    }
+    const cats = await this.categoriesFor(c.entityType, c.categories);
+    if (!cats.length) { alert("This record takes no document types you can upload."); return; }
+    const pick = this.guess(files.map(f => f.name), cats);
+    const vendorBill = c.entityType === "purchase_order" && c === this.open() && files.length === 1 && document.getElementById("bill-file");
+    const { value, el } = await askDialog({ title: `What Is It? — ${this.label(c)}`, body: `
+      <p class="muted small" style="margin:0 0 8px;">${files.map(f => `${escapeHtml(f.name)} <span class="muted">(${fmtFileSize(f.size)})</span>`).join("<br>")}</p>
+      <div class="drop-types">${cats.map(k => `<label class="inline-check"><input type="radio" name="drop-cat" value="${escapeHtml(k)}" ${k === pick ? "checked" : ""}> ${escapeHtml(attachmentLabel(k))}</label>`).join("")}</div>
+      <label style="margin-top:8px;">Note (Optional)</label><input type="text" id="drop-note" placeholder="E.g. Heat #, Invoice #">
+      ${vendorBill ? `<p class="muted small" style="margin:8px 0 0;">A vendor invoice can also go in Vendor Invoices below (amount, due date) — pick <strong>Add As A Vendor Invoice</strong>.</p>` : ""}`,
+      buttons: [{ label: "Upload", value: "up" }, ...(vendorBill ? [{ label: "Add As A Vendor Invoice", value: "bill", cls: "secondary" }] : []), { label: "Cancel", value: null, cls: "secondary" }] });
+    if (!value) return;
+    const cat = (el.querySelector("input[name=drop-cat]:checked") || {}).value;
+    const note = el.querySelector("#drop-note").value;
+    if (value === "bill") return this.toBillForm(files[0], note);
+    const form = new FormData();
+    form.append("entity_type", c.entityType);
+    form.append("entity_id", c.entityId);
+    form.append("category", cat);
+    form.append("note", note);
+    files.forEach(f => form.append("files", f));
+    try {
+      const r = await fetch("/api/attachments/", { method: "POST", headers: { Authorization: `Bearer ${AuthGuard.getToken()}` }, body: form });
+      const data = await r.json();
+      if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Upload failed");
+    } catch (e) { alert(e.message); return; }
+    toast(`Attached ${files.length} file${files.length > 1 ? "s" : ""} as ${attachmentLabel(cat)}`);
+    if (c === this.open()) {  // redraw the files box + thumbnails in place (no page jump)
+      const y = window.scrollY;
+      await renderAttachments(c.el, c.entityType, c.entityId, c.categories, c.opts);
+      if (c.opts && c.opts.onChange) c.opts.onChange();
+      document.dispatchEvent(new CustomEvent("files-changed", { detail: { entityType: c.entityType, entityId: c.entityId, from: c.el } }));
+      window.scrollTo(0, y);
+    }
+  },
+  toBillForm(file, note) {  // the PO's Vendor Invoices row, with the file in it; the user types the number + amount
+    const input = document.getElementById("bill-file");
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    const num = document.getElementById("bill-number");
+    if (num && note && !num.value) num.value = note.replace(/^\s*(invoice|inv)\s*#?\s*/i, "");
+    input.closest("tr").classList.add("flash-row");
+    (num || input).scrollIntoView({ block: "center", behavior: "smooth" });
+    setTimeout(() => (num || input).focus({ preventScroll: true }), 400);
+    toast("The file is in the Vendor Invoices row — fill in the invoice # and amount, then save it");
+  },
+  async toDesk(files) {
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    try { await apiUpload("/api/ai-desk/files", fd); } catch (e) { alert(e.message); return; }
+    toast(`Sent ${files.length} file${files.length > 1 ? "s" : ""} to the AI Desk`, { label: "Open AI Desk", run: () => { location.href = "ai-desk.html"; } });
+  },
+};
+(() => {
+  let depth = 0;
+  const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+  const busy = () => document.querySelector(".modal-backdrop");  // a pop-up of its own (it may take files itself)
+  window.addEventListener("dragenter", e => { if (!hasFiles(e) || busy() || !DropAttach.wanted()) return; depth++; DropAttach.overlay(true); });
+  window.addEventListener("dragleave", e => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) DropAttach.overlay(false); });
+  window.addEventListener("dragover", e => { if (hasFiles(e) && document.getElementById("drop-overlay")) e.preventDefault(); });
+  window.addEventListener("drop", e => {
+    if (!hasFiles(e) || !document.getElementById("drop-overlay")) return;
+    depth = 0;
+    DropAttach.overlay(false);
+    if (e.target.closest && e.target.closest("input[type=file]")) return;  // a file box of its own: let it take the file
+    e.preventDefault();
+    DropAttach.drop(Array.from(e.dataTransfer.files));
+  });
+})();
+
 // Renders an upload box + the file list into `container` (an element or its id).
 // categories: which document types this record takes, first one is the default.
 async function renderAttachments(container, entityType, entityId, categories, opts = {}) {
   const el = typeof container === "string" ? document.getElementById(container) : container;
   if (!el) return;
+  if (!opts.noDrop) DropAttach.current = { entityType, entityId, categories, el, opts, code: opts.code };  // drops on the page land here
   try { await TypeLists.load("attachment"); } catch {}
   if (TypeLists.cache.attachment) {  // the record kind's types (Company Settings -> Types & Tags), the caller's order first
     const mine = TypeLists.active("attachment", entityType).map(o => o.key);
@@ -1765,12 +1905,48 @@ async function printWithTemplate(docType, labels, win) {
     return true;
   } catch (e) { return false; }
 }
+// Individual (every box's label) or Grouped (ONE label per set of identical boxes -- same shipment, item, order line,
+// qty per box and lot -- with no "Box 3 of 80" on it: the printer's feed button makes the copies). User, 2026-10-17.
+const labelKey = l => [l.shipment, l.item_code, l.line ?? "", l.qty, l.lot || ""].join("|");
+async function chooseLabelMode(labels) {
+  const groups = [];
+  const byKey = {};
+  labels.forEach(l => { const k = labelKey(l); if (!byKey[k]) { byKey[k] = { key: k, first: l, n: 0 }; groups.push(byKey[k]); } byKey[k].n++; });
+  if (groups.every(g => g.n === 1)) return { mode: "individual", keys: null };  // nothing repeats: just print
+  let saved = "individual";
+  try { saved = localStorage.getItem("at_hub_label_mode") || "individual"; } catch {}
+  const { value, el } = await askDialog({ title: "Print Box Labels", wide: true, body: `
+    <div class="row" style="gap:18px; margin-bottom:8px;">
+      <label class="inline-check"><input type="radio" name="lb-mode" value="individual" ${saved === "individual" ? "checked" : ""}> <strong>Individual</strong> — a label for every box (${labels.length})</label>
+      <label class="inline-check"><input type="radio" name="lb-mode" value="grouped" ${saved === "grouped" ? "checked" : ""}> <strong>Grouped</strong> — one label per set of identical boxes (${groups.length}); use the printer's feed button for copies</label>
+    </div>
+    <table class="compact-table no-table-tools"><thead><tr><th><input type="checkbox" checked onchange="this.closest('table').querySelectorAll('.lb-g').forEach(c => c.checked = this.checked)"></th>
+      <th>Shipment</th><th>Item</th><th class="num">Qty / Box</th><th>Lot</th><th class="num">Boxes</th></tr></thead><tbody>
+      ${groups.map((g, i) => `<tr><td><input type="checkbox" class="lb-g" value="${i}" checked></td><td>${escapeHtml(g.first.shipment || "")}</td>
+        <td>${escapeHtml(g.first.item_code || "")} <span class="muted small">${escapeHtml((g.first.item_title || "").slice(0, 50))}</span></td>
+        <td class="num">${escapeHtml(String(g.first.qty ?? ""))}</td><td>${escapeHtml(g.first.lot || "")}</td><td class="num">${g.n}</td></tr>`).join("")}</tbody></table>`,
+    buttons: [{ label: "Print", value: "go" }, { label: "Cancel", value: null, cls: "secondary" }] });
+  if (value !== "go") return null;
+  const mode = el.querySelector("input[name=lb-mode]:checked").value;
+  try { localStorage.setItem("at_hub_label_mode", mode); } catch {}
+  return { mode, keys: new Set([...el.querySelectorAll(".lb-g:checked")].map(c => groups[+c.value].key)), groups };
+}
 async function printBoxLabels(labels, title) {
-  const win = window.open("", "_blank");
-  if (win) win.document.write("<p style='font-family:sans-serif;padding:20px;color:#555'>Preparing labels…</p>");
   const counts = {}, seen = {};  // "Box 3 of 12" within each shipment
   labels.forEach(l => { counts[l.shipment] = (counts[l.shipment] || 0) + 1; });
   labels = labels.map(l => ({ ...l, box: l.box ?? (seen[l.shipment] = (seen[l.shipment] || 0) + 1), boxes: l.boxes ?? counts[l.shipment] }));
+  const pick = await chooseLabelMode(labels);
+  if (!pick) return;
+  if (pick.keys) labels = labels.filter(l => pick.keys.has(labelKey(l)));
+  if (pick.mode === "grouped") {
+    const done = new Set(), n = {};
+    labels.forEach(l => { const k = labelKey(l); n[k] = (n[k] || 0) + 1; });
+    labels = labels.filter(l => { const k = labelKey(l); if (done.has(k)) return false; done.add(k); return true; })
+      .map(l => ({ ...l, grouped: true, box: "", boxes: n[labelKey(l)] }));
+  }
+  if (!labels.length) return;
+  const win = window.open("", "_blank");
+  if (win) win.document.write("<p style='font-family:sans-serif;padding:20px;color:#555'>Preparing labels…</p>");
   if (await printWithTemplate("box_label", labels, win)) return;
   const company = await labelCompany();
   printLabelCards(labels.map(l => boxLabelHtml(l, company, location.origin)).join(""), title, win);
@@ -5199,6 +5375,76 @@ function cardSendFromHtml(d) {
       ${cardSenders.map(s => `<option value="${s.id}" ${s.id === cur ? "selected" : ""}>${escapeHtml(s.address)}</option>`).join("")}</select></div></div>`;
 }
 
+
+// ---- Assign / Ask a person on a record: <div data-ask="purchase_order:42"></div> anywhere mounts itself (services/asks.py).
+// The button, the open asks as banners (comment, replies, Reply / Done / Take Back), earlier ones folded away.
+const AskBox = {
+  async mount(el) {
+    const [type, id] = (el.dataset.ask || "").split(":");
+    if (!type || !id) return;
+    el.dataset.askReady = "1";
+    let asks = [];
+    try { asks = await apiFetch(`/api/asks/?entity_type=${type}&entity_id=${id}`); } catch { el.innerHTML = ""; return; }
+    const me = (AuthGuard.getUser() || {}).username;
+    const open = asks.filter(a => a.status === "open"), done = asks.filter(a => a.status !== "open");
+    const when = d => d ? fmtDate(d) : "";
+    const replies = a => (a.replies || []).map(r => `<div class="ask-reply"><strong>${escapeHtml(r.name || r.by)}</strong> <span class="muted small">${fmtWhen(r.at)}</span><div>${escapeHtml(r.text)}</div></div>`).join("");
+    el.innerHTML = `<div class="ask-row"><button type="button" class="secondary small-btn" onclick="AskBox.open('${type}', ${id}, this)">👤 Assign / Ask</button>
+        ${done.length ? `<a class="link small" onclick="this.closest('[data-ask]').querySelector('.ask-done').classList.toggle('hidden')">${done.length} earlier</a>` : ""}</div>
+      ${open.map(a => `<div class="ask-banner">
+        <div><strong>${escapeHtml(a.asked_by_name)}</strong> asked <strong>${escapeHtml(a.asked_name)}</strong> to <strong>${escapeHtml(a.action_label.toLowerCase())}</strong>
+          <span class="muted small">· ${when(a.created_at)}${a.due_date ? ` · due ${when(a.due_date)}` : ""}</span></div>
+        ${a.comment ? `<div class="ask-comment">${escapeHtml(a.comment)}</div>` : ""}
+        ${replies(a)}
+        <div class="ask-actions">${[a.asked_user, a.asked_by].includes(me) ? `<a class="link small" onclick="AskBox.reply(${a.id}, this)">Reply</a> · <a class="link small" onclick="AskBox.done(${a.id}, this)">Done</a>` : ""}
+          ${a.asked_by === me ? ` · <a class="link small" onclick="AskBox.withdraw(${a.id}, this)">Take Back</a>` : ""}</div></div>`).join("")}
+      <div class="ask-done hidden">${done.map(a => `<div class="ask-banner done"><span class="muted small">${escapeHtml(a.asked_by_name)} asked ${escapeHtml(a.asked_name)} to ${escapeHtml(a.action_label.toLowerCase())}
+        — ${escapeHtml(a.status === "withdrawn" ? "taken back" : a.done_how || "done")}${a.done_at ? ` ${fmtWhen(a.done_at)}` : ""}</span>${a.comment ? `<div class="small">${escapeHtml(a.comment)}</div>` : ""}${replies(a)}</div>`).join("")}</div>`;
+  },
+  refresh(fromEl) { const box = fromEl.closest("[data-ask]"); if (box) AskBox.mount(box); },
+  async open(type, id, btn) {
+    let people;
+    try { people = await apiFetch(`/api/asks/people?entity_type=${type}&entity_id=${id}`); } catch (e) { alert(e.message); return; }
+    const { value, el } = await askDialog({ title: "Assign / Ask", wide: true, body: `
+      <div class="row" style="gap:10px;"><div style="flex:2;"><label>Who</label><select id="ask-user"><option value="">— pick a person —</option>
+        ${people.filter(p => !p.me).map(p => `<option value="${escapeHtml(p.username)}" ${p.ok ? "" : "disabled"}>${escapeHtml(p.name)}${p.ok ? "" : ` — ${escapeHtml(p.why)}, can't be tagged`}</option>`).join("")}</select></div>
+        <div style="flex:1;"><label>To</label><select id="ask-action"><option value="validate">Validate</option><option value="review" selected>Review</option>
+          <option value="approve">Approve</option><option value="check_prices">Check Prices</option><option value="other">Other</option></select></div>
+        <div style="flex:1;"><label>By (Optional)</label><input type="date" id="ask-due"></div></div>
+      <label style="margin-top:8px;">What should they look at?</label><textarea id="ask-comment" rows="3" placeholder="E.g. Check the line quantities against the vendor's SO and the customs charge"></textarea>
+      <p class="muted small" style="margin:6px 0 0;">It goes in their To-Do with a link here. People who can't see this record (its module or prices) are greyed out.</p>
+      <div class="error" id="ask-err"></div>`,
+      buttons: [{ label: "Send", value: "go" }, { label: "Cancel", value: null, cls: "secondary" }] });
+    if (value !== "go") return;
+    const user = el.querySelector("#ask-user").value;
+    if (!user) { alert("Pick who to ask."); return; }
+    try {
+      await apiFetch("/api/asks/", { method: "POST", body: JSON.stringify({ entity_type: type, entity_id: id, user, action: el.querySelector("#ask-action").value,
+        comment: el.querySelector("#ask-comment").value, due_date: el.querySelector("#ask-due").value || null }) });
+      toast("Sent — it's in their To-Do");
+      AskBox.refresh(btn);
+    } catch (e) { alert(e.message); }
+  },
+  async reply(askId, a) {
+    const text = prompt("Your reply:");
+    if (!text) return;
+    try { await apiFetch(`/api/asks/${askId}/reply`, { method: "POST", body: JSON.stringify({ text }) }); AskBox.refresh(a); } catch (e) { alert(e.message); }
+  },
+  async done(askId, a) {
+    try { await apiFetch(`/api/asks/${askId}/done`, { method: "POST" }); toast("Done ✓"); AskBox.refresh(a); } catch (e) { alert(e.message); }
+  },
+  async withdraw(askId, a) {
+    if (!confirm("Take this ask back? It comes off their To-Do.")) return;
+    try { await apiFetch(`/api/asks/${askId}/withdraw`, { method: "POST" }); AskBox.refresh(a); } catch (e) { alert(e.message); }
+  },
+};
+new MutationObserver(muts => {
+  for (const m of muts) for (const n of m.addedNodes) {
+    if (!(n instanceof Element)) continue;
+    if (n.matches("[data-ask]") && !n.dataset.askReady) AskBox.mount(n);
+    n.querySelectorAll && n.querySelectorAll("[data-ask]:not([data-ask-ready])").forEach(x => AskBox.mount(x));
+  }
+}).observe(document.documentElement, { childList: true, subtree: true });
 
 // "+ Create Item" from a line's item picker (POs, customer orders): the quick-add pop-up, then the new item fills the line.
 async function createItemForPicker(text, select, side, items, groups) {
